@@ -4,6 +4,7 @@ import { ResearchLink, ResearchLinkCategory } from '@bike4mind/database/content'
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 interface ICsvRow {
   name: string;
@@ -83,6 +84,7 @@ const handler = baseApi().post(
       let created = 0;
       let updated = 0;
       let errors = 0;
+      let categoriesCreated = 0;
 
       for (const row of parsedRows) {
         try {
@@ -105,6 +107,7 @@ const handler = baseApi().post(
                   name: row.categoryName,
                   description: row.categoryDescription || row.categoryName,
                 });
+                categoriesCreated++;
               }
 
               categoryId = category._id.toString();
@@ -137,6 +140,13 @@ const handler = baseApi().post(
           errors++;
         }
       }
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.business_link.imported',
+        target: { kind: 'settings', id: 'business-links-import', displayName: 'business links CSV import' },
+        summary: `imported business links from CSV (${created} created, ${updated} updated, ${errors} failed)`,
+        details: { created, updated, errors, categoriesCreated, total: parsedRows.length },
+      });
 
       return res.json({
         message: 'Import completed',

@@ -46,9 +46,13 @@ import type {
 import {
   awaitsWorktree,
   branchHolder,
+  isLocalBackend,
+  isLocalModel,
   isResumableStop,
   isTurnBudgetStop,
+  localBackend,
   messagesSinceBoundary,
+  parseLocalModelId,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { shouldAutoCompact } from '@shared/contextLimit';
@@ -90,7 +94,15 @@ import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
-import { prefetchBase, resolveWorkspace, type SpareWorktrees, type WorkspaceOutcome } from './project/workspace';
+import {
+  hasAppWorkspaceBranch,
+  inspectWorktreeRemoval,
+  removeSessionWorktree,
+  prefetchBase,
+  resolveWorkspace,
+  type SpareWorktrees,
+  type WorkspaceOutcome,
+} from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
@@ -111,7 +123,8 @@ import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
-import { LOCAL_MODEL_PREFIX, OllamaLocal } from './OllamaLocal';
+import { OllamaLocal } from './OllamaLocal';
+import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -129,7 +142,6 @@ import { readableThinking } from './thinkingBlocks';
 import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
 import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
 import {
-  isLocalModel,
   pickSuggestionModel,
   sanitizeSuggestion,
   SUGGESTION_MAX_TOKENS,
@@ -281,7 +293,7 @@ type SendOptions = {
  *
  * Counts autonomous runs only. A user typing into a spawned session is not rationed.
  */
-const MAX_CONCURRENT_SPAWNED = 3;
+export const MAX_CONCURRENT_SPAWNED = 10;
 
 /**
  * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
@@ -323,6 +335,10 @@ const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
  * limit. Abandoning it changes nothing - see compactContext.
  */
 const COMPACT_TIMEOUT_MS = 120_000;
+// A local summary reads most of the window, about 14k tokens on a 16k model: over two minutes of
+// CPU prefill. Stop cannot reach a compaction, so this stays the bound on the user's wait.
+const LOCAL_COMPACT_TIMEOUT_MS = 300_000;
+const SUMMARY_SHRINK_RETRIES = 2;
 
 /**
  * How far a message may travel from the turn the USER typed, in agent-to-agent hops.
@@ -471,6 +487,8 @@ export interface ChatServiceDeps {
    * them.
    */
   sessionClosed?(sessionId: string): void;
+  /** Hold terminal creation until cleanup ends; reject unless existing terminals have exited. */
+  releaseSessionTerminals?(sessionId: string): Promise<() => void>;
 }
 
 /** One model-requested tool call, as it arrives on the wire. */
@@ -537,6 +555,19 @@ export class ChatService {
 
   /** Startup has failed; no new input may race its preservation or deletion. */
   private readonly abandoning = new Set<string>();
+
+  private withWorkspaceBindings<T>(operation: () => Promise<T>): Promise<T> {
+    return this.deps.store.withWorkspaceBindings(operation);
+  }
+
+  private async workspaceBindingReason(directory: string): Promise<string | null> {
+    try {
+      if (!(await stat(directory)).isDirectory()) return `${directory} is not a directory.`;
+    } catch (error) {
+      return error instanceof Error ? error.message : `Cannot access ${directory}.`;
+    }
+    return unusableProjectReason(directory);
+  }
 
   /**
    * A queued message the user promoted past the live turn with "send now", held between the
@@ -860,6 +891,12 @@ export class ChatService {
    * any tools can run there. See ensureWorkspace.
    */
   async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
+    return this.withWorkspaceBindings(() => this.createCodeSessionWithWorkspaceLease(request));
+  }
+
+  private async createCodeSessionWithWorkspaceLease(
+    request: CreateCodeSessionRequest
+  ): Promise<CreateCodeSessionResult> {
     const timer = new PhaseTimer();
     const catalog = await this.listModels();
     const model = (await this.pickModel(catalog.models)) ?? undefined;
@@ -870,7 +907,7 @@ export class ChatService {
     }
 
     const directory = resolve(request.directory);
-    const unusable = await unusableProjectReason(directory);
+    const unusable = await this.workspaceBindingReason(directory);
     if (unusable) return { ok: false, error: unusable };
     // Only the choice is recorded; see `ensureWorkspace` for when the worktree is actually cut.
     const base = await this.resolveWorkspaceBase(directory, (request.branch ?? '').trim(), request.workspace === true);
@@ -910,6 +947,10 @@ export class ChatService {
    * switch git refuses leaves the session exactly as it was; see checkoutInPlace.
    */
   async updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
+    return this.withWorkspaceBindings(() => this.updateProjectWithWorkspaceLease(request));
+  }
+
+  private async updateProjectWithWorkspaceLease(request: UpdateProjectRequest): Promise<UpdateProjectResult> {
     const session = await this.deps.store.get(request.sessionId);
     if (session?.mode !== 'code') return { ok: false, error: 'Only a Code session is grounded in a project.' };
 
@@ -933,7 +974,7 @@ export class ChatService {
     if (!directory) return { ok: false, error: 'Choose a project folder for this conversation first.' };
     // Checked on every change, not only on a move: a session already bound to a container has
     // to be told why nothing it picks there can work, and re-picking the folder is the way out.
-    const unusable = await unusableProjectReason(directory);
+    const unusable = await this.workspaceBindingReason(directory);
     if (unusable) return { ok: false, error: unusable };
     // An unbound session is "moved" by its first binding, which is what drops the branch and
     // context folders it never had - the same rule that applies to moving between projects.
@@ -1109,6 +1150,8 @@ export class ChatService {
     this.preparing.set(sessionId, { since: Date.now(), base });
     this.emit({ type: 'workspace', sessionId, running: true, base });
     try {
+      const unusable = await this.workspaceBindingReason(project.directory);
+      if (unusable) return { error: unusable };
       const resolved = await resolveWorkspace(project.directory, {
         base,
         // A branch already named - a spawn's, as the user approved it - is cut as named.
@@ -1398,8 +1441,47 @@ export class ChatService {
     return outcome;
   }
 
-  async deleteSession(sessionId: string): Promise<void> {
-    await this.cleanupDeletedSession(sessionId, true);
+  async inspectSessionWorktreeRemoval(sessionId: string) {
+    const session = await this.deps.store.get(sessionId);
+    // The scan parses every stored conversation; most deletes have no app worktree to inspect.
+    if (!hasAppWorkspaceBranch(session?.project)) return null;
+    const others = await this.deps.store.workspaceProjectsExcept(sessionId);
+    const inspection = await inspectWorktreeRemoval(session.project, others);
+    if (inspection && this.hasTurnInFlight(sessionId)) {
+      return { ...inspection, safe: false, reason: 'Conversation is still running' };
+    }
+    return inspection;
+  }
+
+  async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
+    if (!removeWorktree) {
+      await this.cleanupDeletedSession(sessionId, true);
+      return;
+    }
+    return this.withWorkspaceBindings(() => this.deleteSessionWithWorkspaceLease(sessionId));
+  }
+
+  private async deleteSessionWithWorkspaceLease(sessionId: string): Promise<void> {
+    if (this.abandoning.has(sessionId)) throw new Error('This conversation is already being deleted');
+    this.abandoning.add(sessionId);
+    let releaseTerminals: (() => void) | undefined;
+    try {
+      if (this.hasTurnInFlight(sessionId)) throw new Error('Stop the conversation before removing its worktree');
+      const session = await this.deps.store.get(sessionId);
+      if (!session?.project) throw new Error('This conversation has no worktree');
+      const inspection = await this.inspectSessionWorktreeRemoval(sessionId);
+      if (!inspection?.safe) throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
+      await this.deps.background?.killSession(sessionId);
+      releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
+      this.deps.sessionClosed?.(sessionId);
+      await this.deps.browser?.closeSession(sessionId);
+      const others = await this.deps.store.workspaceProjectsExcept(sessionId);
+      await removeSessionWorktree(session.project, others);
+      await this.cleanupDeletedSession(sessionId, true);
+    } finally {
+      releaseTerminals?.();
+      this.abandoning.delete(sessionId);
+    }
   }
 
   private async cleanupDeletedSession(
@@ -1644,8 +1726,7 @@ export class ChatService {
     const { released, seedHops } = options;
     const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
-    if (!api && !existing.model.startsWith(LOCAL_MODEL_PREFIX))
-      return { ok: false, error: 'Sign in to send a message.' };
+    if (!api && !isLocalModel(existing.model)) return { ok: false, error: 'Sign in to send a message.' };
     // First turns only: they are where a session start spends its time.
     const timer = existing.messages.length === 0 ? new PhaseTimer() : undefined;
 
@@ -1776,8 +1857,7 @@ export class ChatService {
     const session = await this.deps.store.get(sessionId);
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
-    if (!api && !session.model.startsWith(LOCAL_MODEL_PREFIX))
-      return { ok: false, error: 'Sign in to continue this reply.' };
+    if (!api && !isLocalModel(session.model)) return { ok: false, error: 'Sign in to continue this reply.' };
 
     const last = session.messages[session.messages.length - 1];
     if (!last || last.role !== 'assistant' || !isResumableStop(last.stopReason)) {
@@ -1857,8 +1937,9 @@ export class ChatService {
    * message released from the queue, which has no caller to read a result, still reports it.
    */
   private async autoCompact(session: ChatSession): Promise<void> {
-    const window = this.deps.models?.cached()?.find(model => model.id === session.model)?.contextWindow;
-    if (!shouldAutoCompact(session.messages, window) && !importedHistoryNeedsCompaction(session)) return;
+    const window = await this.contextWindowOf(session.model);
+    const local = isLocalModel(session.model);
+    if (!shouldAutoCompact(session.messages, window, local) && !importedHistoryNeedsCompaction(session)) return;
 
     const sessionId = session.id;
     this.compacting.add(sessionId);
@@ -1870,6 +1951,16 @@ export class ChatService {
     } finally {
       this.compacting.delete(sessionId);
       this.emit({ type: 'auto-compact', sessionId, running: false, ...(error ? { error } : {}) });
+    }
+  }
+
+  /** For a local model, the num_ctx its requests are sent with (OllamaLocal.contextTokens). */
+  private async contextWindowOf(model: string): Promise<number | undefined> {
+    if (!isLocalModel(model)) return this.deps.models?.cached()?.find(option => option.id === model)?.contextWindow;
+    try {
+      return await (this.deps.local ?? new OllamaLocal()).contextTokens(model);
+    } catch {
+      return undefined;
     }
   }
 
@@ -1896,35 +1987,55 @@ export class ChatService {
   private async compact(session: ChatSession, focus: string, automatic: boolean): Promise<ContextBoundaryResult> {
     const sessionId = session.id;
     const api = this.deps.getApiClient();
-    if (!api && !session.model.startsWith(LOCAL_MODEL_PREFIX))
-      return { ok: false, error: 'Sign in to compact this conversation.' };
+    if (!api && !isLocalModel(session.model)) return { ok: false, error: 'Sign in to compact this conversation.' };
 
     if (!hasClearableHistory(session.messages)) {
       return { ok: false, error: 'There is nothing in this conversation to compact yet.' };
     }
     const history = messagesSinceBoundary(session.messages);
+    const localWindow = isLocalModel(session.model) ? await this.contextWindowOf(session.model) : undefined;
+    let transcript = renderForSummary(
+      history,
+      localWindow === undefined ? undefined : localTranscriptChars(localWindow, COMPACT_MAX_TOKENS)
+    );
 
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
     let answer = '';
     try {
-      timer = setTimeout(() => controller.abort(), COMPACT_TIMEOUT_MS);
-      await this.streamAuxiliary(
-        api,
-        {
-          // The session's own model, as asked: a summary of a long coding conversation is the
-          // kind of reading a small model does badly, and this one is the handoff everything
-          // after the boundary depends on.
-          model: session.model,
-          messages: compactRequestMessages(renderForSummary(history), focus),
-          tools: [],
-          maxTokens: COMPACT_MAX_TOKENS,
-        },
-        event => {
-          if (event.type === 'content') answer += event.text ?? '';
-        },
-        controller.signal
+      timer = setTimeout(
+        () => controller.abort(),
+        isLocalModel(session.model) ? LOCAL_COMPACT_TIMEOUT_MS : COMPACT_TIMEOUT_MS
       );
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await this.streamAuxiliary(
+            api,
+            {
+              // The session's own model, as asked: a summary of a long coding conversation is the
+              // kind of reading a small model does badly, and this one is the handoff everything
+              // after the boundary depends on.
+              model: session.model,
+              messages: compactRequestMessages(transcript, focus),
+              tools: [],
+              maxTokens: COMPACT_MAX_TOKENS,
+            },
+            event => {
+              if (event.type === 'content') answer += event.text ?? '';
+            },
+            controller.signal
+          );
+          break;
+        } catch (err) {
+          // One message cannot be trimmed by OllamaLocal, so the transcript shrinks by what Ollama
+          // measured: dense text such as CJK runs far fewer characters to a token than estimated.
+          if (!(err instanceof ContextOverflowError) || attempt === SUMMARY_SHRINK_RETRIES) throw err;
+          transcript = renderForSummary(
+            history,
+            shrunkTranscriptChars(transcript.length, err.tokens, err.limit, COMPACT_MAX_TOKENS)
+          );
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`CHAT: could not compact ${sessionId}: ${message}`);
@@ -2010,7 +2121,7 @@ export class ChatService {
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
         // Reporting to the PARENT writes a different session's file, so it needs no ordering here.
-        void this.settleSpawnedTurn(sessionId, session.model.startsWith(LOCAL_MODEL_PREFIX));
+        void this.settleSpawnedTurn(sessionId, isLocalModel(session.model));
 
         // Awaited, and before the queue: both append to THIS session, and appendMessage is a
         // read-modify-write with no lock of its own - overlapping them would let the later
@@ -2040,7 +2151,7 @@ export class ChatService {
     if (!available || available.length === 0) return { session };
     if (available.some(model => model.id === session.model)) return { session };
     // A device-local model is never swapped for a hosted one: that would send the conversation to the server.
-    if (session.model.startsWith(LOCAL_MODEL_PREFIX)) return { session };
+    if (isLocalModel(session.model)) return { session };
 
     const replacement = await this.pickModel(available);
     if (!replacement) return { session };
@@ -2161,7 +2272,7 @@ export class ChatService {
     try {
       // Read before any await: a folder changed while the config loads must still reach the first refresh.
       let scopeVersion = this.scopeVersion(sessionId);
-      const localTurn = session.model.startsWith(LOCAL_MODEL_PREFIX);
+      const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
       const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
@@ -2388,7 +2499,7 @@ export class ChatService {
           if (event.stopReason) stopReason = event.stopReason;
           turnUsage = foldUsage(turnUsage, event);
         };
-        const failure = session.model.startsWith(LOCAL_MODEL_PREFIX)
+        const failure = isLocalModel(session.model)
           ? await streamLocalRound(
               this.deps.local ?? new OllamaLocal(),
               {
@@ -2402,7 +2513,8 @@ export class ChatService {
                 ...(maxTokens ? { maxTokens } : {}),
               },
               onCompletionEvent,
-              controller.signal
+              controller.signal,
+              dropped => this.emit({ type: 'context-trimmed', sessionId, dropped })
             )
           : await streamRound(
               api!.getAxiosInstance(),
@@ -2618,6 +2730,7 @@ export class ChatService {
                 source: { type: 'base64', media_type: image.mediaType, data: image.data },
               })),
             ],
+            continuesTurn: true,
           });
           screenshotTurns.push(wire.length - 1);
           pruneScreenshots(wire, screenshotTurns);
@@ -2678,7 +2791,8 @@ export class ChatService {
             ...(entry.round.usage ? { usage: entry.round.usage } : {}),
             ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
           }))
-          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning),
+          // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
+          .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
       ];
       // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
       const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
@@ -3199,9 +3313,7 @@ export class ChatService {
     const project = session.project;
     if (!project) return undefined;
     const visibleTitle = (target: Pick<ChatSession, 'title' | 'model'>): string =>
-      !session.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
-        ? 'Local conversation'
-        : target.title;
+      !isLocalModel(session.model) && isLocalModel(target.model) ? 'Local conversation' : target.title;
 
     const addressable = async (sessionId: string): Promise<ChatSession | null> => {
       if (!isValidSessionId(sessionId)) return null;
@@ -3233,7 +3345,7 @@ export class ChatService {
 
       readSession: async sessionId => {
         const target = await addressable(sessionId);
-        if (target?.model.startsWith(LOCAL_MODEL_PREFIX) && !session.model.startsWith(LOCAL_MODEL_PREFIX)) {
+        if (target && isLocalModel(target.model) && !isLocalModel(session.model)) {
           throw new Error('A hosted model cannot read a device-local conversation. Open it directly to read it.');
         }
         return target ? renderTranscript(target) : null;
@@ -3540,7 +3652,7 @@ export class ChatService {
     if (!target) {
       return { ok: false, reason: 'no-target', message: 'No conversation with that id in this project.' };
     }
-    if (from.model.startsWith(LOCAL_MODEL_PREFIX) && !target.model.startsWith(LOCAL_MODEL_PREFIX)) {
+    if (isLocalModel(from.model) && !isLocalModel(target.model)) {
       return {
         ok: false,
         reason: 'unavailable',
@@ -3548,10 +3660,7 @@ export class ChatService {
           'A device-local conversation cannot send messages to a hosted model. Choose a local conversation instead.',
       };
     }
-    const title =
-      !from.model.startsWith(LOCAL_MODEL_PREFIX) && target.model.startsWith(LOCAL_MODEL_PREFIX)
-        ? 'Local conversation'
-        : target.title;
+    const title = !isLocalModel(from.model) && isLocalModel(target.model) ? 'Local conversation' : target.title;
     if (target.archived === true) {
       return {
         ok: false,
@@ -3682,9 +3791,26 @@ export class ChatService {
     placement: SpawnPlacement,
     onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
+    return this.withWorkspaceBindings(() =>
+      this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, onFailed)
+    );
+  }
+
+  private async spawnSessionWithWorkspaceLease(
+    parent: ChatSession,
+    prompt: string,
+    title: string | undefined,
+    placement: SpawnPlacement,
+    onFailed?: (message: string) => Promise<void>
+  ): Promise<SpawnOutcome> {
     const project = parent.project;
     if (!project) {
       return { ok: false, reason: 'no-project', message: 'Only a Code session, which has a project, can start one.' };
+    }
+
+    const unusable = await this.workspaceBindingReason(project.workingDirectory);
+    if (unusable || !(await this.deps.store.get(parent.id))) {
+      return { ok: false, reason: 'no-project', message: unusable ?? 'The parent conversation no longer exists.' };
     }
 
     const seed = prompt.trim();
@@ -3897,7 +4023,7 @@ export class ChatService {
       });
       if (!retained) await onFailed?.(reason);
       await this.deliverChildReport(parentId, {
-        localOnly: child.model.startsWith(LOCAL_MODEL_PREFIX),
+        localOnly: isLocalModel(child.model),
         content:
           `The session you started, "${child.title}" (${child.id}), could not start and ${outcome}: ${reason} ` +
           (retained
@@ -4019,7 +4145,7 @@ export class ChatService {
 
     for (const report of queued) {
       const parent = report.localOnly ? await this.deps.store.get(sessionId) : null;
-      const withheld = report.localOnly && !parent?.model.startsWith(LOCAL_MODEL_PREFIX);
+      const withheld = report.localOnly && !(parent && isLocalModel(parent.model));
       const localNotice = 'A device-local child session finished. Open that conversation to read its report.';
       const message: ChatMessage = {
         id: randomUUID(),
@@ -4773,7 +4899,7 @@ export class ChatService {
     onEvent: (event: CompletionStreamEvent) => void,
     signal: AbortSignal
   ): Promise<void> {
-    if (request.model.startsWith(LOCAL_MODEL_PREFIX)) {
+    if (isLocalModel(request.model)) {
       const thinking = createThinkFilter();
       await (this.deps.local ?? new OllamaLocal()).stream(
         { ...request, thinking: false },
@@ -4813,7 +4939,7 @@ export class ChatService {
     // Everything is inside, including reading the catalog: this runs as a floating promise, so
     // a throw out of it would be an unhandled rejection in main rather than a missing title.
     try {
-      const model = session.model.startsWith(LOCAL_MODEL_PREFIX)
+      const model = isLocalModel(session.model)
         ? session.model
         : pickTitleModel(this.deps.models?.cached() ?? [], session.model);
       if (!model) return;
@@ -4892,17 +5018,21 @@ export class ChatService {
         .find(message => message.role === 'user' && !message.system && message.content.trim());
       if (!prompt) return null;
 
-      const available = session.model.startsWith(LOCAL_MODEL_PREFIX)
+      const available = isLocalModel(session.model)
         ? []
         : (this.deps.models?.cached() ?? (await this.listModels()).models);
-      const model = session.model.startsWith(LOCAL_MODEL_PREFIX)
-        ? { id: session.model, name: session.model, backend: 'local-ollama' }
+      const model = isLocalModel(session.model)
+        ? {
+            id: session.model,
+            name: session.model,
+            backend: localBackend(parseLocalModelId(session.model)?.runtimeId ?? ''),
+          }
         : pickSuggestionModel(available, preferredModel);
       if (!model) return null;
 
       timer = setTimeout(
         () => controller.abort(),
-        isLocalModel(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
+        isLocalBackend(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
       );
 
       let answer = '';
@@ -5287,6 +5417,7 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
     wire[index] = {
       role: 'user',
       content: [{ type: 'text', text: '[An earlier image was here. Capture or read it again if you need to see it.]' }],
+      continuesTurn: true,
     };
   }
 }
@@ -5455,10 +5586,11 @@ async function streamLocalRound(
   local: OllamaLocal,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onTrimmed?: (dropped: number) => void
 ): Promise<Error | null> {
   try {
-    await local.stream(request, onEvent, signal);
+    await local.stream(request, onEvent, signal, onTrimmed);
     return null;
   } catch (err) {
     if (signal?.aborted) return null;

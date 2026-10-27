@@ -16,7 +16,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { adminSettingsRepository, dataLakeAccessGrantRepository, dataLakeRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { HTTPError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveRetrievalLakeScope, type RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';

@@ -5,14 +5,13 @@ import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
-import Switch from '@mui/joy/Switch';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { LOCAL_MODEL_PREFIX, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
-import { effectiveContextLimit } from '@shared/contextLimit';
+import { isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { SkillMarketPanel } from './SkillMarketPanel';
@@ -23,7 +22,9 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
-import { GlobeIcon, PanelRightIcon, TerminalIcon } from './icons';
+import type { ModelsInUse } from '../models/InstalledTab';
+import { ModelsScreen } from '../models/ModelsScreen';
+import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -36,6 +37,7 @@ import { useWorkspaceChanges } from './useWorkspaceChanges';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
+import { DeleteSessionDialog } from './DeleteSessionDialog';
 import { isUntouchedImport, projectForGroup } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
@@ -57,7 +59,7 @@ import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
-import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
+import { describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
 import { ImageMenuProvider } from './ImageContextMenu';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
@@ -141,7 +143,7 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -313,6 +315,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     setBrowserOpen(true);
     writeBrowserPaneOpen(true);
   }, []);
+  const setHistory = conversation.setHistory;
+  const onHistory = useCallback((enabled: boolean) => void setHistory(enabled), [setHistory]);
   const openInBrowserPane = useCallback(
     (url: string) => openInSessionBrowser(url, activeId, showBrowserPane),
     [activeId, showBrowserPane]
@@ -334,6 +338,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
+  const modelsInUse = useMemo<ModelsInUse>(() => {
+    const localName = (id: string | undefined) =>
+      catalog.models.find(model => model.id === id && model.backend === 'local-ollama')?.name ?? null;
+    return {
+      active: localName(conversation.session?.model),
+      conversations: sessions.filter(session => !session.archived).flatMap(session => localName(session.model) ?? []),
+    };
+  }, [catalog.models, conversation.session?.model, sessions]);
   const blockedReason =
     modelOption?.supportsVision === false && draft.attachments.some(attachment => attachment.kind === 'image')
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
@@ -405,8 +417,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
+    // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.
+    const local = !!conversation.session?.model && isLocalModel(conversation.session.model);
     return {
-      contextTokens: contextTokens(reply),
+      contextTokens: occupiedTokens(conversation.messages, turnOpen, local),
       contextLimit: effectiveContextLimit(modelOption?.contextWindow),
       modelWindow: modelOption?.contextWindow ?? null,
       credits: credits.balance,
@@ -416,6 +430,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     };
   }, [
     conversation.messages,
+    conversation.session?.model,
     turnOpen,
     modelOption?.contextWindow,
     credits.balance,
@@ -587,9 +602,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     [sessions, createCode, clearCodeError, markSessionStart]
   );
 
+  const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
   const onDelete = useCallback(
-    async (sessionId: string) => {
-      await remove(sessionId);
+    async (sessionId: string, removeWorktree: boolean) => {
+      await remove(sessionId, removeWorktree);
       setActiveId(current => (current === sessionId ? null : current));
     },
     [remove]
@@ -598,6 +614,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
       <SpawnFailureToast />
+      {deleteSessionId && (
+        <DeleteSessionDialog
+          key={deleteSessionId}
+          sessionId={deleteSessionId}
+          onDelete={onDelete}
+          onClose={() => setDeleteSessionId(null)}
+        />
+      )}
       {drop.over && (
         <Box
           sx={{
@@ -634,7 +658,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onOpenArtifacts={() => setScreen('artifacts')}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onCreateInSection={sectionId => void onCreateInSection(sectionId)}
-        onDelete={sessionId => void onDelete(sessionId)}
+        onDelete={setDeleteSessionId}
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         onRename={(session, title) => void rename(session, title)}
@@ -645,6 +669,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         sectionError={sectionError}
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
+        onOpenModels={() => setScreen('models')}
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
@@ -652,6 +677,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'models' ? (
+        <ModelsScreen onClose={() => setScreen('conversation')} inUse={modelsInUse} />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (
@@ -681,6 +708,24 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   </Typography>
                 )}
               </Box>
+              {!opening && conversation.session?.historyEnabled === true && (
+                <Tooltip
+                  size="sm"
+                  variant="soft"
+                  placement="bottom-end"
+                  title="Local history is on. Change it in the browser's ... menu."
+                >
+                  <Box
+                    component="span"
+                    role="img"
+                    aria-label="Local history is on"
+                    data-testid="chat-history-indicator"
+                    sx={{ display: 'inline-flex', color: 'text.tertiary', px: 0.5 }}
+                  >
+                    <SearchIcon />
+                  </Box>
+                </Tooltip>
+              )}
               {panelProject && (
                 <Tooltip
                   size="sm"
@@ -701,16 +746,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   >
                     <PanelRightIcon />
                   </IconButton>
-                </Tooltip>
-              )}
-              {!opening && conversation.session && (
-                <Tooltip title="Keep this conversation and its visited pages in the local search index.">
-                  <Switch
-                    size="sm"
-                    checked={conversation.session.historyEnabled === true}
-                    onChange={event => void conversation.setHistory(event.target.checked)}
-                    slotProps={{ input: { 'aria-label': 'Local history', 'data-testid': 'chat-history-switch' } }}
-                  />
                 </Tooltip>
               )}
               {/* Inside the reading column, not out at the window edge: a tooltip opening from
@@ -1016,7 +1051,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             blockedReason={blockedReason}
             // Blocked rather than refused: a refused send has already cleared the box.
             notReady={
-              auth?.reauthRequired && !conversation.session?.model.startsWith(LOCAL_MODEL_PREFIX)
+              auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
                 ? 'Sign in'
                 : unbound
                   ? 'No folder'
@@ -1104,7 +1139,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         page floating over them would be unreachable - and it is told to stand down while the
         drop overlay is up, which is drawn in the React tree and so would be behind it. */}
       {browserOpen && browserAvailable && screen === 'conversation' && (
-        <BrowserPane sessionId={activeId} suspended={drop.over} conversation={conversationColumn} />
+        <BrowserPane
+          sessionId={activeId}
+          suspended={drop.over}
+          conversation={conversationColumn}
+          historyEnabled={!opening && conversation.session ? conversation.session.historyEnabled === true : null}
+          onHistory={onHistory}
+        />
       )}
     </Box>
   );

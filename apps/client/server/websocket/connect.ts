@@ -2,7 +2,7 @@ import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database
 import { ApiKeyScope, ApiKeyScopeValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';

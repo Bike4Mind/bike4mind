@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';

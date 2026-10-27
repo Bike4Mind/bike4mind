@@ -43,7 +43,7 @@ export interface SessionsController {
   creatingCode: boolean;
   codeError: string | null;
   clearCodeError: () => void;
-  remove: (sessionId: string) => Promise<void>;
+  remove: (sessionId: string, removeWorktree?: boolean) => Promise<void>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
   toggleArchived: (session: ChatSessionSummary) => Promise<void>;
   /** Rename any listed session, shown at once and rolled back (with `renameError`) if main refuses. */
@@ -152,8 +152,8 @@ export function useSessions(): SessionsController {
     [list]
   );
 
-  const remove = useCallback(async (sessionId: string) => {
-    await window.b4m.chat.deleteSession(sessionId);
+  const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
+    await window.b4m.chat.deleteSession(sessionId, removeWorktree);
     editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
 
@@ -311,6 +311,9 @@ export function useModelCatalog(): ModelCatalogController {
       void load(true);
     });
   }, [load]);
+
+  // A model pulled or removed on the Models screen changes the local half of the list.
+  useEffect(() => window.b4m.models.onInstalledChanged(() => void load(true)), [load]);
 
   const reload = useCallback(() => load(true), [load]);
 
@@ -733,6 +736,13 @@ export function useConversation(
             `Could not compact automatically, so your message went out with the whole conversation. ${event.error}`
           );
         }
+        return;
+      }
+
+      if (event.type === 'context-trimmed') {
+        setNotice(
+          `This conversation no longer fits the model's context, so ${event.dropped === 1 ? 'its oldest message was' : `its ${event.dropped} oldest messages were`} left out of this reply. Your next message compacts it first, or run /compact now.`
+        );
         return;
       }
 

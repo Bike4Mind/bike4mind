@@ -26,7 +26,7 @@ import { fileTagRepository } from '@bike4mind/database';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { Logger } from '@bike4mind/observability';
 import { researchTaskJobs } from '@server/utils/researchTasks';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { getQuestErrorCode, type IUserDocument } from '@bike4mind/common';
 

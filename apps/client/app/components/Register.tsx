@@ -82,6 +82,7 @@ const Register: React.FC = () => {
   const [otcCode, setOtcCode] = useState('');
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [submittedData, setSubmittedData] = useState<RegisterFormData | null>(null);
+  const [inviteCode, setInviteCode] = useState('');
 
   // MFA state - the verify call can come back as a LOGIN when the email already has an
   // account (the user forgot they registered, or a prior attempt created it), and that
@@ -136,12 +137,6 @@ const Register: React.FC = () => {
 
   const hasRedirectedRef = useRef(false);
 
-  // Gate direct navigation to /register on the open-registration master switch.
-  // The login page already hides the "Sign up" link when this is off, but a user
-  // hitting /register directly would otherwise reach the form, submit, receive an
-  // OTC code, and dead-end on the backend's "invite code required" rejection.
-  // Redirect them to /login instead. Only act once the config has loaded and is
-  // explicitly false - never on the undefined (still-loading) value.
   const { data: publicConfig, isLoading: isPublicConfigLoading } = usePublicConfig();
   const registrationClosed = !isPublicConfigLoading && publicConfig?.allowOpenRegistration === false;
 
@@ -152,15 +147,6 @@ const Register: React.FC = () => {
       applyRedirect(router.history, searchParams.get('redirectTo'), '/', true);
     }
   }, [currentUser, router]);
-
-  useEffect(() => {
-    if (registrationClosed && !hasRedirectedRef.current) {
-      hasRedirectedRef.current = true;
-      const searchParams = new URLSearchParams(window.location.search);
-      const redirectTo = searchParams.get('redirectTo');
-      navigate({ to: '/login', search: redirectTo ? { redirectTo } : undefined });
-    }
-  }, [registrationClosed, navigate]);
 
   // Cleanup cooldown timer
   useEffect(() => {
@@ -210,6 +196,7 @@ const Register: React.FC = () => {
 
   const onSubmit = async (data: RegisterFormData) => {
     if (rateLimit.secondsLeft > 0) return;
+    if (registrationClosed && !inviteCode.trim()) return;
     setCreateError(null);
     setServerUsernameError(null);
     setServerEmailError(null);
@@ -266,6 +253,7 @@ const Register: React.FC = () => {
         email: submittedData.email,
         code: otcCode,
         username: submittedData.username,
+        inviteCode: inviteCode.trim() || undefined,
         pendingToken: pendingToken || undefined,
         clientData,
         // P0-B: the schema's z.literal(true) guarantees both boxes were checked before
@@ -363,9 +351,7 @@ const Register: React.FC = () => {
     window.location.href = appendRedirectTo(redirectUrl, new URLSearchParams(window.location.search).get('redirectTo'));
   };
 
-  // Avoid flashing the registration form while the open-registration switch is still
-  // loading or when it's off (the effect above redirects to /login).
-  if (isPublicConfigLoading || registrationClosed) {
+  if (isPublicConfigLoading) {
     return (
       <Box
         data-testid="register-config-gate"
@@ -453,60 +439,62 @@ const Register: React.FC = () => {
 
           {currentStep === 'form' && (
             <>
-              <Box
-                className="register-social-buttons"
-                sx={{ display: 'flex', gap: '8px', width: '100%', '& > button': { minHeight: '40px' } }}
-              >
-                <Button
-                  className="google-login-button"
-                  type="button"
-                  variant="outlined"
-                  color="neutral"
-                  sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
-                  disabled={isSendingOTC}
-                  onClick={() => handleSocialLogin('google')}
+              <Box hidden={registrationClosed}>
+                <Box
+                  className="register-social-buttons"
+                  sx={{ display: 'flex', gap: '8px', width: '100%', '& > button': { minHeight: '40px' } }}
                 >
-                  <Box display="flex" alignItems="center">
-                    <GoogleColorIcon />
-                    <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
-                      Google
-                    </Typography>
-                  </Box>
-                </Button>
-                <Button
-                  className="github-login-button"
-                  type="button"
-                  variant="outlined"
-                  color="neutral"
-                  sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
-                  disabled={isSendingOTC}
-                  onClick={() => handleSocialLogin('github')}
-                >
-                  <Box display="flex" alignItems="center">
-                    <GitHubIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
-                    <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
-                      GitHub
-                    </Typography>
-                  </Box>
-                </Button>
-                <Button
-                  className="okta-login-button"
-                  type="button"
-                  variant="outlined"
-                  color="neutral"
-                  sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
-                  disabled={isSendingOTC}
-                  onClick={() => handleSocialLogin('okta')}
-                >
-                  <Box display="flex" alignItems="center">
-                    <OktaIcon sx={{ color: '#007DC1' }} />
-                    <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
-                      Okta
-                    </Typography>
-                  </Box>
-                </Button>
+                  <Button
+                    className="google-login-button"
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
+                    disabled={isSendingOTC}
+                    onClick={() => handleSocialLogin('google')}
+                  >
+                    <Box display="flex" alignItems="center">
+                      <GoogleColorIcon />
+                      <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
+                        Google
+                      </Typography>
+                    </Box>
+                  </Button>
+                  <Button
+                    className="github-login-button"
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
+                    disabled={isSendingOTC}
+                    onClick={() => handleSocialLogin('github')}
+                  >
+                    <Box display="flex" alignItems="center">
+                      <GitHubIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+                      <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
+                        GitHub
+                      </Typography>
+                    </Box>
+                  </Button>
+                  <Button
+                    className="okta-login-button"
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
+                    disabled={isSendingOTC}
+                    onClick={() => handleSocialLogin('okta')}
+                  >
+                    <Box display="flex" alignItems="center">
+                      <OktaIcon sx={{ color: '#007DC1' }} />
+                      <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
+                        Okta
+                      </Typography>
+                    </Box>
+                  </Button>
+                </Box>
+                <Divider sx={dividerStyles}>or</Divider>
               </Box>
-              <Divider sx={dividerStyles}>or</Divider>
 
               <Stack className="register-stack" spacing={3}>
                 {/* eslint-disable-next-line react-hooks/refs -- react-hook-form's handleSubmit uses refs internally */}
@@ -616,6 +604,17 @@ const Register: React.FC = () => {
                       </FormControl>
                     </Stack>
 
+                    <FormControl size="sm" required={registrationClosed} sx={{ mt: '16px' }}>
+                      <FormLabel htmlFor="register-invite-code">Invite code</FormLabel>
+                      <Input
+                        data-testid="register-invite-input"
+                        slotProps={{ input: { id: 'register-invite-code' } }}
+                        value={inviteCode}
+                        onChange={e => setInviteCode(e.target.value)}
+                        sx={inputStyles}
+                      />
+                    </FormControl>
+
                     {/* P0-B abuse gate: AUP/ToS acceptance + 18+ attestation. Both are
                         z.literal(true) in the schema, so Continue stays disabled until both are
                         checked. The acceptedPolicyVersion sent on OTC verify is the single
@@ -701,7 +700,12 @@ const Register: React.FC = () => {
                         type="submit"
                         fullWidth
                         color="primary"
-                        disabled={!isValid || isSendingOTC || rateLimit.secondsLeft > 0}
+                        disabled={
+                          !isValid ||
+                          isSendingOTC ||
+                          rateLimit.secondsLeft > 0 ||
+                          (registrationClosed && !inviteCode.trim())
+                        }
                         sx={[
                           { borderRadius: '8px', display: 'flex', gap: 1, alignItems: 'center' },
                           isDarkMode ? darkInactive : lightInactive,

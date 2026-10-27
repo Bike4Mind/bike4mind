@@ -15,7 +15,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: any, _res: any, next: any) => next(),
 }));
 

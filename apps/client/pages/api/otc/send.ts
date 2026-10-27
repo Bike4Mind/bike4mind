@@ -112,6 +112,7 @@ const handler = baseApi({ auth: false })
                 to: toEmail,
                 subject: 'Your sign-in code',
                 body: emailBody,
+                category: 'otc',
               });
               // Count accepted email dispatches even if token confirmation later fails.
               req.logger.info('otc-code-dispatched');

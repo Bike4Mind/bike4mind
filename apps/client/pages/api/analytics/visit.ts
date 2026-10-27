@@ -1,8 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { isAnalyticsConfigured, emitVisitEvent, sanitizeReferrer } from '@server/analytics/emitActiveEvent';
-import { readUtmCookie } from '@server/analytics/cookies';
+import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import { isProbableBot, mintVisitId, readVisitId, visitCookieHeader } from '@server/analytics/visitSession';
 
 /**

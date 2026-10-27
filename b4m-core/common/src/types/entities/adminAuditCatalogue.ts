@@ -76,6 +76,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
+  'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
   'settings.whats_new.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.synced': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.generation_triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
@@ -98,6 +99,15 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.sessions.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  // Bulk abuse response (apps/client/pages/api/admin/abuse/bulk-*.ts): one strict entry per user and
+  // step, written in that user's transaction, plus a summary per execute. The summary is bestEffort
+  // because the per-user entries are the record and the work is already committed when it is written.
+  'abuse.bulk.executed': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  'abuse.bulk.ban': { category: 'access', severity: 'critical', write: 'strict' },
+  'abuse.bulk.revoke_keys': { category: 'access', severity: 'notice', write: 'strict' },
+  'abuse.bulk.revoke_sessions': { category: 'identity', severity: 'notice', write: 'strict' },
+  'abuse.bulk.clawback': { category: 'credits', severity: 'notice', write: 'strict' },
+  'abuse.bulk.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
@@ -175,6 +185,48 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: rapid reply
+  'settings.rapid_reply_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.bulk_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  // Handler coverage: content and directory config
+  'settings.modal.variants_updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.modal.variants_cleared': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.modal.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.modal.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.modal.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.release_note.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.release_note.status_changed': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.business_link.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.business_link.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.business_link.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.business_link.imported': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.business_link_category.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.business_link_category.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.business_link_category.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.team_member.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.team_member.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.team_member.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.voice_agent.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.voice_agent.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.voice_agent.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+
+  // Handler coverage: signup and org access
+  'org.partner_signup_rule.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.deleted': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.backfilled': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.accounts.migrated': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.reg_invite.updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.reg_invite.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.waitlist_subscriber.deleted': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'org.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

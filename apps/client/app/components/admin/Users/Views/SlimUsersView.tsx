@@ -4,7 +4,7 @@ import { useGetRecentActivities } from '@client/app/hooks/data/user';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
-import { Box, Button, Card, Grid, LinearProgress, Stack, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Card, Checkbox, Grid, LinearProgress, Stack, Tooltip, Typography } from '@mui/joy';
 import prettyBytes from 'pretty-bytes';
 import React, { useMemo } from 'react';
 import AdminProfile from '../../AdminProfile';
@@ -14,13 +14,22 @@ import UserIdChip from '../UserIdChip';
 import { computeStoragePercent } from './storageUtils';
 import { formatAccountAge, formatAccountCreatedTitle } from '../formatAccountAge';
 
+/** Row checkboxes for the bulk abuse response; omitted, the list renders without them. */
+export type UserSelection = {
+  selectedIds: ReadonlySet<string>;
+  onToggle: (userId: string) => void;
+  onTogglePage: (userIds: string[], selected: boolean) => void;
+};
+
 interface SlimUsersViewProps {
   user: AdminUserListItem;
   index: number;
+  selection?: UserSelection;
 }
 
 interface SlimUsersContainerProps {
   users: AdminUserListItem[];
+  selection?: UserSelection;
 }
 
 /** Header and row share these widths; they must be edited together or the table skews. */
@@ -117,19 +126,56 @@ const UserActions: React.FC<{ userId: string }> = ({ userId }) => {
   );
 };
 
-const SlimUsersViewHeader: React.FC = () => (
-  <Card
-    variant="outlined"
+const RowCheckbox: React.FC<{ user: AdminUserListItem; selection?: UserSelection }> = ({ user, selection }) =>
+  selection ? (
+    <Checkbox
+      size="sm"
+      checked={selection.selectedIds.has(user.id)}
+      onChange={() => selection.onToggle(user.id)}
+      slotProps={{ input: { 'aria-label': `Select ${user.email}`, 'data-testid': 'admin-user-select-checkbox' } }}
+    />
+  ) : null;
+
+const PageCheckbox: React.FC<{ users: AdminUserListItem[]; selection: UserSelection }> = ({ users, selection }) => {
+  const selectedOnPage = users.filter(user => selection.selectedIds.has(user.id)).length;
+  const allSelected = users.length > 0 && selectedOnPage === users.length;
+  return (
+    <Checkbox
+      size="sm"
+      checked={allSelected}
+      indeterminate={selectedOnPage > 0 && !allSelected}
+      onChange={() =>
+        selection.onTogglePage(
+          users.map(user => user.id),
+          !allSelected
+        )
+      }
+      slotProps={{
+        input: { 'aria-label': 'Select all users on this page', 'data-testid': 'admin-user-select-page-checkbox' },
+      }}
+    />
+  );
+};
+
+// One table surface (DESIGN_GUIDE.md, "Tables"): a 38px header and 56px rows split by 1px lines.
+const ROW_SX = {
+  px: 1.5,
+  borderBottom: '1px solid',
+  borderColor: 'admin.border',
+  display: 'flex',
+  alignItems: 'center',
+} as const;
+
+const SlimUsersViewHeader: React.FC<SlimUsersContainerProps> = ({ users, selection }) => (
+  <Box
+    role="row"
     sx={{
-      mb: 1,
-      width: '100%',
-      bgcolor: 'background.surface',
-      p: 1,
+      ...ROW_SX,
+      minHeight: 38,
+      bgcolor: 'admin.surfaceSubtle',
       position: 'sticky',
       top: 0,
       zIndex: 1,
-      borderBottom: 2,
-      borderColor: 'divider',
     }}
   >
     <Grid container spacing={2} sx={{ width: '100%' }} alignItems="center">
@@ -147,37 +193,44 @@ const SlimUsersViewHeader: React.FC = () => (
         ] as const
       ).map(([label, width]) => (
         <Grid key={label} xs={width}>
-          <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary', ...ELLIPSIS_SX }}>
-            {label}
-          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            {label === 'Name' && selection && <PageCheckbox users={users} selection={selection} />}
+            <Typography level="body-xs" role="columnheader" sx={{ color: 'admin.inkMuted', ...ELLIPSIS_SX }}>
+              {label}
+            </Typography>
+          </Stack>
         </Grid>
       ))}
     </Grid>
-  </Card>
+  </Box>
 );
 
-const SlimUsersView: React.FC<SlimUsersViewProps> = ({ user, index }) => (
-  <Card
-    variant="outlined"
+const SlimUsersView: React.FC<Omit<SlimUsersViewProps, 'index'>> = ({ user, selection }) => (
+  <Box
+    role="row"
     data-testid="admin-user-card"
     sx={{
-      mb: 1,
-      width: '100%',
-      bgcolor: index % 2 ? 'background.level1' : 'background.level2',
-      p: 1,
+      ...ROW_SX,
+      minHeight: 56,
+      '&:last-of-type': { borderBottom: 0 },
+      '&:hover': { bgcolor: 'admin.surfaceSubtle' },
     }}
   >
     <Grid container spacing={2} sx={{ width: '100%' }} alignItems="center">
-      <Grid xs={COLUMN_WIDTHS.name}>
-        <Tooltip title={user.name} placement="top">
-          <Typography
-            level="body-sm"
-            sx={{ cursor: 'help', fontWeight: 500, ...ELLIPSIS_SX }}
-            data-testid={`user-name-${user.name}`}
-          >
-            {user.name}
-          </Typography>
-        </Tooltip>
+      {/* The checkbox shares the name cell so COLUMN_WIDTHS still sums to 12. */}
+      <Grid xs={COLUMN_WIDTHS.name} sx={{ minWidth: 0 }}>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+          <RowCheckbox user={user} selection={selection} />
+          <Tooltip title={user.name} placement="top">
+            <Typography
+              level="body-sm"
+              sx={{ cursor: 'help', fontWeight: 500, ...ELLIPSIS_SX }}
+              data-testid={`user-name-${user.name}`}
+            >
+              {user.name}
+            </Typography>
+          </Tooltip>
+        </Stack>
       </Grid>
 
       <Grid xs={COLUMN_WIDTHS.userId} sx={{ minWidth: 0 }}>
@@ -234,21 +287,22 @@ const SlimUsersView: React.FC<SlimUsersViewProps> = ({ user, index }) => (
         <UserActions userId={user.id} />
       </Grid>
     </Grid>
-  </Card>
+  </Box>
 );
 
 /**
  * Phone layout: stacked card instead of the 800px-wide grid, which previously gave every
  * row its own horizontal scrollbar. Storage is omitted here and stays in the Admin modal.
  */
-const SlimUserCardMobile: React.FC<SlimUsersViewProps> = ({ user, index }) => (
+const SlimUserCardMobile: React.FC<SlimUsersViewProps> = ({ user, index, selection }) => (
   <Card
     variant="outlined"
     data-testid="admin-user-card"
     sx={{ mb: 1, width: '100%', bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 1, gap: 1 }}
   >
     <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
-      <Box sx={{ minWidth: 0 }}>
+      <RowCheckbox user={user} selection={selection} />
+      <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography level="title-sm" data-testid={`user-name-${user.name}`} sx={ELLIPSIS_SX}>
           {user.name}
         </Typography>
@@ -268,7 +322,7 @@ const SlimUserCardMobile: React.FC<SlimUsersViewProps> = ({ user, index }) => (
   </Card>
 );
 
-const SlimUsersContainer: React.FC<SlimUsersContainerProps> = ({ users }) => {
+const SlimUsersContainer: React.FC<SlimUsersContainerProps> = ({ users, selection }) => {
   const isMobile = useIsMobile();
 
   // Rendered conditionally rather than hidden with CSS so row testids never appear twice.
@@ -276,19 +330,19 @@ const SlimUsersContainer: React.FC<SlimUsersContainerProps> = ({ users }) => {
     return (
       <>
         {users.map((user, index) => (
-          <SlimUserCardMobile user={user} index={index} key={user.id} />
+          <SlimUserCardMobile user={user} index={index} key={user.id} selection={selection} />
         ))}
       </>
     );
   }
 
   return (
-    <>
-      <SlimUsersViewHeader />
-      {users.map((user, index) => (
-        <SlimUsersView user={user} index={index} key={user.id} />
+    <Card variant="outlined" role="table" aria-label="Users" sx={{ p: 0, gap: 0, overflow: 'clip' }}>
+      <SlimUsersViewHeader users={users} selection={selection} />
+      {users.map(user => (
+        <SlimUsersView user={user} key={user.id} selection={selection} />
       ))}
-    </>
+    </Card>
   );
 };
 

@@ -373,6 +373,7 @@ describe('/api/otc/send', () => {
     await handler(req, res);
 
     expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(EmailEvents.Send.publish).toHaveBeenCalledWith(expect.objectContaining({ category: 'otc' }));
     expect(req.logger.info).toHaveBeenCalledExactlyOnceWith('otc-code-dispatched');
   });
 

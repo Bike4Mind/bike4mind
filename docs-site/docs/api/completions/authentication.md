@@ -12,30 +12,29 @@ Complete guide to authenticating with the B4M Completions API and securing your 
 
 The API supports **two authentication methods**, which are tried in this order:
 
-### 1. API Key (Recommended)
+### 1. API Key
 
 Use an API key for production integrations and server-to-server communication. API keys provide fine-grained access control through scopes and rate limiting.
 
-**Header formats** (any of these work):
+**Header formats:**
 
 ```bash
-# Option 1: X-API-Key header (recommended)
-X-API-Key: b4m_live_xxxxxxxxxxxx
-
-# Option 2: Authorization with ApiKey prefix
-Authorization: ApiKey b4m_live_xxxxxxxxxxxx
-
-# Option 3: Authorization with Bearer prefix (if key starts with b4m_)
+# Canonical
 Authorization: Bearer b4m_live_xxxxxxxxxxxx
+
+# Legacy, still accepted
+X-API-Key: b4m_live_xxxxxxxxxxxx
 ```
+
+`Authorization: ApiKey b4m_live_xxxxxxxxxxxx` is also accepted. A `Bearer` token that starts with `b4m_` is treated as an API key; anything else is treated as a JWT.
 
 **Example request:**
 
 ```bash
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
-  -H "X-API-Key: b4m_live_xxxxxxxxxxxx" \
+  -H "Authorization: Bearer b4m_live_xxxxxxxxxxxx" \
   -H "Content-Type: application/json" \
-  -d '{"model": "claude-3-5-sonnet", "messages": [...]}'
+  -d '{"model": "claude-sonnet-5", "messages": [...]}'
 ```
 
 ### 2. JWT Token (Fallback)
@@ -54,19 +53,41 @@ Authorization: Bearer <jwt-token>
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
   -H "Content-Type: application/json" \
-  -d '{"model": "claude-3-5-sonnet", "messages": [...]}'
+  -d '{"model": "claude-sonnet-5", "messages": [...]}'
 ```
 
 ---
+
+## Subscription access
+
+Hosted API keys and CLI/desktop cloud access require an active paid subscription by default.
+Paid standalone plans and organization seats qualify. An organization-billed key also qualifies
+when its billing organization has a paid subscription. Administrators, developer-tagged users
+and keys provisioned by an administrator are exempt from this access switch.
+
+An administrator can change **Admin Settings > SecOps > API Rate Limiting > API Key Access**:
+`all` opens access, `paid` requires a subscription, and `disabled` permits only the exemptions.
+Self-hosted installations default to `all`. Changes apply within 30 seconds and also affect
+existing keys and CLI/desktop sessions.
+
+Federated apps using the AI-token exchange follow the same policy. A refused exchange returns
+HTTP 403 with `error: "subscription_required"`, so your app can direct users to upgrade.
+
+### Troubleshooting subscription access
+
+If a valid key receives **"API keys require an active paid subscription"**, check your active
+subscription and the administrator's access setting. Replacing the key does not change eligibility.
+An organization-billed key must name the subscribed organization. A 5xx response means the server
+could not complete verification; retry with backoff instead of discarding the credential.
 
 ## Obtaining an API Key
 
 Follow these steps to create an API key:
 
-### Step 1: Navigate to API Keys Settings
+### Step 1: Open API Keys
 
 1. Log in to your B4M account
-2. Go to **Settings** → **API Keys**
+2. Open the **Profile** menu, then choose **More** -> **API Keys**
 3. Click **Create API Key**
 
 ### Step 2: Configure API Key
@@ -132,23 +153,23 @@ The API checks authentication in this order:
 
 ```
 1. Check for API key in headers
-   ├─ X-API-Key header
-   ├─ Authorization: ApiKey
-   └─ Authorization: Bearer b4m_*
+   |- Authorization: Bearer b4m_*
+   |- X-API-Key (legacy)
+   \- Authorization: ApiKey
 
 2. If API key found:
-   ├─ Validate key
-   ├─ Check required scopes (ai:generate or ai:chat)
-   ├─ Apply rate limiting
-   └─ Proceed to request
+   |- Validate key
+   |- Check required scopes (ai:generate or ai:chat)
+   |- Apply rate limiting
+   \- Proceed to request
 
 3. If no API key found:
-   ├─ Check for JWT token
-   ├─ Validate JWT
-   └─ Proceed to request
+   |- Check for JWT token
+   |- Validate JWT
+   \- Proceed to request
 
 4. If neither found:
-   └─ Return 401 Unauthorized
+   \- Return 401 Unauthorized
 ```
 
 ---
@@ -252,7 +273,7 @@ This principle of least privilege limits damage if a key is compromised.
 const apiKey = 'b4m_live_xxxxxxxxxxxx'; // Exposed to users!
 
 fetch('https://app.bike4mind.com/api/ai/v1/completions', {
-  headers: { 'X-API-Key': apiKey }
+  headers: { 'Authorization': `Bearer ${apiKey}` }
 });
 ```
 
@@ -265,6 +286,8 @@ fetch('/api/my-completion-proxy', {
 });
 
 // Backend code (Node.js/Express)
+import { Readable } from 'node:stream';
+
 app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   // Validate user has permission
   if (!req.user.canUseAI) {
@@ -275,14 +298,16 @@ app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
     method: 'POST',
     headers: {
-      'X-API-Key': process.env.B4M_API_KEY, // Safe on server
+      'Authorization': `Bearer ${process.env.B4M_API_KEY}`, // Safe on server
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(req.body)
   });
 
   // Stream response back to client
-  response.body.pipe(res);
+  res.status(response.status);
+  res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+  Readable.fromWeb(response.body).pipe(res);
 });
 ```
 
@@ -294,9 +319,7 @@ If your application runs on a fixed set of servers, restrict API key usage to th
 
 Use different API keys for each environment:
 
-- **Production:** `b4m_live_xxxxxxxxxxxx`
-- **Staging:** `b4m_test_xxxxxxxxxxxx`
-- **Development:** `b4m_test_xxxxxxxxxxxx`
+Create a separate key for production, staging and development, and name each one for its environment. All keys start with `b4m_live_`.
 
 This way, if a development key is compromised, your production environment remains secure.
 
@@ -306,7 +329,13 @@ This way, if a development key is compromised, your production environment remai
 
 ### 401 Unauthorized
 
-**Error message:** `"Authentication failed. Provide a valid API key or JWT token."`
+**Response body:**
+
+```json
+{ "error": "Authentication failed. Provide a valid API key or JWT token.", "request_id": "..." }
+```
+
+For some invalid keys the `error` text is more specific, for example `Invalid API key: <reason>`. Branch on the status, not the text.
 
 **Causes:**
 - Missing authentication header
@@ -316,19 +345,28 @@ This way, if a development key is compromised, your production environment remai
 
 **Solutions:**
 1. Verify API key is correctly set in environment variables
-2. Check API key format (should start with `b4m_live_` or `b4m_test_`)
-3. Ensure header format is correct (`X-API-Key: <key>`)
+2. Check API key format (it should start with `b4m_live_`)
+3. Ensure header format is correct (`Authorization: Bearer <key>`)
 4. Regenerate API key if expired or revoked
 
 ### 403 Forbidden
 
-**Error message:** `"API key does not have permission for AI completions"`
+**Response body:**
+
+```json
+{
+  "error": "API key does not have permission for this endpoint (requires ai:chat or ai:generate)",
+  "required_scopes": ["ai:chat", "ai:generate"],
+  "request_id": "..."
+}
+```
 
 **Causes:**
-- API key missing required scopes (`ai:generate` or `ai:chat`)
+- API key missing required scopes (`ai:generate` or `ai:chat`); the body includes `required_scopes`
+- If the body has no `required_scopes`, the account may be suspended or under a dispute; contact support. JWT requests can also be blocked by required MFA enrollment: complete enrollment in the web app. Changing key scopes does not resolve these account restrictions
 
 **Solutions:**
-1. Go to Settings → API Keys
+1. Open the Profile menu -> More -> API Keys
 2. Edit your API key
 3. Add `ai:generate` or `ai:chat` scope
 4. Save changes
@@ -342,11 +380,11 @@ This way, if a development key is compromised, your production environment remai
 ```bash
 # Test authentication
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
-  -H "X-API-Key: $B4M_API_KEY" \
+  -H "Authorization: Bearer $B4M_API_KEY" \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-3-5-sonnet",
+    "model": "claude-sonnet-5",
     "messages": [{"role": "user", "content": "test"}]
   }'
 ```
@@ -356,7 +394,7 @@ curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
 **Expected failure (invalid key):**
 ```
 HTTP/1.1 401 Unauthorized
-{"type":"error","message":"Authentication failed. Provide a valid API key or JWT token."}
+{"error":"Authentication failed. Provide a valid API key or JWT token.","request_id":"..."}
 ```
 
 ### Testing Programmatically
@@ -369,11 +407,11 @@ async function testAuth(apiKey) {
     const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
       method: 'POST',
       headers: {
-        'X-API-Key': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet',
+        model: 'claude-sonnet-5',
         messages: [{ role: 'user', content: 'test' }]
       })
     });
@@ -402,11 +440,11 @@ def test_auth(api_key):
         response = requests.post(
             'https://app.bike4mind.com/api/ai/v1/completions',
             headers={
-                'X-API-Key': api_key,
+                'Authorization': f"Bearer {api_key}",
                 'Content-Type': 'application/json',
             },
             json={
-                'model': 'claude-3-5-sonnet',
+                'model': 'claude-sonnet-5',
                 'messages': [{'role': 'user', 'content': 'test'}]
             },
             stream=True
@@ -426,7 +464,7 @@ test_auth(os.environ.get('B4M_API_KEY'))
 
 ## Next Steps
 
-- **[API Reference](/api/completions/reference)** - Complete technical specification
-- **[SSE Streaming Guide](/api/completions/streaming)** - Implement streaming
-- **[Error Handling](/api/completions/errors)** - Troubleshoot authentication issues
-- **[Best Practices](/api/completions/best-practices)** - Production security guidance
+- **[API Reference](./reference.md)** - Complete technical specification
+- **[SSE Streaming Guide](./streaming.md)** - Implement streaming
+- **[Error Handling](./errors.md)** - Troubleshoot authentication issues
+- **[Best Practices](./best-practices.md)** - Production security guidance

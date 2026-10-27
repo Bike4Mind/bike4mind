@@ -8,6 +8,7 @@ import {
   creditsToUsdAtFloor,
   formatUsdAmount,
   formatUsdPerCredit,
+  isEnforceCreditsLocked,
   MIN_PRICE_PER_CREDIT_USD,
   resolveTeamPlanSettings,
   SETTING_TABS,
@@ -47,6 +48,20 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     keys: ['allowOpenRegistration', 'defaultFreeCredits', 'ReferralCreditsAmount'],
   },
   {
+    id: 'referral-rewards',
+    title: 'Referral rewards for inviters',
+    description:
+      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. Only the starting-invite count is active today; the reward, hold and alert settings are saved but not paid out until inviter rewards ship.',
+    keys: [
+      'ReferralFirstAnswerCredits',
+      'ReferralFirstPaymentCredits',
+      'ReferralSecondPaymentCredits',
+      'ReferralHoldDays',
+      'ReferralInvitesPerUser',
+      'ReferralAlertRewardsPerDay',
+    ],
+  },
+  {
     id: 'credits',
     title: 'Credits and pricing',
     description: 'How usage is metered and what credits cost.',
@@ -62,7 +77,9 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
 
 /** The settings in the tier rate-limit group, read from the group tags so a new tier is picked up. */
 export const RATE_LIMIT_SETTING_KEYS = (Object.keys(settingsMap) as SettingKey[]).filter(
-  key => (settingsMap[key] as { group?: string }).group === API_SERVICE_GROUPS.RATE_LIMITING.id
+  key =>
+    (settingsMap[key] as { group?: string }).group === API_SERVICE_GROUPS.RATE_LIMITING.id &&
+    key.startsWith('apiRateLimit')
 );
 
 // Admin Settings search term that narrows the list to the rate-limit group; it matches on setting
@@ -116,6 +133,9 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   switch (key) {
     case 'defaultFreeCredits':
     case 'ReferralCreditsAmount':
+    case 'ReferralFirstAnswerCredits':
+    case 'ReferralFirstPaymentCredits':
+    case 'ReferralSecondPaymentCredits':
       if (!Number.isFinite(amount)) return null;
       return `${amount.toLocaleString('en-US')} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
     case 'pricePerCredit':
@@ -246,6 +266,11 @@ const AdminGrowthPricingTab = () => {
                       index={index}
                       setting={setting}
                       defaultValue={current}
+                      lockedNote={
+                        key === 'enforceCredits' && isEnforceCreditsLocked()
+                          ? 'Always on for hosted deployments'
+                          : undefined
+                      }
                     />
                   </div>
                 );

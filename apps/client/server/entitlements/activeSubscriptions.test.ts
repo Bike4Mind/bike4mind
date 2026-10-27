@@ -17,10 +17,67 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolder
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn } } }));
 
-import { getActiveSubscriptionsForUser, getRequestActiveSubscriptions } from './activeSubscriptions';
+import {
+  activePlanResolver,
+  getActiveSubscriptionsForUser,
+  getRequestActiveSubscriptions,
+} from './activeSubscriptions';
 
 const own = { priceId: 'price_pro', ownerType: 'User', ownerId: 'u1' };
 const seat = { priceId: 'price_team', ownerType: 'Organization', ownerId: 'org1' };
+
+describe('activePlanResolver', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findActiveUserSubscriptions.mockResolvedValue([]);
+    findActiveSubscriptionsByOwners.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockResolvedValue([]);
+  });
+
+  it('reports no plan only after the user and org reads succeed', async () => {
+    await expect(activePlanResolver.hasActivePlan('u1')).resolves.toBe(false);
+    expect(findActiveUserSubscriptions).toHaveBeenCalledWith('u1');
+    expect(findPlanHolderOrgIds).toHaveBeenCalledWith('u1');
+    expect(findActiveSubscriptionsByOwners).not.toHaveBeenCalled();
+  });
+
+  it('recognizes a user-owned plan without needing the org leg', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([own]);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).resolves.toBe(true);
+    expect(findPlanHolderOrgIds).not.toHaveBeenCalled();
+  });
+
+  it('recognizes an org seat even when the user has no personal plan', async () => {
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwners.mockResolvedValue([seat]);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).resolves.toBe(true);
+    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['org1']);
+  });
+
+  it('does not classify a failed membership read as no active plan', async () => {
+    const error = new Error('membership lookup unavailable');
+    findPlanHolderOrgIds.mockRejectedValue(error);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).rejects.toBe(error);
+  });
+
+  it('does not classify a failed org-subscription read as no active plan', async () => {
+    const error = new Error('org subscriptions unavailable');
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwners.mockRejectedValue(error);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).rejects.toBe(error);
+  });
+
+  it('propagates a failed user-owned subscription read', async () => {
+    const error = new Error('user subscriptions unavailable');
+    findActiveUserSubscriptions.mockRejectedValue(error);
+
+    await expect(activePlanResolver.hasActivePlan('u1')).rejects.toBe(error);
+  });
+});
 
 describe('getActiveSubscriptionsForUser', () => {
   beforeEach(() => {
@@ -66,6 +123,23 @@ describe('getActiveSubscriptionsForUser', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it('strict access reads propagate membership lookup failures even for personal subscribers', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([own]);
+    findPlanHolderOrgIds.mockRejectedValue(new Error('membership down'));
+
+    await expect(getActiveSubscriptionsForUser('u1', { strict: true })).rejects.toThrow('membership down');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('strict access reads propagate org subscription failures even for a personal subscriber', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([own]);
+    findPlanHolderOrgIds.mockResolvedValue(['org1']);
+    findActiveSubscriptionsByOwners.mockRejectedValue(new Error('org subscriptions down'));
+
+    await expect(getActiveSubscriptionsForUser('u1', { strict: true })).rejects.toThrow('org subscriptions down');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('still fails when the user-owned read fails (nothing to degrade to)', async () => {
     findActiveUserSubscriptions.mockRejectedValue(new Error('mongo unavailable'));
 
@@ -104,6 +178,28 @@ describe('getRequestActiveSubscriptions', () => {
 
     await expect(getRequestActiveSubscriptions({ user })).resolves.toEqual([{ ...seat, ownerId: 'adminOrg' }]);
     expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['adminOrg']);
+  });
+
+  it('refreshes a degraded request memo before a strict lookup', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([]);
+    findPlanHolderOrgIds.mockRejectedValueOnce(new Error('membership down'));
+    const req = { user };
+
+    await expect(getRequestActiveSubscriptions(req)).resolves.toEqual([]);
+    await expect(getRequestActiveSubscriptions(req, { strict: true })).resolves.toEqual([seat]);
+    await expect(getRequestActiveSubscriptions(req, { strict: true })).resolves.toEqual([seat]);
+    expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a degraded memo when the strict retry also fails', async () => {
+    findActiveUserSubscriptions.mockResolvedValue([]);
+    const error = new Error('membership down');
+    findPlanHolderOrgIds.mockRejectedValue(error);
+    const req = { user };
+
+    await expect(getRequestActiveSubscriptions(req)).resolves.toEqual([]);
+    await expect(getRequestActiveSubscriptions(req, { strict: true })).rejects.toBe(error);
+    expect(findPlanHolderOrgIds).toHaveBeenCalledTimes(2);
   });
 
   it('manager and admin orgs do not widen request membership', async () => {

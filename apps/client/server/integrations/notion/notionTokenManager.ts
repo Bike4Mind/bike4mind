@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
-import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 import { NOTION_API_BASE_URL, NOTION_VERSION } from './notionConfig';
 

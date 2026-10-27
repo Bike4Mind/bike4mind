@@ -1,3 +1,4 @@
+import type { WorktreeRemoval } from './worktreeRemoval';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -82,6 +83,17 @@ import type {
   TerminalsChangedEvent,
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
+import type {
+  HubDetailResult,
+  HubSearchRequest,
+  HubSearchResult,
+  InstalledModelsResult,
+  ModelPull,
+  ModelPullRequest,
+  ModelPullResult,
+  ModelRemoveResult,
+  ModelRuntimeStatus,
+} from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
@@ -145,6 +157,7 @@ export const IPC_CHANNELS = {
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
+  chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
@@ -264,6 +277,20 @@ export const IPC_CHANNELS = {
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
   updateStateChanged: 'update:state-changed',
+  modelsGetStatus: 'models:get-status',
+  modelsListInstalled: 'models:list-installed',
+  modelsSearch: 'models:search',
+  modelsGetDetail: 'models:get-detail',
+  modelsListPulls: 'models:list-pulls',
+  /** Starts a download; resolves when it finishes, fails or is cancelled. */
+  modelsPull: 'models:pull',
+  modelsCancelPull: 'models:cancel-pull',
+  modelsDismissPull: 'models:dismiss-pull',
+  modelsRemove: 'models:remove',
+  /** main -> renderer push of every pull in flight or failed. */
+  modelsPullsChanged: 'models:pulls-changed',
+  /** main -> renderer push: a pull finished or a model was removed. */
+  modelsInstalledChanged: 'models:installed-changed',
   /**
    * Where the agent's browser should be drawn, if anywhere. Renderer -> main only: the view is
    * an overlay the renderer cannot see, so the renderer is the only thing that knows where the
@@ -509,6 +536,19 @@ export interface DesktopApi {
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
   };
+  models: {
+    getStatus(): Promise<ModelRuntimeStatus>;
+    listInstalled(): Promise<InstalledModelsResult>;
+    search(request: HubSearchRequest): Promise<HubSearchResult>;
+    getDetail(repo: string): Promise<HubDetailResult>;
+    listPulls(): Promise<ModelPull[]>;
+    pull(request: ModelPullRequest): Promise<ModelPullResult>;
+    cancelPull(key: string): Promise<void>;
+    dismissPull(key: string): Promise<void>;
+    remove(name: string): Promise<ModelRemoveResult>;
+    onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
+    onInstalledChanged(listener: () => void): () => void;
+  };
   auth: {
     getState(): Promise<AuthState>;
     signIn(): Promise<void>;
@@ -618,7 +658,8 @@ export interface DesktopApi {
     /** Null when the session is gone (deleted in another window, or a stale id). */
     getSession(sessionId: string): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
-    deleteSession(sessionId: string): Promise<void>;
+    deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
+    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
