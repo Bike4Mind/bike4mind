@@ -168,3 +168,11 @@ Shortcuts:
 2. **Users first.** Rebuild the users list and user profile on the toolkit; split `FullUsersView` into the profile shell and section cards.
 3. **Every other admin tab.** Organizations, credits, API keys, security, settings and audit log move onto the same page anatomy, one PR per tab.
 4. **Lock it in.** A lint rule against raw Joy `Card`, `Modal` and `Table` in admin code outside `shared/`, and a design-review checkbox in the PR template.
+
+### Lint guard
+
+`b4m/no-raw-admin-joy` rejects raw Joy `Card`, `Modal` and `Table` imports (including aliases and component subpaths) outside the root `admin/shared/` toolkit. Namespace imports and re-exports cannot bypass it. Use `SectionCard`, `ActionDialog` and `DataTable` instead.
+
+An exceptional import needs an immediately preceding comment: `// admin-toolkit-allow YYYY-MM-DD -- concrete reason the toolkit cannot serve this use case`. Keep exceptions local to one import; do not disable the rule for a file or directory.
+
+Pre-toolkit imports are recorded by file and component in `eslint-rules/admin-joy-legacy.mjs`, with their recording date and migration justification. This freezes existing import counts, not entire files: another restricted import still fails. Remove a baseline entry when its screen migrates; do not add new screens to the legacy list. This baseline avoids changing behavior in tabs awaiting their own design-guide migrations.
