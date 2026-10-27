@@ -13,6 +13,7 @@ import {
   type HistoricalBaselines,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import {
   computeHistoricalBaselines,
   generateRuleBasedAnalysis,
@@ -183,6 +184,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         `[ContextTelemetry] Failed to cache analysis: ${cacheErr instanceof Error ? cacheErr.message : cacheErr}`
       );
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'ops.context_telemetry.analyzed',
+      target: { kind: 'system', id, displayName: `Context telemetry for quest ${id}` },
+      summary: `analyzed context telemetry for quest ${id}`,
+      details: { questId: id, analysisSource, forced: force },
+    });
 
     res.json({
       id,
