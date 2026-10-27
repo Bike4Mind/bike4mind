@@ -163,7 +163,42 @@ describe('MFAModal paste', () => {
     renderModal();
     paste('654321');
     expect(codeInput().value).toBe('654321');
-    paste('ABCDE12345');
-    expect(codeInput().value).toBe('ABCDE12345');
+    paste('ABCDE23456');
+    expect(codeInput().value).toBe('ABCDE23456');
+  });
+
+  it('accepts a plain or space-grouped 6-digit paste in setup mode', () => {
+    renderSetup();
+    paste('654321');
+    expect(codeInput().value).toBe('654321');
+    paste('123 456');
+    expect(codeInput().value).toBe('123456');
+    paste('987\t654\n');
+    expect(codeInput().value).toBe('987654');
+  });
+
+  it('rejects a short non-code paste in setup mode', () => {
+    renderSetup();
+    paste('hello');
+    expect(codeInput().value).toBe('');
+    expect(screen.getByTestId('mfa-modal-paste-hint').textContent).toBe(
+      'Paste or enter the 6-digit code from your authenticator app.'
+    );
+    paste('abcdef');
+    expect(codeInput().value).toBe('');
+    paste('1234567');
+    expect(codeInput().value).toBe('');
+    paste('ABCDE23456');
+    expect(codeInput().value).toBe('');
+    expect(screen.getByTestId('mfa-modal-verify-btn').hasAttribute('disabled')).toBe(true);
+  });
+
+  it('rejects a short non-code paste in verify mode', () => {
+    renderModal();
+    paste('hello world');
+    expect(codeInput().value).toBe('');
+    expect(screen.getByTestId('mfa-modal-paste-hint').textContent).toBe(
+      'Paste or enter a 6-digit code or 10-character backup code.'
+    );
   });
 });
