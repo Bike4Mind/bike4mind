@@ -17,6 +17,7 @@ export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
 const MAX_TRIM_RETRIES = 3;
+const REASONING_ALLOWANCE_TOKENS = 2048;
 const remoteFields = { remote_host: z.string().optional(), remote_model: z.string().optional() };
 const tagsSchema = z.object({ models: z.array(z.object({ name: z.string().min(1), ...remoteFields })) });
 const showSchema = z.object({
@@ -108,7 +109,8 @@ function thinkField(inspection: Inspection, thinking: boolean | undefined): { th
 function splitPrefilledReasoning(onEvent: (event: CompletionStreamEvent) => void): typeof onEvent {
   const filter = createThinkFilter({ startInReasoning: true });
   const forward = ({ text, reasoning }: ThinkSplit) => {
-    if (reasoning) onEvent({ type: 'content', text: `<think>${reasoning}</think>` });
+    // A literal opener in the reasoning would otherwise nest and hide the reply downstream.
+    if (reasoning) onEvent({ type: 'content', text: `<think>${reasoning.replaceAll('<think>', '')}</think>` });
     if (text) onEvent({ type: 'content', text });
   };
   // emitFrame sends reply text on events of its own, apart from usage and the stop reason.
@@ -167,8 +169,16 @@ export class OllamaLocal {
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
     const numCtx = rememberContext(request.model, inspection);
     const canThink = inspection.capabilities.includes('thinking');
+    const prefilled = !canThink && opensThinkBlock(inspection.template);
+    const offMode = canThink ? thinkingOffMode(inspection) : undefined;
+    // A short budget (titles, suggestions) is meant for the answer; reasoning the model does
+    // anyway would otherwise use it all up and leave the answer empty.
+    const reasonsAnyway =
+      prefilled || (request.thinking === false && (offMode === 'always-thinks' || offMode === 'lowest-effort'));
+    const maxTokens =
+      request.maxTokens && reasonsAnyway ? request.maxTokens + REASONING_ALLOWANCE_TOKENS : request.maxTokens;
     const messages =
-      request.thinking === false && canThink && thinkingOffMode(inspection) === 'no-think-switch'
+      request.thinking === false && offMode === 'no-think-switch'
         ? withNoThinkSwitch(toMessages(request.messages))
         : toMessages(request.messages);
     const tools = (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
@@ -189,7 +199,7 @@ export class OllamaLocal {
           ...thinkField(inspection, request.thinking),
           options: {
             num_ctx: numCtx,
-            ...(request.maxTokens ? { num_predict: request.maxTokens } : {}),
+            ...(maxTokens ? { num_predict: maxTokens } : {}),
           },
           ...(tools.length > 0 ? { tools } : {}),
         }),
@@ -203,7 +213,7 @@ export class OllamaLocal {
     let left = 0;
     for (let retry = 0; measured !== undefined; retry++) {
       // Rescaled from each refusal: the dropped turns need not be as token-dense as the kept ones.
-      const fit = fitToContext(sent, tools, numCtx, request.maxTokens, (1.1 * measured) / estimateTokens(sent, tools));
+      const fit = fitToContext(sent, tools, numCtx, maxTokens, (1.1 * measured) / estimateTokens(sent, tools));
       if (fit.dropped === 0)
         throw new ContextOverflowError(
           `This turn and Desktop's instructions take ${measured} tokens, more than the ${numCtx} this model is run with.`,
@@ -235,7 +245,7 @@ export class OllamaLocal {
                 ? { ...event, usage: { ...event.usage, inputTokens: whole } }
                 : event
             );
-    const sink = !canThink && opensThinkBlock(inspection.template) ? splitPrefilledReasoning(report) : report;
+    const sink = prefilled ? splitPrefilledReasoning(report) : report;
     const reader = response.body.getReader();
     const decoder = new StringDecoder('utf8');
     let pending = '';

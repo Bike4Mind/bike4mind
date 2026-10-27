@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CompletionMessage } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 import { OllamaLocal } from './OllamaLocal';
+import { createThinkFilter } from './thinkFilter';
 
 describe('OllamaLocal', () => {
   afterEach(() => {
@@ -330,10 +331,56 @@ describe('OllamaLocal', () => {
       expect(events).toEqual([
         { type: 'content', text: '<think>Okay, the user asks.</think>' },
         { type: 'content', text: '<think>\n</think>' },
-        { type: 'content', text: '\n\nPar' },
+        { type: 'content', text: 'Par' },
         { type: 'content', text: 'is' },
         { type: 'content', stopReason: 'stop' },
       ]);
+    });
+
+    it('drops a literal opener from prefilled reasoning so it cannot hide the reply downstream', async () => {
+      const { events } = await streamWith(
+        `${JSON.stringify({ message: { content: '<think>plan</think>Paris' }, done: true })}\n`,
+        {},
+        { capabilities: ['completion'], template: legacyQwen3Template }
+      );
+      const filter = createThinkFilter();
+      const visible = events.map(event => filter.push((event as { text?: string }).text ?? '').text).join('');
+      expect(visible + filter.flush().text).toBe('Paris');
+    });
+
+    it.each([
+      ['always thinks', { thinking: false }, alwaysThinks, 64 + 2048],
+      ['takes only effort levels', { thinking: false }, { thinking: { values: ['low', 'medium', 'high'] } }, 64 + 2048],
+      [
+        'prefills the opener with no parser',
+        {},
+        { capabilities: ['completion'], template: legacyQwen3Template },
+        64 + 2048,
+      ],
+      ['takes the Qwen3 switch', { thinking: false }, qwen3, 64],
+      ['honors think:false', { thinking: false }, {}, 64],
+      ['was asked to think', { thinking: true }, alwaysThinks, 64],
+    ])(
+      'gives the reasoning its own budget only when a model that %s reasons anyway',
+      async (_case, request, show, expected) => {
+        const { sent } = await streamWith(done, { ...request, maxTokens: 64 }, show);
+        expect(sent.options.num_predict).toBe(expected);
+      }
+    );
+
+    it('returns only the text after the reasoning to an auxiliary caller on a model that always thinks', async () => {
+      const { sent, events } = await streamWith(
+        [{ message: { thinking: 'They want a title.' } }, { message: { content: 'Capital of France' }, done: true }]
+          .map(frame => `${JSON.stringify(frame)}\n`)
+          .join(''),
+        { thinking: false, maxTokens: 64 },
+        alwaysThinks
+      );
+      expect(sent).not.toHaveProperty('think');
+      expect(sent.options.num_predict).toBe(64 + 2048);
+      const filter = createThinkFilter();
+      const title = events.map(event => filter.push((event as { text?: string }).text ?? '').text).join('');
+      expect(title + filter.flush().text).toBe('Capital of France');
     });
 
     it('leaves the raw reply alone when the template does not prefill the opener', async () => {

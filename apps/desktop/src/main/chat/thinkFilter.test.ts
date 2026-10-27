@@ -57,12 +57,16 @@ describe('createThinkFilter starting in reasoning', () => {
   it('treats text before the first close as reasoning and consumes the close', () => {
     expect(prefilled(['Okay, the user ', 'asks.\n</think>\n\nParis'])).toEqual({
       reasoning: 'Okay, the user asks.\n',
-      text: '\n\nParis',
+      text: 'Paris',
     });
   });
 
   it('handles the close in the first chunk', () => {
-    expect(prefilled(['</think>\n\nParis', ' it is.'])).toEqual({ reasoning: '', text: '\n\nParis it is.' });
+    expect(prefilled(['</think>\n\nParis', ' it is.'])).toEqual({ reasoning: '', text: 'Paris it is.' });
+  });
+
+  it('drops whitespace before the reasoning and before the reply, across chunks', () => {
+    expect(prefilled(['\n', '  hmm</think>', '\n', '\n ok \n'])).toEqual({ reasoning: 'hmm', text: 'ok \n' });
   });
 
   it('streams reasoning as it arrives and holds a close split across chunks', () => {
@@ -79,11 +83,14 @@ describe('createThinkFilter starting in reasoning', () => {
     });
   });
 
-  it('does not nest an opener the model repeats inside the prefilled block', () => {
-    expect(prefilled(['<think>\nplan</think>answer'])).toEqual({ reasoning: '\nplan', text: 'answer' });
+  it('keeps an opener inside the block as reasoning text, as Ollama does', () => {
+    expect(prefilled(['<think>\nplan</think>answer'])).toEqual({ reasoning: '<think>\nplan', text: 'answer' });
   });
 
-  it('splits later spans the usual way once the prefilled block closes', () => {
-    expect(prefilled(['a</think>b<think>c</think>d</think>'])).toEqual({ reasoning: 'ac', text: 'bd</think>' });
+  it('ends the block at the first close and passes later markers through as reply text, as Ollama does', () => {
+    expect(prefilled(['r<think>x</thi', 'nk>rest</think>ans'])).toEqual({
+      reasoning: 'r<think>x',
+      text: 'rest</think>ans',
+    });
   });
 });
