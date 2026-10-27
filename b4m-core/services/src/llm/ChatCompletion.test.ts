@@ -12958,4 +12958,86 @@ describe('prompt moderation', () => {
       })
     );
   });
+
+  it('records a provider moderation hit (Hook A) when the Anthropic safety classifier throws', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedShouldTriggerFallback.mockReturnValue(false);
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('Anthropic safety classifier refusal for gpt-4 - falling back to an alternative model')
+        ),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger }).catch(() => undefined);
+
+    expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    expect(applyModerationHit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hit: expect.objectContaining({ source: 'provider', categories: [] }),
+      })
+    );
+  });
+
+  it('records a provider moderation hit (Hook B) when the provider returns content_filter as finish_reason', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (...args: any[]) => Promise<void>) => {
+          await cb(['Hi!'], { inputTokens: 10, outputTokens: 5, stopReason: 'content_filter' });
+        }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    expect(applyModerationHit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hit: expect.objectContaining({ source: 'provider', categories: [] }),
+      })
+    );
+  });
+
+  it('records at most one provider hit per turn even when multiple fallback hops refuse (guard)', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedShouldTriggerFallback.mockReturnValue(true);
+    mockedIsOverloadedError.mockReturnValue(false);
+    const safetyError = new Error(
+      'Anthropic safety classifier refusal for gpt-4 - falling back to an alternative model'
+    );
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi.fn().mockRejectedValue(safetyError),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+    const fallbackModel = {
+      id: 'claude-opus-4-8',
+      type: 'text' as const,
+      name: 'Claude Opus 4.8',
+      backend: ModelBackend.Anthropic,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+    mockedGetLlmWithFallback.mockResolvedValue({
+      model: fallbackModel,
+      backend: {
+        complete: vi.fn().mockRejectedValue(safetyError),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: fallbackModel.id,
+      },
+      attempt: 1,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger }).catch(() => undefined);
+
+    expect(applyModerationHit).toHaveBeenCalledTimes(1);
+  });
 });
