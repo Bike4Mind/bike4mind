@@ -30,7 +30,8 @@ export async function getSignupAnomalySnapshot(now = new Date()) {
       createdAt: new Date(user.createdAt).toISOString(),
     })),
     keys.slice(0, KEY_SCAN_LIMIT),
-    config
+    config,
+    now.getTime()
   );
   return {
     since: since.toISOString(),

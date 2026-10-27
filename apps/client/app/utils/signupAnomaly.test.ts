@@ -19,7 +19,8 @@ describe('signup anomaly signals', () => {
         { id: 'd', email: 'four@other.test', createdAt: '2026-01-01T00:03:00.000Z' },
       ],
       [{ userId: 'a' }, { userId: 'a' }, { userId: 'd' }],
-      config
+      config,
+      Date.parse('2026-01-01T00:30:00Z')
     );
     expect(groups[0]).toEqual({
       domain: 'example.test',
@@ -32,5 +33,17 @@ describe('signup anomaly signals', () => {
     });
     expect(groups[1]).toMatchObject({ domain: 'other.test', count: 1, apiKeyCount: 1, likelyAutomated: false });
     expect(groupSignupDomains([], [], config)).toEqual([]);
+  });
+
+  it('does not label old accounts on a popular domain as an hourly automation burst', () => {
+    const users = Array.from({ length: 20 }, (_, i) => ({
+      id: String(i),
+      email: 'user@example.test',
+      createdAt: '2025-01-01T00:00:00Z',
+    }));
+    expect(groupSignupDomains(users, [], config, Date.parse('2026-01-01T00:30:00Z'))[0]).toMatchObject({
+      count: 20,
+      likelyAutomated: false,
+    });
   });
 });

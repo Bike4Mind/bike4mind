@@ -32,11 +32,13 @@ export const exceedsSignupBaseline = (count: number, baseline: number, config: S
 export function groupSignupDomains(
   users: { id: string; email: string | null; createdAt: string }[],
   keys: { userId: string }[],
-  config: SignupAnomalyConfig
+  config: SignupAnomalyConfig,
+  now = Date.now()
 ): EmailDomainGroup[] {
   const keyCounts = new Map<string, number>();
   for (const key of keys) keyCounts.set(key.userId, (keyCounts.get(key.userId) ?? 0) + 1);
   const groups = new Map<string, EmailDomainGroup>();
+  const recentCounts = new Map<string, number>();
   for (const user of users) {
     const domain = user.email?.split('@')[1]?.toLowerCase() || '(unknown)';
     const group = groups.get(domain) ?? {
@@ -53,7 +55,11 @@ export function groupSignupDomains(
     group.firstCreatedAt = group.firstCreatedAt < user.createdAt ? group.firstCreatedAt : user.createdAt;
     group.lastCreatedAt = group.lastCreatedAt > user.createdAt ? group.lastCreatedAt : user.createdAt;
     group.apiKeyCount += keyCounts.get(user.id) ?? 0;
-    group.likelyAutomated = exceedsSignupBaseline(group.count, config.signupBaseline, config);
+    const createdAt = Date.parse(user.createdAt);
+    if (createdAt >= now - 3600000 && createdAt < now) {
+      recentCounts.set(domain, (recentCounts.get(domain) ?? 0) + 1);
+    }
+    group.likelyAutomated = exceedsSignupBaseline(recentCounts.get(domain) ?? 0, config.signupBaseline, config);
     groups.set(domain, group);
   }
   return [...groups.values()].sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain));
