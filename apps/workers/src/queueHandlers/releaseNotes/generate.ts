@@ -130,8 +130,8 @@ const ACCURACY_RULES = [
   'or affects only that provider.',
 ];
 
-// Backstop for operator-panel PRs whose title scope is not `admin`; isOperatorOnlyTitle in
-// packages/scripts/src/releaseNotes/buildPayload.ts drops the `admin`-scoped ones before they get here.
+// isOperatorOnlyTitle in packages/scripts/src/releaseNotes/buildPayload.ts drops `admin`-scoped PRs that have no
+// author note; this rule covers the rest (other scopes, and admin-scoped PRs whose note slipped through).
 const OPERATOR_PANEL_RULE = [
   "Changes only to the operator admin panel, the tools the service operator's staff use to run the service",
   '(user and signup review, abuse controls, platform-wide settings, usage reports), are NOT customer-facing.',
@@ -171,9 +171,10 @@ function buildEditorialPrompt(notes: { number: number; title: string; note: stri
     'only numbers from the list).',
     `Also write "headline" (at most ${MAX_HEADLINE_CHARS} characters) and "summary" (at most ${MAX_SUMMARY_CHARS}`,
     'characters).',
-    'Keep every change that has a note unless it is purely internal (CI, tests, refactors, developer tooling)',
-    'or a security vulnerability fix, which is never described. A security or infrastructure change users can',
-    'see stays, e.g. "Other sessions are signed out after a password change" or "Uploads over 100MB no longer fail".',
+    'Keep every change that has a note unless it is purely internal (CI, tests, refactors, developer tooling),',
+    'only changes the operator admin panel, or is a security vulnerability fix, which is never described.',
+    'A security or infrastructure change users can see stays, e.g. "Other sessions are signed out after a password',
+    'change" or "Uploads over 100MB no longer fail".',
     ...OPERATOR_PANEL_RULE,
     ...ACCURACY_RULES,
     ...TITLE_VS_NOTE_RULE,

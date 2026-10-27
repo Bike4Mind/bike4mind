@@ -238,8 +238,9 @@ describe('copy accuracy', () => {
     expect(prompt).toContain('never "You can now ..."');
     expect(prompt).toContain('only when the title states that gain');
     expect(prompt).toContain('Never attach a speed or quality claim to an AI model or provider');
-    expect(prompt).toContain('or a security vulnerability fix');
+    expect(prompt).toContain('is a security vulnerability fix');
     expect(prompt).toContain('Changes only to the operator admin panel');
+    expect(prompt).toContain('Settings that customers manage for their own organization are customer-facing');
     expect(prompt).not.toContain('who it helps');
   });
 
@@ -252,6 +253,7 @@ describe('copy accuracy', () => {
     expect(prompt).toContain('Security vulnerability fixes,');
     expect(prompt).toContain('what changes for the customer');
     expect(prompt).toContain('Changes only to the operator admin panel');
+    expect(prompt).toContain('Settings that customers manage for their own organization are customer-facing');
     expect(prompt).toContain('Never say which roles can see or use something');
     expect(prompt).not.toContain('follow the narrower one');
   });

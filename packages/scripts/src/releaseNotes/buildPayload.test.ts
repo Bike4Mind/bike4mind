@@ -63,6 +63,8 @@ describe('isOperatorOnlyTitle', () => {
     'feat(org): admins can rename the org',
     'feat: admin panel polish',
     'Merge admin work',
+    'Revert "feat(admin): group signups"',
+    'feat(admin) group signups',
   ])('keeps %s', title => expect(isOperatorOnlyTitle(title)).toBe(false));
 });
 
@@ -153,16 +155,17 @@ describe('buildReleaseNotesPayload', () => {
     expect(payload).toMatchObject({ releaseTag: 'v1.0.0.2', deployedSha: sha40('v1.0.0.2'), previousTag: 'v1.0.0.1' });
   });
 
-  it('drops admin-scoped PRs even when they carry a customer note', async () => {
+  it('drops admin-scoped PRs without a customer note and keeps those with one', async () => {
     const getCommitRange = vi.fn(async () => [
       { sha: '1', message: 'feat(admin): signup review (#3)', author: '', authorEmail: '', date: '' },
       { sha: '2', message: 'feat(chat): pinned chats (#4)', author: '', authorEmail: '', date: '' },
+      { sha: '3', message: 'feat(admin): plan card pricing (#5)', author: '', authorEmail: '', date: '' },
     ]);
     const getPRSummary = vi.fn(async (n: number) => ({
       number: n,
-      title: n === 3 ? 'feat(admin): signup review' : 'feat(chat): pinned chats',
+      title: n === 4 ? 'feat(chat): pinned chats' : 'feat(admin): something',
       labels: [],
-      body: '## Customer note\nSomething new.',
+      body: n === 3 ? 'Operator tool.' : '## Customer note\nSomething new.',
     }));
 
     const payload = await buildReleaseNotesPayload(release('v1.0.0.2', '2026-01-02T00:00:00Z'), 'v1.0.0.1', {
@@ -170,7 +173,23 @@ describe('buildReleaseNotesPayload', () => {
       getPRSummary,
     });
 
-    expect(payload.prs.map(pr => pr.number)).toEqual([4]);
+    expect(payload.prs.map(pr => pr.number)).toEqual([4, 5]);
+  });
+
+  it('builds an empty PR list when every PR is operator-only', async () => {
+    const payload = await buildReleaseNotesPayload(release('v1.0.0.2', '2026-01-02T00:00:00Z'), 'v1.0.0.1', {
+      getCommitRange: vi.fn(async () => [
+        { sha: '1', message: 'feat(admin): signup review (#3)', author: '', authorEmail: '', date: '' },
+      ]),
+      getPRSummary: vi.fn(async (n: number) => ({
+        number: n,
+        title: 'feat(admin): signup review',
+        labels: [],
+        body: '',
+      })),
+    });
+
+    expect(payload.prs).toEqual([]);
   });
 
   it('anchors deployedAt to enqueue time, not the release creation date', async () => {
