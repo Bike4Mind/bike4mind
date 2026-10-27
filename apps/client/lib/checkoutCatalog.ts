@@ -5,10 +5,13 @@ import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/con
 import type { SubscriptionPlanInterval } from '@client/lib/userSubscriptions/types';
 
 /**
- * What checkout sells, read from the same constants the checkout paths charge and grant from:
- * CREDIT_PACKAGES (handlePackageTransaction), SUBSCRIPTION_PLANS (pages/api/subscriptions/subscribe.ts)
- * and TEAM_PLAN (pages/api/organizations/subscriptions/subscribe.ts). checkoutCatalog.test.ts fails
- * if this module and checkout stop agreeing.
+ * What checkout sells, read from the constants the checkout paths charge and grant from:
+ * CREDIT_PACKAGES (handlePackageTransaction), SUBSCRIPTION_PLANS (findSubscriptionPlan, used by the
+ * subscribe route and the invoice credit grant) and TEAM_PLAN (isTeamPlanPriceId, used by the org
+ * subscribe route). checkoutCatalog.test.ts resolves every listed row through those same functions.
+ *
+ * Price ids are env-derived, so in the admin browser they reflect this client build; a server Lambda
+ * missing the same NEXT_PUBLIC_STRIPE_PRICE_* var can still disagree.
  */
 
 export type CatalogPack = {
@@ -20,7 +23,8 @@ export type CatalogPack = {
 
 export type CatalogPlanGrant =
   | { kind: 'credits'; credits: number }
-  | { kind: 'perSeat'; creditsPerSeat: number; minSeats: number; maxSeats: number };
+  | { kind: 'perSeat'; creditsPerSeat: number; minSeats: number; maxSeats: number }
+  | { kind: 'unavailable' };
 
 export type CatalogPlan = {
   name: string;
@@ -47,8 +51,11 @@ const describeAvailability = (plan: (typeof SUBSCRIPTION_PLANS)[number]): string
   return notes.length > 0 ? notes.join('; ') : undefined;
 };
 
-/** Team credits and seats are admin settings, so the caller passes them in already resolved. */
-export const listCatalogPlans = (team: TeamPlanSettings): CatalogPlan[] => [
+/**
+ * Team credits and seats are admin settings, so the caller passes them in already resolved, or
+ * undefined when the settings could not be read (never the defaults, which may not be what is stored).
+ */
+export const listCatalogPlans = (team: TeamPlanSettings | undefined): CatalogPlan[] => [
   ...SUBSCRIPTION_PLANS.map(plan => ({
     name: plan.name,
     priceId: plan.priceId,
@@ -60,7 +67,7 @@ export const listCatalogPlans = (team: TeamPlanSettings): CatalogPlan[] => [
     name: TEAM_PLAN.name,
     priceId: TEAM_PLAN.priceId,
     interval: TEAM_PLAN.interval,
-    grant: { kind: 'perSeat', ...team },
+    grant: team ? { kind: 'perSeat', ...team } : { kind: 'unavailable' },
     availability: 'Needs enableTeamPlan',
   },
 ];

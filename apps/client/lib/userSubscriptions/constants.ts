@@ -109,3 +109,13 @@ export const TEAM_PLAN: Pick<SubscriptionPlanDetail, 'priceId' | 'name' | 'inter
   interval: SubscriptionPlanInterval.Monthly,
   tier: UserSubscriptionTier.Pro,
 };
+
+/**
+ * The individual plan checkout sells under `priceId`. The subscribe route and the invoice credit grant
+ * both resolve through this, and the admin checkout catalog test asserts every listed plan does too.
+ */
+export const findSubscriptionPlan = (priceId: string): SubscriptionPlanDetail | undefined =>
+  SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
+
+/** Whether `priceId` is the Team seat price the org subscribe route accepts. */
+export const isTeamPlanPriceId = (priceId: string): boolean => priceId === TEAM_PLAN.priceId;

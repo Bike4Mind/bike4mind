@@ -49,22 +49,19 @@ describe('checkout catalog', () => {
     }
   });
 
-  it('lists every individual plan with the price id and credits the subscribe route validates and grants', async () => {
+  it('lists every individual plan as the plan lookup checkout and the invoice grant resolve it', async () => {
     const { catalog, plans } = await loadModules();
-    const listed = catalog.listCatalogPlans(team);
+    const listed = catalog.listCatalogPlans(team).filter(plan => plan.grant.kind === 'credits');
 
-    for (const plan of plans.SUBSCRIPTION_PLANS) {
-      expect(listed).toContainEqual(
-        expect.objectContaining({
-          name: plan.name,
-          priceId: plan.priceId,
-          grant: { kind: 'credits', credits: plan.credits },
-        })
-      );
+    expect(listed.map(plan => plan.name).sort()).toEqual(plans.SUBSCRIPTION_PLANS.map(plan => plan.name).sort());
+    for (const row of listed) {
+      const sold = plans.findSubscriptionPlan(row.priceId);
+      expect(sold?.name).toBe(row.name);
+      expect(row.grant).toEqual({ kind: 'credits', credits: sold?.credits });
     }
   });
 
-  it('shows the Professional price id the Billing plan cards send to checkout', async () => {
+  it('matches the Professional price id the Billing plan cards resolve on a test stage', async () => {
     const { catalog, plans } = await loadModules();
     const professional = catalog.listCatalogPlans(team).find(plan => plan.name === 'Professional');
 
@@ -72,12 +69,19 @@ describe('checkout catalog', () => {
     expect(professional?.priceId).toBe(plans.professionalPriceIdForStage(true));
   });
 
-  it('lists the Team plan with the org checkout price id and the resolved seat grant', async () => {
-    const { catalog, orgPlan } = await loadModules();
+  it('lists the Team plan under the price id the org subscribe route accepts', async () => {
+    const { catalog, plans, orgPlan } = await loadModules();
     const teamRow = catalog.listCatalogPlans(team).find(plan => plan.name === 'Team');
 
     expect(teamRow?.priceId).toBe('price_org_test');
     expect(teamRow?.priceId).toBe(orgPlan.ORGANIZATION_SUBSCRIPTION_PRICE_ID);
-    expect(teamRow?.grant).toEqual({ kind: 'perSeat', ...team });
+    expect(plans.isTeamPlanPriceId(teamRow?.priceId ?? '')).toBe(true);
+  });
+
+  it('marks the Team grant unavailable rather than showing defaults when settings could not be read', async () => {
+    const { catalog } = await loadModules();
+    const teamRow = catalog.listCatalogPlans(undefined).find(plan => plan.name === 'Team');
+
+    expect(teamRow?.grant).toEqual({ kind: 'unavailable' });
   });
 });

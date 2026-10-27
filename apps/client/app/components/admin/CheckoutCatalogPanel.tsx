@@ -11,10 +11,16 @@ import { DataTable, StatusChip, type DataColumn } from './shared';
 
 const formatCredits = (credits: number) => credits.toLocaleString('en-US');
 
-const describeGrant = (grant: CatalogPlanGrant): string =>
-  grant.kind === 'credits'
-    ? `${formatCredits(grant.credits)} credits`
-    : `${formatCredits(grant.creditsPerSeat)} credits per seat, ${grant.minSeats}-${grant.maxSeats} seats`;
+const describeGrant = (grant: CatalogPlanGrant): string => {
+  switch (grant.kind) {
+    case 'credits':
+      return `${formatCredits(grant.credits)} credits`;
+    case 'perSeat':
+      return `${formatCredits(grant.creditsPerSeat)} credits per seat, ${grant.minSeats}-${grant.maxSeats} seats`;
+    case 'unavailable':
+      return 'Settings could not be loaded';
+  }
+};
 
 // The catalog is static, so the tables never reach their error state.
 const noRetry = () => undefined;
@@ -60,12 +66,12 @@ const PLAN_COLUMNS: readonly DataColumn<CatalogPlan>[] = [
  * Read-only view of every credit pack and plan checkout sells, from the constants checkout charges
  * from (see lib/checkoutCatalog). Packs are charged as an ad-hoc amount, so they have no price id.
  */
-export const CheckoutCatalogPanel = ({ teamPlan }: { teamPlan: TeamPlanSettings }) => (
+export const CheckoutCatalogPanel = ({ teamPlan }: { teamPlan: TeamPlanSettings | undefined }) => (
   <Card variant="outlined" data-testid="admin-growth-pricing-section-catalog">
     <Typography level="title-lg">What checkout sells</Typography>
     <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-      Credit packs and plans exactly as checkout charges and grants them. Prices and price ids are set in code and
-      deploy environment variables, so they cannot be edited here.
+      Credit packs and plans as checkout in this build charges and grants them. Prices and price ids are set in code and
+      deploy environment variables, so they cannot be edited here. Custom credit amounts sell at Price Per Credit above.
     </Typography>
     <Divider inset="none" />
     <CardContent>

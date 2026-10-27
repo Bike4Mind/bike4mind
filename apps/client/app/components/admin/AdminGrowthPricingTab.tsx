@@ -180,14 +180,17 @@ const AdminGrowthPricingTab = () => {
     return map;
   }, [data]);
 
+  // No data after loading means the read failed; the catalog says so rather than showing defaults.
   const teamPlan = useMemo(
     () =>
-      resolveTeamPlanSettings({
-        teamPlanMinSeats: storedByKey.get('teamPlanMinSeats'),
-        teamPlanMaxSeats: storedByKey.get('teamPlanMaxSeats'),
-        teamPlanCreditsPerSeat: storedByKey.get('teamPlanCreditsPerSeat'),
-      }),
-    [storedByKey]
+      data
+        ? resolveTeamPlanSettings({
+            teamPlanMinSeats: storedByKey.get('teamPlanMinSeats'),
+            teamPlanMaxSeats: storedByKey.get('teamPlanMaxSeats'),
+            teamPlanCreditsPerSeat: storedByKey.get('teamPlanCreditsPerSeat'),
+          })
+        : undefined,
+    [data, storedByKey]
   );
 
   // Cross-field checks the per-setting schemas cannot express on their own.

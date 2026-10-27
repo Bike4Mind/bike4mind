@@ -6,7 +6,7 @@ import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { SUBSCRIPTION_PLANS, TEAM_PLAN } from '@client/lib/userSubscriptions/constants';
 
 // Read at render time, so a test can seed the stored platform rows.
-let serverSettings: { settingName: string; settingValue: unknown }[] = [];
+let serverSettings: { settingName: string; settingValue: unknown }[] | undefined = [];
 let settingsLoading = false;
 vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({ data: serverSettings, isLoading: settingsLoading }),
@@ -177,24 +177,37 @@ describe('AdminGrowthPricingTab', () => {
   });
 
   it('lists every credit pack and plan checkout sells, with no edit controls', () => {
-    serverSettings = [{ settingName: 'teamPlanCreditsPerSeat', settingValue: 1234 }];
+    serverSettings = [
+      { settingName: 'teamPlanCreditsPerSeat', settingValue: 1234 },
+      { settingName: 'teamPlanMinSeats', settingValue: 3 },
+      { settingName: 'teamPlanMaxSeats', settingValue: 40 },
+    ];
     renderTab();
 
     const panel = screen.getByTestId('admin-growth-pricing-section-catalog');
     for (const pack of Object.values(CREDIT_PACKAGES)) {
-      expect(within(panel).getByTestId(`admin-catalog-pack-row-${pack.id}`).textContent).toContain(
-        pack.credits.toLocaleString('en-US')
-      );
+      const row = within(panel).getByTestId(`admin-catalog-pack-row-${pack.id}`).textContent;
+      expect(row).toContain(formatUsdAmount(pack.price));
+      expect(row).toContain(pack.credits.toLocaleString('en-US'));
     }
     for (const plan of [...SUBSCRIPTION_PLANS, TEAM_PLAN]) {
       expect(within(panel).getByTestId(`admin-catalog-plan-row-${plan.name}`)).toBeTruthy();
     }
     expect(within(panel).getByTestId(`admin-catalog-plan-row-${TEAM_PLAN.name}`).textContent).toContain(
-      '1,234 credits per seat'
+      '1,234 credits per seat, 3-40 seats'
     );
     for (const role of ['textbox', 'spinbutton', 'checkbox', 'switch']) {
       expect(within(panel).queryAllByRole(role)).toHaveLength(0);
     }
+  });
+
+  it('says the Team grant is unknown when settings could not be loaded', () => {
+    serverSettings = undefined;
+    renderTab();
+
+    expect(screen.getByTestId(`admin-catalog-plan-row-${TEAM_PLAN.name}`).textContent).toContain(
+      'Settings could not be loaded'
+    );
   });
 
   it('links without rendering a second editor for any setting', () => {
