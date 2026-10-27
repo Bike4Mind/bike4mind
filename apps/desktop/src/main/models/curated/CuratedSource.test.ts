@@ -310,6 +310,24 @@ describe('CuratedSource', () => {
     expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'updated' });
   });
 
+  it('checks at once when the saved floor is above the cached copy, as after a copy that was never saved', async () => {
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await source().checkNow();
+    const flaky = new CuratedStore(dir);
+    vi.spyOn(flaky, 'writeCopy').mockRejectedValue(new Error('disk full'));
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [signing], 4));
+    await source({ store: flaky }).checkNow();
+    clock += CURATED_CHECK_INTERVAL_MS / 2;
+
+    const restarted = source();
+    await restarted.loaded();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, checkedAt: null });
+    await restarted.checkIfDue();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 4, check: 'updated' });
+  });
+
   it.each([
     ['no sequence', listText(3, list => delete list.sequence)],
     ['schemaVersion 3', listText(3, list => (list.schemaVersion = 3))],
