@@ -681,7 +681,11 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
           version={version.version}
           thirdParty={!viewer.isAuthor}
           showImportHint={viewer.canImport && !data.myImport?.skill}
-          marketplace={marketplaceOrg ? { org: marketplaceOrg, pluginName: listing.claudePluginName } : undefined}
+          marketplace={
+            marketplaceOrg
+              ? { org: marketplaceOrg, pluginName: listing.claudePluginName, skillName: listing.name }
+              : undefined
+          }
         />
       ) : null}
     </Box>

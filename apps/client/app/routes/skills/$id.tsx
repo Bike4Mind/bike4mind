@@ -10,6 +10,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { Permission } from '@bike4mind/common';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useDeleteSkill, useGetSkill } from '@client/app/hooks/data/skills';
+import { useMarketMe, useMyListings } from '@client/app/hooks/data/skillMarket';
 import { useUser } from '@client/app/contexts/UserContext';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import SkillShareDialog from '@client/app/components/SkillsManagement/SkillShareDialog';
@@ -17,6 +18,7 @@ import SkillUpdatePanel from '@client/app/components/SkillMarket/SkillUpdatePane
 import PublishDialog from '@client/app/components/SkillMarket/PublishDialog';
 import MarketStatusBadge from '@client/app/components/SkillMarket/MarketStatusBadge';
 import ClaudeCodeExportDialog from '@client/app/components/SkillsManagement/ClaudeCodeExportDialog';
+import { findMarketplaceListing } from '@client/app/components/SkillsManagement/ClaudeCodeMarketplaceTab';
 
 const SkillDetailPage: FC = () => {
   const { id } = useParams({ strict: false }) as { id: string };
@@ -47,6 +49,11 @@ const SkillDetailPage: FC = () => {
   const canEdit =
     !!skill && !!currentUser && (isOwner || isAdmin || skill.isGlobalWrite === true || hasShare(Permission.update));
   const canDelete = !!skill && !!currentUser && (isOwner || isAdmin || hasShare(Permission.delete));
+
+  // Only the author's own skill can have a listing; fetched on open so the page doesn't hit /mine on every load.
+  const wantsMarketplace = claudeCodeOpen && isOwner && !skill?.importedFrom;
+  const { data: myListings } = useMyListings({ enabled: wantsMarketplace });
+  const { data: marketMe } = useMarketMe({ enabled: wantsMarketplace });
 
   const handleDelete = async () => {
     if (!skill) return;
@@ -205,6 +212,9 @@ const SkillDetailPage: FC = () => {
           }
           version={skill.importedFrom?.version}
           thirdParty={!!skill.importedFrom}
+          marketplace={
+            wantsMarketplace ? findMarketplaceListing(myListings, skill.id, marketMe?.organizations) : undefined
+          }
         />
       ) : null}
     </Box>
