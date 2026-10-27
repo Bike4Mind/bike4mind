@@ -107,6 +107,22 @@ describe('getTurnstileToken', () => {
     expect(render).toHaveBeenCalledTimes(1);
   });
 
+  it('retries a challenge timeout error', async () => {
+    vi.useFakeTimers();
+    render
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => opts['error-callback']('110600'));
+        return 'widget-1';
+      })
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => opts.callback('tok-2'));
+        return 'widget-2';
+      });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(pending).resolves.toBe('tok-2');
+  });
+
   it('does not retry an expired challenge', async () => {
     render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
       queueMicrotask(() => opts['expired-callback']());

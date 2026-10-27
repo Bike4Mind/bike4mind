@@ -3,8 +3,11 @@ const CHALLENGE_TIMEOUT_MS = 60_000;
 /** Widget errors are often transient (network blips, a flaky challenge), so a few fresh renders run first. */
 export const MAX_CHALLENGE_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1_500;
-/** 110xxx and 400xxx are site configuration errors (bad site key, domain not allowed): retrying cannot help. */
-const NON_RETRYABLE_ERROR_CODE = /^(110|400)/;
+/**
+ * Site configuration and browser errors (bad site key, domain not allowed, unsupported browser, wrong clock):
+ * retrying cannot help. 1106xx challenge timeouts are retryable, per Cloudflare's client-side error code table.
+ */
+const NON_RETRYABLE_ERROR_CODE = /^(1101|1102|1104|1105|200100|400)/;
 
 type TurnstileApi = {
   render: (
@@ -119,7 +122,7 @@ async function solveOnce(
           callback: token => settle(() => resolve(token)),
           'error-callback': errorCode => {
             settle(() => reject(new TurnstileError('error', attempt, errorCode)));
-            // Handled: stops Cloudflare from also throwing the error as uncaught.
+            // Handled: stops Cloudflare from also logging its own console warning.
             return true;
           },
           'expired-callback': () => settle(() => reject(new TurnstileError('expired', attempt))),
