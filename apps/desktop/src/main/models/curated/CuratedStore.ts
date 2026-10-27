@@ -17,11 +17,17 @@ export interface CuratedCopy {
   signature: Uint8Array;
 }
 
-/** `intact` is false when revoked-keys.json exists but could not be read whole, so ids may be missing. */
-export interface CuratedRevoked {
-  ids: Set<string>;
-  intact: boolean;
-}
+/**
+ * The revoked set from both of its copies. `lost`: both copies are damaged, so ids may be missing. `unavailable`: a
+ * read failed for a reason other than a missing file (EBUSY, EACCES) and may work on a later try.
+ */
+export type CuratedRevoked =
+  | { status: 'ok'; ids: Set<string>; repair: boolean }
+  | { status: 'lost'; ids: Set<string> }
+  | { status: 'unavailable'; detail: string };
+
+type RevokedCopy =
+  { kind: 'missing' } | { kind: 'error'; detail: string } | { kind: 'damaged' | 'valid'; ids: string[] };
 
 const EMPTY_STATE: CuratedCheckState = { lastSuccessAt: null, lastAttemptAt: null, failures: 0, floors: {} };
 const MAX_REVOKED = 256;
@@ -31,6 +37,8 @@ const POINTER = 'pair.json';
 const PAIR_DIR = /^pair-\d+-[0-9a-f]{12}$/;
 const MANIFEST = 'curated-v2.json';
 const SIGNATURE = 'curated-v2.json.sig';
+// The backup is written first, so after a crash between the two writes it is the newer copy.
+const REVOKED_COPIES = ['revoked-keys.backup.json', 'revoked-keys.json'];
 
 const time = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
 const unique = () => `${process.pid}-${randomBytes(6).toString('hex')}`;
@@ -84,6 +92,25 @@ async function writeAtomic(path: string, data: string | Uint8Array): Promise<voi
     throw error;
   }
   await syncDir(dirname(path));
+}
+
+async function readRevokedCopy(path: string): Promise<RevokedCopy> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' ? { kind: 'missing' } : { kind: 'error', detail: code ?? String(error) };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { kind: 'damaged', ids: [] };
+  }
+  if (!Array.isArray(raw)) return { kind: 'damaged', ids: [] };
+  const ids = raw.filter((id): id is string => typeof id === 'string' && KEY_ID.test(id));
+  return { kind: ids.length === raw.length && ids.length <= MAX_REVOKED ? 'valid' : 'damaged', ids };
 }
 
 function floors(raw: unknown): Record<string, number> {
@@ -185,34 +212,36 @@ export class CuratedStore {
     await writeAtomic(join(this.#dir(source), 'state.json'), JSON.stringify(state));
   }
 
-  /** A missing file is an intact empty set; an unreadable one keeps whatever valid ids it still holds. */
+  /**
+   * The union of every valid id in both copies. One damaged or missing copy is read from the other and marked for
+   * repair; both missing is an empty set.
+   */
   async readRevoked(): Promise<CuratedRevoked> {
-    let text: string;
-    try {
-      text = await readFile(join(this.root, 'revoked-keys.json'), 'utf8');
-    } catch (error) {
-      return { ids: new Set(), intact: (error as NodeJS.ErrnoException).code === 'ENOENT' };
-    }
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch {
-      return { ids: new Set(), intact: false };
-    }
-    if (!Array.isArray(raw)) return { ids: new Set(), intact: false };
-    const ids = raw.filter((id): id is string => typeof id === 'string' && KEY_ID.test(id));
-    return { ids: new Set(ids.slice(0, MAX_REVOKED)), intact: ids.length === raw.length && ids.length <= MAX_REVOKED };
+    const copies = await Promise.all(REVOKED_COPIES.map(name => readRevokedCopy(join(this.root, name))));
+    const failed = copies.find((copy): copy is Extract<RevokedCopy, { kind: 'error' }> => copy.kind === 'error');
+    if (failed) return { status: 'unavailable', detail: failed.detail };
+    const ids = new Set(copies.flatMap(copy => ('ids' in copy ? copy.ids : [])).slice(0, MAX_REVOKED));
+    if (copies.every(copy => copy.kind === 'damaged')) return { status: 'lost', ids };
+    const whole = copies.every(copy => copy.kind === 'valid' && copy.ids.length === ids.size);
+    return { status: 'ok', ids, repair: ids.size > 0 ? !whole : copies.some(copy => copy.kind === 'damaged') };
   }
 
-  /** Append-only: saves `ids` with the readable ids already on disk; a revocation is never undone. */
+  /**
+   * Append-only: saves `ids` with every readable id already on disk, to both copies. Files exist only for a non-empty
+   * set, so a damaged pair always means a recovery-signed list revoked a key.
+   */
   async addRevoked(ids: Iterable<string>): Promise<Set<string>> {
-    const { ids: revoked, intact } = await this.readRevoked();
-    const before = revoked.size;
+    const current = await this.readRevoked();
+    if (current.status === 'unavailable') throw new Error(`could not read the revoked keys (${current.detail})`);
+    const revoked = new Set(current.ids);
     for (const id of ids) if (revoked.size < MAX_REVOKED && KEY_ID.test(id)) revoked.add(id);
-    if (revoked.size !== before || !intact) {
-      await makeDir(this.root);
-      await writeAtomic(join(this.root, 'revoked-keys.json'), JSON.stringify([...revoked]));
+    if (revoked.size === current.ids.size && current.status === 'ok' && !current.repair) return revoked;
+    if (revoked.size === 0) {
+      for (const name of REVOKED_COPIES) await rm(join(this.root, name), { force: true });
+      return revoked;
     }
+    await makeDir(this.root);
+    for (const name of REVOKED_COPIES) await writeAtomic(join(this.root, name), JSON.stringify([...revoked]));
     return revoked;
   }
 

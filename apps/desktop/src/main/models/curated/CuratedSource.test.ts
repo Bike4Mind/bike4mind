@@ -1,5 +1,5 @@
 import { generateKeyPairSync, type KeyObject } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HUB_MAX_SEQUENCE } from '@bike4mind/common';
@@ -18,6 +18,7 @@ import { CuratedStore } from './CuratedStore';
 const URL_BASE = 'https://catalog.example.com/model-hub/curated-v2/';
 const LATEST = `${URL_BASE}latest.json`;
 const NOTE = 'Served by the test server.';
+const REVOKED_FILES = ['revoked-keys.json', 'revoked-keys.backup.json'];
 
 interface Signer {
   key: CuratedKey;
@@ -406,11 +407,8 @@ describe('CuratedSource', () => {
     server.publish(3, revoking, sigText(revoking, [recovery], 3));
     await source().checkNow();
 
-    for (const damage of [
-      () => rm(join(dir, 'revoked-keys.json')),
-      () => writeFile(join(dir, 'revoked-keys.json'), '['),
-    ]) {
-      await damage();
+    for (const damage of [(file: string) => rm(join(dir, file)), (file: string) => writeFile(join(dir, file), '[')]) {
+      for (const file of REVOKED_FILES) await damage(file);
       const restarted = source();
       await restarted.loaded();
       expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3 });
@@ -420,37 +418,89 @@ describe('CuratedSource', () => {
       await restarted.checkNow();
       expect(restarted.view()).toMatchObject({ sequence: 3, check: 'failed' });
     }
-    logged(/revoked-keys.json was unreadable; rebuilt it from the cached curated list/);
+    logged(/both copies of revoked-keys.json were damaged; rebuilt them from the cached curated list/);
   });
 
-  it('accepts only a recovery-signed list while an unreadable revoked set is rebuilt, then repairs the file', async () => {
+  it('accepts only a recovery-signed list while a damaged revoked set is rebuilt, then repairs both copies', async () => {
+    const second = signer('signing');
+    const keys = [signing.key, second.key, recovery.key];
+    const three = listText(3, list => (list.revokedKeyIds = [second.key.keyId]));
+    server.publish(3, three, sigText(three, [recovery], 3));
+    const first = source({ keys });
+    await first.checkNow();
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [signing], 4));
+    await first.checkNow();
+    expect(first.view()).toMatchObject({ sequence: 4 });
+    for (const file of REVOKED_FILES) await writeFile(join(dir, file), '{"not":"a list"}');
+    server.requests = [];
+
+    const restarted = source({ keys });
+    await restarted.loaded();
+    expect(restarted.settings().available).toBe(true);
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
+    logged(/both copies of revoked-keys.json are damaged and no recovery-signed cached list can rebuild them/);
+    const five = listText(5);
+    server.publish(5, five, sigText(five, [second], 5));
+    await restarted.checkIfDue();
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    expect(await readFile(join(dir, 'revoked-keys.json'), 'utf8')).toBe('{"not":"a list"}');
+    logged(/only a recovery-signed list can rebuild the damaged revoked-keys.json/);
+
+    const six = listText(6, list => (list.revokedKeyIds = [second.key.keyId]));
+    server.publish(6, six, sigText(six, [recovery, signing], 6));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 6, check: 'updated' });
+    for (const file of REVOKED_FILES)
+      expect(JSON.parse(await readFile(join(dir, file), 'utf8'))).toEqual([second.key.keyId]);
+    const seven = listText(7);
+    server.publish(7, seven, sigText(seven, [second], 7));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ sequence: 6, check: 'failed' });
+  });
+
+  it('is not held to recovery-signed lists by a damaged revoked-keys.json when nothing was ever revoked', async () => {
     const three = listText(3);
     server.publish(3, three, sigText(three, [signing], 3));
     await source().checkNow();
     await writeFile(join(dir, 'revoked-keys.json'), '{"not":"a list"}');
+
+    const restarted = source();
+    await restarted.loaded();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+    await expect(readFile(join(dir, 'revoked-keys.json'))).rejects.toThrow();
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [signing], 4));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 4, check: 'updated' });
+  });
+
+  it('fails only the check while the revoked set cannot be read, and reads it again on the next one', async () => {
+    const three = listText(3, list => (list.revokedKeyIds = [signing.key.keyId]));
+    server.publish(3, three, sigText(three, [recovery], 3));
+    await source().checkNow();
+    await rm(join(dir, 'revoked-keys.json'));
+    await mkdir(join(dir, 'revoked-keys.json'));
     server.requests = [];
 
     const restarted = source();
     await restarted.loaded();
-    expect(restarted.settings().available).toBe(true);
     expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
-    logged(/revoked-keys.json is unreadable and no recovery-signed cached list can rebuild it/);
+    await restarted.checkIfDue();
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', check: 'failed' });
+    expect(server.requests).toEqual([]);
+    logged(/could not read the revoked curated keys \(EISDIR\)/);
+
+    await rm(join(dir, 'revoked-keys.json'), { recursive: true });
     const four = listText(4);
     server.publish(4, four, sigText(four, [signing], 4));
-    await restarted.checkIfDue();
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
-    expect(await readFile(join(dir, 'revoked-keys.json'), 'utf8')).toBe('{"not":"a list"}');
-    logged(/only a recovery-signed list can rebuild the unreadable revoked-keys.json/);
-
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'failed' });
+    logged(/revoked-key/);
     const five = listText(5, list => (list.revokedKeyIds = [signing.key.keyId]));
     server.publish(5, five, sigText(five, [recovery], 5));
     await restarted.checkNow();
     expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 5, check: 'updated' });
-    expect(JSON.parse(await readFile(join(dir, 'revoked-keys.json'), 'utf8'))).toEqual([signing.key.keyId]);
-    const six = listText(6);
-    server.publish(6, six, sigText(six, [signing], 6));
-    await restarted.checkNow();
-    expect(restarted.view()).toMatchObject({ sequence: 5, check: 'failed' });
   });
 
   it('retries a revocation that could not be saved, and applies it from the cached list after a restart', async () => {
