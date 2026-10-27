@@ -44,6 +44,8 @@ export interface StartRequest {
   cwd: string;
   roots: readonly string[];
   protectedPaths: readonly string[];
+  /** The agent started it, so its exit is worth telling the conversation about. See `exited`. */
+  wakeOnExit?: boolean;
 }
 
 /**
@@ -66,6 +68,7 @@ export interface AdoptRequest {
   launch: SandboxedCommand;
   /** What the foreground runner collected before the move, so none of it is lost on the way. */
   captured?: readonly { stream: OutputStream; text: string }[];
+  wakeOnExit?: boolean;
 }
 
 export interface ReadResult {
@@ -89,11 +92,19 @@ interface Tracked {
   emitTimer: NodeJS.Timeout | null;
   killTimer: NodeJS.Timeout | null;
   closed: Promise<void>;
+  wakeOnExit: boolean;
+  /** The model has already been shown this process as finished, so a notice would repeat it. */
+  exitSeen: boolean;
 }
 
 export interface BackgroundProcessEvents {
   output(sessionId: string, processId: string, stream: OutputStream, text: string): void;
   status(sessionId: string, info: BackgroundProcessInfo): void;
+  /**
+   * A `wakeOnExit` process ended on its own, before the model saw it end. Never for a kill:
+   * whoever stopped it already knows, and telling the model again would only cost a turn.
+   */
+  exited?(sessionId: string, processId: string): void;
 }
 
 export class BackgroundProcessLimit extends Error {
@@ -155,7 +166,7 @@ export class BackgroundProcessRegistry {
       throw err;
     }
 
-    const tracked = this.track(info, child, child.pid ?? null, launch);
+    const tracked = this.track(info, child, child.pid ?? null, launch, request.wakeOnExit === true);
 
     // Never written to, only held open. Unref'd so an idle pipe cannot be the thing keeping
     // the app alive at quit.
@@ -188,7 +199,7 @@ export class BackgroundProcessRegistry {
     this.enforceLimits(request.sessionId);
 
     const info = this.newInfo(request.sessionId, request.command, request.cwd, request.startedAt);
-    const tracked = this.track(info, request.child, request.pgid, request.launch);
+    const tracked = this.track(info, request.child, request.pgid, request.launch, request.wakeOnExit === true);
 
     for (const chunk of request.captured ?? []) {
       if (chunk.text) tracked.buffer.push(chunk.stream, chunk.text);
@@ -218,7 +229,8 @@ export class BackgroundProcessRegistry {
     info: BackgroundProcessInfo,
     child: ChildProcess,
     pgid: number | null,
-    launch: SandboxedCommand
+    launch: SandboxedCommand,
+    wakeOnExit: boolean
   ): Tracked {
     const tracked: Tracked = {
       info,
@@ -232,6 +244,8 @@ export class BackgroundProcessRegistry {
       emitTimer: null,
       killTimer: null,
       closed: Promise.resolve(),
+      wakeOnExit,
+      exitSeen: false,
     };
 
     tracked.closed = new Promise<void>(resolve => {
@@ -318,7 +332,32 @@ export class BackgroundProcessRegistry {
 
     const slice = tracked.buffer.read(fromStart ? 0 : tracked.modelCursor, maxChars);
     tracked.modelCursor = slice.cursor;
+    if (tracked.info.status !== 'running') tracked.exitSeen = true;
     return { info: { ...tracked.info }, text: slice.text, cursor: slice.cursor, missed: slice.missed };
+  }
+
+  /** bash_list has shown the model every finished process here, so none of them needs a notice. */
+  markExitsSeen(sessionId: string): void {
+    for (const tracked of this.processes.values()) {
+      if (tracked.info.sessionId === sessionId && tracked.info.status !== 'running') tracked.exitSeen = true;
+    }
+  }
+
+  /**
+   * A finished process the model has not yet seen finish, with its newest output, marked seen
+   * as it is handed over so one exit is only ever reported once. Null once anything else - a
+   * bash_output, a bash_list, an earlier notice - has shown it.
+   */
+  takeExitNotice(
+    id: string,
+    sessionId: string,
+    tailChars: number
+  ): { info: BackgroundProcessInfo; tail: string } | null {
+    const tracked = this.processes.get(id);
+    if (!tracked || tracked.info.sessionId !== sessionId) return null;
+    if (tracked.exitSeen || tracked.info.status === 'running' || tracked.info.status === 'killed') return null;
+    tracked.exitSeen = true;
+    return { info: { ...tracked.info }, tail: tracked.buffer.tail(tailChars) };
   }
 
   /** The newest output, for the UI, which has no cursor of its own to keep. */
@@ -490,6 +529,9 @@ export class BackgroundProcessRegistry {
     void tracked.launch.cleanup();
     this.pruneFinished(tracked.info.sessionId);
     this.events.status(tracked.info.sessionId, { ...tracked.info });
+    if (tracked.wakeOnExit && status !== 'killed' && !tracked.exitSeen && !this.shuttingDown) {
+      this.events.exited?.(tracked.info.sessionId, tracked.info.id);
+    }
   }
 
   /** Keep the newest finished entries so their output stays readable; drop the rest. */
