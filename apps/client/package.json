@@ -171,7 +171,7 @@
     "mongoose": "^8.24.1",
     "next": "16.4.1",
     "next-connect": "^0.13.0",
-    "nodemailer": "^10.1.4",
+    "nodemailer": "^10.2.1",
     "nuqs": "^2.10.1",
     "openai": "^6.46.0",
     "openid-client": "^6.8.8",

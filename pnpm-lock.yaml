@@ -542,8 +542,8 @@ importers:
         specifier: ^0.13.0
         version: 0.13.0
       nodemailer:
-        specifier: ^10.1.4
-        version: 10.1.4
+        specifier: ^10.2.1
+        version: 10.2.1
       nuqs:
         specifier: ^2.10.1
         version: 2.10.1(@tanstack/react-router@1.170.44(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(next@16.4.1(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.64.0)(@types/node@24.12.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)
@@ -1117,8 +1117,8 @@ importers:
         specifier: ^1.6.1
         version: 1.6.1
       mailparser:
-        specifier: ^3.9.38
-        version: 3.9.38
+        specifier: ^3.12.4
+        version: 3.12.4
       mime-types:
         specifier: ^3.0.2
         version: 3.0.2
@@ -1790,8 +1790,8 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(vitest@4.1.11)
       mailparser:
-        specifier: ^3.9.38
-        version: 3.9.38
+        specifier: ^3.12.4
+        version: 3.12.4
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
@@ -2530,8 +2530,8 @@ importers:
         specifier: ^17.0.35
         version: 17.0.35
       mailparser:
-        specifier: ^3.9.38
-        version: 3.9.38
+        specifier: ^3.12.4
+        version: 3.12.4
       ora:
         specifier: ^9.4.1
         version: 9.4.1
@@ -4864,13 +4864,6 @@ packages:
       '@emnapi/core': ^1.7.1 || ^2.0.0-alpha.4
       '@emnapi/runtime': ^1.7.1 || ^2.0.0-alpha.4
 
-  '@napi-rs/wasm-runtime@1.2.6':
-    resolution: {integrity: sha512-mRyDmEw9/fCDXCGfL1sbgIw/GUK0PVxRW4YwgPN61F3LQ+fSyoBFarJVzgGyhF6kRzEQZ0FejDqm4WLXSeqQmw==}
-    engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
-    peerDependencies:
-      '@emnapi/core': ^1.7.1 || 2.0.0-beta.2
-      '@emnapi/runtime': ^1.7.1 || 2.0.0-beta.2
-
   '@next/env@16.4.1':
     resolution: {integrity: sha512-5sUUrrSvs/2/2LnLoesybMGx12EtPB46fdZ6RhAw0XDGSPxU2LFyQBB7yuEiOFFJPKmBY6+q2jTr1/AMbnp0/g==}
 
@@ -5754,10 +5747,6 @@ packages:
 
   '@smithy/node-http-handler@4.12.1':
     resolution: {integrity: sha512-ThMkboGeONWXAelq9FvGsuJC4rOi+qyC4/zhUF58xYpxUg5sQKx2VXZYJmtNjr4dSuBJ1HeJXETQILCz3wOHvw==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/node-http-handler@4.13.0':
-    resolution: {integrity: sha512-/GGcPoNJ2nzGytdAanpbx7mpp9Coa8LP+/Rpmbktr8YeLuIXs9B0SEz+X3AeonHdyzOIFJdKbN7jOZ+Tj+pMGw==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/signature-v4@5.7.4':
@@ -7204,8 +7193,9 @@ packages:
   '@yuku-toolchain/types@0.8.3':
     resolution: {integrity: sha512-9LN3HYs3A9qSPVFunsxlbfwBcUgexti3TmhOzIxB/UH8zFuaHQJXTRDcN17DW6cp1GsyZtiZA7f18uIra36Jag==}
 
-  '@zone-eu/mailsplit@5.4.20':
-    resolution: {integrity: sha512-6B2w0zRBWOwbO5h7SL5N/2z1AuNchTP3OT33MObUr4/cz9bWPrZ6KadLKxnSrOZG0AGu7Q03p4X7eQhZHc1u/A==}
+  '@zone-eu/mailsplit@5.4.29':
+    resolution: {integrity: sha512-CCUNycmUjrV5M0wNf23waWAt9eOHczhjLbUQS7k0FNJvR0py9VSqHFt+tSl/D0+XI73VLG0U+PwYtq9R0zsm9Q==}
+    engines: {node: '>=20.0.0'}
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -9766,8 +9756,8 @@ packages:
     resolution: {integrity: sha512-4OUAqU9Z1i3vCnS05hzGiFnEMDpQ+62pAD/MVQOp83fYyNC8GleCqaS0QikQBmcWCrKFiUs/B8ztRRiYOAXuCA==}
     engines: {node: '>= 12'}
 
-  ip-address@10.7.5:
-    resolution: {integrity: sha512-t2v0rkILYv9WXmSL7TpAaU3HXgaFYOPUcH3QHgwQ++gpJuH3bqyMy4Fvt/DJCTKwzH3Cf+bAp5W/mFL39KPLzA==}
+  ip-address@10.7.4:
+    resolution: {integrity: sha512-DWBMKyeM25D70nrIiTkgQth59/G+naKOTep6huF9j+GmeK3DMD60Zvxg5d5qQnz+38AHgou6ean2LECX+lrKDg==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -10267,14 +10257,17 @@ packages:
     engines: {node: '>=16'}
     hasBin: true
 
-  libbase64@1.3.2:
-    resolution: {integrity: sha512-fFCoI0ceXhTu/0QiJ6Uf6BV9k7X/8QW2/D4BR1vw3BPrHcIjLbGLH+U7inQ4SeWrfNCOmpGE09Qt4XjSFfus0g==}
+  libbase64@1.4.1:
+    resolution: {integrity: sha512-Nyh3H90B3gRtrcxIe56Ayy7635J0jmh6AbxbQgQae8wrSPQMH5wFqJChiMTB13yKG512L3YspbA5DzumhFTITA==}
+    engines: {node: '>=20.0.0'}
 
-  libmime@5.4.7:
-    resolution: {integrity: sha512-r1ENu4wMVSB52AAORwaW4L/MeQJr9rryzHLRpcjud3zcUPWXh1Xkgn+tAqL8oTnRO/LW7y5xxPBE20ta5amtMA==}
+  libmime@5.6.3:
+    resolution: {integrity: sha512-cuTUW/Jybvh5O4/U9p61gyutHOjDtZyGQYuY99+bfnaFwqcDf2Nb+R6hMHY6DDen2H9wLKQSMpofWUgn2TI5JQ==}
+    engines: {node: '>=20.0.0'}
 
-  libqp@2.1.2:
-    resolution: {integrity: sha512-rp+U80tl9Os4K7GnVbPzPRmghPu6eqB8rcF+ontvNAnoga0JhMFG/bkTD/reC8yoznKMgOc5/ttZHJasiWeFPw==}
+  libqp@3.0.1:
+    resolution: {integrity: sha512-7QZxpPX25pga1WiMueduWxmrHMVBFrZPH6ZUaozGYa/H98JH6NVBSET3qVw+4NxzoraIW7rJ81YxSU9IalvCpg==}
+    engines: {node: '>=20.0.0'}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -10481,8 +10474,8 @@ packages:
   magicast@0.5.3:
     resolution: {integrity: sha512-pVKE4UdSQ7DvHzivsCIFx2BJn1mHG6KsyrFcaxFx6tONdneEuThrDx0Cj3AMg58KyN4pzYT+LHOotxDQDjNvkw==}
 
-  mailparser@3.9.38:
-    resolution: {integrity: sha512-CeSx2cx6MgFzuFPx2bnyGNmJABiMWvGJbrotOv6Ve47aQhlfCHO7cGd2CJHGVC3klfWjjcJ9itXDOdj2xXZFYg==}
+  mailparser@3.12.4:
+    resolution: {integrity: sha512-FdoMF+S89/AQaJHY7StwTfABPHZ8Vey+CDyUno5j+TO0jF0UxM+la4Pe9MeqKqBO4Y9ZMB2eomdyg5i+jzpfZw==}
     engines: {node: '>=20.0.0'}
 
   make-dir@3.1.0:
@@ -11089,12 +11082,8 @@ packages:
     resolution: {integrity: sha512-YHs7BmmcsdAI5Ozuf8JZo6PT0mv2GIWC9vMfvUC3dp65M8hn7Ux8CPL+2oBI7juNuj9d0ndhTcznq2ODBps9cQ==}
     engines: {node: '>=18'}
 
-  nodemailer@10.1.0:
-    resolution: {integrity: sha512-fXW8AulB25aOTuwfRYV6lqHyfz2VM4rr4SGXH03mE7x5znEUpzL5mu6anARUpZN7744Ziwkmr4AxSLPJsBQspg==}
-    engines: {node: '>=20.0.0'}
-
-  nodemailer@10.1.4:
-    resolution: {integrity: sha512-EsMnOR2oRv4LGnWvHgcVYkkQ4O2j8KO4WTw6l+PHR4sOXo8SAgIraxtEnGDmotjbhv0hDsu3IuDIFZm8iXwO4A==}
+  nodemailer@10.2.1:
+    resolution: {integrity: sha512-ZrDNsPFoDMwefNs7sJwrYiEJ/CG4ClJWDZv05iNJsEBWa8GRDry1QJHTJxsuTAY9eDDKjX4k+q3SxslXJOao7w==}
     engines: {node: '>=20.0.0'}
 
   nopt@9.0.0:
@@ -14070,7 +14059,7 @@ snapshots:
       '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.13.0
+      '@smithy/node-http-handler': 4.12.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
     optional: true
@@ -14278,7 +14267,7 @@ snapshots:
       '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.13.0
+      '@smithy/node-http-handler': 4.12.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
     optional: true
@@ -14494,7 +14483,7 @@ snapshots:
       '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
-      '@smithy/node-http-handler': 4.13.0
+      '@smithy/node-http-handler': 4.12.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
     optional: true
@@ -16711,13 +16700,6 @@ snapshots:
       '@tybys/wasm-util': 0.10.4
     optional: true
 
-  '@napi-rs/wasm-runtime@1.2.6(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)':
-    dependencies:
-      '@emnapi/core': 1.10.0
-      '@emnapi/runtime': 1.10.0
-      '@tybys/wasm-util': 0.10.4
-    optional: true
-
   '@next/env@16.4.1': {}
 
   '@next/eslint-plugin-next@16.4.0(eslint@9.39.2(jiti@2.7.0))':
@@ -17434,7 +17416,7 @@ snapshots:
     dependencies:
       '@emnapi/core': 1.10.0
       '@emnapi/runtime': 1.10.0
-      '@napi-rs/wasm-runtime': 1.2.6(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
+      '@napi-rs/wasm-runtime': 1.2.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
     optional: true
 
   '@rolldown/binding-win32-arm64-msvc@1.0.0-rc.17':
@@ -17694,13 +17676,6 @@ snapshots:
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
-
-  '@smithy/node-http-handler@4.13.0':
-    dependencies:
-      '@smithy/core': 3.36.1
-      '@smithy/types': 4.19.0
-      tslib: 2.8.1
-    optional: true
 
   '@smithy/signature-v4@5.7.4':
     dependencies:
@@ -18955,7 +18930,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@7.3.7(@types/node@24.12.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/expect@4.1.11':
     dependencies:
@@ -19020,7 +18995,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@7.3.7(@types/node@24.12.3)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
   '@vitest/utils@4.1.11':
     dependencies:
@@ -19196,11 +19171,11 @@ snapshots:
 
   '@yuku-toolchain/types@0.8.3': {}
 
-  '@zone-eu/mailsplit@5.4.20':
+  '@zone-eu/mailsplit@5.4.29':
     dependencies:
-      libbase64: 1.3.2
-      libmime: 5.4.7
-      libqp: 2.1.2
+      libbase64: 1.4.1
+      libmime: 5.6.3
+      libqp: 3.0.1
 
   abbrev@4.0.0: {}
 
@@ -22323,7 +22298,7 @@ snapshots:
 
   ip-address@10.7.1: {}
 
-  ip-address@10.7.5:
+  ip-address@10.7.4:
     optional: true
 
   ipaddr.js@1.9.1: {}
@@ -22827,16 +22802,16 @@ snapshots:
     dependencies:
       isomorphic.js: 0.2.5
 
-  libbase64@1.3.2: {}
+  libbase64@1.4.1: {}
 
-  libmime@5.4.7:
+  libmime@5.6.3:
     dependencies:
       encoding-japanese: 2.4.0
       iconv-lite: 0.7.3
-      libbase64: 1.3.2
-      libqp: 2.1.2
+      libbase64: 1.4.1
+      libqp: 3.0.1
 
-  libqp@2.1.2: {}
+  libqp@3.0.1: {}
 
   lie@3.3.0:
     dependencies:
@@ -23013,16 +22988,14 @@ snapshots:
       '@babel/types': 7.29.8
       source-map-js: 1.2.2
 
-  mailparser@3.9.38:
+  mailparser@3.12.4:
     dependencies:
-      '@zone-eu/mailsplit': 5.4.20
-      encoding-japanese: 2.4.0
+      '@zone-eu/mailsplit': 5.4.29
       he: 1.2.0
       html-to-text: 10.0.1
-      iconv-lite: 0.7.3
-      libmime: 5.4.7
+      libmime: 5.6.3
       linkify-it: 5.0.2
-      nodemailer: 10.1.0
+      nodemailer: 10.2.1
       punycode.js: 2.3.1
       tlds: 1.261.0
 
@@ -23946,9 +23919,7 @@ snapshots:
 
   node-releases@2.0.54: {}
 
-  nodemailer@10.1.0: {}
-
-  nodemailer@10.1.4: {}
+  nodemailer@10.2.1: {}
 
   nopt@9.0.0:
     dependencies:
@@ -25544,7 +25515,7 @@ snapshots:
 
   socks@2.8.6:
     dependencies:
-      ip-address: 10.7.5
+      ip-address: 10.7.4
       smart-buffer: 4.2.0
     optional: true
 
