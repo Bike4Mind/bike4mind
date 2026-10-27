@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { statfs as nodeStatfs } from 'node:fs/promises';
 import nodeOs from 'node:os';
+import { parseWindowsGpus, scanLinuxGpus, windowsGpuCommand, type DetectedGpu } from './gpus';
 
 export interface HardwareProfile {
   platform: string;
@@ -8,13 +9,14 @@ export interface HardwareProfile {
   arch: string;
   memoryKind: 'unified' | 'discrete' | 'cpu';
   totalMemoryBytes: number;
-  /** Summed across GPUs; null on unified memory, where the GPU shares `totalMemoryBytes`. */
+  /** Summed across one vendor's GPUs; null on unified memory, where the GPU shares `totalMemoryBytes`, or unknown. */
   gpuMemoryBytes: number | null;
   gpuName: string | null;
+  /** Usable discrete GPUs behind `gpuMemoryBytes`; integrated GPUs that Ollama skips are not counted. */
   gpuCount: number;
   chip: string | null;
   diskFreeBytes: number | null;
-  /** 'low' when a GPU this probe cannot measure (AMD, Intel, unknown) may be present. */
+  /** 'low' when a usable GPU's memory is unknown or the GPUs cannot be listed or reached (WSL, containers). */
   confidence: 'high' | 'low';
 }
 
@@ -33,7 +35,13 @@ export interface HardwareProbeOptions {
   statfs?: (path: string) => Promise<StatfsResult>;
   platform?: string;
   arch?: string;
+  /** Where Linux `/sys`, `/proc` and `/dev` are read from; tests point it at a fixture tree. */
+  rootDir?: string;
+  /** Checked for WSL and `SystemRoot`; defaults to `process.env`. */
+  env?: Environment;
 }
+
+type Environment = Record<string, string | undefined>;
 
 const EXEC_TIMEOUT_MS = 5_000;
 const MIB = 1024 * 1024;
@@ -74,6 +82,29 @@ async function attempt<T>(task: () => Promise<T> | T): Promise<T | null> {
   }
 }
 
+async function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([task, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+let cachedWindowsGpus: DetectedGpu[] | undefined;
+
+/** PowerShell costs a second or more to start, so a successful real query is kept for the process. */
+async function windowsGpus(exec: ExecLike, env: Environment, cache: boolean): Promise<DetectedGpu[] | null> {
+  if (cache && cachedWindowsGpus) return cachedWindowsGpus;
+  const [command, args] = windowsGpuCommand(env);
+  const gpus = parseWindowsGpus((await exec(command, args)).stdout);
+  if (cache && gpus) cachedWindowsGpus = gpus;
+  return gpus;
+}
+
 /** Describes the host's memory and GPUs for model-fit decisions. Never throws; unmeasurable fields are null. */
 export async function probeHardware(options: HardwareProbeOptions = {}): Promise<HardwareProfile> {
   const exec = options.exec ?? defaultExec;
@@ -110,6 +141,19 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
     };
   }
 
+  if (platform === 'darwin') {
+    // Ollama's and llama.cpp's Intel Mac builds run on the CPU, whatever GPU the Mac has.
+    return {
+      ...base,
+      memoryKind: 'cpu',
+      gpuMemoryBytes: null,
+      gpuName: null,
+      gpuCount: 0,
+      chip: null,
+      confidence: 'high',
+    };
+  }
+
   const smi = await attempt(() =>
     exec('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits'])
   );
@@ -137,13 +181,47 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
     };
   }
 
+  const env = options.env ?? process.env;
+  const scanned =
+    platform === 'linux'
+      ? await attempt(() => withTimeout(scanLinuxGpus(options.rootDir, env), EXEC_TIMEOUT_MS))
+      : platform === 'win32'
+        ? await attempt(() => windowsGpus(exec, env, !options.exec))
+        : null;
+  if (!scanned || scanned.length === 0) {
+    return {
+      ...base,
+      memoryKind: 'cpu',
+      gpuMemoryBytes: null,
+      gpuName: null,
+      gpuCount: 0,
+      chip: null,
+      confidence: scanned ? 'high' : 'low',
+    };
+  }
+  if (scanned.some(gpu => gpu.memoryBytes === null)) {
+    return {
+      ...base,
+      memoryKind: 'discrete',
+      gpuMemoryBytes: null,
+      gpuName: scanned[0]?.name ?? null,
+      gpuCount: scanned.length,
+      chip: null,
+      confidence: 'low',
+    };
+  }
+  // A model loads within one vendor's runtime (ROCm, CUDA or Vulkan per vendor), so VRAM is not summed across vendors.
+  const sizeOf = (group: DetectedGpu[]) => group.reduce((sum, gpu) => sum + (gpu.memoryBytes ?? 0), 0);
+  const groups = new Map<string, DetectedGpu[]>();
+  for (const gpu of scanned) groups.set(gpu.vendor, [...(groups.get(gpu.vendor) ?? []), gpu]);
+  const largest = [...groups.values()].reduce((best, group) => (sizeOf(group) > sizeOf(best) ? group : best));
   return {
     ...base,
-    memoryKind: 'cpu',
-    gpuMemoryBytes: null,
-    gpuName: null,
-    gpuCount: 0,
+    memoryKind: 'discrete',
+    gpuMemoryBytes: sizeOf(largest),
+    gpuName: largest[0]?.name ?? null,
+    gpuCount: largest.length,
     chip: null,
-    confidence: 'low',
+    confidence: 'high',
   };
 }

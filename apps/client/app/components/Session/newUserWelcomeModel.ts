@@ -45,8 +45,9 @@ interface CreditsLineArgs {
   balance: number;
   /** Signed up openly and still owes email verification before the starter grant lands. */
   awaitingVerification: boolean;
-  /** What verification will grant: the user's invite amount, else the defaultFreeCredits setting. */
+  /** An explicit grant or the maximum staged entitlement before risk assessment. */
   pendingGrant: number | null;
+  pendingGrantIsMaximum?: boolean;
 }
 
 /**
@@ -59,11 +60,14 @@ export function welcomeCreditsLine({
   balance,
   awaitingVerification,
   pendingGrant,
+  pendingGrantIsMaximum = false,
 }: CreditsLineArgs): string | null {
   if (!enforceCredits) return null;
   if (awaitingVerification) {
     return pendingGrant && pendingGrant > 0
-      ? `Verify your email to unlock your ${formatCreditBalance(pendingGrant)}.`
+      ? pendingGrantIsMaximum
+        ? `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)}, subject to eligibility checks.`
+        : `Verify your email to unlock your ${formatCreditBalance(pendingGrant)}.`
       : 'Verify your email to unlock your free credits.';
   }
   if (balance <= 0) return null;

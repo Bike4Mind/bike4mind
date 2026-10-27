@@ -21,6 +21,8 @@ interface FloatingChatWindowProps {
   headerActions?: React.ReactNode;
   /** Overrides the default "AI Chat" title-bar label (e.g. /opti swaps in the Data Lakes toggle). */
   title?: React.ReactNode;
+  /** Close collapses to the "AI Chat" pill instead of hiding the chat, for pages (e.g. /admin) with no other launcher to bring it back. */
+  closeToPill?: boolean;
 }
 
 // Animation for expand/collapse
@@ -83,7 +85,12 @@ const getCursorForHandle = (position: string): string => {
   return cursors[position] || 'default';
 };
 
-const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, headerActions, title }) => {
+const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
+  children,
+  headerActions,
+  title,
+  closeToPill = false,
+}) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
 
@@ -307,11 +314,16 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
     }
   }, [isMinimized, hiddenFromLayout]);
 
-  // Handle close - dismiss the panel entirely. Re-docking is a separate action
-  // (the dock-right/dock-bottom controls in ChatPanelControls), not this button's job.
+  // Close hides the panel entirely, or collapses to the pill when closeToPill is set (pages with
+  // no other launcher). Re-docking is a separate action (the dock-right/dock-bottom controls in
+  // ChatPanelControls), not this button's job.
   const handleClose = useCallback(() => {
+    if (closeToPill) {
+      setSessionLayout({ floatingChatMinimized: true });
+      return;
+    }
     setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
-  }, []);
+  }, [closeToPill]);
 
   const bounds = {
     left: 0,

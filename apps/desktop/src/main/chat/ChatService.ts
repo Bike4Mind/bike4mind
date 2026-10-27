@@ -52,7 +52,9 @@ import {
   isTurnBudgetStop,
   localBackend,
   messagesSinceBoundary,
+  NO_LOCAL_MODEL,
   parseLocalModelId,
+  pickLocalModel,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { shouldAutoCompact } from '@shared/contextLimit';
@@ -267,6 +269,8 @@ const TURN_LIMITS: TurnLimits = {
 };
 
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
+type SettledModel = { session: ChatSession; summary?: ChatSessionSummary; notice?: string } | { error: string };
+
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 
 /** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
@@ -483,6 +487,8 @@ export interface ChatServiceDeps {
   turnTiming?: boolean;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
   getApiClient(): AuthenticatedApiClient | null;
+  /** True in the device-local scope (signed out by choice); false for an account whose session expired. */
+  isDeviceLocal?(): boolean;
   /** Identifies the cached completions endpoint; changing environments invalidates it. */
   getEnvironmentUrl(): string;
   emit(event: ChatStreamEvent): void;
@@ -918,13 +924,25 @@ export class ChatService {
    */
   async createSession(): Promise<ChatSessionSummary> {
     const catalog = await this.listModels();
-    return this.deps.store.create((await this.pickModel(catalog.models)) ?? undefined);
+    return this.deps.store.create(await this.startModel(catalog.models));
   }
 
   /** The model a new conversation would start on, for a session the Claude importer writes. */
   async modelForNewSession(): Promise<string | undefined> {
     const catalog = await this.listModels();
-    return (await this.pickModel(catalog.models)) ?? undefined;
+    return this.startModel(catalog.models);
+  }
+
+  /** `pickModel`, except the device-local scope never starts on a hosted default it could not send to. */
+  private async startModel(models: readonly ChatModelOption[]): Promise<string | undefined> {
+    if (this.deviceLocal()) {
+      return pickLocalModel(models, await this.deps.modelMemory?.read()) ?? NO_LOCAL_MODEL;
+    }
+    return (await this.pickModel(models)) ?? undefined;
+  }
+
+  private deviceLocal(): boolean {
+    return !this.deps.getApiClient() && this.deps.isDeviceLocal?.() === true;
   }
 
   /**
@@ -965,7 +983,7 @@ export class ChatService {
   ): Promise<CreateCodeSessionResult> {
     const timer = new PhaseTimer();
     const catalog = await this.listModels();
-    const model = (await this.pickModel(catalog.models)) ?? undefined;
+    const model = await this.startModel(catalog.models);
     timer.lap('model');
 
     if (!request.directory) {
@@ -1788,7 +1806,7 @@ export class ChatService {
     sessionId: string,
     prompt: string,
     attachments: readonly ChatAttachment[],
-    existing: ChatSession,
+    claimed: ChatSession,
     invocation: ReturnType<typeof parseSkillInvocation>,
     skillCommand: Awaited<ReturnType<SkillCatalog['get']>>,
     options: SendOptions,
@@ -1797,11 +1815,18 @@ export class ChatService {
     const { released, seedHops } = options;
     const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
-    if (!api && !isLocalModel(existing.model)) return { ok: false, error: 'Sign in to send a message.' };
+    if (!api && !isLocalModel(claimed.model) && !this.deviceLocal())
+      return { ok: false, error: 'Sign in to send a message.' };
+    const settled: SettledModel = this.deviceLocal()
+      ? await this.settleDeviceLocal(claimed, (await this.deps.models?.listLocal?.(true)) ?? [])
+      : { session: claimed };
+    if ('error' in settled) return { ok: false, error: settled.error };
+    const existing = settled.session;
     // First turns only: they are where a session start spends its time.
     const timer = existing.messages.length === 0 ? new PhaseTimer() : undefined;
 
-    const { session: reconciled, notice } = await this.reconcileModel(existing);
+    const { session: reconciled, notice: reconcileNotice } = await this.reconcileModel(existing);
+    const notice = reconcileNotice ?? settled.notice;
     timer?.lap('reconcileModel');
 
     const attached = await this.resolveAttachments(sessionId, attachments);
@@ -2236,6 +2261,41 @@ export class ChatService {
       session: { ...session, model: replacement },
       notice: `${session.model} is not available on this server. Switched this conversation to ${name}.`,
     };
+  }
+
+  /**
+   * Device-local scope only: a conversation whose model is not in the local list (placeholder,
+   * hosted, or since removed) moves to `pickLocalModel`. With no list, a turn on a real local id
+   * proceeds and anything else is refused, so nothing goes anywhere hosted.
+   */
+  private async settleDeviceLocal(session: ChatSession, models: readonly ChatModelOption[]): Promise<SettledModel> {
+    if (models.some(model => model.id === session.model)) return { session };
+    if (models.length === 0)
+      return parseLocalModelId(session.model)
+        ? { session }
+        : { error: 'No local model is available. Start Ollama, or install a model from the Models screen.' };
+    const replacement = pickLocalModel(models, await this.deps.modelMemory?.read());
+    if (!replacement) return { session };
+    const summary = await this.deps.store.setModel(session.id, replacement);
+    const name = models.find(model => model.id === replacement)?.name ?? replacement;
+    const was = parseLocalModelId(session.model)?.model ?? session.model;
+    return {
+      session: { ...session, model: replacement },
+      ...(summary ? { summary } : {}),
+      ...(session.model === NO_LOCAL_MODEL
+        ? {}
+        : { notice: `${was} is not available on this device. Switched this conversation to ${name}.` }),
+    };
+  }
+
+  /** Saves the model a send would use, so the picker shows it before the user sends. Null when nothing changed. */
+  async settleSessionModel(sessionId: string): Promise<{ session: ChatSessionSummary; notice?: string } | null> {
+    if (!this.deviceLocal()) return null;
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return null;
+    const settled = await this.settleDeviceLocal(session, (await this.deps.models?.listLocal?.()) ?? []);
+    if ('error' in settled || !settled.summary) return null;
+    return { session: settled.summary, ...(settled.notice ? { notice: settled.notice } : {}) };
   }
 
   /**

@@ -495,6 +495,17 @@ describe('the attach shortcut', () => {
     remove.mockRestore();
   });
 
+  it('blocks sending with a reason and runs the fix button', () => {
+    const onSend = vi.fn();
+    const onClick = vi.fn();
+    mount({ onSend, blockedReason: 'No local model.', blockedAction: { label: 'Open Models', onClick } });
+    expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.textContent).toContain('No local model.');
+    act(() => (host?.querySelector('[data-testid="composer-blocked-action-btn"]') as HTMLElement).click());
+    expect(onClick).toHaveBeenCalledOnce();
+    expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it('advertises the chord on the attach button', () => {
     mount();
     const button = host?.querySelector('[data-testid="composer-attach-btn"]');

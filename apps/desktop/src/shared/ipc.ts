@@ -130,6 +130,7 @@ export const IPC_CHANNELS = {
   chatListModels: 'chat:list-models',
   chatListSuggestionModels: 'chat:list-suggestion-models',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSettleLocalModel: 'chat:settle-local-model',
   chatSetSessionHistory: 'chat:set-session-history',
   chatSearchHistory: 'chat:search-history',
   chatClearHistory: 'chat:clear-history',
@@ -607,6 +608,8 @@ export interface DesktopApi {
     listSuggestionModels(): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
+    settleLocalModel(sessionId: string): Promise<{ session: ChatSessionSummary; notice?: string } | null>;
     setSessionHistory(sessionId: string, enabled: boolean): Promise<ChatSessionSummary | null>;
     searchHistory(query: string): Promise<LocalHistoryResult[]>;
     clearHistory(): Promise<LocalHistoryState>;

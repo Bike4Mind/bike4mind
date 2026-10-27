@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
@@ -204,7 +204,7 @@ describe('FullUsersView - reason-required admin actions', () => {
   const typeReason = (testId: string, value: string) =>
     fireEvent.change(screen.getByTestId(testId), { target: { value } });
 
-  it('requires a reason before a role change is saved, then sends roleChangeReason', () => {
+  it('requires a reason before a role change is saved, then sends roleChangeReason', async () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('role-radio-super-admin').querySelector('input') as HTMLInputElement);
@@ -222,7 +222,7 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(mutations.updateMutate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mutations.updateMutate).toHaveBeenCalledTimes(1));
     expect(mutations.updateMutate.mock.calls[0][0]).toMatchObject({
       id: 'u1',
       data: { isAdmin: true, roleChangeReason: 'Promoted to cover on-call' },
@@ -240,7 +240,7 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(mutations.updateMutate.mock.calls[0][0].data).not.toHaveProperty('roleChangeReason');
   });
 
-  it('login-as sends the reason with the MFA token and blocks confirm until it is valid', () => {
+  it('login-as sends the reason with the MFA token and blocks confirm until it is valid', async () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('login-as-user-btn'));
@@ -254,11 +254,13 @@ describe('FullUsersView - reason-required admin actions', () => {
     expect(confirmButton).toBeEnabled();
     fireEvent.click(confirmButton);
 
-    expect(mutations.loginAsMutate).toHaveBeenCalledWith({
-      id: 'u1',
-      mfaToken: '123456',
-      reason: 'Reproduce billing bug',
-    });
+    await waitFor(() =>
+      expect(mutations.loginAsMutate).toHaveBeenCalledWith({
+        id: 'u1',
+        mfaToken: '123456',
+        reason: 'Reproduce billing bug',
+      })
+    );
   });
 });
 

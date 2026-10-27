@@ -48,7 +48,8 @@ import ProductAccess from '../ProductAccess';
 import SystemMessageModal from '../SystemMessageModal';
 import { useDeleteUser, useUpdateUser, useLoginAsUser } from '@client/app/hooks/data/user';
 import { IUserDocument, UserLevelType, isValidAdminActionReason } from '@bike4mind/common';
-import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
+import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from '@client/app/components/admin/shared/adminReason';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useShallow } from 'zustand/shallow';
@@ -144,8 +145,6 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   // (see adminUpdateUser) only when currentCredits is actually edited.
   const [creditReason, setCreditReason] = useState('');
   const [roleConfirmOpen, setRoleConfirmOpen] = useState(false);
-  const [roleChangeReason, setRoleChangeReason] = useState('');
-  const [loginAsReason, setLoginAsReason] = useState('');
   const [tempUserLevel, setTempUserLevel] = useState<UserLevelType>(user.level);
   const [systemMessageModalOpen, setSystemMessageModalOpen] = useState(false);
   const [loginAsMfaModalOpen, setLoginAsMfaModalOpen] = useState(false);
@@ -198,22 +197,15 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
     deleteUser.mutate({ id: userId, reason }, { onSuccess: () => onUserDeleted?.() });
   };
 
-  const closeRoleConfirm = () => {
-    setRoleConfirmOpen(false);
-    setRoleChangeReason('');
-  };
+  const closeRoleConfirm = () => setRoleConfirmOpen(false);
 
-  const closeLoginAsModal = () => {
-    setLoginAsMfaModalOpen(false);
-    setLoginAsReason('');
-  };
+  const closeLoginAsModal = () => setLoginAsMfaModalOpen(false);
 
-  const submitLoginAs = () => {
-    loginAsUser.mutate({ id: user.id, mfaToken: loginAsMfaToken.trim(), reason: loginAsReason.trim() });
+  const submitLoginAs = (reason: string) => {
+    loginAsUser.mutate({ id: user.id, mfaToken: loginAsMfaToken.trim(), reason });
     closeLoginAsModal();
   };
 
-  const canSubmitLoginAs = !!loginAsMfaToken.trim() && isValidAdminActionReason(loginAsReason);
   const creditReasonMissing = !!editedFields.currentCredits && !isValidAdminActionReason(creditReason);
 
   const getNextLevel = (currentLevel: string) => {
@@ -448,7 +440,6 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
             return;
           }
           setLoginAsMfaToken('');
-          setLoginAsReason('');
           setLoginAsMfaModalOpen(true);
         }}
         loading={loginAsUser.isPending}
@@ -688,91 +679,60 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
         </ModalDialog>
       </Modal>
 
-      {/* Role change confirmation: the reason is required and audited */}
-      <Modal open={roleConfirmOpen} onClose={closeRoleConfirm}>
-        <ModalDialog data-testid="role-change-confirm-modal">
-          <ModalClose />
-          <Typography level="title-md" startDecorator={<SecurityIcon />}>
-            Confirm Role Change
-          </Typography>
-          <Typography level="body-sm" sx={{ mb: 1 }}>
-            {formState.isAdmin ? (
-              <>
-                You are about to grant <strong>Super Admin</strong> to <strong>{user.name || user.email}</strong>. They
-                will have full administrative access.
-              </>
-            ) : (
-              <>
-                You are about to remove <strong>Super Admin</strong> from <strong>{user.name || user.email}</strong>.
-                They will lose administrative access.
-              </>
-            )}
-          </Typography>
-          <AdminReasonField
-            value={roleChangeReason}
-            onChange={setRoleChangeReason}
-            data-testid="role-change-reason-input"
-          />
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={closeRoleConfirm}>
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              disabled={!isValidAdminActionReason(roleChangeReason)}
-              loading={updateUser.isPending}
-              onClick={() => handleSaveChanges(roleChangeReason)}
-              data-testid="role-change-confirm-btn"
-            >
-              Confirm Role Change
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+      <ActionDialog
+        open={roleConfirmOpen}
+        onClose={closeRoleConfirm}
+        title={formState.isAdmin ? 'Grant Super Admin' : 'Remove Super Admin'}
+        description={
+          formState.isAdmin ? (
+            <>
+              <strong>{user.name || user.email}</strong> gets full administrative access.
+            </>
+          ) : (
+            <>
+              <strong>{user.name || user.email}</strong> loses administrative access.
+            </>
+          )
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.roleChange}
+        confirmLabel={formState.isAdmin ? 'Grant Super Admin' : 'Remove Super Admin'}
+        tone="danger"
+        pending={updateUser.isPending}
+        onConfirm={handleSaveChanges}
+        data-testid="role-change-confirm-modal"
+        testIds={{ reason: 'role-change-reason-input', confirm: 'role-change-confirm-btn' }}
+      />
 
-      {/* MFA verification modal for loginAs */}
-      <Modal open={loginAsMfaModalOpen} onClose={closeLoginAsModal}>
-        <ModalDialog data-testid="login-as-mfa-modal">
-          <ModalClose />
-          <Typography level="title-md" startDecorator={<SecurityIcon />}>
-            Verify Your Identity
-          </Typography>
-          <Typography level="body-sm" sx={{ mb: 1 }}>
-            Enter your authenticator code to login as <strong>{user.name || user.email}</strong>.
-          </Typography>
-          <FormControl>
-            <FormLabel>TOTP Code</FormLabel>
-            <Input
-              autoFocus
-              placeholder="6-digit code"
-              value={loginAsMfaToken}
-              onChange={e => setLoginAsMfaToken(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && canSubmitLoginAs) {
-                  submitLoginAs();
-                }
-              }}
-              data-testid="login-as-mfa-input"
-              slotProps={{ input: { maxLength: 10 } }}
-            />
-          </FormControl>
-          <AdminReasonField value={loginAsReason} onChange={setLoginAsReason} data-testid="login-as-reason-input" />
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={closeLoginAsModal}>
-              Cancel
-            </Button>
-            <Button
-              color="primary"
-              disabled={!canSubmitLoginAs}
-              loading={loginAsUser.isPending}
-              onClick={submitLoginAs}
-              data-testid="login-as-mfa-confirm-btn"
-            >
-              Confirm
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+      <ActionDialog
+        open={loginAsMfaModalOpen}
+        onClose={closeLoginAsModal}
+        title="Log in as user"
+        description={
+          <>
+            Starts an audited session as <strong>{user.name || user.email}</strong>. Enter your own authenticator code
+            to continue.
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.impersonation}
+        confirmLabel={`Log in as ${user.name || user.email}`}
+        blockedReason={loginAsMfaToken.trim() ? null : 'Enter your 6-digit authenticator code.'}
+        pending={loginAsUser.isPending}
+        onConfirm={submitLoginAs}
+        data-testid="login-as-mfa-modal"
+        testIds={{ reason: 'login-as-reason-input', confirm: 'login-as-mfa-confirm-btn' }}
+      >
+        <FormControl>
+          <FormLabel>Authenticator code</FormLabel>
+          <Input
+            autoFocus
+            placeholder="6-digit code"
+            value={loginAsMfaToken}
+            onChange={e => setLoginAsMfaToken(e.target.value)}
+            data-testid="login-as-mfa-input"
+            slotProps={{ input: { maxLength: 10, autoComplete: 'one-time-code' } }}
+          />
+        </FormControl>
+      </ActionDialog>
     </Card>
   );
 };
