@@ -453,7 +453,7 @@ describe('SmartChunker', () => {
     });
 
     it('chunks a BOM-prefixed file', async () => {
-      const out = await chunkTexts('﻿{\r\n  "y": "payload"\r\n}');
+      const out = await chunkTexts('\uFEFF{\r\n  "y": "payload"\r\n}');
 
       expect(out).toContain('payload');
     });
