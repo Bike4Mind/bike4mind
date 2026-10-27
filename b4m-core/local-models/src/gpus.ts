@@ -69,10 +69,12 @@ export interface DetectedGpu {
   /** Dedicated VRAM, or what ROCm can allocate on a shared-memory GPU; null when the OS does not expose it. */
   memoryBytes: number | null;
   /**
-   * Strix Halo, which ROCm serves from its firmware carve-out (memory the OS does not see) or, when GTT is larger,
-   * from GTT in the RAM the OS sees.
+   * Strix Halo, which ROCm serves from its firmware carve-out (memory the OS does not see) or from GTT in the RAM the
+   * OS sees: GTT on kernels 6.10 to 6.14, and from 6.15 only when GTT is larger than the carve-out.
    */
   sharedMemory?: 'carve-out' | 'gtt';
+  /** The kernel version could not be read, so `memoryBytes` is the smaller of the carve-out and the GTT budget. */
+  memoryUnconfirmed?: true;
 }
 
 interface PciGpu extends DetectedGpu {
@@ -156,22 +158,52 @@ async function reachable(root: string, dir: string, driver: string): Promise<boo
 type Classified = { gpu: PciGpu; reachable: boolean } | null | undefined;
 
 /**
- * The device memory KFD gives ROCm on an APU: the carve-out, or the TTM page limit once GTT is larger than the
- * carve-out (amdgpu_amdkfd_get_local_mem_info). GTT bounds the latter too, in case amdgpu.gttsize lowered it.
+ * How amdgpu_amdkfd_get_local_mem_info sizes an APU for ROCm, by kernel: the carve-out before 6.10, the TTM page
+ * limit on every APU from 6.10, and from 6.15 the TTM page limit only when GTT is larger than the carve-out
+ * (apu_prefer_gtt). Null when the kernel version cannot be read.
+ */
+type KfdApuRule = 'carve-out' | 'ttm' | 'prefer-gtt' | null;
+
+async function kfdApuRule(root: string): Promise<KfdApuRule> {
+  const match = /^Linux version (\d+)\.(\d+)/.exec((await readText(join(root, 'proc/version'))) ?? '');
+  if (!match) return null;
+  const version = Number(match[1]) * 1000 + Number(match[2]);
+  if (version < 6010) return 'carve-out';
+  return version < 6015 ? 'ttm' : 'prefer-gtt';
+}
+
+/**
+ * The memory ROCm can allocate on Strix Halo under `rule`. When KFD reports the TTM page limit it places allocations
+ * in GTT, whose manager stops at the GTT size, so a smaller amdgpu.gttsize caps it too. An unknown rule takes the
+ * smaller of the two.
  */
 async function strixHaloMemory(
   root: string,
   dir: string,
-  vram: number | null
-): Promise<{ bytes: number | null; kind: NonNullable<DetectedGpu['sharedMemory']> }> {
+  vram: number | null,
+  rule: KfdApuRule
+): Promise<Pick<DetectedGpu, 'memoryBytes' | 'sharedMemory' | 'memoryUnconfirmed'>> {
   const gtt = positive(await readText(join(dir, 'mem_info_gtt_total')));
-  if (vram === null || gtt === null) return { bytes: null, kind: 'carve-out' };
-  if (vram >= gtt) return { bytes: vram, kind: 'carve-out' };
+  if (vram === null || gtt === null) return { memoryBytes: null, sharedMemory: 'carve-out' };
   const pages = positive(await readText(join(root, 'sys/module/ttm/parameters/pages_limit')));
-  return { bytes: Math.min(gtt, pages === null ? gtt : pages * TTM_PAGE_BYTES), kind: 'gtt' };
+  const carveOut = { memoryBytes: vram, sharedMemory: 'carve-out' } as const;
+  const shared = {
+    memoryBytes: Math.min(gtt, pages === null ? gtt : pages * TTM_PAGE_BYTES),
+    sharedMemory: 'gtt',
+  } as const;
+  if (rule === 'carve-out') return carveOut;
+  if (rule === 'ttm') return shared;
+  if (rule === 'prefer-gtt') return vram >= gtt ? carveOut : shared;
+  return { ...(carveOut.memoryBytes <= shared.memoryBytes ? carveOut : shared), memoryUnconfirmed: true };
 }
 
-async function linuxGpu(root: string, dir: string, address: string, kfd: Map<string, KfdNode>): Promise<Classified> {
+async function linuxGpu(
+  root: string,
+  dir: string,
+  address: string,
+  kfd: Map<string, KfdNode>,
+  rule: KfdApuRule
+): Promise<Classified> {
   const pciClass = await readText(join(dir, 'class'));
   if (!pciClass || !/^0x[0-9a-f]{6}$/i.test(pciClass)) return undefined;
   if (!pciClass.startsWith('0x03')) return null;
@@ -192,43 +224,34 @@ async function linuxGpu(root: string, dir: string, address: string, kfd: Map<str
   const driver = driverLink ? basename(driverLink) : null;
   if (!vendor || !driver) return null;
   const classified = async (
-    memoryBytes: number | null,
-    sharedMemory?: DetectedGpu['sharedMemory']
+    memory: Pick<DetectedGpu, 'memoryBytes' | 'sharedMemory' | 'memoryUnconfirmed'>
   ): Promise<Classified> => ({
-    gpu: {
-      vendor,
-      name: await readText(join(dir, 'product_name')),
-      memoryBytes,
-      ...(sharedMemory && { sharedMemory }),
-      vendorId,
-      deviceId,
-    },
+    gpu: { vendor, name: await readText(join(dir, 'product_name')), ...memory, vendorId, deviceId },
     reachable: await reachable(root, dir, driver),
   });
 
   if (vendor === 'nvidia') {
     // CUDA needs the proprietary driver; under nouveau only Mesa's NVK can expose the card, through Vulkan.
     const usable = driver === 'nvidia' || driver === 'nouveau';
-    return usable && parseInt(deviceId, 16) >= NVIDIA_FIRST_MAXWELL_DEVICE ? classified(null) : null;
+    return usable && parseInt(deviceId, 16) >= NVIDIA_FIRST_MAXWELL_DEVICE ? classified({ memoryBytes: null }) : null;
   }
   if (vendor === 'amd') {
     if (driver !== 'amdgpu') return null;
     const vram = positive(await readText(join(dir, 'mem_info_vram_total')));
     const node = kfd.get(address);
     if (node ? node.gfxTarget === STRIX_HALO_GFX_TARGET : deviceId === STRIX_HALO_DEVICE_ID) {
-      const shared = await strixHaloMemory(root, dir, vram);
-      return classified(shared.bytes, shared.kind);
+      return classified(await strixHaloMemory(root, dir, vram, rule));
     }
     if (vram !== null && vram <= INTEGRATED_MAX_VRAM_BYTES) return null;
     if (node && (AMD_APU_GFX_TARGETS.has(node.gfxTarget) || node.cpuCores > 0)) return null;
     // Unless the target is a known card, an APU's firmware carve-out could pass for VRAM, so leave it unmeasured.
-    return classified(node && AMD_DISCRETE_GFX_TARGETS.has(node.gfxTarget) ? vram : null);
+    return classified({ memoryBytes: node && AMD_DISCRETE_GFX_TARGETS.has(node.gfxTarget) ? vram : null });
   }
   // Intel integrated graphics sit on the root bus (00:02.0); discrete Arc cards hang off a PCIe port.
   const bus = parseInt(address.split(':')[1] ?? '', 16);
   if ((driver !== 'i915' && driver !== 'xe') || bus === 0) return null;
   // Current xe/i915 expose memory sizes through DRM ioctls, not a VRAM sysfs attribute.
-  return classified(null);
+  return classified({ memoryBytes: null });
 }
 
 async function pciIdsLookup(root: string): Promise<(vendorId: string, deviceId: string) => string | null> {
@@ -263,30 +286,26 @@ export async function scanLinuxGpus(root = '/', env: Environment = process.env):
   } catch {
     return null;
   }
-  const [wsl, deviceTree, kfd] = await Promise.all([
+  const [wsl, deviceTree, kfd, rule] = await Promise.all([
     isWsl(root, env),
     readText(join(root, 'proc/device-tree/compatible')),
     kfdNodes(root),
+    kfdApuRule(root),
   ]);
   if (wsl || deviceTree?.includes('nvidia,tegra')) return null;
 
   const found = await Promise.all(
-    addresses.map(address => linuxGpu(root, join(devicesDir, address), address, kfd).catch(() => undefined))
+    addresses.map(address => linuxGpu(root, join(devicesDir, address), address, kfd, rule).catch(() => undefined))
   );
   if (found.includes(undefined)) return null;
   const usable = found.filter((entry): entry is NonNullable<Classified> => entry !== null);
   if (usable.some(entry => !entry.reachable)) return null;
   const gpus = usable.map(entry => entry.gpu);
   const lookup = gpus.some(gpu => !gpu.name) ? await pciIdsLookup(root) : null;
-  return gpus.map(({ vendor, name, memoryBytes, sharedMemory, vendorId, deviceId }) => {
-    const model = name ? null : lookup?.(vendorId, deviceId);
-    const label = VENDOR_LABELS[vendor];
-    return {
-      vendor,
-      memoryBytes,
-      ...(sharedMemory && { sharedMemory }),
-      name: name ?? (model ? `${label} ${model}` : `${label} GPU [${vendorId}:${deviceId}]`),
-    };
+  return gpus.map(({ vendorId, deviceId, ...gpu }) => {
+    const model = gpu.name ? null : lookup?.(vendorId, deviceId);
+    const label = VENDOR_LABELS[gpu.vendor];
+    return { ...gpu, name: gpu.name ?? (model ? `${label} ${model}` : `${label} GPU [${vendorId}:${deviceId}]`) };
   });
 }
 

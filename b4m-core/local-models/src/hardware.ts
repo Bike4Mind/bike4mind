@@ -210,7 +210,7 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
     gpuCount: 1,
     gpuVendor: 'amd',
     chip: null,
-    confidence: totalMemoryBytes > 0 && apuBytes !== null ? 'high' : 'low',
+    confidence: totalMemoryBytes > 0 && apuBytes !== null && !apu.memoryUnconfirmed ? 'high' : 'low',
   };
 }
 

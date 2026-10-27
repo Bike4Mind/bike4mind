@@ -80,6 +80,7 @@ const cpuOnly = { memoryKind: 'cpu', gpuMemoryBytes: null, gpuName: null, gpuCou
 const RYZEN_AI_MAX = { PROCESSOR_IDENTIFIER: 'AMD64 Family 26 Model 112 Stepping 0, AuthenticAMD' };
 const RTX_4090_SMI = 'NVIDIA GeForce RTX 4090, 24564\n';
 const amdKfd = [KFD_CPU_NODE, KFD_RX7900XTX_NODE, KFD_RAPHAEL_NODE];
+const kernel = (release: string) => `Linux version ${release} (builder@localhost) #1 SMP PREEMPT_DYNAMIC\n`;
 
 describe('probeHardware', () => {
   it('reports Apple Silicon as unified memory with the chip name', async () => {
@@ -277,7 +278,12 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     const ram = 125 * GiB;
     const ttm = (pages: number) => ({ 'sys/module/ttm/parameters/pages_limit': String(pages) });
     const probe = (gtt: number, files: Record<string, string> = {}) =>
-      linux({ devices: [strixHalo(512 * MiB, gtt)], kfdNodes: [KFD_STRIX_HALO_NODE], files }, undefined, {}, ram);
+      linux(
+        { devices: [strixHalo(512 * MiB, gtt)], kfdNodes: [KFD_STRIX_HALO_NODE], files, procVersion: kernel('6.15.0') },
+        undefined,
+        {},
+        ram
+      );
     // The kernel default: GTT and the TTM limit both at half of RAM, as AMD's amd-ttm prints it.
     const half = 16469033 * 4096;
     expect(await probe(half, ttm(16469033))).toMatchObject({ gpuMemoryBytes: half, confidence: 'high' });
@@ -288,6 +294,39 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     expect(await probe(120 * GiB, ttm(120 * 262144))).toMatchObject({ gpuMemoryBytes: ram * 0.75 });
     // A higher TTM limit than GTT still stops at GTT.
     expect(await probe(40 * GiB, ttm(100 * 262144))).toMatchObject({ gpuMemoryBytes: 40 * GiB });
+  });
+
+  it('sizes Strix Halo by the rule of the running kernel', async () => {
+    const files = { 'sys/module/ttm/parameters/pages_limit': String(24 * 262144) };
+    const probe = (vram: number, gtt: number, procVersion: string) =>
+      linux(
+        { devices: [strixHalo(vram, gtt)], kfdNodes: [KFD_STRIX_HALO_NODE], files, procVersion },
+        undefined,
+        {},
+        125 * GiB
+      );
+    // Before 6.10 KFD reports the carve-out, however small.
+    expect(await probe(512 * MiB, 32 * GiB, kernel('6.9.12'))).toMatchObject({ gpuMemoryBytes: 512 * MiB });
+    // 6.10 to 6.14 report the TTM limit on every APU, a large carve-out included.
+    for (const release of ['6.10.0', '6.14.11']) {
+      expect(await probe(96 * GiB, 32 * GiB, kernel(release))).toMatchObject({ gpuMemoryBytes: 24 * GiB });
+    }
+    // 6.15 keeps a carve-out at least as large as GTT.
+    expect(await probe(96 * GiB, 32 * GiB, kernel('6.15.0'))).toMatchObject({ gpuMemoryBytes: 96 * GiB });
+    expect(await probe(96 * GiB, 32 * GiB, kernel('7.0.1'))).toMatchObject({ gpuMemoryBytes: 96 * GiB });
+    expect(await probe(512 * MiB, 32 * GiB, kernel('6.17.0'))).toMatchObject({ gpuMemoryBytes: 24 * GiB });
+  });
+
+  it('takes the smaller Strix Halo budget at low confidence when the kernel version cannot be read', async () => {
+    const probe = (vram: number, gtt: number) =>
+      linux(
+        { devices: [strixHalo(vram, gtt)], kfdNodes: [KFD_STRIX_HALO_NODE], procVersion: '' },
+        undefined,
+        {},
+        31 * GiB
+      );
+    expect(await probe(96 * GiB, 16 * GiB)).toMatchObject({ gpuMemoryBytes: 16 * GiB, confidence: 'low' });
+    expect(await probe(512 * MiB, 16 * GiB)).toMatchObject({ gpuMemoryBytes: 512 * MiB, confidence: 'low' });
   });
 
   it('keeps Strix Halo unified at low confidence when its GTT size is missing', async () => {
