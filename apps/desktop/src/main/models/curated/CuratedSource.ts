@@ -53,9 +53,8 @@ const sameBytes = (a: Uint8Array, b: Uint8Array | null) =>
   b !== null && a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
 
 /**
- * The Curated tab's list: the bundled copy, or a newer one fetched from the baked URL, verified against this
- * build's keys and kept on disk. Checks run only when Models opens and are due, or on Check now; none at launch.
- * Nothing here throws: every failure keeps the current list and is logged with its reason.
+ * The Curated tab's list: the bundled copy, or a newer verified one from the baked URL, checked when Models opens
+ * and is due or on Check now. Nothing here throws: a failure keeps the current list and logs why.
  */
 export class CuratedSource {
   readonly #deps: CuratedSourceDeps;
@@ -63,8 +62,10 @@ export class CuratedSource {
   readonly #bundled: Copy;
   readonly #loaded: Promise<void>;
   #cached: Copy | null = null;
-  #state: CuratedCheckState = { lastSuccessAt: null, lastAttemptAt: null, failures: 0 };
+  #state: CuratedCheckState = { lastSuccessAt: null, lastAttemptAt: null, failures: 0, floors: {} };
   #revoked = new Set<string>();
+  // Set when revoked-keys.json is unreadable and nothing trusted can rebuild it.
+  #blocked = false;
   #enabled = true;
   #status: 'idle' | 'checking' | Outcome = 'idle';
   #inFlight: Promise<void> | null = null;
@@ -90,7 +91,7 @@ export class CuratedSource {
   }
 
   get available(): boolean {
-    return this.#source !== null && this.#deps.keys.length > 0;
+    return this.#source !== null && this.#deps.keys.length > 0 && !this.#blocked;
   }
 
   /** Resolves once the setting and the cached copy are read; the bundled list is current until then. */
@@ -189,20 +190,61 @@ export class CuratedSource {
     try {
       this.#enabled = await store.readEnabled();
       if (!this.available || !this.#source) return;
-      this.#revoked = await store.readRevoked();
+      const revoked = await store.readRevoked();
+      this.#revoked = revoked.ids;
       this.#state = await store.readState(this.#source);
       const copy = await store.readCopy(this.#source);
-      if (!copy) return;
-      const verdict = this.#verify(copy.manifest, copy.signature);
-      if (!verdict.ok) {
+      const verdict = copy ? this.#verify(copy.manifest, copy.signature) : null;
+      if (copy && verdict && !verdict.ok) {
         this.#log(`deleted the cached curated list: ${verdict.detail}`);
         await store.deleteCopy(this.#source);
+      }
+      const recovered = verdict?.ok ? this.#revocations(verdict) : null;
+      if (!revoked.intact && recovered === null) {
+        this.#blocked = true;
+        this.#log(
+          'revoked-keys.json is unreadable and no recovery-signed cached list can rebuild it; using the bundled list'
+        );
         return;
       }
-      this.#cached = this.#copy(verdict, copy.manifest, copy.signature);
+      if (copy && verdict?.ok) this.#cached = this.#copy(verdict, copy.manifest, copy.signature);
+      if (recovered && (!revoked.intact || recovered.some(id => !this.#revoked.has(id)))) {
+        if (!revoked.intact) this.#log('revoked-keys.json was unreadable; rebuilt it from the cached curated list');
+        await this.#revoke(recovered);
+      }
     } catch (error) {
       this.#log(`could not read the cached curated list: ${String(error)}`);
     }
+  }
+
+  /** The ids a recovery-signed list revokes, less this build's recovery keys; null when no recovery key signed it. */
+  #revocations(verdict: Extract<Verdict, { ok: true }>): string[] | null {
+    if (!verdict.signedBy.some(key => key.role === 'recovery')) return null;
+    const ids = (verdict.json as { revokedKeyIds?: string[] }).revokedKeyIds ?? [];
+    return ids.filter(id => !this.#deps.keys.some(key => key.keyId === id && key.role === 'recovery'));
+  }
+
+  /** Applies `ids` in memory at once, then saves them with one retry; false when they could not be saved. */
+  async #revoke(ids: readonly string[]): Promise<boolean> {
+    this.#revoked = new Set([...this.#revoked, ...ids]);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        this.#revoked = new Set([...this.#revoked, ...(await this.#deps.store.addRevoked(this.#revoked))]);
+        return true;
+      } catch (error) {
+        this.#log(`could not save revoked keys (attempt ${attempt}): ${String(error)}`);
+      }
+    }
+    return false;
+  }
+
+  /** The highest sequence accepted before from a key still trusted; it outlives a cached copy lost at startup. */
+  #floor(): number {
+    let floor = 0;
+    for (const key of this.#deps.keys)
+      if (key.role === 'recovery' || !this.#revoked.has(key.keyId))
+        floor = Math.max(floor, this.#state.floors[key.keyId] ?? 0);
+    return floor;
   }
 
   #copy(verdict: Extract<Verdict, { ok: true }>, bytes: Uint8Array, signature: Uint8Array): Copy {
@@ -246,7 +288,7 @@ export class CuratedSource {
     this.#state =
       outcome === 'failed' || outcome === 'rejected'
         ? { ...this.#state, lastAttemptAt: now, failures: this.#state.failures + 1 }
-        : { lastSuccessAt: now, lastAttemptAt: now, failures: 0 };
+        : { ...this.#state, lastSuccessAt: now, lastAttemptAt: now, failures: 0 };
     await this.#deps.store.writeState(this.#source as string, this.#state).catch((error: unknown) => {
       this.#log(`could not save the curated check state: ${String(error)}`);
     });
@@ -295,33 +337,63 @@ export class CuratedSource {
     return this.#consider(verdict, pair.bytes, pair.signature);
   }
 
-  /** The sequence rule: higher accepts, equal and identical is up to date, equal and different is equivocation. */
+  /**
+   * Revocations first, so a revoked key's high sequence cannot outrank the list revoking it. Then the sequence rule:
+   * higher than the current list and the floor accepts; anything else keeps the current list.
+   */
   async #consider(verdict: Extract<Verdict, { ok: true }>, bytes: Uint8Array, signature: Uint8Array): Promise<Outcome> {
+    const added = this.#revocations(verdict)?.filter(id => !this.#revoked.has(id)) ?? [];
+    // An unsaved revocation still holds this session; failing the check makes the next one apply it again.
+    const unsaved = added.length > 0 && !(await this.#revoke(added));
+    if (added.length > 0) {
+      this.#log(`revoked curated keys ${added.join(', ')}`);
+      await this.#recheckCached();
+    }
+    const kept = unsaved ? 'failed' : 'up-to-date';
     const current = this.#chosen();
     if (verdict.sequence < current.sequence) {
       this.#log(`curated list ${verdict.sequence} is older than the current list ${current.sequence}; kept it`);
-      return 'up-to-date';
+      return kept;
     }
     if (verdict.sequence === current.sequence) {
-      if (sameBytes(bytes, current.bytes)) return 'up-to-date';
-      this.#log(`rejected curated list ${verdict.sequence}: it differs from the current list with that sequence`);
-      return 'rejected';
+      if (!sameBytes(bytes, current.bytes))
+        this.#log(
+          `warning: curated list ${verdict.sequence} differs from the current list with that sequence; kept it`
+        );
+      return kept;
     }
-    const recovery = verdict.signedBy.some(key => key.role === 'recovery');
-    const revoked = (verdict.json as { revokedKeyIds?: string[] }).revokedKeyIds ?? [];
-    if (recovery && revoked.length > 0) {
-      const revocable = revoked.filter(id => !this.#deps.keys.some(key => key.keyId === id && key.role === 'recovery'));
-      this.#revoked = await this.#deps.store.addRevoked(revocable).catch((error: unknown) => {
-        this.#log(`could not save revoked keys: ${String(error)}`);
-        return new Set([...this.#revoked, ...revocable]);
-      });
+    const floor = this.#floor();
+    if (verdict.sequence < floor) {
+      this.#log(`curated list ${verdict.sequence} is older than list ${floor}, accepted before; kept the current list`);
+      return kept;
     }
     this.#cached = this.#copy(verdict, bytes, signature);
-    await this.#deps.store.writeCopy(this.#source as string, { manifest: bytes, signature }).catch((error: unknown) => {
-      this.#log(`could not cache the curated list: ${String(error)}`);
-    });
+    const floors = { ...this.#state.floors };
+    for (const key of verdict.signedBy) floors[key.keyId] = Math.max(floors[key.keyId] ?? 0, verdict.sequence);
+    this.#state = { ...this.#state, floors };
+    const cachedOk = await this.#deps.store.writeCopy(this.#source as string, { manifest: bytes, signature }).then(
+      () => true,
+      (error: unknown) => {
+        this.#log(`could not cache the curated list: ${String(error)}`);
+        return false;
+      }
+    );
     const keyIds = verdict.signedBy.map(key => key.keyId).join(', ');
     this.#log(`accepted curated list ${verdict.sequence}, signed by ${keyIds}`);
-    return 'updated';
+    // A cached recovery-signed list re-applies its revocations at the next start.
+    return unsaved && !cachedOk ? 'failed' : 'updated';
+  }
+
+  /** Drops the cached list when it no longer verifies under the revoked set. */
+  async #recheckCached(): Promise<void> {
+    const cached = this.#cached;
+    if (!cached?.signature) return;
+    const verdict = this.#verify(cached.bytes, cached.signature);
+    if (verdict.ok) return;
+    this.#cached = null;
+    this.#log(`dropped the cached curated list ${cached.sequence}: ${verdict.detail}`);
+    await this.#deps.store.deleteCopy(this.#source as string).catch((error: unknown) => {
+      this.#log(`could not delete the cached curated list: ${String(error)}`);
+    });
   }
 }

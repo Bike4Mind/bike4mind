@@ -2,6 +2,7 @@ import { generateKeyPairSync, type KeyObject } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { HUB_MAX_SEQUENCE } from '@bike4mind/common';
 import { curatedPublicKey, signCurated, type CuratedKey, type CuratedKeyRole } from '@bike4mind/local-models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CURATED_TEXT } from './bundled';
@@ -79,12 +80,14 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function source(options: { keys?: CuratedKey[]; url?: string | null; bundledText?: string } = {}) {
+function source(
+  options: { keys?: CuratedKey[]; url?: string | null; bundledText?: string; store?: CuratedStore } = {}
+) {
   const onChange = vi.fn();
   const created = new CuratedSource({
     url: options.url === undefined ? LATEST : options.url,
     keys: options.keys ?? [signing.key, recovery.key],
-    store: new CuratedStore(dir),
+    store: options.store ?? new CuratedStore(dir),
     bundledText: options.bundledText ?? BUNDLED_CURATED_TEXT,
     allowLoopbackHttp: false,
     fetch: server.fetch,
@@ -201,7 +204,7 @@ describe('CuratedSource', () => {
     logged(/HTTP 403 for \/model-hub\/curated-v2\/5\.json/);
   });
 
-  it('keeps a newer list over an older one, and rejects a different list under the same sequence', async () => {
+  it('keeps a newer list over an older one, and keeps it over a different list with the same sequence', async () => {
     const three = listText(3);
     server.publish(3, three, sigText(three, [signing], 3));
     const s = source();
@@ -215,12 +218,16 @@ describe('CuratedSource', () => {
 
     const other = listText(3, list => (list.updatedAt = '2026-10-29T00:00:00Z'));
     server.publish(3, other, sigText(other, [signing], 3));
+    clock += 1000;
     await s.checkNow();
-    expect(s.view()).toMatchObject({ sequence: 3, check: 'failed' });
-    logged(/differs from the current list with that sequence/);
+    expect(why(s)).toBe(`${NOTE} List 3.`);
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'up-to-date', checkedAt: new Date(clock).toISOString() });
+    logged(/warning: curated list 3 differs from the current list with that sequence; kept it/);
+    const state = JSON.parse(await readFile(join(dir, CuratedStore.sourceKey(LATEST), 'state.json'), 'utf8'));
+    expect(state).toMatchObject({ failures: 0, lastSuccessAt: clock });
   });
 
-  it('compares against the bundled list too: identical is up to date, different is rejected', async () => {
+  it('compares against the bundled list too: identical or different, the bundled list stays', async () => {
     server.publish(1, BUNDLED_CURATED_TEXT, sigText(BUNDLED_CURATED_TEXT, [signing], 1));
     const s = source();
     await s.checkNow();
@@ -229,7 +236,36 @@ describe('CuratedSource', () => {
     const different = listText(1);
     server.publish(1, different, sigText(different, [signing], 1));
     await s.checkNow();
+    expect(s.view()).toMatchObject({ origin: 'bundled', check: 'up-to-date' });
+  });
+
+  it('rejects a list above the highest sequence', async () => {
+    const huge = listText(HUB_MAX_SEQUENCE + 1);
+    server.publish(HUB_MAX_SEQUENCE + 1, huge, sigText(huge, [signing], HUB_MAX_SEQUENCE));
+    const s = source();
+    await s.checkNow();
     expect(s.view()).toMatchObject({ origin: 'bundled', check: 'failed' });
+    logged(/rejected the curated list: invalid list/);
+  });
+
+  it('refuses a rollback below the floor after the cached list is lost, and accepts the floor list again', async () => {
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await source().checkNow();
+    await rm(join(dir, CuratedStore.sourceKey(LATEST), 'pair.json'));
+
+    const restarted = source();
+    await restarted.loaded();
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1 });
+    const two = listText(2);
+    server.publish(2, two, sigText(two, [signing], 2));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'up-to-date' });
+    logged(/curated list 2 is older than list 3, accepted before; kept the current list/);
+
+    server.publish(3, three, sigText(three, [signing], 3));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3, check: 'updated' });
   });
 
   it.each([
@@ -285,6 +321,101 @@ describe('CuratedSource', () => {
     logged(/revoked-key/);
   });
 
+  it('lets a lower recovery-signed list revoke a leaked key that served the highest sequence', async () => {
+    const leaked = listText(HUB_MAX_SEQUENCE);
+    const leakedSig = sigText(leaked, [signing], HUB_MAX_SEQUENCE);
+    server.publish(HUB_MAX_SEQUENCE, leaked, leakedSig);
+    const s = source();
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ origin: 'updated', sequence: HUB_MAX_SEQUENCE });
+
+    const revoking = listText(5, list => (list.revokedKeyIds = [signing.key.keyId]));
+    server.publish(5, revoking, sigText(revoking, [recovery], 5));
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ origin: 'updated', sequence: 5, check: 'updated' });
+    expect(JSON.parse(await readFile(join(dir, 'revoked-keys.json'), 'utf8'))).toEqual([signing.key.keyId]);
+    logged(/dropped the cached curated list 1000000: revoked-key/);
+
+    server.publish(HUB_MAX_SEQUENCE, leaked, leakedSig);
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ sequence: 5, check: 'failed' });
+    const restarted = source();
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ sequence: 5, check: 'failed' });
+  });
+
+  it('rebuilds a missing or unreadable revoked set from a recovery-signed cached list', async () => {
+    const revoking = listText(3, list => (list.revokedKeyIds = [signing.key.keyId]));
+    server.publish(3, revoking, sigText(revoking, [recovery], 3));
+    await source().checkNow();
+
+    for (const damage of [
+      () => rm(join(dir, 'revoked-keys.json')),
+      () => writeFile(join(dir, 'revoked-keys.json'), '['),
+    ]) {
+      await damage();
+      const restarted = source();
+      await restarted.loaded();
+      expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+      expect(JSON.parse(await readFile(join(dir, 'revoked-keys.json'), 'utf8'))).toEqual([signing.key.keyId]);
+      const four = listText(4);
+      server.publish(4, four, sigText(four, [signing], 4));
+      await restarted.checkNow();
+      expect(restarted.view()).toMatchObject({ sequence: 3, check: 'failed' });
+    }
+    logged(/revoked-keys.json was unreadable; rebuilt it from the cached curated list/);
+  });
+
+  it('keeps the remote list off when an unreadable revoked set cannot be rebuilt', async () => {
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await source().checkNow();
+    await writeFile(join(dir, 'revoked-keys.json'), '{"not":"a list"}');
+    server.requests = [];
+
+    const restarted = source();
+    await restarted.checkNow();
+    expect(restarted.settings().available).toBe(false);
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'off' });
+    expect(server.requests).toEqual([]);
+    expect(await readFile(join(dir, 'revoked-keys.json'), 'utf8')).toBe('{"not":"a list"}');
+    logged(/revoked-keys.json is unreadable and no recovery-signed cached list can rebuild it/);
+  });
+
+  it('retries a revocation that could not be saved, and applies it from the cached list after a restart', async () => {
+    const flaky = new CuratedStore(dir);
+    const addRevoked = vi.spyOn(flaky, 'addRevoked').mockRejectedValue(new Error('disk full'));
+    const revoking = listText(3, list => (list.revokedKeyIds = [signing.key.keyId]));
+    server.publish(3, revoking, sigText(revoking, [recovery], 3));
+    const s = source({ store: flaky });
+    await s.checkNow();
+    expect(addRevoked).toHaveBeenCalledTimes(2);
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'updated' });
+    await expect(readFile(join(dir, 'revoked-keys.json'))).rejects.toThrow();
+    logged(/could not save revoked keys \(attempt 2\): Error: disk full/);
+
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [signing], 4));
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'failed' });
+
+    const restarted = source();
+    await restarted.checkNow();
+    expect(JSON.parse(await readFile(join(dir, 'revoked-keys.json'), 'utf8'))).toEqual([signing.key.keyId]);
+    expect(restarted.view()).toMatchObject({ sequence: 3, check: 'failed' });
+  });
+
+  it('fails the check when neither the revocation nor the list that carries it could be saved', async () => {
+    const broken = new CuratedStore(dir);
+    vi.spyOn(broken, 'addRevoked').mockRejectedValue(new Error('disk full'));
+    vi.spyOn(broken, 'writeCopy').mockRejectedValue(new Error('disk full'));
+    const revoking = listText(3, list => (list.revokedKeyIds = [signing.key.keyId]));
+    server.publish(3, revoking, sigText(revoking, [recovery], 3));
+    const s = source({ store: broken });
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'failed' });
+  });
+
   it('deletes a cached copy that no longer verifies, and lets a newer bundled list win over the cache', async () => {
     const three = listText(3);
     server.publish(3, three, sigText(three, [signing], 3));
@@ -295,11 +426,13 @@ describe('CuratedSource', () => {
     await newerBundled.loaded();
     expect(newerBundled.view()).toMatchObject({ origin: 'bundled', sequence: 5 });
 
-    await writeFile(join(sourceDir, 'curated-v2.json'), three.replace(NOTE, 'Tampered.'));
+    const pair = JSON.parse(await readFile(join(sourceDir, 'pair.json'), 'utf8')).dir as string;
+    await writeFile(join(sourceDir, pair, 'curated-v2.json'), three.replace(NOTE, 'Tampered.'));
     const corrupt = source();
     await corrupt.loaded();
     expect(corrupt.view()).toMatchObject({ origin: 'bundled', sequence: 1 });
-    await expect(readFile(join(sourceDir, 'curated-v2.json'))).rejects.toThrow();
+    await expect(readFile(join(sourceDir, 'pair.json'))).rejects.toThrow();
+    await expect(readFile(join(sourceDir, pair, 'curated-v2.json'))).rejects.toThrow();
     logged(/deleted the cached curated list/);
   });
 
