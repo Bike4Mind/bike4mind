@@ -7,7 +7,7 @@ import { parseUserId } from '../Users/usersTabSearch';
 import { adminFocusScope, adminSurface } from './adminStyles';
 import { focusAdminSearch, isAdminChordEvent, isAdminShortcutEvent } from './adminKeyboard';
 
-export type AdminCommand = { id: string; label: string; shortcut?: string; run: () => void };
+export type AdminCommand = { id: string; label: string; shortcut?: string; disabled?: boolean; run: () => void };
 
 const shortcuts = [
   ['Cmd/Ctrl+K', 'Open command palette'],
@@ -46,7 +46,7 @@ export function AdminCommandPalette({
     ...(onOpenHelp ? [{ id: 'help', label: 'Open Help Center', run: onOpenHelp }] : []),
   ];
   const userId = parseUserId(query.trim().toLowerCase());
-  const results = [
+  const results: AdminCommand[] = [
     ...(userId
       ? [
           {
@@ -60,6 +60,7 @@ export function AdminCommandPalette({
   ];
   const selected = results[Math.min(active, Math.max(0, results.length - 1))];
   const execute = (command: AdminCommand) => {
+    if (command.disabled) return;
     setOpen(false);
     // Let the modal restore focus before a command focuses another control or opens a dialog.
     window.clearTimeout(commandTimer.current);
@@ -86,7 +87,7 @@ export function AdminCommandPalette({
         if (scope && focusAdminSearch(scope)) event.preventDefault();
       } else if (!event.shiftKey) {
         const command = commands.find(item => item.shortcut === key);
-        if (command) {
+        if (command && !command.disabled) {
           event.preventDefault();
           command.run();
         }
@@ -135,6 +136,7 @@ export function AdminCommandPalette({
             color="neutral"
             size="sm"
             data-testid={`admin-command-${command.id}-btn`}
+            disabled={command.disabled}
             onClick={command.run}
           >
             {command.label}
@@ -180,7 +182,7 @@ export function AdminCommandPalette({
                 setActive(index =>
                   results.length ? (index + (event.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length : 0
                 );
-              } else if (event.key === 'Enter' && selected) {
+              } else if (event.key === 'Enter' && selected && !selected.disabled) {
                 event.preventDefault();
                 execute(selected);
               }
@@ -202,6 +204,7 @@ export function AdminCommandPalette({
                 color="neutral"
                 fullWidth
                 data-testid="admin-search-result"
+                disabled={command.disabled}
                 onClick={() => execute(command)}
                 sx={{ justifyContent: 'flex-start' }}
               >
@@ -230,8 +233,8 @@ export function AdminCommandPalette({
             </Typography>
           ))}
           <Typography level="body-xs">
-            Shortcuts never run in inputs, editable text, menus or dialogs. Actions still require their normal preview,
-            reason and confirmation.
+            Single-key shortcuts do not run in inputs or editable text. No shortcut runs while a menu or dialog is open.
+            Actions still require their normal preview, reason and confirmation.
           </Typography>
         </ModalDialog>
       </Modal>

@@ -307,7 +307,7 @@ const AdminSettingInputField = ({
           </Grid>
 
           <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
-            <Tooltip title="Save setting (Cmd/Ctrl+S outside inputs)" placement="top">
+            <Tooltip title="Save setting (Cmd/Ctrl+S, including from inputs)" placement="top">
               <Button
                 data-testid={`admin-setting-${setting.key}-save-btn`}
                 data-admin-save

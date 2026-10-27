@@ -102,6 +102,35 @@ describe('FullUsersView - Overview and Activity tabs', () => {
     expect(mutations.updateMutate).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { action: 'suspend', label: 'Suspend account' },
+    { action: 'revoke', label: 'Revoke API keys' },
+  ])('protects staged edits from the $action command until they are undone', ({ action, label }) => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+    addCustomTag('unsaved-record-action');
+
+    expect(screen.getByTestId(`admin-command-${action}-btn`)).toBeDisabled();
+    expect(screen.getByTestId('profile-action-unsaved-hint')).toHaveTextContent('Update or undo your changes');
+    fireEvent.click(screen.getByTestId(`admin-command-${action}-btn`));
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    expect(screen.getByTestId('remove-tag-unsaved-record-action')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+    const search = screen.getByTestId('admin-search-input');
+    fireEvent.change(search, { target: { value: label } });
+    expect(screen.getByTestId('admin-search-result')).toBeDisabled();
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-command-close-btn'));
+
+    fireEvent.click(screen.getByTestId('remove-tag-unsaved-record-action'));
+    expect(screen.getByTestId(`admin-command-${action}-btn`)).toBeEnabled();
+    expect(screen.queryByTestId('profile-action-unsaved-hint')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`admin-command-${action}-btn`));
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-action', action);
+  });
+
   it('keeps staged Overview edits when switching to Activity and back', async () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={vi.fn()} />, {
       wrapper: TestWrapper,

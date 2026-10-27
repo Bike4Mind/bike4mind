@@ -26,6 +26,39 @@ describe('AdminCommandPalette', () => {
     navigate.mockReset();
   });
 
+  it('blocks disabled commands from clicks, shortcuts and Enter until enabled', async () => {
+    const run = vi.fn();
+    const renderPalette = (disabled: boolean) => (
+      <CssVarsProvider theme={theme}>
+        <AdminCommandPalette commands={[{ id: 'suspend', label: 'Suspend account', shortcut: 's', disabled, run }]} />
+      </CssVarsProvider>
+    );
+    const view = render(renderPalette(true));
+    const toolbarButton = screen.getByTestId('admin-command-suspend-btn');
+    expect(toolbarButton).toBeDisabled();
+    fireEvent.click(toolbarButton);
+    fireEvent.keyDown(document.body, { key: 's' });
+    fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+    const input = screen.getByTestId('admin-search-input');
+    fireEvent.change(input, { target: { value: 'Suspend' } });
+    const result = screen.getByRole('option', { name: 'Suspend account' });
+    expect(result).toBeDisabled();
+    fireEvent.click(result);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(run).not.toHaveBeenCalled();
+    expect(input).toBeInTheDocument();
+
+    view.rerender(renderPalette(false));
+    expect(screen.getByRole('option', { name: 'Suspend account' })).toBeEnabled();
+    fireEvent.keyDown(screen.getByTestId('admin-search-input'), { key: 'Enter' });
+    await waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(screen.queryByTestId('admin-search-input')).not.toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(run).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByTestId('admin-command-suspend-btn'));
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+
   it('opens the mounted Help Center through its host callback', async () => {
     const onOpenHelp = vi.fn();
     render(

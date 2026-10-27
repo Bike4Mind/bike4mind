@@ -167,6 +167,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
     profileRoot.current?.querySelector<HTMLInputElement>('[data-admin-credits-input]')?.focus();
     setFocusCredits(false);
   }, [focusCredits, activeTab]);
+  const hasUnsavedChanges = Object.values(editedFields).some(changed => changed);
   const profileCommands = useMemo<AdminCommand[]>(
     () => [
       {
@@ -178,10 +179,25 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
           setFocusCredits(true);
         },
       },
-      { id: 'suspend', label: 'Suspend account', shortcut: 's', run: () => setProfileAction('suspend') },
-      { id: 'revoke', label: 'Revoke API keys', run: () => setProfileAction('revoke') },
+      {
+        id: 'suspend',
+        label: 'Suspend account',
+        shortcut: 's',
+        disabled: hasUnsavedChanges,
+        run: () => {
+          if (!hasUnsavedChanges) setProfileAction('suspend');
+        },
+      },
+      {
+        id: 'revoke',
+        label: 'Revoke API keys',
+        disabled: hasUnsavedChanges,
+        run: () => {
+          if (!hasUnsavedChanges) setProfileAction('revoke');
+        },
+      },
     ],
-    [setActiveTab]
+    [setActiveTab, hasUnsavedChanges]
   );
 
   useEffect(() => {
@@ -328,8 +344,6 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       }
     );
   };
-
-  const hasUnsavedChanges = Object.values(editedFields).some(changed => changed);
 
   const overviewSections: OverviewSection[] = [
     {
@@ -613,7 +627,16 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       )}
 
       {/* Full content - always visible on sm+ or on the page, conditionally on xs */}
-      {isPage && <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />}
+      {isPage && (
+        <>
+          <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />
+          {hasUnsavedChanges && (
+            <Typography level="body-sm" data-testid="profile-action-unsaved-hint" sx={{ px: 1 }}>
+              Update or undo your changes before suspending the account or revoking API keys.
+            </Typography>
+          )}
+        </>
+      )}
       <Box sx={{ display: isPage ? 'block' : { xs: mobileExpanded ? 'block' : 'none', sm: 'block' } }}>
         {isPage ? <UserProfileHeader user={user} actions={quickActions} /> : cardHeader}
 
@@ -647,7 +670,6 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
           recordAction={profileAction}
           onClose={() => setProfileAction(null)}
           onExecuted={() => {
-            queryClient.invalidateQueries({ queryKey: ['user', user.id] });
             queryClient.invalidateQueries({ queryKey: ['users'] });
           }}
         />

@@ -82,6 +82,65 @@ describe('admin keyboard scoping', () => {
     expect(save).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['dialog', 'alertdialog', 'menu'])('does not save while a %s is open', role => {
+    const save = vi.fn();
+    function Editor() {
+      const ref = useRef<HTMLDivElement>(null);
+      useAdminSaveShortcut(ref);
+      return (
+        <div ref={ref} data-admin-settings-editor>
+          <input data-testid="blocked-editor-input" />
+          <button data-admin-save onClick={save}>
+            Save
+          </button>
+        </div>
+      );
+    }
+    const view = render(
+      <>
+        <Editor />
+        <div role={role}>Open popup</div>
+      </>
+    );
+    fireEvent.keyDown(screen.getByTestId('blocked-editor-input'), { key: 's', ctrlKey: true });
+    expect(save).not.toHaveBeenCalled();
+    view.rerender(<Editor />);
+    fireEvent.keyDown(screen.getByTestId('blocked-editor-input'), { key: 's', ctrlKey: true });
+    expect(save).toHaveBeenCalledOnce();
+  });
+
+  it('saves only the focused child when parent and nested child editors are both dirty', () => {
+    const saveParent = vi.fn();
+    const saveChild = vi.fn();
+    function NestedEditors() {
+      const parentRef = useRef<HTMLDivElement>(null);
+      const childRef = useRef<HTMLDivElement>(null);
+      useAdminSaveShortcut(parentRef);
+      useAdminSaveShortcut(childRef);
+      return (
+        <div ref={parentRef} data-admin-settings-editor>
+          <input data-testid="parent-editor-input" />
+          <button data-admin-save onClick={saveParent}>
+            Save parent
+          </button>
+          <div ref={childRef} data-admin-settings-editor>
+            <input data-testid="child-editor-input" />
+            <button data-admin-save onClick={saveChild}>
+              Save child
+            </button>
+          </div>
+        </div>
+      );
+    }
+    render(<NestedEditors />);
+    fireEvent.keyDown(screen.getByTestId('child-editor-input'), { key: 's', metaKey: true });
+    expect(saveChild).toHaveBeenCalledOnce();
+    expect(saveParent).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByTestId('parent-editor-input'), { key: 's', metaKey: true });
+    expect(saveParent).toHaveBeenCalledOnce();
+    expect(saveChild).toHaveBeenCalledOnce();
+  });
+
   it('claims Cmd/Ctrl+S on an editor with no Save button so the browser dialog stays closed', () => {
     function CleanEditor() {
       const ref = useRef<HTMLDivElement>(null);
