@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const { mocks } = vi.hoisted(() => ({
@@ -132,6 +132,10 @@ beforeEach(() => {
   mocks.withTransaction.mockImplementation((fn: () => Promise<unknown>) => fn());
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('POST /api/gears/claim', () => {
   it('propagates a failed trust lookup without starting a payout', async () => {
     unlockProjects();
@@ -231,6 +235,25 @@ describe('POST /api/gears/claim', () => {
     await promise;
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'reward_check' });
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { emailVerified: false, ageInDays: 8, reason: 'unverified' },
+    { emailVerified: true, ageInDays: 3, reason: 'too_new' },
+  ])('holds a viewed Published reward for a $reason account', async ({ emailVerified, ageInDays, reason }) => {
+    mocks.publishedExists.mockResolvedValue({ _id: 'a1' });
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - ageInDays * 24 * 60 * 60 * 1000), emailVerified }),
+    });
+
+    const { res, promise } = claim({ key: 'published' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason });
+    expect(mocks.publishedExists).toHaveBeenCalledExactlyOnceWith({ ownerId: 'u1', deletedAt: null });
+    expect(mocks.withTransaction).not.toHaveBeenCalled();
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
@@ -337,16 +360,33 @@ describe('POST /api/gears/claim', () => {
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
-  it('allows payout at exactly 7 days old (inclusive lower boundary)', async () => {
-    unlockProjects();
-    mocks.userFindById.mockReturnValue({
-      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), emailVerified: true }),
-    });
-    const { res, promise } = claim({ key: 'projects' });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ key: 'projects', creditsAwarded: 1000 });
-  });
+  it.each([
+    { millisecondsUntilEligible: 1, statusCode: 409 },
+    { millisecondsUntilEligible: 0, statusCode: 200 },
+  ])(
+    'enforces the age boundary with $millisecondsUntilEligible ms remaining',
+    async ({ millisecondsUntilEligible, statusCode }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-27T00:00:00Z'));
+      unlockProjects();
+      mocks.userFindById.mockReturnValue({
+        lean: () =>
+          Promise.resolve({
+            createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000 + millisecondsUntilEligible),
+            emailVerified: true,
+          }),
+      });
+      const { res, promise } = claim({ key: 'projects' });
+      await promise;
+      expect(res._getStatusCode()).toBe(statusCode);
+      if (millisecondsUntilEligible > 0) {
+        expect(res._getJSONData()).toEqual({ error: 'reward_pending', reason: 'too_new' });
+        expect(mocks.addCredits).not.toHaveBeenCalled();
+      } else {
+        expect(res._getJSONData()).toEqual({ key: 'projects', creditsAwarded: 1000 });
+      }
+    }
+  );
 
   it('pays a verified legacy account that has no createdAt', async () => {
     unlockProjects();

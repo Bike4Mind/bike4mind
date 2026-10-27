@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
+import { useUser } from '@client/app/contexts/UserContext';
 import type { GearKey, GearKind, GearPendingReason } from '@client/lib/gears/keys';
 
 /**
@@ -36,12 +38,24 @@ export interface GearsStatusResponse {
 }
 
 export function useGearsStatus() {
+  const queryClient = useQueryClient();
+  const emailVerified = useUser(state => state.currentUser?.emailVerified);
+  const previousEmailVerified = useRef(emailVerified);
+  useEffect(() => {
+    if (previousEmailVerified.current === emailVerified) return;
+    previousEmailVerified.current = emailVerified;
+    // Verification in another tab or by an admin arrives through the user subscription.
+    void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] }, { cancelRefetch: false });
+  }, [emailVerified, queryClient]);
+
   return useQuery<GearsStatusResponse>({
     queryKey: ['gears', 'status'],
     queryFn: async () => (await api.get<GearsStatusResponse>('/api/gears/status')).data,
     // Unlocks only move forward and creations invalidate explicitly (or are
     // picked up on the next visit) - keep the nav from refetching on every mount.
     staleTime: 5 * 60_000,
+    // Age eligibility changes without a user action to invalidate the cache.
+    refetchInterval: query => (query.state.data?.gears.some(gear => gear.pendingReason === 'too_new') ? 60_000 : false),
   });
 }
 
