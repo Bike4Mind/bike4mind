@@ -22,6 +22,20 @@ const setup = (commands: AdminCommand[] = []) =>
   );
 
 describe('AdminCommandPalette', () => {
+  it('does not execute Enter during composition or after unmount', async () => {
+    const run = vi.fn();
+    const view = setup([{ id: 'credits', label: 'Adjust credits', run }]);
+    fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+    const input = screen.getByTestId('admin-search-input');
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(screen.getByTestId('admin-search-input')).toBeInTheDocument();
+    expect(run).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    view.unmount();
+    await new Promise(resolve => window.setTimeout(resolve, 10));
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('opens a labelled palette, navigates with arrows and Enter, and closes', async () => {
     setup();
     fireEvent.keyDown(document.body, { key: 'k', metaKey: true });

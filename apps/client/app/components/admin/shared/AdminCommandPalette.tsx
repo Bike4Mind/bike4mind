@@ -28,6 +28,8 @@ export function AdminCommandPalette({
 }) {
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement>(null);
+  const commandTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(commandTimer.current), []);
   const [open, setOpen] = useState(false);
   const [help, setHelp] = useState(false);
   const [query, setQuery] = useState('');
@@ -57,7 +59,8 @@ export function AdminCommandPalette({
   const execute = (command: AdminCommand) => {
     setOpen(false);
     // Let the modal restore focus before a command focuses another control or opens a dialog.
-    window.setTimeout(command.run, 0);
+    window.clearTimeout(commandTimer.current);
+    commandTimer.current = window.setTimeout(command.run, 0);
   };
 
   useEffect(() => {
@@ -167,6 +170,7 @@ export function AdminCommandPalette({
               },
             }}
             onKeyDown={event => {
+              if (event.nativeEvent.isComposing || event.repeat) return;
               if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                 event.preventDefault();
                 setActive(index =>
