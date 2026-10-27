@@ -176,7 +176,8 @@ async function runFullPipeline(
     organizationId,
     // stream:true so the model emits tokens incrementally - ChatCompletionProcess
     // fires onReplyStream on each chunk, and the proxy relays SSE deltas.
-    params: { model: sessionCtx.reasoningModelId, max_tokens: 4096, stream: true },
+    // No max_tokens: ChatCompletionProcess sizes it per model, so a reasoning model keeps room to answer.
+    params: { model: sessionCtx.reasoningModelId, stream: true },
     promptMeta: { session: { id: sessionCtx.sessionId, userId: sessionCtx.userId, organizationId } },
     enableArtifacts: false,
     // Enable the inline built-in tools (web search, RAG, etc.) plus any ElevenLabs
