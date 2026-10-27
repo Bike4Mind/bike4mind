@@ -10,6 +10,10 @@ export const LOCK_REFRESH_MS = 10_000;
 export const LOCK_STALE_MS = 30_000;
 const VERIFY_ATTEMPTS = 3;
 const VERIFY_RETRY_MS = 100;
+/** How FAT32 and exFAT, which have no hard links, refuse `link`. */
+const NO_LINK_CODES = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
+/** An empty takeover guard younger than this may be a contender's still being written (ms). */
+const EMPTY_GUARD_GRACE_MS = 5_000;
 
 export type StorageOperation = 'read' | 'write';
 
@@ -99,6 +103,21 @@ function isStale(holder: { mtimeMs: number }, staleMs: number): boolean {
 }
 
 const readText = (path: string) => readFile(path, 'utf8').catch(() => null);
+const errno = (error: unknown) => (error as NodeJS.ErrnoException).code ?? '';
+
+/** Moves a file renamed aside back to `path`; without hard links, only while nothing else has taken `path`. */
+async function putBack(aside: string, path: string): Promise<void> {
+  try {
+    await link(aside, path);
+  } catch (error) {
+    if (!NO_LINK_CODES.has(errno(error))) return;
+    const taken = await stat(path).then(
+      () => true,
+      () => false
+    );
+    if (!taken) await rename(aside, path).catch(() => undefined);
+  }
+}
 
 /** Moves a takeover guard left by a process that died during its takeover out of the way, once it is stale. */
 async function clearStaleGuard(guard: string, nonce: string, staleMs: number): Promise<void> {
@@ -111,9 +130,45 @@ async function clearStaleGuard(guard: string, nonce: string, staleMs: number): P
     () => false
   );
   if (!renamed) return;
-  // Each guard holds its owner's nonce: different text means a contender replaced the stale one before the rename.
-  if ((await readText(aside)) !== text) await link(aside, guard).catch(() => undefined);
+  const moved = await readText(aside);
+  const movedAt = (await stat(aside).catch(() => null))?.mtimeMs ?? 0;
+  // Each guard holds its owner's nonce, so other text means a contender's guard replaced the stale one; so does an
+  // empty one written just now, by a contender on a file system without hard links that has not written it yet.
+  if (moved !== text || (moved === '' && Date.now() - movedAt < EMPTY_GUARD_GRACE_MS)) await putBack(aside, guard);
   await rm(aside, { force: true });
+}
+
+/** Creates `guard` holding `nonce`; false when another guard is there. */
+async function createGuard(guard: string, nonce: string): Promise<boolean> {
+  // Written aside and linked into place, so where links work a guard is never seen empty.
+  const draft = `${guard}.new-${nonce}`;
+  try {
+    await writeFile(draft, nonce, { flag: 'wx' });
+    await link(draft, guard);
+    return true;
+  } catch (error) {
+    if (errno(error) === 'EEXIST') return false;
+    if (!NO_LINK_CODES.has(errno(error))) throw error;
+  } finally {
+    await rm(draft, { force: true });
+  }
+  let handle;
+  try {
+    handle = await open(guard, 'wx');
+  } catch (error) {
+    if (errno(error) === 'EEXIST') return false;
+    throw error;
+  }
+  try {
+    await handle.writeFile(nonce);
+    await handle.sync();
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await rm(guard, { force: true });
+    throw error;
+  }
+  await handle.close();
+  return true;
 }
 
 const same = (a: Holder | null, b: Holder) => a !== null && a.ino === b.ino && a.text === b.text;
@@ -129,22 +184,9 @@ async function takeOver(
   options: { force: boolean; staleMs: number }
 ): Promise<boolean> {
   const guard = `${lockPath}.takeover`;
-  // Written aside and linked into place, so a guard is never seen empty: an empty one is a crash leftover.
-  const draft = `${guard}.new-${nonce}`;
-  try {
-    await writeFile(draft, nonce, { flag: 'wx' });
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await link(draft, guard);
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        if (attempt > 0) return false;
-        await clearStaleGuard(guard, nonce, options.staleMs);
-      }
-    }
-  } finally {
-    await rm(draft, { force: true });
+  if (!(await createGuard(guard, nonce))) {
+    await clearStaleGuard(guard, nonce, options.staleMs);
+    if (!(await createGuard(guard, nonce))) return false;
   }
   try {
     const current = await readHolder(lockPath);
@@ -159,7 +201,7 @@ async function takeOver(
     }
     // Text, not inode: FAT and exFAT may renumber a file on rename. Only a release in between makes these differ.
     const moved = await readText(aside);
-    if (moved !== judged.text) await link(aside, lockPath).catch(() => undefined);
+    if (moved !== judged.text) await putBack(aside, lockPath);
     await rm(aside, { force: true });
     return moved === judged.text;
   } finally {

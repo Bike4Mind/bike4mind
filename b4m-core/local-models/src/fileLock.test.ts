@@ -1,8 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, link: vi.fn(actual.link) };
+});
 import { ModelFileBusyError, RuntimeStorageError } from './errors';
 import { LOCK_STALE_MS, lockFile, onDisk } from './fileLock';
 
@@ -184,6 +189,28 @@ describe('lockFile', () => {
     await (await lockFile(path, 'test')).release();
     const left = (await readdir(dirname(path))).filter(name => name.startsWith(`${basename(path)}.lock.`));
     expect(left).toEqual([]);
+  });
+
+  it('takes over without hard links, as on FAT32 and exFAT', async () => {
+    const noLinks = Object.assign(new Error('operation not permitted, link'), { code: 'EPERM' });
+    vi.mocked(link).mockRejectedValue(noLinks);
+    try {
+      const path = join(await mkdtemp(join(dir, 'fat-')), 'model.gguf');
+      await writeFile(`${path}.lock`, '{}');
+      await writeFile(`${path}.lock.takeover`, '');
+      await age(`${path}.lock`, LOCK_STALE_MS + 5_000);
+      await age(`${path}.lock.takeover`, LOCK_STALE_MS + 5_000);
+      const lock = await lockFile(path, 'test');
+      expect(JSON.parse(await readFile(`${path}.lock`, 'utf8'))).toMatchObject({ pid: process.pid });
+      await lock.release();
+      expect(await readdir(dirname(path))).toEqual([]);
+      expect(vi.mocked(link)).toHaveBeenCalled();
+    } finally {
+      vi.mocked(link).mockReset();
+      vi.mocked(link).mockImplementation(
+        (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).link
+      );
+    }
   });
 
   it('reports a directory that does not exist as a storage error', async () => {
