@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { ISuspiciousPattern } from '@bike4mind/database';
 
 vi.mock('@bike4mind/database', () => ({ authFailLogRepository: {}, connectDB: vi.fn(), userRepository: {} }));
-vi.mock('@server/utils/logger', () => ({ contextToLogs: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/logger', () => ({ contextToLogs: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('sst', () => ({ Resource: {} }));
 

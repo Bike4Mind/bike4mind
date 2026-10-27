@@ -14,7 +14,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ApiKeyScope, isNearLimit } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { component: 'admin-github-rate-limit' } });

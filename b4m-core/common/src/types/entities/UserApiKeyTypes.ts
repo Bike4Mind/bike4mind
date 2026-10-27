@@ -213,6 +213,26 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.RELEASE_NOTES_WRITE,
 ];
 
+/**
+ * Built-in scopes left out of the public API reference. An explicit list, not a rule: `admin:*`, the
+ * confined integration scopes except `skills:read`, and the `optihashi:*` family. Documentation only -
+ * it never affects which scopes a key may hold or what the runtime accepts.
+ */
+export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.ADMIN,
+  ...CONFINED_API_KEY_SCOPES.filter(scope => scope !== ApiKeyScope.SKILLS_READ),
+  ApiKeyScope.OPTIHASHI_READ,
+  ApiKeyScope.OPTIHASHI_COMPUTE,
+];
+
+/**
+ * Built-in scopes published in the public OpenAPI spec: every {@link ApiKeyScope} not in
+ * {@link UNDOCUMENTED_API_KEY_SCOPES}. Built-in scopes only: scopes an overlay contributes are not listed.
+ */
+export const PUBLIC_DOC_API_KEY_SCOPES: readonly ApiKeyScope[] = Object.values(ApiKeyScope).filter(
+  scope => !UNDOCUMENTED_API_KEY_SCOPES.includes(scope)
+);
+
 export enum ApiKeyStatus {
   ACTIVE = 'active',
   DISABLED = 'disabled',

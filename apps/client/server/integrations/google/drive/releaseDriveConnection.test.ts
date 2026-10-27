@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
   order: [] as string[],
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v?: string | null) => (v ? `enc(${v})` : null),
   decryptToken: (v?: string | null) => {
     if (!v) return null;

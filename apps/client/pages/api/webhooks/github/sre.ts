@@ -25,7 +25,7 @@ import {
 } from '@server/integrations/github/webhookUtils';
 import { WebhookAuditLogger, extractWebhookMetadata } from '@server/integrations/github/WebhookAuditLogger';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import {
   dispatchIssueToSre,
   syncSreIssueStateFromWebhook,

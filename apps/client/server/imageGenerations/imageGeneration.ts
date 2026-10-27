@@ -18,7 +18,7 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { SessionEvents } from '@server/utils/eventBus';

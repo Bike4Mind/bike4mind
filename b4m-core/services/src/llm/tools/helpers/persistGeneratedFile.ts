@@ -100,7 +100,7 @@ export async function saveGeneratedAssetFromTool(
 
 /**
  * The FabFile adapters a ToolContext supplies, or undefined when the harness lacks any of them. Mirrors the server
- * door (apps/client/server/utils/saveGeneratedAssetToFiles.ts): scopedSettings must ride along, or a per-org/owner/lake
+ * door (packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts): scopedSettings must ride along, or a per-org/owner/lake
  * enforcement override would silently not apply to tool output.
  */
 function toolFileAdapters(context: ToolContext): Pick<SaveGeneratedAssetDeps, 'db' | 'storage'> | undefined {

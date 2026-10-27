@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   agentRepository,
   cacheRepository,

@@ -67,7 +67,7 @@ vi.mock('@bike4mind/services', async () => ({
 vi.mock('@bike4mind/services/llm/modelAdmission', () => ({}));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 0 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@server/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn() }));
 vi.mock('openai', () => ({
   default: class {
     audio = { speech: { create: m.create } };

@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
-import { partnerSignupRuleRepository } from '@bike4mind/database';
+import { partnerSignupRuleRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, createPartnerSignupRuleSchema } from '@bike4mind/common';
 import {
   invalidatePartnerRuleCache,
@@ -9,6 +9,7 @@ import {
   assertKnownSubscriptionPlan,
 } from '@server/entitlements/partnerRules';
 import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const listQuerySchema = z.object({
@@ -61,9 +62,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       let created;
       try {
-        created = await partnerSignupRuleRepository.create({
-          ...data,
-          createdBy: req.user.id,
+        created = await withTransaction(async () => {
+          const rule = await partnerSignupRuleRepository.create({
+            ...data,
+            createdBy: req.user.id,
+          });
+          await recordAdminActionFromRequest(req, {
+            action: 'org.partner_signup_rule.created',
+            target: { kind: 'settings', id: rule.id, displayName: rule.domain },
+            summary: `created partner signup rule for ${rule.domain}`,
+            details: {
+              domain: rule.domain,
+              organizationId: rule.organizationId ?? null,
+              entitlements: rule.entitlements,
+              signupCredits: rule.signupCredits ?? null,
+              enabled: rule.enabled,
+            },
+          });
+          return rule;
         });
       } catch (error) {
         // Race backstop: a concurrent create for the same domain slips past the pre-check

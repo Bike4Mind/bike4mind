@@ -1,7 +1,7 @@
 import { ApiKeyScope, describeRequestedIntegration, type IntegrationDemandResponse } from '@bike4mind/common';
 import { integrationRequestRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
