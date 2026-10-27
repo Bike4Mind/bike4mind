@@ -294,7 +294,7 @@ const argv = await yargs(hideBin(process.argv))
           .option('api-key', {
             type: 'string',
             description:
-              'Bike4Mind API key with the skills:write and me:read scopes (overrides B4M_API_KEY and the stored login). Visible in process listings; prefer B4M_API_KEY',
+              'Bike4Mind API key with the skills:write and me:read scopes (overrides B4M_API_KEY and the stored login). Visible in process listings; prefer B4M_API_KEY, which also takes precedence over the stored login when set, even without --publish',
           })
           .example('b4m skills push ~/.claude/skills/my-skill', 'Create a skill from a Claude Code skill folder')
           .example('b4m skills push ./SKILL.md --update', 'Update the existing skill of the same name')

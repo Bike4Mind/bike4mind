@@ -607,8 +607,16 @@ describe('handleSkillsCommand with an API key', () => {
     expect(handlerMocks.api.post).not.toHaveBeenCalled();
   });
 
+  it("surfaces any other /api/v1/me failure as the server's message, without the scope hint", async () => {
+    handlerMocks.api.get.mockRejectedValue({ response: { status: 401, data: { error: 'Invalid API key' } } });
+    const failure = handleSkillsCommand('push', ARGS);
+    await expect(failure).rejects.toThrow('Invalid API key');
+    await expect(failure).rejects.not.toThrow('me:read');
+    expect(handlerMocks.api.post).not.toHaveBeenCalled();
+  });
+
   it('pushes then publishes the created skill with --publish', async () => {
-    await handleSkillsCommand('push', { ...ARGS, publish: true, tags: 'ci, review' });
+    await handleSkillsCommand('push', { ...ARGS, publish: true, tags: 'ci, review,,' });
     expect(handlerMocks.api.post).toHaveBeenNthCalledWith(2, '/api/v1/skills/market/listings', {
       skill_id: 'new-skill',
       visibility: 'organization',
