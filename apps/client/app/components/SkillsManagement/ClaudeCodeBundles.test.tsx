@@ -89,6 +89,18 @@ describe('ClaudeCodeBundles', () => {
     expect(h.remove).toHaveBeenCalledWith('b1');
   });
 
+  it('keeps a non-candidate member when saving an edited bundle', () => {
+    h.view = { bundles: [bundle], listings: [listings[0]], canEdit: true };
+    renderBundles();
+    fireEvent.click(screen.getByTestId('skill-claude-code-bundle-edit'));
+    fireEvent.change(screen.getByTestId('skill-claude-code-bundle-name'), { target: { value: 'Starter kit' } });
+    fireEvent.click(screen.getByTestId('skill-claude-code-bundle-save'));
+    expect(h.save).toHaveBeenCalledWith(
+      { id: 'b1', name: 'Starter kit', description: 'Day one skills', listingIds: ['l2', 'l1'] },
+      expect.anything()
+    );
+  });
+
   it('needs a name, description and at least one skill to create', () => {
     h.view = { bundles: [], listings, canEdit: true };
     renderBundles();

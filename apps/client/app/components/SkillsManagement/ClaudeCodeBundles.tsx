@@ -152,14 +152,15 @@ const BundleEditor: FC<{ orgId: string; bundle?: ISkillBundle; listings: Candida
   const save = useSaveSkillBundle(orgId);
   const [name, setName] = useState(bundle?.name ?? '');
   const [description, setDescription] = useState(bundle?.description ?? '');
-  // A member that lost approval is not a candidate any more, so it drops out on save.
+  // A member that lost approval is kept but not shown in the picker.
+  const hiddenIds = (bundle?.listingIds ?? []).filter(id => !listings.some(l => l.id === id));
   const [members, setMembers] = useState<Candidate[]>(() =>
     (bundle?.listingIds ?? []).flatMap(id => listings.filter(l => l.id === id))
   );
   const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
-    const input: SkillBundleInput = { name, description, listingIds: members.map(m => m.id) };
+    const input: SkillBundleInput = { name, description, listingIds: [...hiddenIds, ...members.map(m => m.id)] };
     save.mutate({ ...input, id: bundle?.id }, { onSuccess: onDone, onError: e => setError(getErrorMessage(e)) });
   };
 

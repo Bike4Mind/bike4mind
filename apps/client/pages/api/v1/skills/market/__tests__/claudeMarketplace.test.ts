@@ -494,6 +494,7 @@ describe('bundles', () => {
     const sha = createHash('sha256').update(zip).digest('hex');
     expect(plugin.source.sha256).toBe(sha);
     expect(plugin.version).toBe(sha.slice(0, 12));
+    members.reverse();
     expect(zip.equals(await bundleZip())).toBe(true);
   });
 

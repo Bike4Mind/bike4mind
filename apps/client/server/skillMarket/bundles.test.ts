@@ -51,7 +51,13 @@ const body = {
   description: 'Day one skills',
   listingIds: [L1, L2, L1],
 };
-const stored = { id: BUNDLE, organizationId: ORG, name: 'Team Starter Pack', pluginName: 'team-starter-pack' };
+const stored = {
+  id: BUNDLE,
+  organizationId: ORG,
+  name: 'Team Starter Pack',
+  pluginName: 'team-starter-pack',
+  listingIds: [] as string[],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -129,6 +135,20 @@ describe('updateBundle / deleteBundle', () => {
     await expect(updateBundle(admin, BUNDLE, { listingIds: [L1, L2] })).rejects.toMatchObject({ statusCode: 400 });
     await expect(updateBundle(admin, BUNDLE, { listingIds: ['nope'] })).rejects.toMatchObject({ statusCode: 400 });
     expect(h.listingCount).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORG }));
+    expect(h.bundleUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing unapproved member but rejects a new unapproved member', async () => {
+    h.bundleFindById.mockResolvedValue(doc({ ...stored, listingIds: [L1] }));
+    h.listingCount.mockResolvedValue(0);
+
+    const bundle = await updateBundle(admin, BUNDLE, { name: 'Renamed', listingIds: [L1, L1] });
+    expect(bundle).toMatchObject({ name: 'Renamed', listingIds: [L1] });
+    expect(h.listingCount).toHaveBeenCalledWith(expect.objectContaining({ _id: { $in: [] } }));
+
+    h.bundleUpdate.mockClear();
+    await expect(updateBundle(admin, BUNDLE, { listingIds: [L1, L2] })).rejects.toMatchObject({ statusCode: 400 });
+    expect(h.listingCount).toHaveBeenLastCalledWith(expect.objectContaining({ _id: { $in: [L2] } }));
     expect(h.bundleUpdate).not.toHaveBeenCalled();
   });
 

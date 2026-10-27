@@ -123,7 +123,15 @@ export async function updateBundle(actor: MarketActor, id: string, body: unknown
   const bundle = await findBundle(id);
   await assertCanManage(actor, bundle.organizationId);
   const patch = parse(fieldsSchema.partial(), body);
-  if (patch.listingIds) patch.listingIds = await validListingIds(bundle.organizationId, patch.listingIds);
+  if (patch.listingIds) {
+    const existing = new Set(bundle.listingIds.map(String));
+    const unique = [...new Set(patch.listingIds)];
+    await validListingIds(
+      bundle.organizationId,
+      unique.filter(id => !existing.has(id))
+    );
+    patch.listingIds = unique;
+  }
   const updated = await SkillBundle.findByIdAndUpdate(id, { $set: patch }, { new: true });
   if (!updated) throw new NotFoundError('Bundle not found');
   return toBundle(updated);
