@@ -5423,31 +5423,29 @@ export class ChatCompletionProcess {
             // fallback then answers. Same enforceCredits gate as the settlement row. Not billed:
             // the user got no output, and the backend throws before reporting usage, so its
             // tokens and COGS are unknown and left at 0.
-            if (isSafetyRefusalError(lastError)) {
-              if (adminSettingsEnforceCredits) {
-                this.db.usageEvents
-                  ?.record({
-                    requestId: quest.id,
-                    userId: this.user.id,
-                    ownerId: this.reservedCreditsOwnerId || this.user.id,
-                    ownerType: this.reservedCreditsOwnerType,
-                    sessionId: quest.sessionId,
-                    feature: 'chat',
-                    provider: currentModel.backend,
-                    model: currentModel.id,
-                    source: 'web',
-                    inputTokens: 0,
-                    outputTokens: 0,
-                    cachedInputTokens: 0,
-                    cacheWriteTokens: 0,
-                    costUsd: 0,
-                    creditsCharged: 0,
-                    status: 'refusal',
-                  })
-                  .catch((usageEventError: unknown) => {
-                    logger.warn('Failed to record refusal usage event', usageEventError);
-                  });
-              }
+            if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
+              this.db.usageEvents
+                ?.record({
+                  requestId: quest.id,
+                  userId: this.user.id,
+                  ownerId: this.reservedCreditsOwnerId || this.user.id,
+                  ownerType: this.reservedCreditsOwnerType,
+                  sessionId: quest.sessionId,
+                  feature: 'chat',
+                  provider: currentModel.backend,
+                  model: currentModel.id,
+                  source: 'web',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  cachedInputTokens: 0,
+                  cacheWriteTokens: 0,
+                  costUsd: 0,
+                  creditsCharged: 0,
+                  status: 'refusal',
+                })
+                .catch((usageEventError: unknown) => {
+                  logger.warn('Failed to record refusal usage event', usageEventError);
+                });
             }
 
             logger.warn(
