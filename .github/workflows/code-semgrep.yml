@@ -16,6 +16,9 @@ on:
 env:
   DEFAULT_CODE_STAGE: dev
 
+permissions:
+  contents: read
+
 jobs:
   semgrep-code-scan:
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}

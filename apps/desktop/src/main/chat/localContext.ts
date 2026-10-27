@@ -1,5 +1,7 @@
 /** Context sizing and history fitting for local Ollama chat requests. */
+import { estimateFit, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
 import { estimateTextTokens } from '@shared/contextLimit';
+import { LOCAL_CONTEXT_SIZES, type LocalContextSetting } from '@shared/localContextSetting';
 
 export interface OllamaMessage {
   role: string;
@@ -37,13 +39,120 @@ const SUMMARY_OVERHEAD_TOKENS = 1_024;
 const TRANSCRIPT_CHARS_PER_TOKEN = 3;
 const RETRY_MARGIN = 0.9;
 
+/** Granularity of the largest resident context growth searches for. */
+const GROWTH_STEP_TOKENS = 4_096;
+const MAX_LOCAL_CONTEXT = LOCAL_CONTEXT_SIZES[LOCAL_CONTEXT_SIZES.length - 1];
+const LARGEST_FIRST = [...LOCAL_CONTEXT_SIZES].reverse();
+
+/** What the Model Hub fit estimator needs to size a local model's context; any of it may be unknown. */
+export interface LocalModelFootprint {
+  arch: ModelArch | null;
+  /** The model's files as Ollama lists them, projector included. */
+  weightsBytes: number | null;
+  hardware: HardwareProfile | null;
+}
+
+export interface ChatContextInput {
+  setting: LocalContextSetting;
+  footprint: LocalModelFootprint;
+  /** The trained length Ollama reports, for a model whose arch Desktop cannot read. */
+  modelLimit?: number;
+  /** The Modelfile's num_ctx. */
+  configured?: number;
+}
+
+type SizedInput = Omit<FitInput, 'context'>;
+
+function fitInput({ arch, weightsBytes, hardware }: LocalModelFootprint): SizedInput | null {
+  if (!arch || !weightsBytes || !hardware?.totalMemoryBytes) return null;
+  // Ollama's cache type, flash attention and num_parallel are daemon settings its API does not report, so
+  // this assumes the defaults; flash attention off or num_parallel above 1 makes the real footprint larger.
+  return { model: { arch, weightsBytes }, hardware, mode: 'chat', runtime: { kind: 'ollama' } };
+}
+
+function trainedLimit(footprint: LocalModelFootprint, modelLimit: number | undefined): number | undefined {
+  const limits = [footprint.arch?.contextMax, modelLimit].filter((n): n is number => n !== undefined);
+  return limits.length > 0 ? Math.min(...limits) : undefined;
+}
+
+function plan(input: SizedInput, context: number) {
+  if (!Number.isInteger(context) || context < 1 || context > input.model.arch.contextMax) return undefined;
+  return estimateFit({ ...input, context }).requested;
+}
+
+/** Entirely on the GPU, or in RAM on a machine without one: no layers offloaded. */
+function resident(input: SizedInput, context: number): boolean {
+  const requested = plan(input, context);
+  return !!requested?.fits && (requested.placement === 'gpu' || requested.placement === 'cpu');
+}
+
 /**
- * The num_ctx for every request to a model; Ollama reloads the model whenever it changes.
- * The Model Hub fit estimator is meant to replace the fixed target with a memory-aware one.
+ * Auto: the trained length or the largest Settings size that stays resident, else (or unmeasured) 16K;
+ * a larger resident Modelfile num_ctx wins. Fixed: the Settings size. Never past the trained length.
  */
-export function localContextTokens(modelLimit: number | undefined, configured: number | undefined): number {
-  const wanted = Math.max(configured ?? 0, LOCAL_CONTEXT_TARGET_TOKENS);
-  return modelLimit === undefined ? wanted : Math.min(wanted, modelLimit);
+export function chatContextTokens({ setting, footprint, modelLimit, configured }: ChatContextInput): number {
+  const limit = trainedLimit(footprint, modelLimit);
+  const cap = (tokens: number) => (limit === undefined ? tokens : Math.min(tokens, limit));
+  if (setting.mode === 'fixed') return cap(setting.tokens);
+  const floor = cap(LOCAL_CONTEXT_TARGET_TOKENS);
+  const input = fitInput(footprint);
+  if (!input || footprint.hardware?.confidence === 'low') return floor;
+  const allowed = (tokens: number) => tokens === cap(tokens) && resident(input, tokens);
+  const picked = [cap(MAX_LOCAL_CONTEXT), ...LARGEST_FIRST].find(allowed) ?? floor;
+  return configured !== undefined && configured > picked && allowed(configured) ? configured : picked;
+}
+
+/** Whether the model runs entirely on the GPU (or in RAM without one) at this context; undefined when unmeasurable. */
+export function fitsInMemory(footprint: LocalModelFootprint, context: number): boolean | undefined {
+  const input = fitInput(footprint);
+  return input ? resident(input, context) : undefined;
+}
+
+/** Whether the model loads at all at this context, layers moved to system RAM included. */
+export function loadsInMemory(footprint: LocalModelFootprint, context: number): boolean | undefined {
+  const input = fitInput(footprint);
+  return input ? plan(input, context)?.fits === true : undefined;
+}
+
+export type ContextGrowth =
+  { tokens: number; slower: boolean } | { tokens?: undefined; reason: 'model-limit' | 'memory' | 'unmeasured' };
+
+/**
+ * Where Auto takes a model whose prompt needs `measured` tokens: once, to the largest resident context.
+ * Without one, or with an unmeasured GPU, the smallest Settings size that holds it; slower if offloaded.
+ */
+export function grownContext(
+  footprint: LocalModelFootprint,
+  measured: number,
+  maxTokens: number | undefined,
+  modelLimit: number | undefined,
+  current: number
+): ContextGrowth {
+  const reply = maxTokens ?? OUTPUT_RESERVE_TOKENS;
+  const holds = (context: number) => context - Math.min(reply, Math.floor(context / 4)) >= measured;
+  const ceiling = Math.min(trainedLimit(footprint, modelLimit) ?? MAX_LOCAL_CONTEXT, MAX_LOCAL_CONTEXT);
+  const sizes: number[] = [];
+  for (let size = GROWTH_STEP_TOKENS; size < ceiling; size += GROWTH_STEP_TOKENS) if (holds(size)) sizes.push(size);
+  sizes.push(ceiling);
+  const needed = sizes[0];
+  if (!holds(needed) || needed <= current) return { reason: 'model-limit' };
+  const input = fitInput(footprint);
+  if (!input) return { reason: 'unmeasured' };
+  const preset = LOCAL_CONTEXT_SIZES.find(size => size >= needed && size <= ceiling);
+  const steps = [preset, needed].filter((size): size is number => size !== undefined);
+  if (footprint.hardware?.confidence !== 'low') {
+    // Memory only rises with context, so the resident sizes are a prefix of the list.
+    let low = 0;
+    let high = sizes.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (resident(input, sizes[middle])) low = middle + 1;
+      else high = middle;
+    }
+    if (low > 0) return { tokens: sizes[low - 1], slower: false };
+  }
+  const step = steps.find(size => plan(input, size)?.fits);
+  return step === undefined ? { reason: 'memory' } : { tokens: step, slower: !resident(input, step) };
 }
 
 export function estimateTokens(messages: readonly OllamaMessage[], tools: readonly unknown[] = []): number {

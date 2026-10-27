@@ -26,8 +26,16 @@ import {
   Typography,
 } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { IOrganizationDocument, WithId, isValidAdminActionReason } from '@bike4mind/common';
-import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
+import { IOrganizationDocument, WithId } from '@bike4mind/common';
+import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
 import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { toast } from 'sonner';
 import OrganizationProfileModal from './OrganizationProfileModal';
@@ -134,12 +142,11 @@ const OrganizationsTab: React.FC = () => {
   const [grantOwnerEmail, setGrantOwnerEmail] = useState('');
   const [grantSeats, setGrantSeats] = useState<number>(4);
   const [grantInitialCredits, setGrantInitialCredits] = useState<number>(200_000);
-  const [grantReason, setGrantReason] = useState('');
+  const [grantReason, setGrantReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
 
   // Row action dialog state
   const [topUpOrg, setTopUpOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [topUpCredits, setTopUpCredits] = useState<number>(50_000);
-  const [topUpReason, setTopUpReason] = useState('');
 
   const [seatsOrg, setSeatsOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [seatsValue, setSeatsValue] = useState<number>(4);
@@ -194,12 +201,12 @@ const OrganizationsTab: React.FC = () => {
     setGrantOwnerEmail('');
     setGrantSeats(4);
     setGrantInitialCredits(200_000);
-    setGrantReason('');
+    setGrantReason(EMPTY_ADMIN_REASON);
   };
 
   const handleCreateOrganization = async () => {
     if (grantMode) {
-      if (!newOrgName.trim() || !grantOwnerEmail.trim() || !isValidAdminActionReason(grantReason)) {
+      if (!newOrgName.trim() || !grantOwnerEmail.trim() || !isAdminReasonComplete(grantReason)) {
         toast.error('Name, owner email, and a reason of at least 5 characters are required for grants');
         return;
       }
@@ -209,7 +216,7 @@ const OrganizationsTab: React.FC = () => {
           ownerEmail: grantOwnerEmail.trim(),
           seats: grantSeats,
           initialCredits: grantInitialCredits,
-          reason: grantReason.trim(),
+          reason: composeAdminReason(grantReason),
         });
         resetCreateModal();
         refetch();
@@ -233,17 +240,16 @@ const OrganizationsTab: React.FC = () => {
     }
   };
 
-  const handleTopUp = async () => {
+  const handleTopUp = async (reason: string) => {
     if (!topUpOrg) return;
     try {
       await topUpMutation.mutateAsync({
         organizationId: topUpOrg.id,
         credits: topUpCredits,
-        reason: topUpReason.trim(),
+        reason,
       });
       setTopUpOrg(null);
       setTopUpCredits(50_000);
-      setTopUpReason('');
       refetch();
     } catch {
       // toast handled
@@ -337,8 +343,15 @@ const OrganizationsTab: React.FC = () => {
             <FormLabel sx={{ fontSize: 'sm' }}>Search by name</FormLabel>
             <SearchBar
               handleChange={handleSearchChange}
-              placeHolder="Search organizations..."
-              slotProps={{ input: { 'data-testid': 'admin-organizations-search-input' } }}
+              placeHolder="Search organizations (/)"
+              slotProps={{
+                input: {
+                  'data-testid': 'admin-organizations-search-input',
+                  'data-admin-search': true,
+                  'aria-label': 'Search organizations',
+                  'aria-keyshortcuts': '/',
+                },
+              }}
               debounceTimeout={300}
               endDecorator={isLoading && <CircularProgress size="sm" />}
             />
@@ -477,7 +490,6 @@ const OrganizationsTab: React.FC = () => {
                             onClick={() => {
                               setTopUpOrg(org);
                               setTopUpCredits(50_000);
-                              setTopUpReason('');
                             }}
                           >
                             Top up credits
@@ -605,7 +617,6 @@ const OrganizationsTab: React.FC = () => {
                                 onClick={() => {
                                   setTopUpOrg(org);
                                   setTopUpCredits(50_000);
-                                  setTopUpReason('');
                                 }}
                               >
                                 Top up credits
@@ -757,10 +768,10 @@ const OrganizationsTab: React.FC = () => {
                     data-testid="grant-credits-input"
                   />
                 </FormControl>
-                <AdminReasonField
+                <ReasonPicker
+                  presets={ADMIN_REASON_PRESETS.organizationGrant}
                   value={grantReason}
                   onChange={setGrantReason}
-                  placeholder="Why this org is being granted (e.g. 'demo for ACME')"
                   data-testid="org-grant-reason-input"
                 />
               </>
@@ -772,7 +783,7 @@ const OrganizationsTab: React.FC = () => {
             </Button>
             <Button
               loading={createOrganizationMutation.isPending || grantOrgMutation.isPending}
-              disabled={grantMode && !isValidAdminActionReason(grantReason)}
+              disabled={grantMode && !isAdminReasonComplete(grantReason)}
               onClick={handleCreateOrganization}
               data-testid={grantMode ? 'grant-org-submit' : 'create-org-submit'}
             >
@@ -782,42 +793,34 @@ const OrganizationsTab: React.FC = () => {
         </ModalDialog>
       </Modal>
 
-      {/* Top Up Credits Modal */}
-      {topUpOrg && (
-        <Modal open onClose={() => setTopUpOrg(null)}>
-          <ModalDialog>
-            <ModalClose />
-            <Typography level="h4">Top up credits — {topUpOrg.name}</Typography>
-            <Divider sx={{ my: 2 }} />
-            <Stack spacing={2}>
-              <FormControl>
-                <FormLabel>Credits to add</FormLabel>
-                <Input
-                  type="number"
-                  slotProps={{ input: { min: 1, step: 10_000 } }}
-                  value={topUpCredits}
-                  onChange={e => setTopUpCredits(Math.max(1, Number(e.target.value || 1)))}
-                  data-testid="topup-credits-input"
-                />
-              </FormControl>
-              <AdminReasonField value={topUpReason} onChange={setTopUpReason} data-testid="org-topup-reason-input" />
-            </Stack>
-            <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
-              <Button variant="outlined" color="neutral" onClick={() => setTopUpOrg(null)}>
-                Cancel
-              </Button>
-              <Button
-                loading={topUpMutation.isPending}
-                disabled={!isValidAdminActionReason(topUpReason)}
-                onClick={handleTopUp}
-                data-testid="topup-submit"
-              >
-                Add credits
-              </Button>
-            </Stack>
-          </ModalDialog>
-        </Modal>
-      )}
+      <ActionDialog
+        open={!!topUpOrg}
+        onClose={() => setTopUpOrg(null)}
+        title={`Top up credits for ${topUpOrg?.name ?? 'organization'}`}
+        reasonPresets={ADMIN_REASON_PRESETS.creditAdjustment}
+        confirmLabel={`Add ${topUpCredits.toLocaleString()} credits`}
+        pending={topUpMutation.isPending}
+        onConfirm={handleTopUp}
+        data-testid="org-topup-dialog"
+        testIds={{ reason: 'org-topup-reason-input', confirm: 'topup-submit' }}
+      >
+        <FormControl>
+          <FormLabel>Credits to add</FormLabel>
+          <Input
+            type="number"
+            slotProps={{ input: { min: 1, step: 10_000 } }}
+            value={topUpCredits}
+            onChange={e => setTopUpCredits(Math.max(1, Number(e.target.value || 1)))}
+            data-testid="topup-credits-input"
+          />
+        </FormControl>
+        {topUpOrg && (
+          <Typography level="body-sm" data-testid="org-topup-preview">
+            Balance: {(topUpOrg.currentCredits ?? 0).toLocaleString()} {'\u2192'}{' '}
+            {((topUpOrg.currentCredits ?? 0) + topUpCredits).toLocaleString()} credits
+          </Typography>
+        )}
+      </ActionDialog>
 
       {/* Adjust Seats Modal */}
       {seatsOrg && (

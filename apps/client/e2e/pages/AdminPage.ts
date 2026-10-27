@@ -53,15 +53,13 @@ export class AdminPage extends BasePage {
     await expect(navigation).toBeEnabled({ timeout: TIMEOUTS.ACTION });
   }
 
+  /** The sidebar has no accordions now; on a phone the drawer must be opened to reach any item. */
   private async expandUserOps() {
-    const section = this.page.getByRole('button', { name: 'User Ops', exact: true }).filter({ visible: true }).first();
-    if (!(await section.isVisible())) {
+    const usersLink = this.page.getByTestId('admin-users-tab-btn').filter({ visible: true }).first();
+    if (!(await usersLink.isVisible())) {
       await this.page.getByTestId('admin-mobile-menu-btn').click();
     }
-    await expect(section).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
-    if ((await section.getAttribute('aria-expanded')) !== 'true') {
-      await section.click();
-    }
+    await expect(usersLink).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
   async navigateToUsersTab() {
@@ -248,14 +246,16 @@ export class AdminPage extends BasePage {
 
   // --- Delete User (SpicyUserActions) ---
 
-  async typeDeleteConfirmation() {
+  async clickDeleteUserButton() {
     // Delete lives on the profile page's Admin (danger zone) tab.
     await this.page.getByTestId('user-profile-tab-admin').click();
-    await this.page.getByTestId('delete-user-confirm-input').getByRole('textbox').fill('DELETE');
+    await this.page.getByTestId('delete-user-btn').click();
   }
 
-  async clickDeleteUserButton() {
-    await this.page.getByTestId('delete-user-btn').click();
+  /** The delete dialog asks for the account's email; read it from the dialog rather than the fixture. */
+  async typeDeleteConfirmation() {
+    const expected = await this.page.getByTestId('delete-user-dialog-typed-expected').innerText();
+    await this.page.getByTestId('delete-user-confirm-input').fill(expected);
   }
 
   /** The confirm-delete button stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */

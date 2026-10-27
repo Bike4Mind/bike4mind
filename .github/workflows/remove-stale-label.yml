@@ -12,8 +12,10 @@ permissions:
 jobs:
   remove-stale:
     name: Remove Stale Label
-    if: github.event.issue.pull_request || github.event_name == 'pull_request'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event.issue.pull_request && contains(github.event.issue.labels.*.name, 'Stale'))
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v8
         with:

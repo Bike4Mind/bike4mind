@@ -13,6 +13,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, describeSuggestionOutcome, RUN_HERE_PREAMBLE } from './ChatService';
 import { MessageQueue } from './MessageQueue';
+import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -71,6 +72,12 @@ describe('ChatService spawn suggestions', () => {
     service = new ChatService({
       store,
       access: { list: async () => [] } as unknown as AccessStore,
+      // An installed local model: an expired session must still be refused, never moved onto it.
+      models: {
+        list: async () => ({ models: [] }),
+        listLocal: async () => [{ id: 'local:ollama:qwen', name: 'qwen', backend: 'local-ollama' }],
+        cached: () => null,
+      } as unknown as ModelCatalog,
       approvals,
       queue,
       logger: { debug: vi.fn(), warn: vi.fn() },

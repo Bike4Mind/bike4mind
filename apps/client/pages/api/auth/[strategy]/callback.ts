@@ -22,10 +22,21 @@ import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { AuthEvents } from '@bike4mind/common';
-import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
+import { resolveOAuthFailureReason, oauthFailureLoginErrorCode } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+
+/**
+ * True for the provider's `invalid_grant` on the code exchange: the authorization code was already
+ * redeemed or has expired (back button, double submit, slow return). An expected outcome, so it
+ * logs at warn rather than at error, the level the alert channel pages on.
+ */
+function isReplayedOrExpiredCode(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const { name, code } = err as { name?: unknown; code?: unknown };
+  return name === 'TokenError' && code === 'invalid_grant';
+}
 
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
@@ -62,7 +73,8 @@ const handler = baseApi({ auth: false })
         const email = (info as any)?.email || undefined;
 
         if (err) {
-          console.error('Passport Authenticate Error:', info, err);
+          const logError = isReplayedOrExpiredCode(err) ? console.warn : console.error;
+          logError('Passport Authenticate Error:', info, err);
           try {
             await authFailLogRepository.create({
               strategy,
@@ -105,7 +117,7 @@ const handler = baseApi({ auth: false })
           } catch (logErr) {
             console.error('Failed to write AuthFailLog (oauth no user):', logErr);
           }
-          return res.redirect(`/login?error=${encodeURIComponent(oauthFailureRedirectMessage(reason))}`);
+          return res.redirect(`/login?error=${oauthFailureLoginErrorCode(reason)}`);
         }
 
         // Ban gate, mirroring saml/callback.ts and okta/callback.ts. Without it a banned
@@ -258,7 +270,7 @@ const handler = baseApi({ auth: false })
       } catch (callbackError) {
         // Catch any unhandled errors in the callback to prevent unhandled promise rejections
         console.error('Unhandled error in passport authenticate callback:', callbackError);
-        return res.redirect('/login?error=Authentication%20failed');
+        return res.redirect(`/login?error=${oauthFailureLoginErrorCode('internal')}`);
       }
     })(req, res, next);
   });

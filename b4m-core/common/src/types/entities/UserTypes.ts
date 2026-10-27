@@ -7,6 +7,7 @@ import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
+import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -288,6 +289,9 @@ export interface IUser extends ICreditHolder {
    * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
    */
   freeCreditClaimEmail?: string | null;
+  /** Absent on accounts created before staged grants were enabled. */
+  signupGrant?: SignupGrant;
+  signupGrantAssessment?: SignupGrantAssessment;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
@@ -452,6 +456,8 @@ export interface IUser extends ICreditHolder {
 
   numReferralsAvailable: number;
   regInvites: Array<IRegInviteDocument['id']>;
+  /** Sender of the referral invite this account redeemed; unset for accounts that signed up without one. */
+  referredByUserId?: string | null;
 
   /**
    * This field is used to store the current selected organization ID.
@@ -730,6 +736,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   existsOtherUserWithEmail: (email: string, excludeUserId?: string) => Promise<boolean>;
   /** Username counterpart of {@link IUserRepository.existsOtherUserWithEmail}. */
   existsOtherUserWithUsername: (username: string, excludeUserId?: string) => Promise<boolean>;
+  /**
+   * Whether a live, unbanned, non-system user whose email is on `domain` or a subdomain of it
+   * verified that email no later than `verifiedBefore`. An unindexed suffix scan: call it rarely and cache the answer.
+   */
+  existsVerifiedUserOnEmailDomain: (domain: string, verifiedBefore: Date) => Promise<boolean>;
   /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
    * group type is revoked and its instances are soft-deleted). Named for the scope so a caller

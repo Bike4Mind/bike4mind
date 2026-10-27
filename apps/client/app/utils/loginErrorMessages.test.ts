@@ -14,6 +14,11 @@ describe('getLoginErrorMessage (surface SSO failures)', () => {
     expect(msg).toMatch(/unavailable|administrator/i);
   });
 
+  it('maps the OAuth start challenge codes to verification messages', () => {
+    expect(getLoginErrorMessage('challenge_failed')).toMatch(/verification failed/i);
+    expect(getLoginErrorMessage('challenge_unavailable')).toMatch(/temporarily unavailable/i);
+  });
+
   it('maps known SAML / flow codes to specific messages', () => {
     expect(getLoginErrorMessage('saml_auth_failed')).toMatch(/saml/i);
     expect(getLoginErrorMessage('email_required')).toMatch(/email/i);

@@ -146,8 +146,9 @@ jobs:
       # A staging deploy in flight swaps the Lambda under the suite, so requests can
       # 401 or 5xx mid-run. When that hits the create-test-user setup it skips the
       # ENTIRE suite via Playwright's setup-dependency graph (one red, the rest
-      # "did not run"). E2E_CLEANUP_SECRET itself is stable across deploys (every
-      # tier gets the same value), so the secret is not the hazard - the swap is.
+      # "did not run"). E2E_CLEANUP_SECRET itself is stable across deploys (the
+      # deployer re-seeds the same per-tier value), so the secret is not the hazard -
+      # the swap is.
       # /api/ping is not enough: CloudFront answers it green all
       # through a deploy. So gate on the `staging/deploy` commit status: if the
       # newest commit that has one is still `pending`, a deploy is running - wait it
@@ -234,10 +235,12 @@ jobs:
           # dev/staging read E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper
           # below (same-account). Preview stacks live in a SEPARATE AWS account the
           # dev role can't `sst shell` into, so for pr<N> runs we inject the secret
-          # directly from this repo secret instead. It must match the stable value the
-          # deployer seeds onto every stage (bike4mind-deployer _tier-deploy.yml).
+          # directly from this repo secret instead. It must match the preview-tier value
+          # the deployer seeds onto preview stages.
+          # Empty for dev/staging: the suite prefers the env var over SST, so the preview
+          # value must never reach a staging run.
           # E2E_CLEANUP_SECRET is the ONLY SST value the suite needs.
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          E2E_CLEANUP_SECRET: ${{ inputs.pr_number != '' && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           # Only wire the credits webhook for suites that report credits (show_credits).
@@ -264,7 +267,7 @@ jobs:
             # - a skip must never render as either. (The promotion commit status needs no
             # skip branch: it already returns early on zero parsed results.)
             if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-              echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+              echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured; skipping (0 tests run)"
               echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -541,7 +544,7 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.e2e.outputs.preview_skipped == 'true' && ':fast_forward: Skipped (preview e2e unavailable: E2E_CLEANUP_SECRET repo secret not configured)' || steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
+              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.e2e.outputs.preview_skipped == 'true' && ':fast_forward: Skipped (preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret not configured)' || steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
               "blocks": [
                 {
                   "type": "header",
@@ -555,7 +558,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Status*\n${{ steps.e2e.outputs.preview_skipped == 'true' && ':fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)' || steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
+                      "text": "*Status*\n${{ steps.e2e.outputs.preview_skipped == 'true' && ':fast_forward: Skipped (E2E_CLEANUP_SECRET_PREVIEW not configured)' || steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
                     },
                     {
                       "type": "mrkdwn",

@@ -79,7 +79,14 @@ describe('ggufQuantLabel', () => {
     ['qwen2.5-0.5b-instruct-q4_k_m.gguf', 'Q4_K_M'],
     ['SmolLM2-135M-Instruct-f16.gguf', 'F16'],
     ['qwen2.5-0.5b-instruct-fp16.gguf', null],
-    ['SmolLM2-135M-Instruct-Q4_K_L.gguf', null],
+    ['SmolLM2-135M-Instruct-Q4_K_L.gguf', 'Q4_K_L'],
+    ['Qwen2.5-0.5B-Instruct-Q5_K_L.gguf', 'Q5_K_L'],
+    ['Qwen2.5-0.5B-Instruct-Q6_K_L.gguf', 'Q6_K_L'],
+    ['Qwen2.5-0.5B-Instruct-IQ4_NL.gguf', 'IQ4_NL'],
+    ['Qwen2.5-0.5B-Instruct-IQ3_XS.gguf', 'IQ3_XS'],
+    ['Qwen3-0.6B-UD-IQ2_M.gguf', 'UD-IQ2_M'],
+    ['Qwen3-0.6B-UD-Q2_K_XL.gguf', 'UD-Q2_K_XL'],
+    ['Qwen3-0.6B-UD-Q8_K_XL.gguf', 'UD-Q8_K_XL'],
     ['SmolLM2-135M-Instruct-Q2_K_L.gguf', 'Q2_K_L'],
     ['SmolLM2-135M-Instruct-Q4_0.gguf', 'Q4_0'],
     ['SmolLM2-135M-Instruct-Q4_0_4_4.gguf', 'Q4_0_4_4'],
@@ -369,6 +376,42 @@ describe('HuggingFaceHub.getModel', () => {
     expect(detail).toMatchObject({ licenses: [], gguf: null, gated: false, author: 'someone' });
   });
 
+  it('labels bartowski _L builds and blocks only the ones the registry rejects as tags', async () => {
+    const repo = 'bartowski/Llama-3.2-1B-Instruct-GGUF';
+    const sha = 'c'.repeat(40);
+    const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'd'.repeat(64), size } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('Llama-3.2-1B-Instruct-Q3_K_XL.gguf', 796139648),
+        file('Llama-3.2-1B-Instruct-Q4_K_L.gguf', 871309440),
+        file('Llama-3.2-1B-Instruct-Q4_K_M.gguf', 807694464),
+        file('Llama-3.2-1B-Instruct-Q5_K_L.gguf', 975118464),
+        file('Llama-3.2-1B-Instruct-Q6_K.gguf', 1021800576),
+        file('Llama-3.2-1B-Instruct-Q6_K_L.gguf', 1085415552),
+        file('Llama-3.2-1B-Instruct-IQ4_XS.gguf', 743000000),
+        file('Model-UD-Q4_K_L.gguf', 1),
+        file('Model-Q8_K_L.gguf', 2),
+        file('Model-F16-Q4_K_L.gguf', 3),
+        file('Model-Q5_K_L_IMAT.gguf', 4),
+      ])
+    );
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(detail.builds.map(build => [build.quant, build.ollamaRef, build.ollamaRefIssue])).toEqual([
+      ['UD-Q4_K_L', null, 'unsupported-quant'],
+      ['Q8_K_L', null, 'unsupported-quant'],
+      // Another scheme in the name still gives the registry a tag it accepts.
+      ['Q4_K_L', `hf.co/${repo}:F16-Q4_K_L`, null],
+      ['Q5_K_L_IMAT', null, 'unsupported-quant'],
+      ['IQ4_XS', `hf.co/${repo}:IQ4_XS`, null],
+      ['Q3_K_XL', `hf.co/${repo}:Q3_K_XL`, null],
+      ['Q4_K_M', `hf.co/${repo}:Q4_K_M`, null],
+      ['Q4_K_L', null, 'unsupported-quant'],
+      ['Q5_K_L', null, 'unsupported-quant'],
+      ['Q6_K', `hf.co/${repo}:Q6_K`, null],
+      ['Q6_K_L', `hf.co/${repo}:Q6_K_L`, null],
+    ]);
+  });
+
   it('follows a same-origin redirect for a renamed repo and uses the new id', async () => {
     const server = await serve({
       'GET /api/models/old/name-GGUF/revision/main': (request, response) =>
@@ -565,11 +608,11 @@ describe('HuggingFaceHub Ollama refs', () => {
       return elapsed;
     };
     await plan(500);
-    // 4x the files costs about 4x linear and 16x quadratic; best of three damps CI noise.
+    // 8x the files costs about 8x linear and 64x quadratic; best of three damps CI noise.
     const small = Math.min(await plan(1000), await plan(1000), await plan(1000));
-    const large = Math.min(await plan(4000), await plan(4000));
-    expect(large / small).toBeLessThan(10);
-  }, 120_000);
+    const large = Math.min(await plan(8000), await plan(8000));
+    expect(large / small).toBeLessThan(32);
+  }, 180_000);
 
   it('answers null for a 404 manifest', async () => {
     const repo = 'someone/model-GGUF';
@@ -754,6 +797,18 @@ describe('HuggingFaceHub errors', () => {
     expect(await caught(new HuggingFaceHub({ endpoint: server.baseUrl }).search())).toBeInstanceOf(
       RuntimeProtocolError
     );
+  });
+
+  it.each([
+    ['malformed JSON', TOKEN],
+    ['unexpected JSON shape', JSON.stringify({ [TOKEN]: TOKEN })],
+  ])('keeps echoed credentials out of %s errors and their causes', async (_label, body) => {
+    const hub = new HuggingFaceHub({ token: TOKEN, fetch: async () => new Response(body) });
+    const error = await caught(hub.search());
+
+    expect(error).toBeInstanceOf(RuntimeProtocolError);
+    expectNoToken(error);
+    expect(inspect(error, { depth: 10 })).not.toContain(TOKEN.slice(0, 10));
   });
 
   it('never puts the token in an error, even when the server echoes it', async () => {

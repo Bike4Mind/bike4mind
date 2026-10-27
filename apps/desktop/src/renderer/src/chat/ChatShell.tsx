@@ -10,7 +10,8 @@ import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
@@ -22,6 +23,8 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import type { ModelsInUse } from '../models/InstalledTab';
+import { ModelsScreen } from '../models/ModelsScreen';
 import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
@@ -141,7 +144,7 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -212,7 +215,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const background = useBackgroundProcesses(activeId);
   const videoJobs = useVideoJobs(activeId);
   const skills = useSkills(activeId);
-  const catalog = useModelCatalog();
+  const localMode = isLocalMode(auth);
+  const catalog = useModelCatalog(localMode);
+  const noLocal = localMode ? noLocalModels(catalog) : null;
   const statuses = useSessionStatuses();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
@@ -336,10 +341,38 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
-  const blockedReason =
+  const modelsInUse = useMemo<ModelsInUse>(() => {
+    const localName = (id: string | undefined) =>
+      catalog.models.find(model => model.id === id && isLocalBackend(model))?.name ?? null;
+    return {
+      active: localName(conversation.session?.model),
+      conversations: sessions.filter(session => !session.archived).flatMap(session => localName(session.model) ?? []),
+    };
+  }, [catalog.models, conversation.session?.model, sessions]);
+  const block = composerBlock(
+    noLocal,
     modelOption?.supportsVision === false && draft.attachments.some(attachment => attachment.kind === 'image')
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
-      : null;
+      : null
+  );
+  const blockedReason = block.reason;
+  const blockedAction =
+    block.action === 'open-models' ? { label: 'Open Models', onClick: () => setScreen('models') } : null;
+
+  // Main saves the model a send would use as soon as one is listed, so the picker shows it.
+  const settleLocalModel = conversation.settleLocalModel;
+  const settledFor = useRef<string | null>(null);
+  const sessionModel = conversation.session?.model;
+  const sessionKey = conversation.session?.id;
+  const listed = catalog.models.length > 0 && !catalog.loading;
+  const modelListed = catalog.models.some(model => model.id === sessionModel);
+  useEffect(() => {
+    if (!localMode || !listed || !sessionKey || !sessionModel || modelListed) return;
+    const key = `${sessionKey}:${sessionModel}:${catalog.models[0]?.id}`;
+    if (settledFor.current === key) return;
+    settledFor.current = key;
+    void settleLocalModel();
+  }, [localMode, listed, sessionKey, sessionModel, modelListed, catalog.models, settleLocalModel]);
 
   // A Code session with no project has no working directory, so main refuses the turn. The
   // centered workspace form is the thing to act on, and the composer names the state in one word
@@ -463,9 +496,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       // accepted; a rejected turn restores nothing, but its files are still on disk and named
       // in the error.
       draft.clear();
-      await conversation.send(text, attached);
+      const accepted = await conversation.send(text, attached);
+      // Main knows something this window did not: reread so the banner and Send gate catch up.
+      if (!accepted && localMode) void catalog.reload();
     },
-    [conversation, draft]
+    [conversation, draft, localMode, catalog]
   );
 
   /**
@@ -659,6 +694,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         sectionError={sectionError}
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
+        onOpenModels={() => setScreen('models')}
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
@@ -666,6 +702,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'models' ? (
+        <ModelsScreen onClose={() => setScreen('conversation')} inUse={modelsInUse} />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (
@@ -1036,6 +1074,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             streaming={turnOpen}
             attachments={draft}
             blockedReason={blockedReason}
+            blockedAction={blockedAction}
             // Blocked rather than refused: a refused send has already cleared the box.
             notReady={
               auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
@@ -1075,6 +1114,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   modelId={conversation.session?.model ?? null}
                   disabled={!activeId}
                   onSelect={model => void conversation.setModel(model)}
+                  noLocal={noLocal}
+                  local={localMode}
+                  onOpenModels={() => setScreen('models')}
                 />
                 <ReasoningEffortPicker
                   models={catalog.models}

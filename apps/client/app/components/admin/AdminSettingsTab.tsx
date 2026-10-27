@@ -162,10 +162,20 @@ export const GROWTH_PRICING_ONLY_KEYS: ReadonlySet<SettingKey> = new Set<Setting
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
+  'ReferralFirstAnswerCredits',
+  'ReferralFirstPaymentCredits',
+  'ReferralSecondPaymentCredits',
+  'ReferralHoldDays',
+  'ReferralInvitesPerUser',
+  'ReferralAlertRewardsPerDay',
 ]);
 
 // Settings whose value is a list of plain strings get the one-entry-per-line editor.
-const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails', 'blockedEmailDomains']);
+const STRING_LIST_SETTING_KEYS = new Set<string>([
+  'ImageModerationReviewerEmails',
+  'blockedEmailDomains',
+  'freeTierAllowedModels',
+]);
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
@@ -565,11 +575,18 @@ const AdminSettingsTab: React.FC = () => {
             </Stack>
             <FormControl sx={{ width: { xs: '100%', md: '40vw' } }}>
               <Input
-                placeholder="Search by name, description, or non-sensitive value"
+                placeholder="Search by name, description, or non-sensitive value (/)"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 fullWidth
-                slotProps={{ input: { 'data-testid': 'admin-settings-search-input' } }}
+                slotProps={{
+                  input: {
+                    'data-testid': 'admin-settings-search-input',
+                    'data-admin-search': true,
+                    'aria-label': 'Search settings',
+                    'aria-keyshortcuts': '/',
+                  },
+                }}
               />
             </FormControl>
             {searchTerm && (

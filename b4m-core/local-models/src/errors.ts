@@ -24,7 +24,7 @@ export class RuntimeHttpError extends LocalRuntimeError {
     message: string,
     runtimeId: string,
     readonly status: number,
-    /** The `error` message of an OpenAI/Ollama-style JSON body; null when the body was not that shape. */
+    /** The JSON `error` (OpenAI/Ollama) or string `detail` (FastAPI); null for unsupported bodies. */
     readonly detail: string | null = null
   ) {
     super(message, runtimeId);
@@ -45,6 +45,19 @@ export class RuntimeProtocolError extends LocalRuntimeError {
   constructor(message: string, runtimeId: string, options?: { cause?: unknown }) {
     super(message, runtimeId, options);
     this.name = 'RuntimeProtocolError';
+  }
+}
+
+export type GgufFormatErrorReason = 'truncated' | 'unsupported' | 'invalid' | 'limit';
+
+/** A GGUF header that is truncated, malformed, in an unsupported version or byte order, or past a read limit. */
+export class GgufFormatError extends LocalRuntimeError {
+  constructor(
+    message: string,
+    readonly reason: GgufFormatErrorReason
+  ) {
+    super(message, 'gguf');
+    this.name = 'GgufFormatError';
   }
 }
 

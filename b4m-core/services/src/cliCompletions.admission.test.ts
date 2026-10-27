@@ -5,6 +5,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * shared modelAdmission rule before any backend is built: an entitlement-gated model is a 403 for a
  * caller without the entitlement, and runs for one who has it.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+const gate = vi.hoisted(() => ({
+  loadFreeTierAllowedModels: vi.fn(async (): Promise<ReadonlySet<string> | undefined> => undefined),
+}));
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: gate.loadFreeTierAllowedModels,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -41,12 +50,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 import { ForbiddenError } from '@bike4mind/common';
 import { executeCompletion } from './cliCompletions';
 
-function buildDb() {
+const entitlementGatedConfigs = [{ id: 'gated-model', enabled: true, allowedEntitlements: ['pro'] }];
+
+function buildDb(configs: unknown[] = entitlementGatedConfigs) {
   return {
     adminSettings: {
-      findOne: vi.fn().mockResolvedValue({
-        settingValue: [{ id: 'gated-model', enabled: true, allowedEntitlements: ['pro'] }],
-      }),
+      findOne: vi.fn().mockResolvedValue({ settingValue: configs }),
     } as any,
     apiKeys: {} as any,
     creditTransactions: {} as any,
@@ -59,19 +68,20 @@ function buildDb() {
   };
 }
 
-const run = (getEntitlements: () => Promise<string[]>) =>
+const run = (getEntitlements: () => Promise<string[]>, configs?: unknown[]) =>
   executeCompletion({
     userId: 'user1',
     model: 'gated-model',
     messages: [{ role: 'user', content: 'hi' }],
     onChunk: vi.fn().mockResolvedValue(undefined),
-    db: buildDb(),
+    db: buildDb(configs),
     getEntitlements,
   });
 
 describe('executeCompletion model admission', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    gate.loadFreeTierAllowedModels.mockResolvedValue(undefined);
     h.complete.mockImplementation(async (_m, _msgs, _o, cb) => cb(['ok'], { inputTokens: 1, outputTokens: 1 }));
     h.getLlmByModel.mockReturnValue({ currentModel: '', complete: h.complete });
   });
@@ -107,5 +117,26 @@ describe('executeCompletion model admission', () => {
     await expect(
       executeCompletion({ ...base, db: adminDb(), scopeActor: actor => ({ ...actor, isAdmin: false }) })
     ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  describe('free-tier model gate', () => {
+    beforeEach(() => {
+      gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+    });
+
+    it('refuses a text model outside the free-tier allowlist with model_requires_subscription before building a backend', async () => {
+      const error: unknown = await run(async () => ['base'], []).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ForbiddenError);
+      expect((error as ForbiddenError).additionalInfo).toEqual({ errorCode: 'model_requires_subscription' });
+      expect(h.getLlmByModel).not.toHaveBeenCalled();
+      expect(h.complete).not.toHaveBeenCalled();
+    });
+
+    it('runs the same model for a caller holding the paid-plan entitlement', async () => {
+      await run(async () => ['base', 'plan:paid'], []);
+
+      expect(h.complete).toHaveBeenCalledOnce();
+    });
   });
 });

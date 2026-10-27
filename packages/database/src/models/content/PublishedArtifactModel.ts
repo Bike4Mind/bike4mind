@@ -364,7 +364,12 @@ export interface ShareTokenBearing {
  * Callers still add their own `deletedAt: null`, since this is only the token half.
  */
 export function shareTokenFilter(shareToken: string): Record<string, unknown> {
-  return { shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } } };
+  return {
+    // Repeats the partial filter of the `shareTokens.token` index: the planner only uses a partial
+    // index when the query implies its filter, and neither the `$elemMatch` nor a bare equality does.
+    'shareTokens.token': { $type: 'string', $eq: shareToken },
+    shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } },
+  };
 }
 
 /**
