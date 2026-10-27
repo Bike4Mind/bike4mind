@@ -175,30 +175,37 @@ function installedReviewed(inspection: ModelInspection, reviewed: HubBuild): boo
   return (configuredNumCtx(inspection.parameters) ?? null) === pins.numCtx;
 }
 
-function olderThan(version: string, minimum: string): boolean {
-  const parts = (text: string) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(text.trim())?.slice(1).map(Number);
-  const have = parts(version);
-  const want = parts(minimum);
-  if (!have || !want) return false;
-  const differs = have.findIndex((part, index) => part !== want[index]);
-  return differs !== -1 && have[differs] < want[differs];
-}
+const versionParts = (text: string) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(text.trim())?.slice(1).map(Number);
 
-/** The build's minimum Ollama when the running one is older; null when it is new enough or reports no version. */
-function ollamaTooOld(build: HubBuild, version: string | null): string | null {
+/** Why this Ollama cannot download the build; one with a minimum is blocked while Ollama reports no version. */
+function ollamaBlocked(build: HubBuild, version: string | null): string | null {
   const minimum = build.runtimeMin?.ollama;
-  return minimum && version && olderThan(version, minimum) ? minimum : null;
+  const want = minimum && versionParts(minimum);
+  if (!minimum || !want) return null;
+  const needs = `Needs Ollama ${minimum} or newer`;
+  const have = version ? versionParts(version) : undefined;
+  if (!have) return `${needs}, and Ollama did not report its version`;
+  const differs = have.findIndex((part, index) => part !== want[index]);
+  return differs !== -1 && have[differs] < want[differs] ? needs : null;
 }
 
 const smallestBuild = (entry: CuratedEntryView) => Math.min(...entry.builds.map(build => build.sizeBytes));
 
-type Prepared = { ok: true; ref: string } | { ok: false; error: ModelHubError; listed: boolean };
 /** `listed` keeps the failure in the pull list, as a failed download rather than a refused one. */
-const refused = (kind: ModelHubErrorKind, message: string, listed = false): Prepared => ({
+type Refusal = { ok: false; error: ModelHubError; listed: boolean };
+type Prepared = { ok: true; ref: string } | Refusal;
+const refused = (kind: ModelHubErrorKind, message: string, listed = false): Refusal => ({
   ok: false,
   error: hubError(kind, message),
   listed,
 });
+
+/** Refuses a download unless Ollama is running and, for a curated build, new enough for it. */
+function runtimeRefusal(health: RuntimeHealth, build: HubBuild | null): Refusal | null {
+  if (!health.ok) return refused('runtime-unavailable', 'Ollama is not running. Start it, then retry.', true);
+  const blocked = build && ollamaBlocked(build, health.version);
+  return blocked ? refused('cannot-pull', `${blocked}. Update Ollama, then download it.`) : null;
+}
 
 interface PullEntry {
   view: ModelPull;
@@ -379,6 +386,18 @@ function chatContext(
   return chatContextTokens({ setting, footprint: { arch, weightsBytes, hardware }, ...bounds });
 }
 
+/** A reviewed build's fit from its layer shapes, pinned projector and num_ctx; its row and its pull dialog share it. */
+function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit {
+  const library = libraryOf(build);
+  // The library's size already includes the projector; Hugging Face weight sizes leave it out.
+  const weights = library ? library.sizeBytes : (build.weights[0]?.sizeBytes ?? 0);
+  const projector = library ? 0 : (pinsOf(build)?.projectorBytes ?? 0);
+  const context = chatContext(sizing, entry.arch, weights + projector, {
+    configured: pinsOf(build)?.numCtx ?? undefined,
+  });
+  return fitFromArch(entry.arch, weights, sizing.hardware, context, { mmprojBytes: projector });
+}
+
 /** Installed models, Hugging Face search and pulls for the Ollama daemon Desktop chats with. */
 export class ModelHubService {
   readonly #deps: ModelHubServiceDeps;
@@ -443,25 +462,26 @@ export class ModelHubService {
       : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined });
   }
 
-  /** A reviewed curated file uses the manifest's layer shapes; any other file falls back to its size. */
+  /** A reviewed curated file is rated as its Curated row is; any other file falls back to its size. */
   #buildFit(detail: HubModelDetail, sizing: Sizing): (build: HubGgufBuild) => ModelFit | null {
-    const { hardware } = sizing;
     const projector = projectorBytes(detail) ?? 0;
     return build => {
       if (build.sizeBytes <= 0) return null;
-      const path = build.files.length === 1 ? build.files[0].path.toLowerCase() : null;
-      const entry = this.#deps.curated.entries.find(candidate =>
-        candidate.builds.some(
-          reviewed =>
-            !!reviewed.hf && sameRepo(reviewed.hf.repo, detail.id) && reviewed.weights[0]?.path.toLowerCase() === path
-        )
-      );
-      const limit = entry?.arch.contextMax ?? detail.gguf?.contextLength ?? undefined;
-      const context = chatContext(sizing, entry?.arch ?? null, build.sizeBytes + projector, {
-        modelLimit: detail.gguf?.contextLength ?? undefined,
-      });
-      if (entry) return fitFromArch(entry.arch, build.sizeBytes, hardware, context, { mmprojBytes: projector });
-      return fitFromSize(build.sizeBytes + projector, hardware, context, { limitKnown: limit !== undefined });
+      const file = build.files.length === 1 ? build.files[0] : null;
+      for (const entry of this.#deps.curated.entries)
+        for (const reviewed of entry.builds) {
+          const weights = reviewed.weights[0];
+          if (
+            reviewed.hf &&
+            sameRepo(reviewed.hf.repo, detail.id) &&
+            weights?.path.toLowerCase() === file?.path.toLowerCase() &&
+            weights.sizeBytes === file?.sizeBytes
+          )
+            return reviewedFit(entry, reviewed, sizing);
+        }
+      const limit = detail.gguf?.contextLength ?? undefined;
+      const context = chatContext(sizing, null, build.sizeBytes + projector, { modelLimit: limit });
+      return fitFromSize(build.sizeBytes + projector, sizing.hardware, context, { limitKnown: limit !== undefined });
     };
   }
 
@@ -526,11 +546,8 @@ export class ModelHubService {
   }
 
   #curatedBuild(entry: HubEntry, build: HubBuild, sizing: Sizing, version: string | null) {
-    const { hardware } = sizing;
-    const contextFor = (sizeBytes: number) =>
-      chatContext(sizing, entry.arch, sizeBytes, { configured: pinsOf(build)?.numCtx ?? undefined });
-    const minimum = ollamaTooOld(build, version);
-    const blocked = minimum ? `Needs Ollama ${minimum} or newer` : null;
+    const fit = reviewedFit(entry, build, sizing);
+    const blockedReason = ollamaBlocked(build, version);
     const library = libraryOf(build);
     if (library)
       return {
@@ -540,23 +557,20 @@ export class ModelHubService {
         quant: build.quant.label,
         sizeBytes: library.sizeBytes,
         ollamaRef: library.ref,
-        fit: fitFromArch(entry.arch, library.sizeBytes, hardware, contextFor(library.sizeBytes)),
-        blockedReason: blocked,
+        fit,
+        blockedReason,
       } satisfies CuratedBuildView;
     const repo = build.hf?.repo ?? '';
     const file = build.weights[0];
-    const projector = pinsOf(build)?.projectorBytes ?? 0;
     return {
       id: build.id,
       repo,
       pullBuildId: hubBuildId(file.path),
       quant: build.quant.label,
-      sizeBytes: file.sizeBytes + projector,
+      sizeBytes: file.sizeBytes + (pinsOf(build)?.projectorBytes ?? 0),
       ollamaRef: `hf.co/${repo}:${build.quant.label}`,
-      fit: fitFromArch(entry.arch, file.sizeBytes, hardware, contextFor(file.sizeBytes + projector), {
-        mmprojBytes: projector,
-      }),
-      blockedReason: blocked,
+      fit,
+      blockedReason,
     } satisfies CuratedBuildView;
   }
 
@@ -632,16 +646,12 @@ export class ModelHubService {
     const { entry, build: reviewed } = picked;
     try {
       const [sizing, health] = await Promise.all([this.#sizing(), this.#deps.runtime.health()]);
-      const minimum = ollamaTooOld(reviewed, health.ok ? health.version : null);
-      if (minimum)
-        return {
-          ok: false,
-          error: hubError('cannot-pull', `Needs Ollama ${minimum} or newer. Update Ollama, then download it.`),
-        };
+      const runtime = runtimeRefusal(health, reviewed);
+      if (runtime) return { ok: false, error: runtime.error };
       if (libraryOf(reviewed)) {
         const layers = await this.#checkLayers(reviewed, null);
         if (layers) return { ok: false, error: layers };
-        return { ok: true, ...libraryView(entry, reviewed, this.#curatedBuild(entry, reviewed, sizing, null).fit) };
+        return { ok: true, ...libraryView(entry, reviewed, reviewedFit(entry, reviewed, sizing)) };
       }
       const repo = reviewed.hf?.repo ?? '';
       const detail = await this.#deps.hub.getModel(repo);
@@ -665,7 +675,8 @@ export class ModelHubService {
       const build = model.builds.find(candidate => candidate.id === live.id);
       if (!build) return { ok: false, error: hubError('not-found', 'That build is no longer in this repo.') };
       const kind = permissive(entry) && model.licenseKind === 'permissive' ? 'permissive' : 'restricted';
-      return { ok: true, model: { ...model, licenseKind: kind }, build };
+      const projector = pinsOf(reviewed)?.projectorBytes ?? null;
+      return { ok: true, model: { ...model, licenseKind: kind, projectorBytes: projector }, build };
     } catch (error) {
       return { ok: false, error: toModelHubError(error) };
     }
@@ -838,9 +849,8 @@ export class ModelHubService {
 
     const health = await this.#deps.runtime.health();
     if (signal.aborted) return refused('cancelled', 'Download cancelled.');
-    if (!health.ok) return refused('runtime-unavailable', 'Ollama is not running. Start it, then retry.', true);
-    const minimum = curated ? ollamaTooOld(curated.build, health.version) : null;
-    if (minimum) return refused('cannot-pull', `Needs Ollama ${minimum} or newer. Update Ollama, then download it.`);
+    const runtime = runtimeRefusal(health, curated?.build ?? null);
+    if (runtime) return runtime;
     // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
     const ref = await this.#deps.hub.verifyOllamaRef(detail, build, { signal });
     if (signal.aborted) return refused('cancelled', 'Download cancelled.');
@@ -875,9 +885,8 @@ export class ModelHubService {
 
     const health = await this.#deps.runtime.health();
     if (signal.aborted) return refused('cancelled', 'Download cancelled.');
-    if (!health.ok) return refused('runtime-unavailable', 'Ollama is not running. Start it, then retry.', true);
-    const minimum = ollamaTooOld(curated.build, health.version);
-    if (minimum) return refused('cannot-pull', `Needs Ollama ${minimum} or newer. Update Ollama, then download it.`);
+    const runtime = runtimeRefusal(health, curated.build);
+    if (runtime) return runtime;
     const layers = await this.#checkLayers(curated.build, null, signal);
     if (layers) return { ok: false, error: layers, listed: false };
     return { ok: true, ref: library.ref };
