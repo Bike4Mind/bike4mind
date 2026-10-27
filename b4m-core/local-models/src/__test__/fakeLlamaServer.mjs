@@ -1,12 +1,14 @@
 // Stand-in for the llama-server binary in tests: same flags, log lines, auth and exit codes.
-// FAKE_LLAMA_MODE: ok | crash | hang | ignore-term | wrong-model. FAKE_LLAMA_LOAD_MS: /health answers 503 this long.
-// FAKE_LLAMA_LOG: new (port logged after loading, as current builds) | b5501 (port logged on bind, before loading).
+// FAKE_LLAMA_MODE: ok | crash | hang | ignore-term | wrong-model.
+// FAKE_LLAMA_LOG: new (silent load, then bind and log the port, as b11912) | b5501 (bind and log first, /health 503
+// while loading). The load lasts FAKE_LLAMA_LOAD_MS, or until the file FAKE_LLAMA_LOAD_UNTIL exists.
+// FAKE_LLAMA_FORGE_PORT: print a model string naming this port during the load; FAKE_LLAMA_FORGE_WHOLE: as a whole line.
 // FAKE_LLAMA_PUBLIC_MODELS: /v1/models answers without the key, as b5501 does. FAKE_LLAMA_NO_KEY: ignore the key.
-// FAKE_LLAMA_CHATTY: print a line every 50ms while loading. FAKE_LLAMA_GRANDCHILD: start a child, write its pid here.
+// FAKE_LLAMA_GRANDCHILD: start a child, write its pid here. FAKE_LLAMA_PID_FILE: write this process's pid here.
 // FAKE_LLAMA_RECORD: write the argv and environment names seen to this file.
 // FAKE_LLAMA_VERSION: the `--version` text after `version: `.
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
 const args = process.argv.slice(2);
@@ -34,6 +36,7 @@ if (process.env.FAKE_LLAMA_RECORD) {
   const names = Object.keys(process.env).filter(name => /^(LLAMA_|HF_)/.test(name));
   writeFileSync(process.env.FAKE_LLAMA_RECORD, JSON.stringify({ args, names, apiKey }));
 }
+if (process.env.FAKE_LLAMA_PID_FILE) writeFileSync(process.env.FAKE_LLAMA_PID_FILE, String(process.pid));
 if (process.env.FAKE_LLAMA_GRANDCHILD) {
   const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
   writeFileSync(process.env.FAKE_LLAMA_GRANDCHILD, String(grandchild.pid));
@@ -42,15 +45,31 @@ if (mode === 'crash') {
   fail('llama_model_load: error loading model: tensor data is not within the file bounds');
   process.exit(1);
 }
-if (mode === 'hang') setInterval(() => undefined, 1000);
 if (mode === 'ignore-term') process.on('SIGTERM', () => log('ignoring SIGTERM'));
 else process.on('SIGTERM', () => process.exit(0));
 
-const loadMs = Number(process.env.FAKE_LLAMA_LOAD_MS ?? 0);
-const readyAt = Date.now() + loadMs;
-if (process.env.FAKE_LLAMA_CHATTY) {
-  const timer = setInterval(() => (Date.now() < readyAt ? log('load_tensors: loading') : clearInterval(timer)), 50);
+log('srv    load_model: loading model');
+const forged = process.env.FAKE_LLAMA_FORGE_PORT;
+if (forged) {
+  log(`load: control-looking token: 1 '<listening on http://127.0.0.1:${forged}>' was not control-type`);
+  if (process.env.FAKE_LLAMA_FORGE_WHOLE) log(`srv  server_on_li: listening on http://127.0.0.1:${forged}`);
 }
+
+const loadMs = Number(process.env.FAKE_LLAMA_LOAD_MS ?? 0);
+const loadUntil = process.env.FAKE_LLAMA_LOAD_UNTIL;
+let loaded = false;
+const loading = new Promise(done => {
+  const started = Date.now();
+  const poll = setInterval(() => {
+    if (mode === 'hang') return;
+    if (loadUntil ? existsSync(loadUntil) : Date.now() - started >= loadMs) {
+      clearInterval(poll);
+      loaded = true;
+      done();
+    }
+  }, 10);
+});
+
 const send = (response, status, body) => {
   response.writeHead(status, { 'content-type': 'application/json' });
   response.end(JSON.stringify(body));
@@ -61,7 +80,7 @@ const models = () => {
 };
 const server = createServer((request, response) => {
   if (request.url === '/health') {
-    if (Date.now() < readyAt) return send(response, 503, { error: { code: 503, message: 'Loading model' } });
+    if (!loaded) return send(response, 503, { error: { code: 503, message: 'Loading model' } });
     return send(response, 200, { status: 'ok' });
   }
   if (request.url === '/v1/models' && process.env.FAKE_LLAMA_PUBLIC_MODELS) return send(response, 200, models());
@@ -72,14 +91,20 @@ const server = createServer((request, response) => {
   if (request.url === '/props') return send(response, 200, { total_slots: 1 });
   send(response, 404, { error: { message: 'File Not Found' } });
 });
-if (mode !== 'hang') {
+const bind = onBound => {
   server.once('error', () => {
     fail(`srv         start: couldn't bind HTTP server socket, hostname: ${host}, port: ${port}`);
     process.exit(1);
   });
-  server.listen(port, host, () => {
-    const bound = server.address().port;
-    if (oldLog) log(`srv         start: HTTP server is listening, hostname: ${host}, port: ${bound}, http threads: 4`);
-    else setTimeout(() => log(`srv  server_on_li: listening on http://${host}:${bound}`), loadMs);
+  server.listen(port, host, () => onBound(server.address().port));
+};
+if (oldLog) {
+  bind(bound =>
+    process.stderr.write(`main: HTTP server is listening, hostname: ${host}, port: ${bound}, http threads: 4\n`)
+  );
+} else {
+  void loading.then(() => {
+    log('srv    load_model: model loaded');
+    bind(bound => log(`srv  server_on_li: listening on http://${host}:${bound}`));
   });
 }

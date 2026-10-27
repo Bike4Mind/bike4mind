@@ -1,7 +1,7 @@
 import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { access, constants, stat } from 'node:fs/promises';
+import { access, constants, readFile, readdir, readlink, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
@@ -20,18 +20,16 @@ import type { FetchLike } from './types';
 
 /** Used when the caller passes no `contextSize`; callers such as Desktop pass one sized to the hardware. */
 export const DEFAULT_LLAMA_SERVER_CONTEXT_SIZE = 16384;
-/** How long a starting server may print nothing before it is given up on (ms). */
-export const DEFAULT_LLAMA_SERVER_START_TIMEOUT_MS = 120_000;
 export const DEFAULT_LLAMA_SERVER_STOP_TIMEOUT_MS = 5_000;
 /** First llama.cpp release with `--offline`; `--jinja`, `--no-webui`, `--port 0` and `LLAMA_API_KEY` are older. */
 export const MIN_LLAMA_SERVER_BUILD = 5501;
 
 /**
- * The only flags `extraArgs` may pass, each accepted by both `MIN_LLAMA_SERVER_BUILD` and current builds. Anything
+ * The only flags `extraArgs` may pass: same values in b5501 and current builds (so not `--flash-attn`). Anything
  * else could expose the server, fetch over the network, write files, or override a flag this module sets.
  */
 export const LLAMA_SERVER_TUNING_FLAGS: readonly string[] = [
-  '-b --batch-size -ub --ubatch-size -tb --threads-batch -fa --flash-attn',
+  '-b --batch-size -ub --ubatch-size -tb --threads-batch',
   '-ctk --cache-type-k -ctv --cache-type-v -np --parallel -cb --cont-batching -nocb --no-cont-batching',
   '-nkvo --no-kv-offload -sm --split-mode -ts --tensor-split -mg --main-gpu -dev --device',
   '--rope-scaling --rope-scale --rope-freq-base --rope-freq-scale --yarn-orig-ctx --yarn-ext-factor',
@@ -51,8 +49,9 @@ const LOG_LINES = 200;
 const MAX_MESSAGE_LINE = 300;
 const FLAG_RE = /^--?[a-zA-Z]/;
 const TUNING_FLAGS = new Set(LLAMA_SERVER_TUNING_FLAGS);
-/** b5501 logs `HTTP server is listening, hostname: H, port: P`; current builds `listening on http://H:P`. */
-const LISTENING_RE = /listening.*?(?:port: |https?:\/\/[^\s/]+:)(\d+)/;
+// The two real listening lines, whole: model strings printed during the load cannot pass for them mid-line.
+const LISTENING_RE =
+  /^(?:\d+\.\d+\.\d+\.\d+ [A-Z] )?(?:main: HTTP server is listening, hostname: 127\.0\.0\.1, port: (\d+), http threads: \d+|srv +server_on_li: listening on http:\/\/127\.0\.0\.1:(\d+))$/;
 const BATCH_FILE_RE = /\.(bat|cmd)$/i;
 
 const healthSchema = z.object({ status: z.string() });
@@ -146,11 +145,7 @@ async function probeBinary(
   return { path, version, build: build ? Number(build) : null };
 }
 
-/**
- * The parent's environment without llama.cpp settings or Hugging Face tokens, which would override our flags. On
- * Linux, a binary with `libllama.so` beside it also gets its directory on `LD_LIBRARY_PATH`: release zips before the
- * `$ORIGIN` runpath (b5501 among them) find their libraries only that way.
- */
+/** The parent's environment without llama.cpp settings or HF tokens; older Linux zips need their own library dir. */
 function childEnv(env: NodeJS.ProcessEnv, binaryPath: string): NodeJS.ProcessEnv {
   const child = Object.fromEntries(
     Object.entries(env).filter(([name]) => !/^LLAMA_/i.test(name) && !/^(HF_TOKEN|HUGGING_FACE_HUB_TOKEN)$/i.test(name))
@@ -184,7 +179,7 @@ export interface StartLlamaServerOptions extends LlamaServerTuning {
   alias?: string;
   /** A fixed loopback port; default a port the server picks itself. */
   port?: number;
-  /** Gives up when the process prints nothing for this long (ms); loading output resets it. */
+  /** Gives up when the server is not ready this long after spawning (ms). Default no limit: loads can be silent. */
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
   signal?: AbortSignal;
@@ -254,7 +249,17 @@ function track(child: ChildProcess): void {
     exitHookInstalled = true;
   }
   liveChildren.add(child);
-  child.once('exit', () => liveChildren.delete(child));
+  child.once('exit', () => {
+    liveChildren.delete(child);
+    // A launcher that exits first would leave llama-server running where stop() cannot reach it.
+    if (process.platform !== 'win32' && child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        // ESRCH: the group is already gone.
+      }
+    }
+  });
   // A child that never spawned emits 'error' and no 'exit'.
   child.once('error', () => {
     if (child.pid === undefined) liveChildren.delete(child);
@@ -273,7 +278,6 @@ class ManagedLlamaServer implements LlamaServerProcess {
   exit: LlamaServerExit | null = null;
   spawnError: Error | null = null;
   onExit: ((exit: LlamaServerExit) => void) | undefined;
-  lastOutputAt = Date.now();
   #port = 0;
   #runtime: OpenAICompatibleRuntime | null = null;
   readonly #lines: string[] = [];
@@ -293,11 +297,11 @@ class ManagedLlamaServer implements LlamaServerProcess {
     this.listening = new Promise(done => (heard = done));
     for (const stream of [child.stdout, child.stderr]) {
       if (!stream) continue;
-      stream.on('data', () => (this.lastOutputAt = Date.now()));
       createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => {
         this.#lines.push(line);
         if (this.#lines.length > LOG_LINES) this.#lines.shift();
-        const port = Number(LISTENING_RE.exec(line)?.[1] ?? 0);
+        const match = LISTENING_RE.exec(line);
+        const port = Number(match?.[1] ?? match?.[2] ?? 0);
         if (port > 0 && this.#port === 0) {
           this.#port = port;
           heard(port);
@@ -473,6 +477,31 @@ function untilAborted(signal: AbortSignal | undefined): { promise: Promise<void>
   return { promise, dispose: () => dispose() };
 }
 
+/**
+ * Whether a process in process group `pgid` holds the socket listening on loopback `port` (Linux only): a model
+ * string with a newline in it could still print a whole forged listening line.
+ */
+async function listenerInGroup(port: number, pgid: number): Promise<boolean> {
+  const local = `:${port.toString(16).toUpperCase().padStart(4, '0')}`;
+  const table = await readFile('/proc/net/tcp', 'utf8').catch(() => '');
+  const sockets = new Set<string>();
+  for (const row of table.split('\n').slice(1)) {
+    const fields = row.trim().split(/\s+/);
+    if (fields[1]?.endsWith(local) && fields[3] === '0A') sockets.add(`socket:[${fields[9]}]`);
+  }
+  if (sockets.size === 0) return false;
+  for (const pid of await readdir('/proc').catch(() => [])) {
+    if (!/^\d+$/.test(pid)) continue;
+    const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => '');
+    // After the parenthesized command name: state, ppid, pgrp.
+    if (Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2]) !== pgid) continue;
+    for (const fd of await readdir(`/proc/${pid}/fd`).catch(() => [])) {
+      if (sockets.has(await readlink(`/proc/${pid}/fd/${fd}`).catch(() => ''))) return true;
+    }
+  }
+  return false;
+}
+
 const delay = (ms: number) => new Promise<void>(done => setTimeout(done, ms).unref());
 
 /**
@@ -542,12 +571,12 @@ async function waitUntilReady(
   options: StartLlamaServerOptions,
   aborted: Promise<void>
 ): Promise<void> {
-  const timeoutMs = options.startTimeoutMs ?? DEFAULT_LLAMA_SERVER_START_TIMEOUT_MS;
+  const timeoutMs = options.startTimeoutMs;
+  const deadline = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
   const check = () => {
     options.signal?.throwIfAborted();
     if (!server.running) throw server.exitError(options.binaryPath, options.port);
-    if (Date.now() - server.lastOutputAt > timeoutMs)
-      throw server.startError('timeout', `llama-server printed nothing for ${timeoutMs}ms while starting`);
+    if (Date.now() > deadline) throw server.startError('timeout', `llama-server was not ready within ${timeoutMs}ms`);
   };
   const pause = () => Promise.race([delay(HEALTH_POLL_MS), server.exited, aborted]);
   // Until the process names its port, whatever answers on a port is not known to be it.
@@ -569,6 +598,8 @@ async function waitUntilReady(
     if (healthy) break;
     await pause();
   }
+  if (process.platform === 'linux' && !(await listenerInGroup(server.port, server.pid)))
+    throw server.startError('wrong-server', `port ${server.port} is not held by the llama-server just started`);
   const status = await server.statusWithoutKey('/props');
   if (status !== 401) {
     throw server.startError(

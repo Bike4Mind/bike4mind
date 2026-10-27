@@ -4,7 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   LlamaServerBinaryError,
   LlamaServerExitError,
@@ -83,6 +83,21 @@ function hostile(): Promise<{ server: Server; port: number; authorizations: (str
     server.listen(0, '127.0.0.1', () =>
       done({ server, port: (server.address() as { port: number }).port, authorizations })
     );
+  });
+}
+
+/** A listener that acts like a keyed llama-server serving any key, as a forged log line would point at. */
+function spoof(): Promise<{ server: Server; port: number; requests: { url?: string; authorization?: string }[] }> {
+  const requests: { url?: string; authorization?: string }[] = [];
+  const server = createServer((request, response) => {
+    requests.push({ url: request.url, authorization: request.headers.authorization });
+    response.writeHead(request.url === '/health' || request.headers.authorization ? 200 : 401, {
+      'content-type': 'application/json',
+    });
+    response.end(JSON.stringify({ status: 'ok', data: [{ id: 'tiny-Q4_K_M.gguf' }] }));
+  });
+  return new Promise(done => {
+    server.listen(0, '127.0.0.1', () => done({ server, port: (server.address() as { port: number }).port, requests }));
   });
 }
 
@@ -345,15 +360,80 @@ describe('startLlamaServer', () => {
     expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
   });
 
-  it('gives up on a process that prints nothing for the start timeout, and waits for one still loading', async () => {
+  it('waits through a long silent load, as current builds load, with no limit by default', async () => {
+    const gate = join(root, `loaded-${Date.now()}`);
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    try {
+      let settled = false;
+      const pending = start({ startTimeoutMs: undefined }, { FAKE_LLAMA_LOAD_UNTIL: gate }).finally(
+        () => (settled = true)
+      );
+      await new Promise(done => setImmediate(done));
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(settled).toBe(false);
+      await writeFile(gate, '');
+      const server = await pending;
+      expect(server.running).toBe(true);
+      await server.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up at startTimeoutMs, counted from the spawn whatever the server prints', async () => {
     await expect(start({ startTimeoutMs: 400 }, { FAKE_LLAMA_MODE: 'hang' })).rejects.toMatchObject({
       name: 'LlamaServerStartError',
       reason: 'timeout',
-      message: 'llama-server printed nothing for 400ms while starting',
+      message: 'llama-server was not ready within 400ms',
     });
-    const server = await start({ startTimeoutMs: 400 }, { FAKE_LLAMA_LOAD_MS: '1500', FAKE_LLAMA_CHATTY: '1' });
-    expect(server.running).toBe(true);
-    await server.stop();
+  });
+
+  it('ignores a listening line printed inside a model string during the load', async () => {
+    const decoy = await spoof();
+    try {
+      const server = await start({}, { FAKE_LLAMA_FORGE_PORT: String(decoy.port), FAKE_LLAMA_LOAD_MS: '200' });
+      expect(server.port).not.toBe(decoy.port);
+      await server.stop();
+      expect(decoy.requests).toEqual([]);
+    } finally {
+      decoy.server.close();
+    }
+  });
+
+  it.runIf(process.platform === 'linux')(
+    'refuses a port whose listening socket belongs to another process, before sending the key',
+    async () => {
+      const decoy = await spoof();
+      try {
+        const error = await start(
+          {},
+          { FAKE_LLAMA_FORGE_PORT: String(decoy.port), FAKE_LLAMA_FORGE_WHOLE: '1', FAKE_LLAMA_LOAD_MS: '200' }
+        ).catch((caught: unknown) => caught);
+        expect(error).toMatchObject({
+          name: 'LlamaServerStartError',
+          reason: 'wrong-server',
+          message: `port ${decoy.port} is not held by the llama-server just started`,
+        });
+        expect(decoy.requests.every(request => request.authorization === undefined)).toBe(true);
+      } finally {
+        decoy.server.close();
+      }
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')('kills what a launcher started when the launcher exits first', async () => {
+    const pidFile = join(root, `orphan-${Date.now()}.pid`);
+    const error = await start(
+      { binaryPath: '/bin/sh', binaryArgs: ['-c', '"$0" "$@" & sleep 0.5; exit 3', process.execPath, FIXTURE] },
+      { FAKE_LLAMA_PID_FILE: pidFile, FAKE_LLAMA_LOAD_MS: '60000' }
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ name: 'LlamaServerExitError', code: 3 });
+    const orphan = Number(await readFile(pidFile, 'utf8'));
+    for (let i = 0; i < 50 && alive(orphan); i++) await new Promise(done => setTimeout(done, 20));
+    expect(alive(orphan)).toBe(false);
   });
 
   it('validates the model, alias and tuning before spawning', async () => {
@@ -384,6 +464,9 @@ describe('startLlamaServer', () => {
       ['--temp', '0.2', '--connect-code', 'x'],
       ['-hf', 'org/repo'],
       ['--mmproj-url', 'https://example.com/x.gguf'],
+      // A bare switch in b5501 and a valued one now: no form works on both.
+      ['-fa', 'on'],
+      ['--flash-attn'],
       // Current builds reject these, so they are not tuning flags here either.
       ['--no-mmap'],
       ['--mlock'],
@@ -395,7 +478,7 @@ describe('startLlamaServer', () => {
       'llama-server takes the value of --temp as a separate argument'
     );
     const record = join(root, 'record-tuning.json');
-    const extraArgs = ['-fa', 'on', '--temp', '0.2', '-ctk', 'q8_0', '--n-predict', '-1', '--no-warmup', '-np', '2'];
+    const extraArgs = ['-ub', '256', '--temp', '0.2', '-ctk', 'q8_0', '--n-predict', '-1', '--no-warmup', '-np', '2'];
     const server = await start({ extraArgs }, { FAKE_LLAMA_RECORD: record });
     await server.stop();
     expect((await recorded(record)).args.slice(-extraArgs.length)).toEqual(extraArgs);
