@@ -50,6 +50,7 @@ export {
   readGgufMetadata,
   type GgufByteSource,
   type GgufHeader,
+  type GgufKeyType,
   type GgufInspection,
   type GgufMetadata,
   type GgufOmittedArray,

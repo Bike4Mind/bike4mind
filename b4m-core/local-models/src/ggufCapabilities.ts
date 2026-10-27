@@ -1,5 +1,5 @@
 import { stat } from 'node:fs/promises';
-import { readGgufMetadata, type GgufMetadata } from './gguf';
+import { readGgufMetadata, type GgufHeader } from './gguf';
 
 export interface GgufCapabilityInfo {
   /** `tokenizer.chat_template`, or null when the header has none. */
@@ -9,25 +9,22 @@ export interface GgufCapabilityInfo {
   poolingType: number | null;
 }
 
-/** llama.cpp refuses to load a file with an array of arrays; kept or omitted, an inner array is an object. */
-function hasNestedArray(metadata: GgufMetadata): boolean {
-  return Object.values(metadata).some(value =>
-    Array.isArray(value)
-      ? value.some(item => typeof item === 'object')
-      : typeof value === 'object' && value.itemType === 'array'
-  );
-}
-
-function capabilityInfo(metadata: GgufMetadata): GgufCapabilityInfo {
-  const text = (key: string) => {
+/** Undefined for a header llama.cpp refuses: one with an array of arrays, even an empty one. */
+function capabilityInfo({ metadata, types }: GgufHeader): GgufCapabilityInfo | undefined {
+  if (Object.values(types).some(type => type.itemType === 'array')) return undefined;
+  const info: GgufCapabilityInfo = { chatTemplate: null, architecture: null, poolingType: null };
+  for (const [key, { type }] of Object.entries(types)) {
     const value = metadata[key];
-    return typeof value === 'string' ? value : null;
-  };
-  let poolingType: number | null = null;
-  for (const [key, value] of Object.entries(metadata)) {
-    if (key.endsWith('.pooling_type') && typeof value === 'number' && Number.isInteger(value)) poolingType = value;
+    if (key === 'general.architecture' && typeof value === 'string') info.architecture = value;
+    else if (key.endsWith('.pooling_type') && (type === 'uint32' || type === 'int32') && typeof value === 'number') {
+      info.poolingType = value;
+    } else if (key === 'tokenizer.chat_template' && typeof value === 'string') {
+      // Converters write the tokenizer keys last, after the architecture's own keys.
+      info.chatTemplate = value;
+      break;
+    }
   }
-  return { chatTemplate: text('tokenizer.chat_template'), architecture: text('general.architecture'), poolingType };
+  return info;
 }
 
 const cache = new Map<string, GgufCapabilityInfo | undefined>();
@@ -42,7 +39,7 @@ export async function readCapabilityInfo(path: string): Promise<GgufCapabilityIn
   const key = `${path}\0${stats.mtimeMs}\0${stats.size}`;
   if (cache.has(key)) return cache.get(key);
   const info = await readGgufMetadata(path, { timeoutMs: Infinity })
-    .then(({ metadata }) => (hasNestedArray(metadata) ? undefined : capabilityInfo(metadata)))
+    .then(capabilityInfo)
     .catch(() => undefined);
   cache.set(key, info);
   return info;

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { headerCapabilities, readCapabilityInfo } from './ggufCapabilities';
-import { gguf, ggufWithTemplate, i32, u32 } from './__test__/ggufWriter';
+import { f32, gguf, ggufWithTemplate, i32, i64, str, u32, u64, u8 } from './__test__/ggufWriter';
 
 let dir: string;
 let count = 0;
@@ -41,6 +41,24 @@ describe('readCapabilityInfo', () => {
     expect((await readCapabilityInfo(await file(unspecified)))?.poolingType).toBe(-1);
   });
 
+  it('takes a pooling type only as a 32-bit integer written before the template', async () => {
+    for (const pooling of [u8(3), u64(3), i64(3), f32(3)]) {
+      expect((await readCapabilityInfo(await file(ggufWithTemplate(null, 'qwen3', pooling))))?.poolingType).toBeNull();
+    }
+    const late = gguf({
+      kv: [
+        ['general.architecture', str('qwen3')],
+        ['tokenizer.chat_template', str('{{ messages }}')],
+        ['qwen3.pooling_type', u32(3)],
+      ],
+    });
+    expect(await readCapabilityInfo(await file(late))).toEqual({
+      chatTemplate: '{{ messages }}',
+      architecture: 'qwen3',
+      poolingType: null,
+    });
+  });
+
   it('is undefined for a header it cannot read', async () => {
     const whole = ggufWithTemplate(TOOLS_TEMPLATE);
     expect(await readCapabilityInfo(await file(whole.subarray(0, whole.length - 10)))).toBeUndefined();
@@ -67,10 +85,12 @@ describe('readCapabilityInfo', () => {
       ...Array(depth).fill(Buffer.concat([u32le(4), u64le(0)])),
     ]);
     const short = Buffer.concat([head, u32le(9), u32le(9), u64le(1), u32le(4), u64le(0)]);
+    const empty = Buffer.concat([head, u32le(9), u32le(9), u64le(0)]);
     const started = Date.now();
     expect(await readCapabilityInfo(await file(nested))).toBeUndefined();
     expect(await readCapabilityInfo(await file(wide))).toBeUndefined();
     expect(await readCapabilityInfo(await file(short))).toBeUndefined();
+    expect(await readCapabilityInfo(await file(empty))).toBeUndefined();
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
