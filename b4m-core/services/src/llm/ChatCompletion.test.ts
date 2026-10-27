@@ -13038,6 +13038,96 @@ describe('prompt moderation', () => {
 
     await service.process({ body: startParams, logger: mockLogger }).catch(() => undefined);
 
+    expect(mockedGetLlmWithFallback.mock.calls.length).toBeGreaterThan(1);
     expect(applyModerationHit).toHaveBeenCalledTimes(1);
+  });
+
+  it('records no provider hit when a fallback model answers after a safety refusal', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedShouldTriggerFallback.mockReturnValue(true);
+    mockedIsOverloadedError.mockReturnValue(false);
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('Anthropic safety classifier refusal for gpt-4 - falling back to an alternative model')
+        ),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+    const fallbackModel = {
+      id: 'claude-opus-4-8',
+      type: 'text' as const,
+      name: 'Claude Opus 4.8',
+      backend: ModelBackend.Anthropic,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: {},
+      supportsImageVariation: false,
+    };
+    mockedGetLlmWithFallback.mockResolvedValue({
+      model: fallbackModel,
+      backend: {
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_m: unknown, _msgs: unknown, _o: unknown, cb: (...args: any[]) => Promise<void>) => {
+              await cb(['Hi!'], { inputTokens: 10, outputTokens: 5, stopReason: 'end_turn' });
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: fallbackModel.id,
+      },
+      attempt: 1,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(applyModerationHit).not.toHaveBeenCalled();
+  });
+
+  it('records a provider moderation hit when the model settles with an Anthropic refusal stop reason', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (...args: any[]) => Promise<void>) => {
+          await cb(['No.'], { inputTokens: 10, outputTokens: 5, stopReason: 'refusal' });
+        }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    expect(applyModerationHit).toHaveBeenCalledTimes(1);
+    expect(applyModerationHit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hit: expect.objectContaining({ source: 'provider' }),
+      })
+    );
+  });
+
+  it('still completes the turn and logs when recording a provider hit fails', async () => {
+    wireModMocks({ openaiKey: null, guardrailId: null });
+    vi.mocked(applyModerationHit).mockRejectedValueOnce(new Error('db down'));
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi
+        .fn()
+        .mockImplementation(async (_m: unknown, _msgs: unknown, _o: unknown, cb: (...args: any[]) => Promise<void>) => {
+          await cb(['Hi!'], { inputTokens: 10, outputTokens: 5, stopReason: 'content_filter' });
+        }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any);
+
+    await expect(service.process({ body: startParams, logger: mockLogger })).resolves.not.toThrow();
+
+    await vi.waitFor(() =>
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to record provider moderation hit'),
+        expect.any(Error)
+      )
+    );
   });
 });

@@ -42,6 +42,11 @@ export const REFUSAL_FINISH_REASON = 'refusal';
  */
 export const CONTENT_FILTER_FINISH_REASON = 'content_filter';
 
+/** A settled stop reason meaning the provider declined or blocked the request. */
+export function isProviderRefusalStopReason(stopReason: string | undefined | null): boolean {
+  return stopReason === REFUSAL_FINISH_REASON || stopReason === CONTENT_FILTER_FINISH_REASON;
+}
+
 /**
  * Stamped on `promptMeta.finishReason` when recovery settles a quest whose run died without
  * finishing: the liveness timeout (the process was hard-killed, e.g. at the server Lambda's
