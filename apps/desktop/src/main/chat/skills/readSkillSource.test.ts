@@ -26,8 +26,13 @@ describe('readSkillSource', () => {
 
     expect(await readSkillSource(skill)).toEqual({
       ok: true,
-      fields: { name: 'code-review', description: 'Reviews code', body: 'Review it.' },
-      dropped: ['allowed-tools', 'model'],
+      fields: {
+        name: 'code-review',
+        description: 'Reviews code',
+        body: 'Review it.',
+        claudeCodeAllowedTools: ['Bash', 'Read'],
+      },
+      dropped: ['model'],
       extraFiles: ['a.py', 'b.md', 'c', 'd', 'e'],
       extraFileCount: 6,
     });

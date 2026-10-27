@@ -54,7 +54,7 @@ const blockDisposableFrom = (settingValue: unknown): boolean => {
  */
 export const isAdminBlockedEmailDomain = async (
   email: string,
-  { adminSettings }: { adminSettings: IAdminSettingsRepository }
+  { adminSettings }: { adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'> }
 ): Promise<boolean> => {
   const setting = await adminSettings.findBySettingName('blockedEmailDomains');
   return isEmailInDomains(email, blockedDomainsFrom(setting?.settingValue));

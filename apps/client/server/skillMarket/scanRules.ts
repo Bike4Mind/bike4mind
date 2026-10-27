@@ -1,3 +1,4 @@
+import { splitAllowedTools } from '@bike4mind/common/utils/skillMd';
 import {
   b4mLLMTools,
   type ISkillScanFinding,
@@ -471,6 +472,10 @@ function scanMarkdownImages(text: string, allowlist: string[]): ISkillScanFindin
   return undefined;
 }
 
+// Claude Code tools that only read or plan. Everything else a SKILL.md declares (Bash, Write, Edit,
+// WebFetch, Task, an MCP tool, an unknown name) acts outside the conversation, so it is high-risk.
+const CLAUDE_CODE_READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'TodoWrite']);
+
 function scanTools(
   snapshot: ISkillSnapshot,
   text: string,
@@ -491,6 +496,21 @@ function scanTools(
   if (riskyTools.length > 0) {
     findings.push(
       finding('high_risk_tools', 'high', 'Declares tools that act outside the conversation', riskyTools.join(', '))
+    );
+  }
+
+  // `Bash(git add:*)` restricts Bash to a command prefix, but it is still Bash.
+  const riskyClaudeCodeTools = splitAllowedTools(snapshot.claudeCodeAllowedTools).filter(
+    tool => !CLAUDE_CODE_READ_ONLY_TOOLS.has(tool.split('(')[0].trim())
+  );
+  if (riskyClaudeCodeTools.length > 0) {
+    findings.push(
+      finding(
+        'high_risk_tools',
+        'high',
+        'Declares Claude Code tools that act outside the conversation',
+        riskyClaudeCodeTools.slice(0, 5).join(', ')
+      )
     );
   }
 

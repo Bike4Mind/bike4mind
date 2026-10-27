@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 const mockClearPending = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -139,6 +142,8 @@ describe('emailVerifiedGrants', () => {
       mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
 
       await applyEmailVerifiedGrants(params);
+
+      expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', logger);
 
       expect(mockApplySignupDomainGrant).toHaveBeenCalledWith({
         userId: 'user-1',
