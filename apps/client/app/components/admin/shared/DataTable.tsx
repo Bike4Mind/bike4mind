@@ -27,6 +27,8 @@ export type DataTableProps<Row> = {
   activeRowId?: string;
   testId?: string;
   rowTestId?: (row: Row) => string;
+  /** Disable when the caller paginates rows on the server. */
+  pagination?: boolean;
   /** Changing this (e.g. the serialized filter state) returns the table to its first page. */
   pageResetKey?: string;
   serverPagination?: {
@@ -55,6 +57,7 @@ export function DataTable<Row>({
   activeRowId,
   testId = 'admin-data-table',
   rowTestId,
+  pagination = true,
   pageResetKey,
   serverPagination,
 }: DataTableProps<Row>) {
@@ -84,7 +87,9 @@ export function DataTable<Row>({
   const currentPage = serverPagination ? Math.max(0, serverPagination.page - 1) : Math.min(page, lastPage);
   const visibleRows = serverPagination
     ? rows
-    : sorted.slice(currentPage * effectivePageSize, (currentPage + 1) * effectivePageSize);
+    : pagination
+      ? sorted.slice(currentPage * effectivePageSize, (currentPage + 1) * effectivePageSize)
+      : sorted;
   // Server pages cannot enumerate the complete all-matching selection or sort it locally.
   const selectable = !serverPagination && selection !== undefined && onSelectionChange !== undefined;
   const changePage = (next: number) => (serverPagination ? serverPagination.onPageChange(next + 1) : setPage(next));
@@ -294,60 +299,62 @@ export function DataTable<Row>({
           </tbody>
         </Table>
       </Box>
-      <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-          {rows.length === 0 ? 0 : currentPage * effectivePageSize + 1}-
-          {rows.length === 0
-            ? 0
-            : Math.min(
-                currentPage * effectivePageSize + rows.length,
-                total,
-                (currentPage + 1) * effectivePageSize
-              )}{' '}
-          of {total.toLocaleString()}
-        </Typography>
-        <Select
-          aria-label="Rows per page"
-          size="sm"
-          value={effectivePageSize}
-          disabled={loading}
-          data-testid="admin-table-page-size"
-          onChange={(_, value) => {
-            if (value !== null) {
-              if (serverPagination) {
-                serverPagination.onPageSizeChange(value);
-                return;
+      {(pagination || serverPagination) && (
+        <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            {rows.length === 0 ? 0 : currentPage * effectivePageSize + 1}-
+            {rows.length === 0
+              ? 0
+              : Math.min(
+                  currentPage * effectivePageSize + rows.length,
+                  total,
+                  (currentPage + 1) * effectivePageSize
+                )}{' '}
+            of {total.toLocaleString()}
+          </Typography>
+          <Select
+            aria-label="Rows per page"
+            size="sm"
+            value={effectivePageSize}
+            disabled={loading}
+            data-testid="admin-table-page-size"
+            onChange={(_, value) => {
+              if (value !== null) {
+                if (serverPagination) {
+                  serverPagination.onPageSizeChange(value);
+                  return;
+                }
+                setPageSize(value);
+                setPage(0);
               }
-              setPageSize(value);
-              setPage(0);
-            }
-          }}
-        >
-          {PAGE_SIZES.map(size => (
-            <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
-              {size}
-            </Option>
-          ))}
-        </Select>
-        <Button
-          size="sm"
-          variant="outlined"
-          disabled={loading || currentPage === 0}
-          onClick={() => changePage(currentPage - 1)}
-          data-testid="admin-table-previous-btn"
-        >
-          Previous
-        </Button>
-        <Button
-          size="sm"
-          variant="outlined"
-          disabled={loading || currentPage >= lastPage}
-          onClick={() => changePage(currentPage + 1)}
-          data-testid="admin-table-next-btn"
-        >
-          Next
-        </Button>
-      </Stack>
+            }}
+          >
+            {PAGE_SIZES.map(size => (
+              <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
+                {size}
+              </Option>
+            ))}
+          </Select>
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={loading || currentPage === 0}
+            onClick={() => changePage(currentPage - 1)}
+            data-testid="admin-table-previous-btn"
+          >
+            Previous
+          </Button>
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={loading || currentPage >= lastPage}
+            onClick={() => changePage(currentPage + 1)}
+            data-testid="admin-table-next-btn"
+          >
+            Next
+          </Button>
+        </Stack>
+      )}
     </Stack>
   );
 }

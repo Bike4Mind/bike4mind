@@ -20,6 +20,8 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => blo
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => ({ kind: 'rateLimit', options }),
 }));
+const turnstileGuard = vi.hoisted(() => ({ kind: 'oauthStartTurnstile' }));
+vi.mock('@server/utils/auth/oauthStartTurnstile', () => ({ requireOAuthStartTurnstile: () => turnstileGuard }));
 vi.mock('@server/auth/auth', () => ({ default: { authenticate: vi.fn() } }));
 vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({ issueStateNonce: vi.fn() }));
 vi.mock('@server/auth/passportOAuthStateStore', () => ({ OAUTH_NONCE_HASH_REQ_KEY: 'nonceHash' }));
@@ -36,5 +38,10 @@ describe('[strategy] OAuth initiation guards', () => {
       kind: 'rateLimit',
       options: { limit: 10, windowMs: 60 * 1000, bucket: 'oauth-start' },
     });
+  });
+
+  it('runs the Turnstile challenge after the rate limit and before the provider redirect', () => {
+    const rateLimitIndex = chainUses.findIndex(mw => (mw as { kind?: string }).kind === 'rateLimit');
+    expect(chainUses.indexOf(turnstileGuard)).toBe(rateLimitIndex + 1);
   });
 });
