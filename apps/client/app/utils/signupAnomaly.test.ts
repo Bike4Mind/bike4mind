@@ -49,6 +49,16 @@ describe('signup anomaly signals', () => {
     expect(groups[0]).toMatchObject({ domain: 'evil.test', userIds: ['a', 'b'] });
   });
 
+  it('groups an email without an @ under (unknown)', () => {
+    const groups = groupSignupDomains(
+      [{ id: 'a', email: 'not-an-email', createdAt: '2026-01-01T00:00:00.000Z' }],
+      [],
+      config,
+      Date.parse('2026-01-01T00:30:00Z')
+    );
+    expect(groups[0]).toMatchObject({ domain: '(unknown)', userIds: ['a'] });
+  });
+
   it('does not label old accounts on a popular domain as an hourly automation burst', () => {
     const users = Array.from({ length: 20 }, (_, i) => ({
       id: String(i),
