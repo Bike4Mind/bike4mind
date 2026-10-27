@@ -24,6 +24,16 @@ const MS_PER_HOUR = 60 * 60 * 1000;
 const STOP_MARGIN_MS = 60_000;
 /** Route template ApiKeyUsageLog stores for the credit balance read (apps/client/pages/api/v1/credits.ts). */
 export const CREDIT_BALANCE_ENDPOINT = '/api/v1/credits';
+/**
+ * Keys that are the user's own mint: org-billed, agent and product keys and keys minted by a
+ * first-party sign-in exchange are not. Shared by the API-share and quick-key reads so they agree.
+ */
+const PERSONAL_KEY_FILTER = {
+  billingOwnerType: { $ne: CreditHolderType.Organization },
+  agentId: null,
+  productId: null,
+  'metadata.createdFrom': { $ne: 'oauth-exchange' },
+};
 
 export interface UsagePatternSignalsRunOptions {
   logger?: Logger;
@@ -101,43 +111,39 @@ async function gatherFacts(
   const windowStart = daysAgo(config.lookbackDays);
   const readStart = daysAgo(Math.max(config.lookbackDays, config.apiOnlyLookbackDays));
   const apiOnlyStart = daysAgo(config.apiOnlyLookbackDays);
-  const [requests, firstKey] = await Promise.all([
-    // The newest maxEventsPerUser rows via the { userId, createdAt } index, folded to one row per
-    // request (a completion can settle several UsageEvent rows).
-    UsageEvent.aggregate<{ at: Date; api: number; rows: number }>([
-      {
-        $match: {
-          userId,
-          createdAt: { $gte: readStart },
-          ownerType: CreditHolderType.User,
-          feature: { $nin: ['operations', 'embedding'] },
-        },
-      },
-      { $sort: { createdAt: -1 } },
-      { $limit: config.maxEventsPerUser },
-      {
-        $group: {
-          _id: '$requestId',
-          at: { $min: '$createdAt' },
-          api: { $max: { $cond: [{ $gt: ['$apiKeyId', null] }, 1, 0] } },
-          rows: { $sum: 1 },
-        },
-      },
-    ]),
-    // Personal keys only: org-billed, agent and product keys and keys minted by a first-party
-    // sign-in exchange are not the user's own mint.
-    UserApiKey.findOne(
-      {
-        userId,
-        billingOwnerType: { $ne: CreditHolderType.Organization },
-        agentId: null,
-        productId: null,
-        'metadata.createdFrom': { $ne: 'oauth-exchange' },
-      },
-      { createdAt: 1 }
-    )
+  const [otherKeys, firstKey] = await Promise.all([
+    UserApiKey.find({ userId, $nor: [PERSONAL_KEY_FILTER] }, { _id: 1 }).lean<{ _id: mongoose.Types.ObjectId }[]>(),
+    UserApiKey.findOne({ userId, ...PERSONAL_KEY_FILTER }, { createdAt: 1 })
       .sort({ createdAt: 1 })
       .lean<{ createdAt?: Date }>(),
+  ]);
+  const otherKeyIds = otherKeys.map(k => String(k._id));
+  // The newest maxEventsPerUser rows via the { userId, createdAt } index, folded to one row per
+  // request (a completion can settle several UsageEvent rows).
+  const requests = await UsageEvent.aggregate<{ at: Date; api: number; rows: number }>([
+    {
+      $match: {
+        userId,
+        createdAt: { $gte: readStart },
+        ownerType: CreditHolderType.User,
+        feature: { $nin: ['operations', 'embedding'] },
+      },
+    },
+    { $sort: { createdAt: -1 } },
+    { $limit: config.maxEventsPerUser },
+    {
+      $group: {
+        _id: '$requestId',
+        at: { $min: '$createdAt' },
+        // Only known non-personal keys are excluded, so traffic on a since-deleted key still counts.
+        api: {
+          $max: {
+            $cond: [{ $and: [{ $gt: ['$apiKeyId', null] }, { $not: [{ $in: ['$apiKeyId', otherKeyIds] }] }] }, 1, 0],
+          },
+        },
+        rows: { $sum: 1 },
+      },
+    },
   ]);
   // When the row cap truncated the read, count polls only over the span actually read, so the
   // polls-per-completion ratio compares like with like.

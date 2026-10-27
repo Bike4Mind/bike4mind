@@ -265,6 +265,24 @@ describe('runUsagePatternSignals', () => {
     expect(stored?.signals.find(s => s.id === 'apiOnlyUsage')).toMatchObject({ value: 0, triggered: false });
   });
 
+  it('does not count traffic on a sign-in exchange key as API usage', async () => {
+    const appUser = await seedUser();
+    const key = await UserApiKey.collection.insertOne({
+      userId: appUser,
+      keyPrefix: appUser,
+      name: 'exchange',
+      metadata: { createdFrom: 'oauth-exchange' },
+      createdAt: new Date(now.getTime() - 24 * 60 * MINUTE),
+    });
+    const times = Array.from({ length: 30 }, (_, i) => new Date(now.getTime() - (i + 1) * 7 * MINUTE));
+    await seedUsage(appUser, times, { apiKeyId: String(key.insertedId), source: 'cli' });
+
+    await runUsagePatternSignals({ now });
+
+    const stored = await userUsagePatternSignalsRepository.findByUserId(appUser);
+    expect(stored?.signals.find(s => s.id === 'apiOnlyUsage')).toMatchObject({ value: 0, triggered: false });
+  });
+
   it('rotates through candidates when there are more than the per-run cap, without spending the cap on paid users', async () => {
     const paid = await seedUser();
     await seedUsage(paid, [new Date(now.getTime() - MINUTE)], {});
