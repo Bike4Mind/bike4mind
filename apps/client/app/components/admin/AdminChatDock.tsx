@@ -14,14 +14,14 @@ interface AdminChatDockProps {
  * beside ("Dock left" = dockRight, on the left) or below the content; every other layout keeps the
  * slot clipped to 0x0, which is enough for the fixed-position floating window and pill.
  *
- * DOM order is always [content, chat slot] so the chat never remounts when the layout changes
- * (a stream or draft in progress survives Dock, Hide and the pill).
+ * DOM order is always [content, chat slot], so SessionContainer (and any stream it holds) stays
+ * mounted across layout changes. The panel/pill contents still swap inside SessionContainer.
  */
 const AdminChatDock: React.FC<AdminChatDockProps> = ({ content, chat }) => {
   const layout = useSessionLayout(s => s.layout);
   const dockChatWidth = useSessionLayout(s => s.dockChatWidth);
   const dockChatHeight = useSessionLayout(s => s.dockChatHeight);
-  // The admin sidebar collapses at md, so a side dock would leave no room for the content there.
+  // Below md (the admin sidebar's breakpoint too) the viewport is too narrow for a 320px side dock plus the content.
   const isWide = useMediaQuery(useTheme().breakpoints.up('md'));
 
   const docked = layout === 'dockRight' || layout === 'dockBottom';

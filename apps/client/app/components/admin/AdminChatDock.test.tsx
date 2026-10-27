@@ -5,6 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import DockedChatPanel from '@client/app/components/Session/DockedChatPanel';
+import FloatingChatWindow from '@client/app/components/Session/FloatingChatWindow';
 import AdminChatDock from './AdminChatDock';
 
 vi.mock('@client/app/components/Session/ChatPanelControls', () => ({
@@ -27,8 +28,18 @@ const setWide = (wide: boolean) =>
         removeListener: vi.fn(),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
-      }) as never
+      }) as unknown as MediaQueryList
   );
+
+// Swaps the docked panel and the floating window by layout, as SessionContainer does.
+const ChatSwitcher = () => {
+  const layout = useSessionLayout(s => s.layout);
+  return layout === 'floatingChat' ? (
+    <FloatingChatWindow closeToPill>chat</FloatingChatWindow>
+  ) : (
+    <DockedChatPanel>chat</DockedChatPanel>
+  );
+};
 
 const renderDock = (chat: React.ReactNode = <div>chat</div>) =>
   render(
@@ -101,19 +112,21 @@ describe('AdminChatDock', () => {
     expect(mounts).toHaveBeenCalledTimes(1);
   });
 
-  it('round-trips Hide chat and the pill with a real docked panel', () => {
+  it('round-trips Hide chat and the pill with the real panel and pill', () => {
     setSessionLayout({ layout: 'dockRight' });
-    renderDock(<DockedChatPanel>chat</DockedChatPanel>);
+    renderDock(<ChatSwitcher />);
     expect(style('admin-chat-slot').position).not.toBe('absolute');
 
     fireEvent.click(screen.getByTestId('docked-chat-close'));
-    const state = useSessionLayout.getState();
-    expect(state.layout).toBe('floatingChat');
-    expect(state.floatingChatMinimized).toBe(true);
-    expect(state.hiddenFromLayout).toBe('dockRight');
+    expect(useSessionLayout.getState().layout).toBe('floatingChat');
+    expect(useSessionLayout.getState().hiddenFromLayout).toBe('dockRight');
     expect(style('admin-chat-slot').position).toBe('absolute');
 
-    act(() => setSessionLayout({ layout: state.hiddenFromLayout }));
+    fireEvent.click(screen.getByTestId('floating-chat-minimized'));
+    const state = useSessionLayout.getState();
+    expect(state.layout).toBe('dockRight');
+    expect(state.floatingChatMinimized).toBe(false);
     expect(style('admin-chat-slot').position).not.toBe('absolute');
+    expect(screen.getByTestId('docked-chat-close')).toBeTruthy();
   });
 });

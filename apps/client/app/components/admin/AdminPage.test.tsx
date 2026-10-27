@@ -1,0 +1,151 @@
+import React from 'react';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { render, screen, act } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+
+// AdminPage pulls in ~50 admin tabs that are irrelevant here. Replace each with a null stub,
+// whatever its export name, and keep the real chat wiring: SessionContainer's host is the
+// bug site, so it must sit inside AdminChatDock's slot and not in a clipped box.
+const STUBBED_MODULES = [
+  '../Knowledge/KnowledgeModal',
+  './AdminDashboardTab',
+  './AdminGrowthPricingTab',
+  './AdminLiveOpsTriageMultiConfigTab',
+  './AdminModalTab',
+  './AdminWhatsNewModalsTab',
+  './AgentExecutionsTab',
+  './AgentOpsTab',
+  './Analytics',
+  './ApiCookbookTab',
+  './ApiKeyScopePreflightTab',
+  './ApiReferenceTab',
+  './ArchitectureDiagramsTab',
+  './AuditLog',
+  './ContextInspectorTab',
+  './CreditAnalysis',
+  './DependenciesTab',
+  './DlqReplayTab',
+  './DocumentationTab',
+  './EmailMarketingTab',
+  './EmbedKeysTab',
+  './EventMetrics',
+  './GitHubConnectionTab',
+  './HelpAnalyticsTab',
+  './IdentityProvidersTab',
+  './IntegrationDemandTab',
+  './IntegrationHealth',
+  './InviteCenter',
+  './LLMDashboardTab',
+  './MigrateUsersTab',
+  './ModelLifecycleTab',
+  './ModelLogsTab',
+  './ModelMetrics',
+  './OAuthClientsTab',
+  './OrganizationsTab',
+  './PartnerSignupRulesTab',
+  './PrReport/PrReportTab',
+  './PublishedArtifactsTab',
+  './RapidReplyTab',
+  './RateLimits',
+  './ReleaseNotes/AdminReleaseNotesTab',
+  './RetrievalRateTab',
+  './SecopsTriageTab',
+  './SecretsRotationTab',
+  './SecurityDashboardMock',
+  './SignupDomainHoldsTab',
+  './SlackMetrics',
+  './SlackWorkspacesTab',
+  './SreAgentTab',
+  './SubscribersTab',
+  './Subscriptions',
+  './SystemSecretsTab',
+  './Team',
+  './ToolDefinitionsTab',
+  './Users',
+  './VoiceSettingsTab',
+  './WebhookAuditLogs',
+  './shared/AdminCommandPalette',
+  './useAdminNotifications',
+  './useAdminTabUrlSync',
+  './AdminSettingsTab',
+  './AdminSystemHealthTab',
+  './EmailVerificationTab',
+  './Feedback',
+  './FilesTab',
+  './ManageGearsTab',
+  './SystemPromptsTab',
+  './WorldTime',
+  './useAdminNotifications',
+];
+
+vi.mock('next/dynamic', () => ({ default: () => () => null }));
+vi.mock('@client/app/components/Session/SessionContainer', () => ({
+  default: () => <div data-testid="session-container-stub" />,
+}));
+vi.mock('@client/app/components/Session/NotebookFilepondProvider', () => ({
+  NotebookFilepondProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { isAdmin: true } }),
+}));
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: vi.fn().mockResolvedValue({}), post: vi.fn().mockResolvedValue({ data: { id: 'admin-session' } }) },
+}));
+vi.mock('@client/app/hooks/data/admin', () => ({
+  useLiveOpsTriageEnv: () => ({ data: undefined, isError: false }),
+}));
+vi.mock('@client/app/hooks/data/sessions', () => ({
+  useGetSession: () => ({ isPending: false }),
+}));
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+
+describe('AdminPage chat slot', () => {
+  let AdminPage: React.ComponentType;
+
+  beforeAll(async () => {
+    const stub = () =>
+      new Proxy(
+        {},
+        {
+          get: (_, key) => (key === '__esModule' ? true : key === 'then' ? undefined : () => null),
+          has: () => true,
+        }
+      );
+    for (const mod of STUBBED_MODULES) vi.doMock(mod, stub);
+    AdminPage = (await import('./AdminPage')).default;
+  });
+
+  beforeEach(() => {
+    vi.mocked(window.matchMedia).mockImplementation(
+      query =>
+        ({
+          matches: true,
+          media: query,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList
+    );
+  });
+
+  it('mounts the chat in a clipped slot as the pill, then in flow once docked', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <AdminPage />
+      </CssVarsProvider>
+    );
+    const slot = () => screen.getByTestId('admin-chat-slot');
+    expect(slot().contains(screen.getByTestId('session-container-stub'))).toBe(true);
+    expect(getComputedStyle(slot()).width).toBe('0px');
+
+    for (const layout of ['dockRight', 'dockBottom'] as const) {
+      act(() => setSessionLayout({ layout }));
+      expect(getComputedStyle(slot()).position).not.toBe('absolute');
+      expect(slot().contains(screen.getByTestId('session-container-stub'))).toBe(true);
+    }
+  });
+});
