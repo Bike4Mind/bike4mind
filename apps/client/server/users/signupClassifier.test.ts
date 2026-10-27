@@ -134,6 +134,21 @@ describe('per-account signals', () => {
     ).toEqual([]);
     expect(classifySignup(user('a', 'a@corp.test', 0, { lastActiveAt: null }), new Set(), NOW)).toEqual([]);
   });
+
+  it('does not call an API-first developer dormant or suspected', () => {
+    const developer = user('a', 'a@corp.test', 0, {
+      lastActiveAt: at(20 * MIN),
+      firstApiKeyAt: at(10 * MIN),
+      lastApiUseAt: at(2 * 24 * 60 * MIN),
+    });
+    const signals = classifySignup(developer, new Set(), NOW);
+    expect(signals).toEqual(['earlyApiKey']);
+    expect(isSuspectedSignup(signals)).toBe(false);
+    expect(classifySignup({ ...developer, lastApiUseAt: at(30 * MIN) }, new Set(), NOW)).toEqual([
+      'earlyApiKey',
+      'dormantAfterSignup',
+    ]);
+  });
 });
 
 describe('suspected verdict', () => {

@@ -78,17 +78,23 @@ async function loadCandidates(since: Date, until: Date) {
     // A key made within 24h of a signup in range was itself made in range, so the bounded createdAt
     // scan finds it without an unbounded `userId: { $in }` list.
     UserApiKey.find({ createdAt: { $gte: since, $lt: until } })
-      .select('userId createdAt')
+      .select('userId createdAt lastUsedAt')
       .hint({ createdAt: 1 })
       .limit(TIMESERIES_KEY_SCAN_LIMIT + 1)
       .maxTimeMS(QUERY_DEADLINE_MS)
       .lean(),
   ]);
   const firstKeyAt = new Map<string, Date>();
+  const lastKeyUseAt = new Map<string, Date>();
   for (const key of keys.slice(0, TIMESERIES_KEY_SCAN_LIMIT)) {
     const createdAt = new Date(key.createdAt);
     const current = firstKeyAt.get(key.userId);
     if (!current || createdAt < current) firstKeyAt.set(key.userId, createdAt);
+    if (key.lastUsedAt) {
+      const usedAt = new Date(key.lastUsedAt);
+      const latest = lastKeyUseAt.get(key.userId);
+      if (!latest || usedAt > latest) lastKeyUseAt.set(key.userId, usedAt);
+    }
   }
   const candidates: SignupCandidate[] = users.slice(0, TIMESERIES_SCAN_LIMIT).map(user => ({
     id: String(user._id),
@@ -97,6 +103,7 @@ async function loadCandidates(since: Date, until: Date) {
     lastActiveAt: user.lastActiveAt ? new Date(user.lastActiveAt) : null,
     signupMeta: user.signupMeta ?? null,
     firstApiKeyAt: firstKeyAt.get(String(user._id)) ?? null,
+    lastApiUseAt: lastKeyUseAt.get(String(user._id)) ?? null,
   }));
   return {
     candidates,

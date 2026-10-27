@@ -79,6 +79,8 @@ export type SignupCandidate = {
   signupMeta?: { isDatacenter?: boolean | null; wafBotSignal?: boolean | null } | null;
   /** Earliest API key the account created, if any. */
   firstApiKeyAt?: Date | null;
+  /** Latest use of any of the account's API keys; REST traffic never touches lastActiveAt. */
+  lastApiUseAt?: Date | null;
 };
 
 type CohortMember = Pick<SignupCandidate, 'id' | 'email' | 'createdAt'>;
@@ -183,10 +185,12 @@ export function classifySignup(
   if (user.signupMeta?.wafBotSignal === true) found.add('wafBotSignal');
   if (user.signupMeta?.isDatacenter === true) found.add('datacenterNetwork');
   if (user.firstApiKeyAt && user.firstApiKeyAt.getTime() - createdAt <= EARLY_API_KEY_MS) found.add('earlyApiKey');
+  const usedApiLater = !!user.lastApiUseAt && user.lastApiUseAt.getTime() - createdAt > FIRST_SESSION_MS;
   if (
     now.getTime() - createdAt >= DORMANCY_MIN_AGE_MS &&
     user.lastActiveAt &&
-    user.lastActiveAt.getTime() - createdAt <= FIRST_SESSION_MS
+    user.lastActiveAt.getTime() - createdAt <= FIRST_SESSION_MS &&
+    !usedApiLater
   ) {
     found.add('dormantAfterSignup');
   }
