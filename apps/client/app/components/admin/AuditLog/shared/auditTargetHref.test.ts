@@ -13,13 +13,14 @@ describe('auditTargetHref', () => {
   });
 
   it('locates a setting without putting its value in the URL', () => {
-    expect(auditTargetHref({ kind: 'settings', id: 'settingKey', displayName: 'Setting' })).toBe(
-      '/admin?tab=admin-settings&q=settingKey'
+    expect(auditTargetHref({ kind: 'settings', id: 'logoSettings', displayName: 'Setting' })).toBe(
+      '/admin?tab=admin-settings&q=logoSettings'
     );
   });
 
   it('does not invent detail routes for unavailable records', () => {
     expect(auditTargetHref({ kind: 'system', id: 'job-1', displayName: 'Job' })).toBeUndefined();
+    expect(auditTargetHref({ kind: 'settings', id: 'job-1', displayName: 'Job' })).toBeUndefined();
     expect(auditTargetHref({ kind: 'user', id: '', displayName: 'Erased user' })).toBeUndefined();
   });
 });
