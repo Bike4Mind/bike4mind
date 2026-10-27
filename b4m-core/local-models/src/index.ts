@@ -1,12 +1,15 @@
 export type {
   AttentionGroup,
   FetchLike,
+  InspectOptions,
   InstalledModel,
   LoadedModel,
   LocalRuntime,
   ModelArch,
   ModelCapabilities,
+  ModelContents,
   ModelInspection,
+  OllamaRegistryLayers,
   OpenAICompatibleProduct,
   PullOptions,
   PullProgress,
@@ -62,6 +65,7 @@ export {
   type ReadGgufOptions,
 } from './gguf';
 export { DEFAULT_OLLAMA_URL, DEFAULT_PULL_IDLE_TIMEOUT_MS, OllamaRuntime, type OllamaRuntimeOptions } from './ollama';
+export { DEFAULT_OLLAMA_REGISTRY, ollamaLibraryLayers, type OllamaLibraryLayersOptions } from './ollamaRegistry';
 export { OpenAICompatibleRuntime, type OpenAICompatibleRuntimeOptions } from './openaiCompatible';
 export {
   DEFAULT_HUGGING_FACE_ENDPOINT,
