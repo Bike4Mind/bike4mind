@@ -159,26 +159,29 @@ export function validateTriggerWords(value: unknown): string[] | undefined {
   return result.data;
 }
 
+type CatalogLogger = Parameters<typeof getCallerModelList>[1];
+
 /**
  * The static enums only know models that shipped with the build; newer ones arrive through the
  * dynamic catalog and chat accepts them by that route. An enum hit passes without a lookup, so the
  * live fan-out runs only for ids the enums miss. The catalog is the caller's own picker list, so
  * "accepted here" means "selectable in chat for this user".
  */
-async function assertModelsSelectable(agentData: Partial<IAgent>, userId: string) {
+async function assertModelsSelectable(agentData: Partial<IAgent>, userId: string, logger: CatalogLogger) {
   const checks = [
-    { id: agentData.preferredModel, known: supportedChatModels, message: 'Invalid model' },
-    { id: agentData.preferredImageModel, known: supportedImageModels, message: 'Invalid image model' },
+    { id: agentData.preferredModel, known: supportedChatModels, type: 'text', message: 'Invalid model' },
+    { id: agentData.preferredImageModel, known: supportedImageModels, type: 'image', message: 'Invalid image model' },
   ].filter(({ id, known }) => id && !known.safeParse(id).success);
   if (checks.length === 0) return;
 
-  const { models } = await getCallerModelList(userId, new Logger());
+  const { models } = await getCallerModelList(userId, logger);
   // An empty catalog means every backend listing failed; reject as unavailable, not as a bad model.
   if (models.length === 0) {
     throw new InternalServerError('Model catalog is unavailable; try again shortly');
   }
-  for (const { id, message } of checks) {
-    if (!models.some(model => model.id === id)) {
+  // The catalog is one flat list across modalities, so match the slot's type too or a chat id would pass as an image model.
+  for (const { id, type, message } of checks) {
+    if (!models.some(model => model.id === id && model.type === type)) {
       throw new AgentValidationError(`${message}: ${id}`);
     }
   }
@@ -188,12 +191,14 @@ async function assertModelsSelectable(agentData: Partial<IAgent>, userId: string
  * Validates and normalizes the fields of an agent body in place, for PUT /api/agents/[id],
  * PATCH /api/v1/agents/[id] and createAgent (both POST routes). Only fields present on `agentData` are checked. `label` renames a field
  * in an error message, so the v1 route can name its snake_case spelling. `userId` scopes the model
- * catalog lookup to the keys the caller can actually chat with.
+ * catalog lookup to the keys the caller can actually chat with; `logger` carries the request's logger
+ * into that lookup.
  */
 export async function validateAgentUpdate(
   agentData: Partial<IAgent>,
   userId: string,
-  label: (field: string) => string = field => field
+  label: (field: string) => string = field => field,
+  logger: CatalogLogger = new Logger()
 ) {
   if (agentData.temperature !== undefined && (agentData.temperature < 0 || agentData.temperature > 2)) {
     throw new AgentValidationError('Temperature must be between 0 and 2');
@@ -233,5 +238,5 @@ export async function validateAgentUpdate(
   }
 
   // Last, so a body the cheap checks reject never pays for the live catalog fan-out.
-  await assertModelsSelectable(agentData, userId);
+  await assertModelsSelectable(agentData, userId, logger);
 }
