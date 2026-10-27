@@ -2,7 +2,12 @@ import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
-import { Box, LinearProgress, Sheet, Stack } from '@mui/joy';
+import { Alert, Box, Checkbox, LinearProgress, Option, Select, Sheet, Stack } from '@mui/joy';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@client/app/contexts/ApiContext';
+import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
+import { AnomalyBanner } from './AnomalyBanner';
+import { EmailDomainGroups } from './EmailDomainGroups';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import AdminProfileModal from '../AdminProfileModal';
@@ -45,6 +50,12 @@ const UsersTab: React.FC = () => {
   } = useDebounceValue(useUsersTab.getState().params.search ?? '');
 
   const usersQuery = useGetUsers(params);
+  const anomalyQuery = useQuery({
+    queryKey: ['admin-signup-anomaly'],
+    queryFn: async () => (await api.get<SignupAnomalySnapshot>('/api/admin/signup-anomaly')).data,
+    staleTime: 60000,
+    refetchInterval: 60000,
+  });
   const users = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data]);
 
   useEffect(() => {
@@ -123,28 +134,64 @@ const UsersTab: React.FC = () => {
     >
       <Box sx={{ flexShrink: 0 }}>
         <Stack sx={{ pt: { xs: 0.5, sm: 1 }, mb: { xs: 0.5, sm: 1 } }}>
+          <AnomalyBanner
+            snapshot={anomalyQuery.data}
+            onReview={() => {
+              setSearch('');
+              setParams({
+                recentSignups: 'hour',
+                groupBy: 'emailDomain',
+                page: 1,
+                search: '',
+                orgSearch: ['all'],
+                tags: [],
+              });
+            }}
+          />
+          {anomalyQuery.isError && <Alert color="warning">Could not check signup anomalies. Refresh to retry.</Alert>}
+          <Stack direction="row" gap={2} flexWrap="wrap" sx={{ my: 1 }}>
+            <Select
+              aria-label="Group by"
+              data-testid="users-group-by"
+              value={params.groupBy ?? 'none'}
+              onChange={(_, value) =>
+                setParams({ groupBy: value === 'emailDomain' ? 'emailDomain' : undefined, page: 1 })
+              }
+            >
+              <Option value="none">Group by: None</Option>
+              <Option value="emailDomain">Group by: Email domain</Option>
+            </Select>
+            <Checkbox
+              label="Signed up in the last hour"
+              checked={params.recentSignups === 'hour'}
+              slotProps={{ input: { 'data-testid': 'users-recent-signups-filter' } }}
+              onChange={event => setParams({ recentSignups: event.target.checked ? 'hour' : undefined, page: 1 })}
+            />
+          </Stack>
           <UsersFilterBar
             displayMode={displayMode}
             onDisplayModeChange={setDisplayMode}
             loading={loading}
             search={search}
             onSearchChange={setSearch}
-            onRefresh={() => usersQuery.refetch()}
+            onRefresh={() => {
+              usersQuery.refetch();
+              anomalyQuery.refetch();
+            }}
             onDownloadCsv={handleDownloadCsv}
             onCreateUser={() => setCreateUserModalOpen(true)}
             downloadDisabled={loading || users.length === 0}
             onOpenFilters={() => setFiltersDrawerOpen(true)}
           />
           <BulkAbuseBar
-            // Rows are only selectable in slim mode, so the bar stays out of the other views.
-            selectedCount={displayMode === 'slim' ? selectedUserIds.size : 0}
+            selectedCount={params.groupBy || displayMode === 'slim' ? selectedUserIds.size : 0}
             onClearSelection={clearSelection}
             onOpen={() => setBulkAbuseOpen(true)}
           />
         </Stack>
 
         {/* Full pagination lives above the table on desktop; phones get the compact pager only. */}
-        {!isMobile && (
+        {!isMobile && !params.groupBy && (
           <PaginationControls
             variant="full"
             currentPage={params.page}
@@ -166,21 +213,34 @@ const UsersTab: React.FC = () => {
         )}
       </Box>
 
-      {!usersQuery.isLoading && (
+      {(params.groupBy || !usersQuery.isLoading) && (
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', mt: 0.5 }}>
-          {displayMode === 'full' &&
+          {params.groupBy && (
+            <EmailDomainGroups
+              groups={usersQuery.data?.groups ?? []}
+              selection={selection}
+              loading={loading}
+              error={usersQuery.isError ? 'Could not load domain groups. Retry the request.' : undefined}
+              onRetry={() => usersQuery.refetch()}
+              truncated={usersQuery.data?.groupsTruncated}
+              keysTruncated={usersQuery.data?.keysTruncated}
+            />
+          )}
+          {!params.groupBy &&
+            displayMode === 'full' &&
             users.map((user, index) => <FullUsersView user={user} index={index} key={user.id} />)}
 
-          {displayMode === 'slim' && <SlimUsersContainer users={users} selection={selection} />}
+          {!params.groupBy && displayMode === 'slim' && <SlimUsersContainer users={users} selection={selection} />}
 
-          {displayMode === 'userJourney' &&
+          {!params.groupBy &&
+            displayMode === 'userJourney' &&
             users.map((user, index) => <UserJourney user={user} index={index} key={user.id} />)}
 
-          {displayMode === 'recentActivity' && <RecentActivityView />}
+          {!params.groupBy && displayMode === 'recentActivity' && <RecentActivityView />}
         </Box>
       )}
 
-      <Box sx={{ flexShrink: 0 }}>
+      <Box sx={{ flexShrink: 0, display: params.groupBy ? 'none' : undefined }}>
         <PaginationControls
           variant="compact"
           currentPage={params.page}
@@ -205,7 +265,7 @@ const UsersTab: React.FC = () => {
       {/* Mounted only while open, so each run starts from a clean form. */}
       {bulkAbuseOpen && (
         <BulkAbuseResponseModal
-          selectedUserIds={displayMode === 'slim' ? [...selectedUserIds] : []}
+          selectedUserIds={params.groupBy || displayMode === 'slim' ? [...selectedUserIds] : []}
           onClose={() => setBulkAbuseOpen(false)}
           onExecuted={clearSelection}
         />

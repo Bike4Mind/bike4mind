@@ -23,6 +23,7 @@ import {
 import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { findSharedWorkspaceUserIds } from '@server/users/sharedWorkspaceUserIds';
 import { findPendingProjectInviteeIds } from '@server/users/pendingProjectInviteeIds';
+import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
 import * as z from 'zod';
 import qs from 'qs';
 import { Request } from 'express';
@@ -49,6 +50,8 @@ const querySchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).optional(),
   orgSearch: z.array(z.string()).default(['all']),
   tags: z.array(z.string()).optional(),
+  recentSignups: z.enum(['hour']).optional(),
+  groupBy: z.enum(['emailDomain']).optional(),
   projectId: z
     .string()
     .regex(/^[0-9a-fA-F]{24}$/)
@@ -82,6 +85,8 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       downloadAll,
       projectId,
       pendingInviteProjectId,
+      recentSignups,
+      groupBy,
     } = querySchema.parse(qs.parse(req.query));
 
     // publicView is the limited directory search used by invite/member pickers; it
@@ -91,6 +96,9 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
     const viewer = { userId: String(req.user?.id), isAdmin };
+    if ((recentSignups || groupBy) && !isAdmin) {
+      return res.status(403).json({ message: 'Signup review is admin-only.' });
+    }
     const isPicker = publicView && !isAdmin;
     if (isPicker) {
       // projectId-scoped requests show members of one specific project rather than the whole
@@ -135,6 +143,10 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     const sharedUserIds = isPicker && !projectId ? await findSharedWorkspaceUserIds(req.user) : undefined;
 
     const conditions = [];
+    if (recentSignups) {
+      const now = new Date();
+      conditions.push({ createdAt: { $gte: new Date(now.getTime() - 3600000), $lt: now } });
+    }
     if (search) {
       const escapedSearch = escapeRegex(search);
       const idConditions: mongoose.FilterQuery<typeof User>[] = /^[0-9a-fA-F]{24}$/.test(search)
@@ -256,6 +268,35 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
     let baseAggregationPipeline = [];
 
+    if (groupBy) {
+      // Cap the indexed candidate scan before joins or grouping; filters can make this sample incomplete.
+      const candidates = await User.find(
+        recentSignups ? { createdAt: { $gte: new Date(Date.now() - 3600000), $lt: new Date() } } : {}
+      )
+        .sort({ createdAt: -1 })
+        .hint({ createdAt: 1 })
+        .select('_id')
+        .limit(SIGNUP_SCAN_LIMIT + 1)
+        .maxTimeMS(2000)
+        .lean();
+      const rows = await User.aggregate<{ _id: unknown; email: string | null; createdAt: Date }>([
+        { $match: { $and: [query, { _id: { $in: candidates.slice(0, SIGNUP_SCAN_LIMIT).map(user => user._id) } }] } },
+        { $lookup: { from: 'organizations', localField: 'organizationId', foreignField: '_id', as: 'organization' } },
+        { $unwind: { path: '$organization', preserveNullAndEmptyArrays: true } },
+        { $match: organizationFilter },
+        { $project: { _id: 1, email: 1, createdAt: 1 } },
+      ]).option({ maxTimeMS: 2000 });
+      const grouped = await getDomainGroups(rows);
+      return res.json({
+        ...grouped,
+        groupsTruncated: candidates.length > SIGNUP_SCAN_LIMIT,
+        users: [],
+        currentPage: 1,
+        totalPages: 1,
+        totalUsers: rows.length,
+      });
+    }
+
     // If using text search, it must be in the first $match stage
     const hasTextSearch = search && conditions.some(c => c && typeof c === 'object' && '$text' in c);
     if (hasTextSearch) {
@@ -307,6 +348,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     } else {
       // Standard pipeline without text search
       baseAggregationPipeline = [
+        { $match: query },
         {
           $lookup: {
             from: 'organizations',
