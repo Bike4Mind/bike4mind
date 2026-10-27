@@ -233,8 +233,10 @@ export class CuratedSource {
       else if (repair) this.#log('repaired a damaged or missing copy of revoked-keys.json');
       await this.#revoke(recovered ?? []);
     }
-    // A list accepted before is gone, so the last success no longer describes what is shown: check again now.
-    if (!this.#cached && this.#floor() > this.#bundled.sequence) this.#state = { ...this.#state, lastSuccessAt: null };
+    // A newer list accepted before is gone (lost, or its copy never saved), so the last success no longer describes
+    // what is shown: check again now.
+    if (this.#floor() > Math.max(this.#cached?.sequence ?? 0, this.#bundled.sequence))
+      this.#state = { ...this.#state, lastSuccessAt: null };
     return true;
   }
 
