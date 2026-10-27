@@ -100,9 +100,9 @@ async function call(handler: typeof feedHandler | typeof zipHandler, userId: str
   } catch (err) {
     const { statusCode } = err as { statusCode?: number };
     if (statusCode === undefined) throw err;
-    return statusCode;
+    return { statusCode, res };
   }
-  return res._getStatusCode();
+  return { statusCode: res._getStatusCode(), res };
 }
 
 async function seedOrg(owner: { id: string }, memberId: string, name: string) {
@@ -132,7 +132,7 @@ async function seedOrg(owner: { id: string }, memberId: string, name: string) {
     reviewStatus: 'approved',
   });
   await SkillListing.updateOne({ _id: listing._id }, { $set: { currentApprovedVersionId: version.id } });
-  return { orgId, listingId: listing.id as string };
+  return { orgId, listingId: listing.id as string, skillName: `${name}-skill` };
 }
 
 async function seed() {
@@ -154,8 +154,26 @@ type Owner = Awaited<ReturnType<typeof seed>>['owner'];
 
 const keyStatus = async (userId: string) => (await UserApiKey.findOne({ userId }))?.status;
 
-const feedStatus = (userId: string, orgId: string) => call(feedHandler, userId, { orgId });
-const zipStatus = (userId: string, listingId: string) => call(zipHandler, userId, { id: listingId });
+const feedStatus = async (userId: string, orgId: string) => (await call(feedHandler, userId, { orgId })).statusCode;
+const zipStatus = async (userId: string, listingId: string) =>
+  (await call(zipHandler, userId, { id: listingId })).statusCode;
+
+async function expectServingOrg(userId: string, org: Awaited<ReturnType<typeof seedOrg>>) {
+  const feed = await call(feedHandler, userId, { orgId: org.orgId });
+  expect(feed.statusCode).toBe(200);
+  const marketplace: unknown = feed.res._getJSONData();
+  expect(marketplace).toMatchObject({ plugins: [{ name: org.skillName, version: '1' }] });
+
+  const zip = await call(zipHandler, userId, { id: org.listingId });
+  expect(zip.statusCode).toBe(200);
+  const archive: unknown = zip.res._getData();
+  if (!Buffer.isBuffer(archive)) throw new TypeError('Expected a plugin ZIP buffer');
+  // The builder stores uncompressed entries, so both the path and SKILL.md text are readable.
+  const archiveText = archive.toString('utf8');
+  expect(archiveText).toContain(`skills/${org.skillName}/SKILL.md`);
+  expect(archiveText).toContain(`name: ${org.skillName}`);
+  expect(archiveText).toContain('Check the diff.');
+}
 
 describe('skills:read key after its owner exits an org', () => {
   it.each([
@@ -176,8 +194,7 @@ describe('skills:read key after its owner exits an org', () => {
     ],
   ])("stays active but loses the org's feed and zip when the member %s", async (_label, depart) => {
     const { owner, memberId, a } = await seed();
-    expect(await feedStatus(memberId, a.orgId)).toBe(200);
-    expect(await zipStatus(memberId, a.listingId)).toBe(200);
+    await expectServingOrg(memberId, a);
 
     await depart(owner, memberId, a.orgId);
 
@@ -195,7 +212,6 @@ describe('skills:read key after its owner exits an org', () => {
     expect(await keyStatus(memberId)).toBe(ApiKeyStatus.ACTIVE);
     expect(await feedStatus(memberId, a.orgId)).toBe(403);
     expect(await zipStatus(memberId, a.listingId)).toBe(404);
-    expect(await feedStatus(memberId, b.orgId)).toBe(200);
-    expect(await zipStatus(memberId, b.listingId)).toBe(200);
+    await expectServingOrg(memberId, b);
   });
 });
