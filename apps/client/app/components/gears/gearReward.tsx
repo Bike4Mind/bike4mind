@@ -5,6 +5,7 @@ import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRew
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { grayAlpha } from '@client/app/utils/themes/colors';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { GEAR_TRUST_MIN_AGE_DAYS } from '@client/lib/gears/keys';
 
 /** The reward as prose, for the tooltips: the chip shows the bare number. */
 export const creditText = (gear: GearStatus) =>
@@ -251,3 +252,22 @@ export const ClaimButton = ({
     </Typography>
   );
 };
+
+/**
+ * Inline note shown on a card when the payout is held by the trust gate or a
+ * gear-specific rewardCheck. Each reason gets its own copy so the user knows
+ * what to do, not just that they cannot claim yet.
+ */
+export const PendingRewardNote = ({ gear }: { gear: GearStatus }) => (
+  <Typography
+    level="body-xs"
+    data-testid={`gear-pending-note-${gear.key}`}
+    sx={{ mt: '16px', fontSize: '13px', color: 'warning.softColor' }}
+  >
+    {gear.pendingReason === 'unverified'
+      ? `Verify your email to claim ${creditText(gear)}.`
+      : gear.pendingReason === 'too_new'
+        ? `Claimable for ${creditText(gear)} once your account is ${GEAR_TRUST_MIN_AGE_DAYS} days old.`
+        : `Once someone else opens your artifact link while signed in, you can claim ${creditText(gear)}.`}
+  </Typography>
+);

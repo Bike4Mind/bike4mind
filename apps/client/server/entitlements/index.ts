@@ -34,7 +34,8 @@ import {
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
-import type { IUserDocument } from '@bike4mind/common';
+import { getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
+import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -120,7 +121,14 @@ export async function getUserEntitlements(
   // Implications run last, over the union of every source, so an implying key
   // confers the same keys whether it came from a tag, domain, partner rule or
   // subscription. Must stay the only place they are applied for gating.
-  return applyImpliedEntitlements(keys);
+  const resolved = applyImpliedEntitlements(keys);
+  // `plan:paid` unlocks paid-only models (the free-tier gate in modelAdmission.ts), so it comes from
+  // the subscription ladder alone, never from a passthrough tag or any other source above. An admin
+  // comps it with an `admin_grant` subscription row, which the ladder read honors.
+  const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
+  return getHighestLadderTier(activeSubscriptions) === undefined
+    ? withoutPaidPlan
+    : [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY];
 }
 
 /**

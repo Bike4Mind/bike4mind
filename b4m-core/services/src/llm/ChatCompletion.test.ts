@@ -899,6 +899,59 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'error' });
     });
 
+    describe('free-tier gate on the direct (quest/Slack) path', () => {
+      const turn = () => {
+        mockSession.userId = 'user1';
+        const body = wireMinimalTurn();
+        const complete = vi.fn();
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn(),
+          currentModel: ChatModels.GPT4_1,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+        return { body, complete };
+      };
+      const gateOn = async () => {
+        const [requested] = (await mockedGetAvailableModels()) as unknown as Array<Record<string, unknown>>;
+        mockedGetAvailableModels.mockResolvedValue([requested, gatedSuccessor] as never);
+        vi.mocked(resolveDeprecatedModelId).mockImplementationOnce(() => ChatModels.GPT4_1);
+        mockedGetSettingsValue.mockImplementation(((key: string) =>
+          key === 'freeTierModelGateEnabled'
+            ? true
+            : key === 'freeTierAllowedModels'
+              ? ['some-free-model']
+              : undefined) as typeof getSettingsValue);
+        onTestFinished(() => mockedGetSettingsValue.mockReset());
+      };
+
+      it('refuses a paid-only model for a free account before any provider call', async () => {
+        const { body, complete } = turn();
+        await gateOn();
+        (service as any).getEntitlements = vi.fn().mockResolvedValue(['base']);
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).toMatchObject({
+          type: 'error',
+          reply: expect.stringContaining('requires a paid plan'),
+        });
+      });
+
+      it('answers a failed entitlement read with a retryable error, not the upgrade prompt', async () => {
+        const { body, complete } = turn();
+        await gateOn();
+        (service as any).getEntitlements = vi.fn().mockRejectedValue(new Error('subscription DB down'));
+
+        await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+        expect(complete).not.toHaveBeenCalled();
+        const reply = mockDb.quests.update.mock.calls.at(-1)?.[0].reply;
+        expect(reply).toContain('Could not verify your plan');
+        expect(reply).not.toContain('requires a paid plan');
+      });
+    });
+
     it('refuses an unadmitted primary model with no remap before any provider call', async () => {
       mockSession.userId = 'user1';
       const body = wireMinimalTurn();
