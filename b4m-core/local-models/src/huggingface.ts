@@ -722,7 +722,7 @@ export class HuggingFaceHub {
   /**
    * Downloads one GGUF file, resuming `<destination>.partial` from an earlier attempt, and checks its size and
    * sha256 (size only when the Hub masks the hash). The token goes to the endpoint only, never to the CDN it
-   * redirects to.
+   * redirects to. An existing `destination` is never overwritten: it is verified, or `ModelFileConflictError`.
    */
   async download(file: HubGgufFile, destination: string, options: DownloadOptions = {}): Promise<DownloadResult> {
     const origin = new URL(this.endpoint).origin;

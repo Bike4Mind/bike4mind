@@ -3,7 +3,7 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, open, readFile, readdir, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import type { DownloadOptions } from './download';
+import { type DownloadOptions, PARTIAL_RECORD_SUFFIX, PARTIAL_SUFFIX, SOURCE_SUFFIX } from './download';
 import {
   InvalidModelNameError,
   LocalRuntimeError,
@@ -19,10 +19,6 @@ import type { InstalledModel } from './types';
 const RUNTIME_ID = 'llama-server';
 const SHARD_RE = /-(\d{5})-of-(\d{5})(\.gguf)$/i;
 const GGUF_MAGIC = 'GGUF';
-const PARTIAL_SUFFIX = '.partial';
-const SOURCE_SUFFIX = '.source.json';
-/** Beside a `.partial`: the sha256 and size it was started for (see `download.ts`). */
-const PARTIAL_RECORD_SUFFIX = '.json';
 /** Leaves room for the `.partial`, `.lock` and `.source.json` suffixes under the usual 255-byte name limit. */
 const MAX_NAME_LENGTH = 200;
 const MAX_DEPTH = 8;
@@ -188,6 +184,9 @@ async function lockAll(paths: readonly string[], options: LockOptions = {}): Pro
   return {
     release,
     assertHeld: () => held.forEach(lock => lock.assertHeld()),
+    check: async () => {
+      for (const lock of held) await lock.check();
+    },
     verify: async () => {
       for (const lock of held) await lock.verify();
     },
@@ -296,7 +295,17 @@ export class GgufModelStore {
 
   /** Downloads that stopped part way, one entry per file (a split model has one per unfinished shard). */
   async partials(): Promise<PartialGgufFile[]> {
-    const names = (await this.#names())
+    const all = await this.#names();
+    const present = new Set(all);
+    // A download creates its partial before the record, so a record alone is a crash leftover.
+    const records = all.filter(name => name.toLowerCase().endsWith(`.gguf${PARTIAL_SUFFIX}${PARTIAL_RECORD_SUFFIX}`));
+    for (const record of records) {
+      const owner = record.slice(0, -PARTIAL_RECORD_SUFFIX.length);
+      if (present.has(owner) || !isModelName(owner.slice(0, -PARTIAL_SUFFIX.length))) continue;
+      await rm(this.#path(record), { force: true }).catch(() => undefined);
+      await this.#prune(record);
+    }
+    const names = all
       .filter(name => name.toLowerCase().endsWith(`.gguf${PARTIAL_SUFFIX}`))
       .map(name => name.slice(0, -PARTIAL_SUFFIX.length))
       .filter(isModelName);

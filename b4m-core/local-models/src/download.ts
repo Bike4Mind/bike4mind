@@ -18,6 +18,11 @@ const PROGRESS_INTERVAL_MS = 250;
 const MAX_TIMER_MS = 2 ** 31 - 1;
 /** A download reads its lock back at least this often, so a writer whose lock was taken over stops soon. */
 const LOCK_VERIFY_BYTES = 16 * 1024 * 1024;
+export const PARTIAL_SUFFIX = '.partial';
+/** Beside a partial: `<file>.partial.json` records the sha256 and size it was started for. */
+export const PARTIAL_RECORD_SUFFIX = '.json';
+/** Beside a finished file: where it came from and its sha256. */
+export const SOURCE_SUFFIX = '.source.json';
 
 export interface DownloadOptions {
   signal?: AbortSignal;
@@ -71,6 +76,10 @@ export async function downloadFile(
   options.signal?.throwIfAborted();
   const lock = await lockFile(destination, transport.runtimeId);
   try {
+    // A crash between the rename and the record's removal leaves a record with no partial.
+    const partial = `${destination}${PARTIAL_SUFFIX}`;
+    if (!(await exists(partial)))
+      await rm(`${partial}${PARTIAL_RECORD_SUFFIX}`, { force: true }).catch(() => undefined);
     // Another download may have finished this file while this one waited for the lock.
     if (await exists(destination)) return await checkFinished(transport.runtimeId, target, destination, options);
     return await downloadLocked(transport, target, destination, options, lock);
@@ -85,6 +94,16 @@ const exists = (path: string) =>
     () => false
   );
 
+/** The sha256 in `<file>.source.json`, which `GgufModelStore` writes after a download it checked. */
+async function recordedSha(destination: string): Promise<string | null> {
+  try {
+    const source = JSON.parse(await readFile(`${destination}${SOURCE_SUFFIX}`, 'utf8')) as { sha256?: unknown };
+    return typeof source.sha256 === 'string' ? source.sha256.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function checkFinished(
   runtimeId: string,
   target: DownloadTarget,
@@ -96,7 +115,7 @@ async function checkFinished(
   if (size !== target.sizeBytes) throw new ModelFileConflictError(runtimeId, name, 'size');
   const expectedSha = target.sha256?.toLowerCase() ?? null;
   options.onProgress?.({ status: 'verifying', completedBytes: 0, totalBytes: size });
-  if (expectedSha) {
+  if (expectedSha && (await recordedSha(destination)) !== expectedSha) {
     const hash = createHash('sha256');
     try {
       for await (const chunk of createReadStream(destination, { signal: options.signal })) hash.update(chunk as Buffer);
@@ -143,8 +162,8 @@ async function downloadLocked(
 ): Promise<DownloadResult> {
   const { runtimeId } = transport;
   const name = basename(destination);
-  const partial = `${destination}.partial`;
-  const recordPath = `${partial}.json`;
+  const partial = `${destination}${PARTIAL_SUFFIX}`;
+  const recordPath = `${partial}${PARTIAL_RECORD_SUFFIX}`;
   const disk = <T>(operation: () => Promise<T>) => onDisk(runtimeId, partial, operation);
   const total = target.sizeBytes;
   const expectedSha = target.sha256?.toLowerCase() ?? null;
@@ -251,7 +270,7 @@ async function downloadLocked(
           if (offset + value.length > total) throw await mismatch('size', String(total), `more than ${total}`);
           lock.assertHeld();
           if (offset - verifiedAt >= LOCK_VERIFY_BYTES) {
-            await lock.verify();
+            await lock.check();
             verifiedAt = offset;
           }
           const at = offset;

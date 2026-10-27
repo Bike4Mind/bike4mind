@@ -8,6 +8,8 @@ import { LocalRuntimeError, ModelFileBusyError, RuntimeStorageError } from './er
 export const LOCK_REFRESH_MS = 10_000;
 /** A lock not refreshed for this long, or last refreshed before the machine booted, is taken over (ms). */
 export const LOCK_STALE_MS = 30_000;
+const VERIFY_ATTEMPTS = 3;
+const VERIFY_RETRY_MS = 100;
 
 export type StorageOperation = 'read' | 'write';
 
@@ -41,9 +43,14 @@ export async function onDisk<T>(
 }
 
 export interface FileLock {
-  /** Throws `ModelFileBusyError` once a refresh or `verify()` found the lock taken over. */
+  /** Throws `ModelFileBusyError` once a refresh or a read-back found the lock taken over. */
   assertHeld(): void;
-  /** Reads the lock back: `ModelFileBusyError` unless it is still this one, `RuntimeStorageError` if unreadable. */
+  /** Reads the lock back: `ModelFileBusyError` if it was taken over; a lock unreadable for now passes. */
+  check(): Promise<void>;
+  /**
+   * Reads the lock back, retrying a lock unreadable for now a few times: `ModelFileBusyError` unless it is still this
+   * one, `RuntimeStorageError` if it stays unreadable.
+   */
   verify(): Promise<void>;
   /** Removes the lock if it is still this one. */
   release(): Promise<void>;
@@ -122,15 +129,22 @@ async function takeOver(
   options: { force: boolean; staleMs: number }
 ): Promise<boolean> {
   const guard = `${lockPath}.takeover`;
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await writeFile(guard, nonce, { flag: 'wx' });
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      if (attempt > 0) return false;
-      await clearStaleGuard(guard, nonce, options.staleMs);
+  // Written aside and linked into place, so a guard is never seen empty: an empty one is a crash leftover.
+  const draft = `${guard}.new-${nonce}`;
+  try {
+    await writeFile(draft, nonce, { flag: 'wx' });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await link(draft, guard);
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        if (attempt > 0) return false;
+        await clearStaleGuard(guard, nonce, options.staleMs);
+      }
     }
+  } finally {
+    await rm(draft, { force: true });
   }
   try {
     const current = await readHolder(lockPath);
@@ -153,9 +167,10 @@ async function takeOver(
   }
 }
 
-/** Removes `.stale-<nonce>` files a crash left between a rename and its cleanup, once they are past `staleMs`. */
+/** Removes `.stale-<nonce>` and guard drafts a crash left behind, once they are past `staleMs`. */
 async function sweepLeftovers(lockPath: string, staleMs: number): Promise<void> {
-  const prefixes = [`${basename(lockPath)}.stale-`, `${basename(lockPath)}.takeover.stale-`];
+  const base = basename(lockPath);
+  const prefixes = [`${base}.stale-`, `${base}.takeover.stale-`, `${base}.takeover.new-`];
   const names = await readdir(dirname(lockPath)).catch(() => []);
   for (const name of names) {
     if (!prefixes.some(prefix => name.startsWith(prefix))) continue;
@@ -206,10 +221,17 @@ function holding(
     assertHeld: () => {
       if (lost) throw busy();
     },
+    check: async () => {
+      if ((await check()) === 'lost') throw busy();
+    },
     verify: async () => {
-      const state = await check();
-      if (state === 'lost') throw busy();
-      if (state !== 'held') throw storageError(runtimeId, lockPath, state.error, 'read');
+      for (let attempt = 1; ; attempt++) {
+        const state = await check();
+        if (state === 'lost') throw busy();
+        if (state === 'held') return;
+        if (attempt >= VERIFY_ATTEMPTS) throw storageError(runtimeId, lockPath, state.error, 'read');
+        await new Promise(done => setTimeout(done, VERIFY_RETRY_MS));
+      }
     },
     release: async () => {
       if (released) return;

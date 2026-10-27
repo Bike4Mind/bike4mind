@@ -421,6 +421,15 @@ describe('GgufModelStore', () => {
     expect(await readdir(store.dir)).toEqual([]);
   });
 
+  it('deletes a partial record left with no partial, and prunes its folder', async () => {
+    const store = freshStore();
+    await place(store, 'org/gone/x.gguf.partial.json', Buffer.from('{}'));
+    await place(store, 'kept.gguf.partial', Buffer.alloc(4));
+    await place(store, 'kept.gguf.partial.json', Buffer.from('{}'));
+    expect((await store.partials()).map(partial => partial.name)).toEqual(['kept.gguf']);
+    expect((await readdir(store.dir)).sort()).toEqual(['kept.gguf.partial', 'kept.gguf.partial.json']);
+  });
+
   it('refuses to add, remove or discard a file another writer holds, unless forced', async () => {
     const store = freshStore();
     await store.add(await sourceFile('held.gguf'));

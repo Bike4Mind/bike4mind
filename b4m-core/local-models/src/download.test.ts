@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import type { ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -205,6 +205,48 @@ describe('HuggingFaceHub.download', () => {
     });
     expect(cdn.requests).toHaveLength(0);
   });
+
+  it('trusts the source sidecar of a finished file before hashing it, and drops a record left with no partial', async () => {
+    const { cdn, client, file } = await hubWithCdn(blob(BYTES));
+    const target = destination('sidecar');
+    // Same size, other bytes: only the sidecar can make this pass, so passing shows no hash was taken.
+    await writeFile(target, Buffer.alloc(BYTES.length));
+    await writeFile(`${target}.source.json`, JSON.stringify({ sha256: SHA.toUpperCase(), sizeBytes: BYTES.length }));
+    await writeFile(`${target}.partial.json`, JSON.stringify({ sha256: SHA, sizeBytes: BYTES.length }));
+    expect((await client.download(file, target)).sha256).toBe(SHA);
+    await expect(stat(`${target}.partial.json`)).rejects.toThrow();
+    expect(cdn.requests).toHaveLength(0);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'rides out a lock it cannot read for a moment while writing',
+    async () => {
+      const mib = 1024 * 1024;
+      const body = randomBytes(40 * mib);
+      const { client, file } = await hubWithCdn(
+        (_request, response) => {
+          response.writeHead(200, { 'content-length': String(body.length) });
+          let sent = 0;
+          const next = () => {
+            if (sent >= body.length) return response.end();
+            response.write(body.subarray(sent, (sent += mib)));
+            setTimeout(next, 5);
+          };
+          next();
+        },
+        FILE_PATH,
+        body
+      );
+      const target = destination('unreadable-lock');
+      const pending = client.download(file, target);
+      const size = async () => (await stat(`${target}.partial`).catch(() => null))?.size ?? 0;
+      while ((await size()) < mib) await new Promise(r => setTimeout(r, 1));
+      await chmod(`${target}.lock`, 0o000);
+      while ((await size()) < 20 * mib) await new Promise(r => setTimeout(r, 1));
+      await chmod(`${target}.lock`, 0o644);
+      expect((await pending).sha256).toBe(file.sha256);
+    }
+  );
 
   it('reads its lock back while writing, so a writer whose lock was taken over stops within 16 MiB', async () => {
     const body = randomBytes(64 * 1024 * 1024);

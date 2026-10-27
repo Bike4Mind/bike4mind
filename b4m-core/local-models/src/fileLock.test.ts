@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir, uptime } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ModelFileBusyError, RuntimeStorageError } from './errors';
 import { LOCK_STALE_MS, lockFile, onDisk } from './fileLock';
@@ -98,9 +98,12 @@ describe('lockFile', () => {
       await chmod(`${path}.lock`, 0o000);
       await wait(100);
       lock.assertHeld();
+      await lock.check();
       await expect(lock.verify()).rejects.toMatchObject({ name: 'RuntimeStorageError', code: 'EACCES' });
-      await chmod(`${path}.lock`, 0o644);
-      await lock.verify();
+      // verify() retries: a lock readable again within its retries passes.
+      const verified = lock.verify();
+      setTimeout(() => void chmod(`${path}.lock`, 0o644), 50);
+      await verified;
       await chmod(`${path}.lock`, 0o000);
       await wait(600);
       expect(() => lock.assertHeld()).toThrow(ModelFileBusyError);
@@ -114,6 +117,7 @@ describe('lockFile', () => {
     const path = target();
     await writeFile(`${path}.lock.stale-0123`, '{}');
     await writeFile(`${path}.lock.takeover.stale-4567`, '');
+    await writeFile(`${path}.lock.takeover.new-89ab`, '89ab');
     await writeFile(`${path}.other`, '');
     const fresh = await lockFile(path, 'test', { staleMs: 60_000 });
     await fresh.release();
@@ -122,6 +126,7 @@ describe('lockFile', () => {
     await (await lockFile(path, 'test', { staleMs: 50 })).release();
     await expect(stat(`${path}.lock.stale-0123`)).rejects.toThrow();
     await expect(stat(`${path}.lock.takeover.stale-4567`)).rejects.toThrow();
+    await expect(stat(`${path}.lock.takeover.new-89ab`)).rejects.toThrow();
     await expect(stat(`${path}.other`)).resolves.toBeTruthy();
   });
 
@@ -162,6 +167,23 @@ describe('lockFile', () => {
       await (won[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof lockFile>>>).value.release();
       await expect(stat(`${path}.lock.takeover`)).rejects.toThrow();
     }
+  });
+
+  it('takes over with a guard that is never empty and leaves no draft behind', async () => {
+    const path = join(await mkdtemp(join(dir, 'guard-')), 'model.gguf');
+    await writeFile(`${path}.lock`, '{}');
+    await age(`${path}.lock`, LOCK_STALE_MS + 5_000);
+    // A guard that cannot be written blocks only the takeover that failed, not the next one.
+    await chmod(dirname(path), 0o555);
+    try {
+      if (process.platform !== 'win32' && process.getuid?.() !== 0)
+        await expect(lockFile(path, 'test')).rejects.toMatchObject({ name: 'RuntimeStorageError' });
+    } finally {
+      await chmod(dirname(path), 0o755);
+    }
+    await (await lockFile(path, 'test')).release();
+    const left = (await readdir(dirname(path))).filter(name => name.startsWith(`${basename(path)}.lock.`));
+    expect(left).toEqual([]);
   });
 
   it('reports a directory that does not exist as a storage error', async () => {
