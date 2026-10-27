@@ -199,6 +199,21 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
       confidence: scanned ? 'high' : 'low',
     };
   }
+  const shared = scanned.filter(gpu => gpu.sharedMemory);
+  if (shared.length > 0) {
+    // Planned from system RAM like Apple Silicon. A discrete GPU beside it is not added, so memory is never overstated;
+    // it still has to be measured for high confidence.
+    const measured = scanned.every(gpu => gpu.sharedMemory || gpu.memoryBytes !== null);
+    return {
+      ...base,
+      memoryKind: 'unified',
+      gpuMemoryBytes: null,
+      gpuName: shared[0]?.name ?? null,
+      gpuCount: shared.length,
+      chip: null,
+      confidence: totalMemoryBytes > 0 && measured ? 'high' : 'low',
+    };
+  }
   if (scanned.some(gpu => gpu.memoryBytes === null)) {
     return {
       ...base,

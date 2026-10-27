@@ -12,6 +12,7 @@ const NVIDIA_FIRST_MAXWELL_DEVICE = 0x1340;
 const ADAPTER_RAM_CAP = 0xfff00000;
 // gfx targets as KFD encodes them (gfxXYZ = X*10000 + Y*100 + Z), from the APU and dGPU cases in amdkfd's
 // kfd_device.c. A target in neither list (a newer part, or gfx942 shared by MI300A and MI300X) stays unmeasured.
+const STRIX_HALO_GFX_TARGET = 110501;
 const AMD_APU_GFX_TARGETS = new Set([
   70000, // Kaveri
   80001, // Carrizo
@@ -63,6 +64,8 @@ export interface DetectedGpu {
   name: string | null;
   /** Dedicated VRAM; null when the OS does not expose it. */
   memoryBytes: number | null;
+  /** Integrated GPU that allocates from system RAM (Strix Halo); `memoryBytes` stays null. */
+  sharedMemory?: boolean;
 }
 
 interface PciGpu extends DetectedGpu {
@@ -165,8 +168,15 @@ async function linuxGpu(root: string, dir: string, address: string, kfd: Map<str
   const vendor = VENDORS[vendorId];
   const driver = driverLink ? basename(driverLink) : null;
   if (!vendor || !driver) return null;
-  const classified = async (memoryBytes: number | null): Promise<Classified> => ({
-    gpu: { vendor, name: await readText(join(dir, 'product_name')), memoryBytes, vendorId, deviceId },
+  const classified = async (memoryBytes: number | null, sharedMemory = false): Promise<Classified> => ({
+    gpu: {
+      vendor,
+      name: await readText(join(dir, 'product_name')),
+      memoryBytes,
+      ...(sharedMemory && { sharedMemory }),
+      vendorId,
+      deviceId,
+    },
     reachable: await reachable(root, dir, driver),
   });
 
@@ -180,7 +190,7 @@ async function linuxGpu(root: string, dir: string, address: string, kfd: Map<str
     const vram = positive(await readText(join(dir, 'mem_info_vram_total')));
     const node = kfd.get(address);
     // Ollama enables Strix Halo by default, but its firmware carve-out is shared RAM, not dedicated VRAM.
-    if (node?.gfxTarget === 110501) return classified(null);
+    if (node?.gfxTarget === STRIX_HALO_GFX_TARGET) return classified(null, true);
     if (vram !== null && vram <= INTEGRATED_MAX_VRAM_BYTES) return null;
     if (node && (AMD_APU_GFX_TARGETS.has(node.gfxTarget) || node.cpuCores > 0)) return null;
     // Unless the target is a known card, an APU's firmware carve-out could pass for VRAM, so leave it unmeasured.
@@ -240,12 +250,13 @@ export async function scanLinuxGpus(root = '/', env: Environment = process.env):
   if (usable.some(entry => !entry.reachable)) return null;
   const gpus = usable.map(entry => entry.gpu);
   const lookup = gpus.some(gpu => !gpu.name) ? await pciIdsLookup(root) : null;
-  return gpus.map(({ vendor, name, memoryBytes, vendorId, deviceId }) => {
+  return gpus.map(({ vendor, name, memoryBytes, sharedMemory, vendorId, deviceId }) => {
     const model = name ? null : lookup?.(vendorId, deviceId);
     const label = VENDOR_LABELS[vendor];
     return {
       vendor,
       memoryBytes,
+      ...(sharedMemory && { sharedMemory }),
       name: name ?? (model ? `${label} ${model}` : `${label} GPU [${vendorId}:${deviceId}]`),
     };
   });
@@ -332,7 +343,7 @@ export function parseWindowsGpus(stdout: string): DetectedGpu[] | null {
 
     if (vendor === 'nvidia') return parseInt(ids[2], 16) >= NVIDIA_FIRST_MAXWELL_DEVICE ? gpu : [];
     if (vendor === 'amd') {
-      if (name && /\b(?:8050S|8060S)\b/i.test(name)) return [{ vendor, name, memoryBytes: null }];
+      if (name && /\b(?:8050S|8060S)\b/i.test(name)) return [{ vendor, name, memoryBytes: null, sharedMemory: true }];
       // Pre-GCN Radeon HD parts have neither a ROCm nor a Vulkan backend.
       if (name && /\bHD\s*(?:[2-6]\d{3}|7[0-6]\d{2})\b/i.test(name)) return [];
       return small || (name !== null && isAmdApuName(name)) ? [] : gpu;

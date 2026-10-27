@@ -245,16 +245,49 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     expect(await linux({ devices: [raphael16], kfdNodes: amdKfd })).toMatchObject({ ...cpuOnly, confidence: 'high' });
   });
 
-  it('keeps the supported Strix Halo APU visible without treating shared RAM as dedicated VRAM', async () => {
+  it('reports Strix Halo as unified memory whatever its firmware carve-out says', async () => {
     for (const memory of [GiB, 64 * GiB]) {
       const device = { ...amdStrixHalo, files: { mem_info_vram_total: String(memory) } };
       expect(await linux({ devices: [device], kfdNodes: [KFD_STRIX_HALO_NODE] })).toMatchObject({
-        memoryKind: 'discrete',
+        memoryKind: 'unified',
+        totalMemoryBytes: 64 * GiB,
         gpuMemoryBytes: null,
         gpuCount: 1,
-        confidence: 'low',
+        confidence: 'high',
       });
     }
+  });
+
+  it('keeps Strix Halo unified at low confidence when system RAM is unknown', async () => {
+    const profile = await probeHardware({
+      exec: execFrom({}),
+      os: os(0),
+      platform: 'linux',
+      arch: 'x64',
+      rootDir: sysfs({ devices: [amdStrixHalo], kfdNodes: [KFD_STRIX_HALO_NODE] }),
+      env: {},
+    });
+    expect(profile).toMatchObject({ memoryKind: 'unified', totalMemoryBytes: 0, confidence: 'low' });
+  });
+
+  it('plans Strix Halo from system RAM and ignores a measured discrete GPU beside it', async () => {
+    const egpu = { ...amdRx7900xtx, address: '0000:03:00.0' };
+    const kfdNodes = [KFD_STRIX_HALO_NODE, KFD_RX7900XTX_NODE];
+    expect(await linux({ devices: [amdStrixHalo, egpu], kfdNodes })).toMatchObject({
+      memoryKind: 'unified',
+      gpuMemoryBytes: null,
+      gpuCount: 1,
+      confidence: 'high',
+    });
+  });
+
+  it('drops Strix Halo confidence when a discrete GPU beside it is unmeasured', async () => {
+    const egpu = { ...nvidiaRtx4090, address: '0000:03:00.0' };
+    expect(await linux({ devices: [amdStrixHalo, egpu], kfdNodes: [KFD_STRIX_HALO_NODE] })).toMatchObject({
+      memoryKind: 'unified',
+      gpuCount: 1,
+      confidence: 'low',
+    });
   });
 
   it('still skips an APU whose KFD node reports CPU cores, as ACPI CRAT topologies do', async () => {
@@ -405,7 +438,7 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     ).toMatchObject({ ...cpuOnly, confidence: 'low' });
   });
 
-  it('keeps an existing but inaccessible GPU device at low confidence', async () => {
+  it.skipIf(process.getuid?.() === 0)('keeps an existing but inaccessible GPU device at low confidence', async () => {
     const root = sysfs({ devices: [amdRx7900xtx], kfdNodes: amdKfd });
     chmodSync(join(root, 'dev/dri/renderD128'), 0);
     expect(await scanLinuxGpus(root, {})).toBeNull();
@@ -476,6 +509,23 @@ describe('probeHardware on Windows without nvidia-smi', () => {
       confidence: 'high',
     });
   });
+
+  it.each(['AMD Radeon 8050S Graphics', 'AMD Radeon 8060S Graphics'])(
+    'reports Windows %s as unified memory, ignoring a measured discrete GPU beside it',
+    async name => {
+      const rows = JSON.parse(POWERSHELL_AMD_DISCRETE_AND_APU).map((row: { name: string }) =>
+        row.name === 'AMD Radeon(TM) Graphics' ? { ...row, name } : row
+      );
+      expect(await windows(JSON.stringify(rows))).toMatchObject({
+        memoryKind: 'unified',
+        gpuMemoryBytes: null,
+        gpuName: name,
+        gpuCount: 1,
+        confidence: 'high',
+      });
+      expect(await windows(JSON.stringify(rows.slice(1)))).toMatchObject({ memoryKind: 'unified', confidence: 'high' });
+    }
+  );
 
   it('reports the largest single-vendor group instead of summing across vendors', async () => {
     const controllers = `[${POWERSHELL_AMD_DISCRETE_AND_APU.slice(1, -1)},${POWERSHELL_INTEL_ARC}]`;
@@ -559,10 +609,10 @@ describe('parseWindowsGpus', () => {
   });
 
   it.each(['AMD Radeon 8050S Graphics', 'AMD Radeon 8060S Graphics'])(
-    'keeps supported shared-memory graphics unmeasured: %s',
+    'marks Strix Halo graphics as shared memory: %s',
     name => {
       expect(parseWindowsGpus(amd({ name, memoryBytes: 64 * GiB }))).toEqual([
-        { vendor: 'amd', name, memoryBytes: null },
+        { vendor: 'amd', name, memoryBytes: null, sharedMemory: true },
       ]);
     }
   );
