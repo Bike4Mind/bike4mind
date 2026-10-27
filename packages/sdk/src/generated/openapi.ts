@@ -1276,6 +1276,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/skills/market/review-queue': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Skill Market versions awaiting review
+     * @description Lists the held versions you can review, oldest first, each with its listing and the approved version it would replace. Under an API key this is the Organization listings of the organizations you administer. Cursor-paginated, but a page can be shorter than `limit`, even empty, while `next_cursor` is non-null: keep passing `next_cursor` back as `cursor` until it is `null`.
+     */
+    get: operations['listSkillMarketReviewQueue'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/skills/market/versions/{vid}/review': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Approve or reject a held Skill Market version
+     * @description Approving puts the version live for importers; rejecting keeps the earlier approved version live and needs a `note` for the author.
+     */
+    post: operations['reviewSkillMarketVersion'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -6127,6 +6167,182 @@ export interface components {
         created_at: string;
       };
     };
+    listSkillMarketReviewQueueResponse200: {
+      data: {
+        version: {
+          id: string;
+          version: number;
+          snapshot: {
+            name: string;
+            description: string;
+            /** @description The SKILL.md body. Omitted from list responses. */
+            body?: string;
+            argument_hint: string | null;
+            allowed_tools: string[];
+            disable_model_invocation: boolean;
+          };
+          /** @enum {string|null} */
+          risk_tier: 'clean' | 'review' | 'high' | null;
+          /** @description Generated from the skill body, not its description. */
+          honest_summary: {
+            what_it_does: string;
+            tools_used: string[];
+            data_it_touches: string;
+            risk_notes: string[];
+            description_matches: boolean;
+            mismatch_note: string | null;
+          } | null;
+          /**
+           * @description Present only for the listing author.
+           * @enum {string}
+           */
+          scan_status?: 'scanning' | 'passed' | 'failed' | 'error';
+          /** @description Present only for the listing author. */
+          scan_findings?: {
+            rule: string;
+            /** @enum {string} */
+            severity: 'critical' | 'high' | 'medium' | 'low';
+            message: string;
+            excerpt: string | null;
+            /** @enum {string} */
+            source: 'rules' | 'classifier';
+          }[];
+          /**
+           * @description Present only for the listing author.
+           * @enum {string}
+           */
+          review_status?: 'not_required' | 'pending' | 'auto_approved' | 'approved' | 'rejected' | 'superseded';
+          /** @description Present only for the listing author. */
+          review_note?: string | null;
+          /** @description ISO 8601 timestamp. */
+          created_at: string;
+        };
+        listing: {
+          id: string;
+          name: string;
+          description: string;
+          /** @enum {string} */
+          visibility: 'public' | 'organization' | 'unlisted';
+          organization_id: string | null;
+          tags: string[];
+          /** @enum {string} */
+          status: 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
+          author_name: string | null;
+          /** @description The approved version importers receive. */
+          current_version: number | null;
+          /** @enum {string|null} */
+          risk_tier: 'clean' | 'review' | 'high' | null;
+          uses_tools: boolean;
+          /** @description Whether the live version was approved without a human reviewer. */
+          auto_checked: boolean;
+          import_count: number;
+          rating_avg: number;
+          rating_count: number;
+          /** @description ISO 8601 timestamp. */
+          published_at: string | null;
+          /** @description ISO 8601 timestamp. */
+          created_at: string;
+          /** @description ISO 8601 timestamp. */
+          updated_at: string;
+          /** @description The skill the listing was published from. Present only for the listing author. */
+          source_skill_id?: string;
+          /** @description Unlocks an unlisted listing. Present only for the listing author. */
+          share_token?: string;
+          /** @description The newest submitted version. Present only for the listing author. */
+          latest_version?: number;
+          /** @description A version awaiting review. Present only for the listing author. */
+          pending_version?: number | null;
+        };
+        /** @description The approved version this one would replace, for a diff. */
+        previous: {
+          id: string;
+          version: number;
+          snapshot: {
+            name: string;
+            description: string;
+            /** @description The SKILL.md body. Omitted from list responses. */
+            body?: string;
+            argument_hint: string | null;
+            allowed_tools: string[];
+            disable_model_invocation: boolean;
+          };
+        } | null;
+        can_decide: boolean;
+      }[];
+      next_cursor: string | null;
+    };
+    reviewSkillMarketVersionResponse200: {
+      version: {
+        id: string;
+        version: number;
+        snapshot: {
+          name: string;
+          description: string;
+          /** @description The SKILL.md body. Omitted from list responses. */
+          body?: string;
+          argument_hint: string | null;
+          allowed_tools: string[];
+          disable_model_invocation: boolean;
+        };
+        /** @enum {string|null} */
+        risk_tier: 'clean' | 'review' | 'high' | null;
+        /** @description Generated from the skill body, not its description. */
+        honest_summary: {
+          what_it_does: string;
+          tools_used: string[];
+          data_it_touches: string;
+          risk_notes: string[];
+          description_matches: boolean;
+          mismatch_note: string | null;
+        } | null;
+        /**
+         * @description Present only for the listing author.
+         * @enum {string}
+         */
+        scan_status?: 'scanning' | 'passed' | 'failed' | 'error';
+        /** @description Present only for the listing author. */
+        scan_findings?: {
+          rule: string;
+          /** @enum {string} */
+          severity: 'critical' | 'high' | 'medium' | 'low';
+          message: string;
+          excerpt: string | null;
+          /** @enum {string} */
+          source: 'rules' | 'classifier';
+        }[];
+        /**
+         * @description Present only for the listing author.
+         * @enum {string}
+         */
+        review_status?: 'not_required' | 'pending' | 'auto_approved' | 'approved' | 'rejected' | 'superseded';
+        /** @description Present only for the listing author. */
+        review_note?: string | null;
+        /** @description ISO 8601 timestamp. */
+        created_at: string;
+      };
+    };
+    /**
+     * @example {
+     *       "action": "approve",
+     *       "ack_high_risk": true
+     *     }
+     */
+    reviewSkillMarketVersionRequest:
+      | {
+          /** @enum {string} */
+          action: 'approve';
+          /** @description Required to approve a version whose `risk_tier` is `high`. */
+          ack_high_risk?: boolean;
+          /** @description Required when `honest_summary.description_matches` is false: the description understates the skill. */
+          ack_mismatch?: boolean;
+          note?: string;
+        }
+      | {
+          /** @enum {string} */
+          action: 'reject';
+          /** @description Shown to the author. */
+          note: string;
+        };
   };
   responses: never;
   parameters: never;
@@ -18703,6 +18919,338 @@ export interface operations {
         };
       };
       /** @description Submission rate limit exceeded (10 scans per hour and an admin-set daily cap), or per-key rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  listSkillMarketReviewQueue: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One page of the review queue. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listSkillMarketReviewQueueResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `skills:review`, or you administer no organization. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description `limit` is out of range, or `cursor` is malformed. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-key rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  reviewSkillMarketVersion: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        vid: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['reviewSkillMarketVersionRequest'];
+      };
+    };
+    responses: {
+      /** @description The decided version. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['reviewSkillMarketVersionResponse200'];
+        };
+      };
+      /** @description Approval needs `ack_high_risk` or `ack_mismatch`. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `skills:review`, or you may not review this listing: it is not an Organization listing of an organization you administer, or it is your own Public listing. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No version with that id exists, or its listing is gone. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The version is no longer awaiting review: it was decided or superseded. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The body is invalid, e.g. a reject without a `note`. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-key rate limit exceeded. */
       429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

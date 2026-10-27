@@ -249,6 +249,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/skills/market/listings',
   },
+  listSkillMarketReviewQueue: {
+    method: 'GET',
+    path: '/api/v1/skills/market/review-queue',
+  },
   listVideoGenerations: {
     method: 'GET',
     path: '/api/v1/video-generations',
@@ -276,6 +280,10 @@ export const operations = {
   rescanSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/rescan',
+  },
+  reviewSkillMarketVersion: {
+    method: 'POST',
+    path: '/api/v1/skills/market/versions/{vid}/review',
   },
   searchDataLake: {
     method: 'POST',
