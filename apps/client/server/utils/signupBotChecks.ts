@@ -39,7 +39,11 @@ export function evaluateSignupSignals(input: {
     // Recently expired means the tab was left open, not automation. Past the grace window the token
     // is treated as replayed, or one fetched token would pass every signup forever.
     if (err instanceof jwt.TokenExpiredError) {
-      if (input.nowMs - err.expiredAt.getTime() > EXPIRED_TOKEN_GRACE_MS) signals.push('signup_token_invalid');
+      // The signature is checked before expiry, so decode is trustworthy; other expired JWTs are invalid.
+      const decoded = jwt.decode(input.formToken) as { purpose?: unknown } | null;
+      if (decoded?.purpose !== PURPOSE || input.nowMs - err.expiredAt.getTime() > EXPIRED_TOKEN_GRACE_MS) {
+        signals.push('signup_token_invalid');
+      }
       return signals;
     }
     if (err instanceof jwt.JsonWebTokenError) signals.push('signup_token_invalid');

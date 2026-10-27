@@ -44,6 +44,11 @@ describe('evaluateSignupSignals', () => {
     expect(evaluate({ formToken: expired })).toEqual([]);
   });
 
+  it('flags an expired token signed with the secret but a different purpose', () => {
+    const expired = jwt.sign({ sub: 'user-1' }, 'test-secret', { algorithm: 'HS256', expiresIn: -3600 });
+    expect(evaluate({ formToken: expired })).toEqual(['signup_token_invalid']);
+  });
+
   it('flags a token expired longer than the grace window as invalid', () => {
     const exp = Math.floor(NOW / 1000) - 3600;
     const stale = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW - 7_200_000, exp }, 'test-secret', {
