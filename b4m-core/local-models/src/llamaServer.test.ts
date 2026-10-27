@@ -872,6 +872,26 @@ describe('LlamaServerRuntime', () => {
     await fresh.stop();
   });
 
+  it('cancels a start whose only caller has already aborted and allows a fresh start', async () => {
+    const runtime = runtimeIn('models-already-aborted');
+    await runtime.store.add(modelPath, { name: 'cancelled.gguf' });
+    const get = vi.spyOn(runtime.store, 'get');
+    const reason = new Error('gone');
+    try {
+      await expect(runtime.start('cancelled.gguf', { signal: AbortSignal.abort(reason) })).rejects.toBe(reason);
+      expect(await runtime.running()).toEqual([]);
+      const server = await runtime.start('cancelled.gguf');
+      expect(server.running).toBe(true);
+      expect(get).toHaveBeenCalledTimes(2);
+      await runtime.stop('cancelled.gguf');
+      expect(server.running).toBe(false);
+      expect(await runtime.running()).toEqual([]);
+    } finally {
+      await runtime.stopAll();
+      get.mockRestore();
+    }
+  });
+
   it('lets each caller of a shared start abort alone, and cancels it once all have', async () => {
     const lines: string[] = [];
     const runtime = runtimeIn(

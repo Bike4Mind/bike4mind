@@ -239,6 +239,7 @@ export class LlamaServerRuntime implements LocalRuntime {
     if (entry.server) return entry.pending;
     if (signal?.aborted) {
       leave();
+      if (entry.waiting === 0) entry.controller.abort(signal.reason);
       return Promise.reject(signal.reason);
     }
     entry.waiting++;
