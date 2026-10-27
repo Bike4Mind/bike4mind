@@ -21,6 +21,7 @@ import {
 } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { TrashIcon } from '../chat/icons';
+import { FitBadge } from './FitBadge';
 
 /** Ollama names of the local models chats point at, so removing one can warn first. */
 export interface ModelsInUse {
@@ -71,6 +72,7 @@ function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (
               Loaded
             </Chip>
           )}
+          <FitBadge fit={model.fit} />
         </Stack>
         <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.75} sx={{ mt: 0.75 }}>
           <Typography level="body-xs" textColor="text.tertiary">
