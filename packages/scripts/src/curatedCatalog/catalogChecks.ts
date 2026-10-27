@@ -138,30 +138,36 @@ export type PublishPlan =
   | { kind: 'publish'; liveSequence: number }
   | { kind: 'already-live'; liveSequence: number }
   | { kind: 'behind-live'; liveSequence: number; reason: string }
-  /** Below a live list whose every signer the candidate revokes, so clients drop that list and take this one. */
+  /** Over a live list whose every signer the candidate revokes, so clients drop that list and take this one. */
   | { kind: 'recover'; liveSequence: number; revokes: string[] }
   | { kind: 'refused'; reason: string };
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer.from(b));
 
+export const isRecoverySigned = (list: CuratedCandidate) => list.signers.some(key => key.role === 'recovery');
+
 /**
  * Compares a verified candidate with the verified live list. Lower or equal-but-different is `behind-live`, which the
  * workflow reports as a sync lag, unless it is `recover`: recovery-signed and revoking every key that signed the live
- * list, as after a leaked key published a high sequence. Refused: a step over MAX_SEQUENCE_STEP, revocations without a recovery
- * signature, a rewritten changelog, a dropped revocation or an earlier `updatedAt`.
+ * list, as after a leaked key published straight to the bucket; that live list's content then binds nothing. Refused: a
+ * step over MAX_SEQUENCE_STEP, revocations without a recovery signature, a rewritten changelog, a dropped revocation
+ * (only a recovery-signed live list's revocations bind) or an earlier `updatedAt`.
  */
 export function planPublish(candidate: CuratedCandidate, live: CuratedCandidate | null): PublishPlan {
   const next = candidate.catalog;
   const liveSequence = live?.catalog.sequence ?? 0;
   if (live && next.sequence === liveSequence && sameBytes(candidate.manifest, live.manifest))
     return { kind: 'already-live', liveSequence };
+  // Mirrors Desktop's CuratedSource: revocations apply before the sequence rule, so a live list signed only by keys
+  // this list revokes is dropped, and a recovery signature is never revoked.
+  const recover: PublishPlan | null =
+    live &&
+    isRecoverySigned(candidate) &&
+    live.signers.every(key => key.role !== 'recovery' && next.revokedKeyIds.includes(key.keyId))
+      ? { kind: 'recover', liveSequence, revokes: live.signers.map(key => key.keyId) }
+      : null;
   if (live && next.sequence <= liveSequence) {
-    // Mirrors Desktop's CuratedSource: revocations apply before the sequence rule, so a live list signed only by keys
-    // this list revokes is dropped, and a recovery signature is never revoked.
-    const supersedes =
-      candidate.signers.some(key => key.role === 'recovery') &&
-      live.signers.every(key => key.role !== 'recovery' && next.revokedKeyIds.includes(key.keyId));
-    if (supersedes) return { kind: 'recover', liveSequence, revokes: live.signers.map(key => key.keyId) };
+    if (recover) return recover;
     return {
       kind: 'behind-live',
       liveSequence,
@@ -174,19 +180,20 @@ export function planPublish(candidate: CuratedCandidate, live: CuratedCandidate 
       reason: `sequence ${next.sequence} is more than ${MAX_SEQUENCE_STEP} above live sequence ${liveSequence}`,
     };
   // Every list carries the whole revoked set under a recovery signature, so any later list can rebuild a lost one.
-  if (next.revokedKeyIds.length > 0 && !candidate.signers.some(key => key.role === 'recovery'))
+  if (next.revokedKeyIds.length > 0 && !isRecoverySigned(candidate))
     return {
       kind: 'refused',
       reason: `revokedKeyIds names ${next.revokedKeyIds.join(', ')}, so a recovery key must co-sign the list`,
     };
   if (!live) return { kind: 'first-publish' };
+  if (recover) return recover;
   const current = live.catalog;
   if (Date.parse(next.updatedAt) < Date.parse(current.updatedAt))
     return { kind: 'refused', reason: `updatedAt ${next.updatedAt} is earlier than live ${current.updatedAt}` };
   const kept = next.changelog.filter(item => item.sequence <= current.sequence);
   if (JSON.stringify(kept) !== JSON.stringify(current.changelog.slice(0, kept.length)))
     return { kind: 'refused', reason: 'changelog items already live were changed or removed; only prepend new ones' };
-  const missing = current.revokedKeyIds.filter(id => !next.revokedKeyIds.includes(id));
+  const missing = isRecoverySigned(live) ? current.revokedKeyIds.filter(id => !next.revokedKeyIds.includes(id)) : [];
   if (missing.length > 0) return { kind: 'refused', reason: `revokedKeyIds drops ${missing.join(', ')}` };
   return { kind: 'publish', liveSequence: current.sequence };
 }
