@@ -63,7 +63,7 @@ vi.mock('@server/utils/telemetryIssueCreator', () => ({
   fetchExistingTelemetryIssues: vi.fn(),
   fetchRecentlyClosedIssues: vi.fn(),
 }));
-vi.mock('@server/services/telemetryFingerprint', () => ({
+vi.mock('@bike4mind/server-utils/services/telemetryFingerprint', () => ({
   generateTelemetryFingerprint: () => 'fp',
   generateSemanticTelemetryFingerprint: () => 'sfp',
   getSeverityEmoji: () => '',
