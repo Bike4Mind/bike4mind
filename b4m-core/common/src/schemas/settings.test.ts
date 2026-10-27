@@ -230,6 +230,12 @@ describe('first-session feature defaults', () => {
 
 describe('public settings projection (M2.5 security boundary)', () => {
   describe('userReadableSettingKeys', () => {
+    it('includes the no-card unlock flags the billing card reads', () => {
+      const keys = new Set(userReadableSettingKeys());
+      expect(keys.has('noCardUnlockEnabled')).toBe(true);
+      expect(keys.has('noCardUnlockProbeInconclusiveAllows')).toBe(true);
+    });
+
     it('excludes admin-only operational config a non-admin has no claim to', () => {
       // These carry no `isSensitive` flag, which is exactly why the previous opt-OUT
       // filter served them to every authenticated caller.

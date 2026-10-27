@@ -3948,6 +3948,7 @@ export const settingsMap = {
     description:
       'When the check for a catch-all mail domain cannot reach a verdict, grant the work-email unlock anyway. OFF (default) refuses it.',
     category: 'Users',
+    userReadable: true,
   }),
   freeTierDailySpendCapCredits: makeNumberSetting({
     key: 'freeTierDailySpendCapCredits',
