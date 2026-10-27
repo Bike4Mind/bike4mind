@@ -5,11 +5,12 @@
  * MongoDB (no schema-level cap on string-array length).
  */
 
-import { BadRequestError, InternalServerError } from '@bike4mind/utils';
+import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import {
   IAgent,
   IUserDocument,
+  ServiceUnavailableError,
   supportedChatModels,
   supportedImageModels,
   triggerWordsSchema,
@@ -192,7 +193,7 @@ async function assertModelsSelectable(agentData: Partial<IAgent>, user: IUserDoc
   const { models } = await getCallerModelList(user, logger);
   // An empty catalog means every backend listing failed; reject as unavailable, not as a bad model.
   if (models.length === 0) {
-    throw new InternalServerError('Model catalog is unavailable; try again shortly');
+    throw new ServiceUnavailableError('Model catalog is unavailable; try again shortly');
   }
   // The catalog is one flat list across modalities, so match the slot's type too or a chat id would pass as an image model.
   for (const { id, type, message } of checks) {

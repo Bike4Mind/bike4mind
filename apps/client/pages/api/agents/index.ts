@@ -55,7 +55,9 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
         return res.status(400).json({ error: error.message });
       }
       req.logger.error('Error creating agent:', error);
-      res.status(500).json({ error: 'Failed to create agent', details: error.message });
+      res
+        .status(error.statusCode === 503 ? 503 : 500)
+        .json({ error: 'Failed to create agent', details: error.message });
     }
   });
 

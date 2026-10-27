@@ -9,7 +9,7 @@ import {
   AgentValidationError,
 } from './agentValidation';
 import { ChatModels, IAgent, IUserDocument } from '@bike4mind/common';
-import { InternalServerError } from '@bike4mind/utils';
+import { ServiceUnavailableError } from '@bike4mind/common';
 
 const { getCallerModelList } = vi.hoisted(() => ({ getCallerModelList: vi.fn() }));
 vi.mock('@server/utils/callerModelList', () => ({ getCallerModelList }));
@@ -306,7 +306,7 @@ describe('validateAgentUpdate', () => {
     it('reports an empty catalog as unavailable rather than blaming the model', async () => {
       getCallerModelList.mockResolvedValue({ models: [], supersededModels: [] });
       await expect(validateAgentUpdate({ preferredModel: 'gpt-6-astra' } as Partial<IAgent>, user)).rejects.toThrow(
-        InternalServerError
+        ServiceUnavailableError
       );
     });
   });

@@ -141,13 +141,13 @@ describe('POST /api/agents - credit allocation', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('answers 500 and logs at error when the model catalog is empty', async () => {
+  it('answers 503 and logs at error when the model catalog is empty', async () => {
     getCallerModelList.mockResolvedValue({ models: [], supersededModels: [] });
     const { run, status, warn, error } = post({ name: 'Agent', preferredModel: 'gpt-9-nope' });
 
     await run();
 
-    expect(status).toHaveBeenCalledWith(500);
+    expect(status).toHaveBeenCalledWith(503);
     expect(error).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
     expect(h.agentCreate).not.toHaveBeenCalled();

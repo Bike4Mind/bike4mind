@@ -229,14 +229,14 @@ describe('POST /api/v1/agents', () => {
   });
 
   it.each([
-    ['an empty catalog', () => mockGetCallerModelList.mockResolvedValueOnce({ models: [], supersededModels: [] })],
-    ['a failing catalog', () => mockGetCallerModelList.mockRejectedValueOnce(new Error('catalog down'))],
-  ])('answers 500, not 422, and creates nothing when the model lookup hits %s', async (_, arrange) => {
+    [503, 'an empty catalog', () => mockGetCallerModelList.mockResolvedValueOnce({ models: [], supersededModels: [] })],
+    [500, 'a failing catalog', () => mockGetCallerModelList.mockRejectedValueOnce(new Error('catalog down'))],
+  ])('answers %i, not 422, and creates nothing when the model lookup hits %s', async (expected, _, arrange) => {
     arrange();
 
     const error = await errorOf({ method: 'POST', body: { name: 'Researcher', preferred_model: 'gpt-9-nope' } });
 
-    expect(error.statusCode ?? 500).toBe(500);
+    expect(error.statusCode ?? 500).toBe(expected);
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
