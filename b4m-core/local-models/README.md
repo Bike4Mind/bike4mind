@@ -53,6 +53,21 @@ const ref = build && (await hub.verifyOllamaRef(detail, build));
 if (ref) await new OllamaRuntime().pull(ref);
 ```
 
+`LlamaServerRuntime` manages llama.cpp's `llama-server` over a directory of GGUF files the caller owns. `findLlamaServer({ path })` checks a configured or bundled binary (or, without `path`, the first `llama-server` on PATH) by running `--version`; nothing downloads a binary or a model on its own. `store` lists, adds (copies, with sibling shards), removes and downloads GGUF files; `store.download(hub, build)` fetches a Hugging Face build from its pinned resolve URLs, resumes a `.partial` file with a Range request, checks size and sha256, and keeps the token off the CDN. `start(model)` runs one server per model on a free `127.0.0.1` port with `--offline --no-ui --jinja`, a 4096-token context by default, and a fresh API key passed in the environment (not argv), then waits for `/health` and checks `/v1/models` with that key. The returned process exposes `baseUrl`, `apiKey`, `model` and `runtime` (an `OpenAICompatibleRuntime` holding the key) for chat; `exited` and `onExit` report a crash, `stop()` sends SIGTERM then SIGKILL, and servers still running when the Node process emits `exit` are killed (a parent killed by a signal it does not handle leaves them running, so call `stopAll()` from your own signal handlers). A process that exits before it is ready rejects with `LlamaServerExitError` (`portInUse` when the port was taken; a free port is retried twice), and a failed hash check with `DownloadVerificationError`.
+
+```ts
+import { HuggingFaceHub, LlamaServerRuntime, findLlamaServer } from '@bike4mind/local-models';
+
+const binary = await findLlamaServer({ path: bundledLlamaServerPath });
+const llama = new LlamaServerRuntime({ binaryPath: binary.path, modelsDir });
+const hub = new HuggingFaceHub();
+const detail = await hub.getModel('ggml-org/SmolLM2-135M-GGUF');
+const model = await llama.store.download(hub, detail.builds[0], { signal, onProgress });
+const server = await llama.start(model.name, { contextSize: 8192 });
+// POST `${server.baseUrl}/v1/chat/completions` with `Authorization: Bearer ${server.apiKey}` and `model: server.model`
+await llama.stopAll();
+```
+
 `isAbliteratedModel(model)` flags a search hit or detail whose repo id, tags or base models mark it as abliterated, decensored, uncensored or heretic (whole words except `abliterat`); callers hide these by default and never recommend them.
 
 Live check against real runtimes (skipped unless the variables are set; set either runtime alone, `LOCAL_MODELS_LIVE_OPENAI_KEY` only for a server started with a key, `LOCAL_MODELS_LIVE_OLLAMA_MODELS` to pull something other than `qwen2.5:0.5b`, and `LOCAL_MODELS_LIVE_HF` to query the Hub, which with Ollama also pulls and removes a 105 MB SmolLM2 build): `LOCAL_MODELS_LIVE_OLLAMA=http://127.0.0.1:11434 LOCAL_MODELS_LIVE_OPENAI=http://127.0.0.1:8080 LOCAL_MODELS_LIVE_OPENAI_KEY=<key> LOCAL_MODELS_LIVE_HF=https://huggingface.co pnpm --filter @bike4mind/local-models test live`

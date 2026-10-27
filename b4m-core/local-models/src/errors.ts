@@ -100,3 +100,31 @@ export class ModelNotFoundError extends LocalRuntimeError {
     this.name = 'ModelNotFoundError';
   }
 }
+
+/** A downloaded file whose size or sha256 does not match; the partial file has been deleted. */
+export class DownloadVerificationError extends LocalRuntimeError {
+  constructor(
+    message: string,
+    runtimeId: string,
+    readonly check: 'size' | 'sha256',
+    readonly expected: string,
+    readonly actual: string
+  ) {
+    super(message, runtimeId);
+    this.name = 'DownloadVerificationError';
+  }
+}
+
+/** A managed llama-server process that exited before it was ready. `log` holds its last output lines. */
+export class LlamaServerExitError extends LocalRuntimeError {
+  constructor(
+    message: string,
+    readonly code: number | null,
+    readonly signal: string | null,
+    readonly portInUse: boolean,
+    readonly log: readonly string[]
+  ) {
+    super(message, 'llama-server');
+    this.name = 'LlamaServerExitError';
+  }
+}

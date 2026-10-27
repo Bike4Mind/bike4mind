@@ -16,10 +16,12 @@ export type {
   TensorStats,
 } from './types';
 export {
+  DownloadVerificationError,
   GgufFormatError,
   type GgufFormatErrorReason,
   HubAccessError,
   HubRateLimitError,
+  LlamaServerExitError,
   LocalRuntimeError,
   ModelNotFoundError,
   RuntimeConnectionError,
@@ -83,6 +85,29 @@ export {
   type DetectedRuntime,
   type ProbeHost,
 } from './detect';
+export {
+  DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS,
+  type DownloadOptions,
+  type DownloadResult,
+  type DownloadTarget,
+} from './download';
+export { GgufModelStore, type GgufModelStoreOptions, type StoredGgufModel } from './ggufStore';
+export {
+  DEFAULT_LLAMA_SERVER_CONTEXT_SIZE,
+  DEFAULT_LLAMA_SERVER_START_TIMEOUT_MS,
+  DEFAULT_LLAMA_SERVER_STOP_TIMEOUT_MS,
+  LlamaServerRuntime,
+  findLlamaServer,
+  startLlamaServer,
+  type FindLlamaServerOptions,
+  type LlamaServerBinary,
+  type LlamaServerExit,
+  type LlamaServerProcess,
+  type LlamaServerRuntimeOptions,
+  type LlamaServerTuning,
+  type StartLlamaServerOptions,
+  type StartModelOptions,
+} from './llamaServer';
 export {
   probeHardware,
   type ExecLike,
