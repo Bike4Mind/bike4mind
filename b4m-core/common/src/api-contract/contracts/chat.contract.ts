@@ -129,13 +129,21 @@ export const chatContract = defineEndpoint({
     422: {
       description:
         'Request body failed schema validation, or `sessionId` and `newConversation: true` were sent ' +
-        'together (they are mutually exclusive).',
+        'together (they are mutually exclusive). A `wait: true` turn whose `max_tokens` a reasoning ' +
+        'model spent entirely on thinking is `errorCode: output_budget_exhausted`; `quest_id` names ' +
+        'the settled quest. Raise `max_tokens` or omit it.',
       schema: ApiErrorSchema,
     },
     429: {
       description:
         'Per-user rate limit exceeded. A free-tier daily credit cap hit is distinguished by ' +
         '`errorCode: daily_free_limit_reached` and a `Retry-After` header until the next UTC midnight.',
+      schema: ApiErrorSchema,
+    },
+    502: {
+      description:
+        'A `wait: true` turn failed upstream: a reasoning model spent the whole server-chosen output ' +
+        'budget thinking and produced no answer. The quest (`quest_id`) is settled as an error. Retry.',
       schema: ApiErrorSchema,
     },
     504: {

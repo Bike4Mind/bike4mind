@@ -48,6 +48,8 @@ export const API_ERROR_CODES = [
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   /** A blocking request ran past its server-side deadline; the turn was ended and the body names it for polling. */
   REQUEST_TIMEOUT_ERROR_CODE,
+  /** A reasoning model spent the caller's whole `max_tokens` thinking; remediation is raising it or omitting it. */
+  'output_budget_exhausted',
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',
