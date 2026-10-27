@@ -115,6 +115,7 @@ function withNoThinkSwitch(messages: OllamaMessage[]): OllamaMessage[] {
   );
 }
 
+/** The `think` field to send, if any. */
 function thinkField(inspection: Inspection, thinking: boolean | undefined): { think?: boolean | string } {
   if (thinking === undefined || !inspection.capabilities.includes('thinking')) return {};
   if (thinking) return { think: true };
