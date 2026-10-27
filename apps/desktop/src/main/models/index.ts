@@ -15,7 +15,7 @@ import { appWindows } from '../windows';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import { BUNDLED_CURATED_TEXT } from './curated/bundled';
 import { CuratedSource } from './curated/CuratedSource';
-import { CuratedStore } from './curated/CuratedStore';
+import { CuratedStore, curatedStoreRoot } from './curated/CuratedStore';
 import { curatedDevOverrides } from './curated/devKey';
 import { resolveCuratedUrl } from './curated/fetchCurated';
 import { PRODUCTION_CURATED_KEYS } from './curated/keys';
@@ -43,7 +43,7 @@ function curatedSource(onChange: () => void): CuratedSource {
   return new CuratedSource({
     url: resolveCuratedUrl(dev?.url ?? process.env.B4M_CURATED_MANIFEST_URL, allowLoopbackHttp),
     keys: [...PRODUCTION_CURATED_KEYS, ...(dev?.keys ?? [])],
-    store: new CuratedStore(join(app.getPath('userData'), 'model-hub', 'curated')),
+    store: new CuratedStore(curatedStoreRoot(app.getPath('userData'), dev !== null)),
     bundledText: BUNDLED_CURATED_TEXT,
     desktopVersion: app.getVersion(),
     allowLoopbackHttp,
