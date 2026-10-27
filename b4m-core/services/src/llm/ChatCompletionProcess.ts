@@ -3516,8 +3516,8 @@ export class ChatCompletionProcess {
         : null;
 
       const subagentModels = agentStore
-        ? shadowModelInfo
-          ? [shadowModelInfo]
+        ? shadowSettings
+          ? [modelInfo]
           : await this.loadSubagentModels(models, modelInfo, entitlementKeys, logger)
         : undefined;
 
@@ -3541,8 +3541,8 @@ export class ChatCompletionProcess {
           deep_research: {
             ...deepResearchConfig,
             model: runModel,
-            // An OpenAI key swaps the analysis model; a substituted turn keeps its own.
-            apiKeys: this.shadowSubstitution ? undefined : apiKeyTable,
+            // An OpenAI key swaps the analysis model; restricted users keep their own.
+            apiKeys: shadowSettings ? undefined : apiKeyTable,
           },
           edit_file: this.shadowSubstitution ? { model: runModel } : undefined,
           image_generation: imageConfig,

@@ -6,6 +6,7 @@ import { checkApiKeyRateLimit, type RateLimitCounter } from '@server/utils/apiKe
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES, isShadowTier } from '@bike4mind/common';
+import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
 export interface ApiKeyRateLimitOptions {
@@ -99,7 +100,10 @@ export const apiKeyRateLimit =
 
       // Restricted tier: a separate counter, so the key's advertised limit never reveals it. A hit
       // looks like the owner's per-user tier limit (middlewares/rateLimit.ts), not the key's.
-      if (req.user && isShadowTier(req.user)) {
+      if (
+        req.user &&
+        isShadowTier({ isAdmin: persistedIsAdmin(req.user), tags: req.user.tags, throttle: req.user.throttle })
+      ) {
         const { requestsPerMin } = await loadShadowTierSettings(adminSettingsRepository);
         const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
           `rate-limit:${req.user.id}:shadow-api-key`,

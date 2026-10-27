@@ -98,6 +98,52 @@ describe('ServerSubagentOrchestrator', () => {
     vi.useRealTimers();
   });
 
+  it.each(['execution-model', 'other-model'])(
+    'applies substitute identity only to its execution model (%s)',
+    async effectiveModel => {
+      const llm = makeLlm(effectiveModel);
+      const run = vi.spyOn(ReActAgent.prototype, 'run').mockImplementation(async function (this: ReActAgent) {
+        await this.completeText('Identify yourself');
+        return {
+          finalAnswer: 'done',
+          steps: [],
+          completionInfo: {
+            totalTokens: 0,
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            iterations: 1,
+            toolCalls: 0,
+            reachedMaxIterations: false,
+          },
+        } satisfies AgentResult;
+      });
+      try {
+        const orchestrator = new ServerSubagentOrchestrator({
+          userId: 'u1',
+          llm,
+          logger: makeLogger(),
+          parentTools: [],
+          substituteIdentity: {
+            substituteId: 'execution-model',
+            identityId: 'requested-model',
+            displayName: 'Requested',
+          },
+        });
+        await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: effectiveModel }) });
+
+        const options = vi.mocked(llm.complete).mock.calls[0]?.[2];
+        if (effectiveModel === 'execution-model') {
+          expect(options).toMatchObject({ modelIdentityId: 'requested-model', modelDisplayName: 'Requested' });
+        } else {
+          expect(options).not.toHaveProperty('modelIdentityId');
+          expect(options).not.toHaveProperty('modelDisplayName');
+        }
+      } finally {
+        run.mockRestore();
+      }
+    }
+  );
+
   describe('dispatchBackgroundAgent', () => {
     it('creates a background child and dispatches to Lambda, returning immediately', async () => {
       const tracker = makeTracker({

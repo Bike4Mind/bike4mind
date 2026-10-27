@@ -1,5 +1,6 @@
 import { CREDITS_PER_USD_COST, CreditHolderType, getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 
 const m = vi.hoisted(() => ({
   deductCredits: vi.fn(),
@@ -317,6 +318,25 @@ describe('meterPlatformCompletion for a restricted-tier caller', () => {
     m.recordUsageEvent.mockResolvedValue(undefined);
     m.userFindById.mockResolvedValue({ id: 'u1', isAdmin: false });
     m.tokenCounter.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
+  });
+
+  it('does not reserve or record restricted tokens for a stored admin with a withheld role', async () => {
+    const owner = withholdAdminRole({ id: 'u1', isAdmin: true, tags: [], throttle: { tier: 'shadow' as const } });
+    const request = { user: owner, logger, headers: {} } as never;
+    m.userIncrement.mockResolvedValue({ currentCredits: 1000 });
+    m.tokenCounter.mockResolvedValue({ success: false, count: 20000, expiresAt: new Date() });
+    expect(owner.isAdmin).toBe(false);
+
+    const reservation = await reserveCompletionCredits(request, 0.01, 'completion');
+    await settleCompletion(reservation, request, {
+      model: 'sonnet',
+      provider: 'anthropic',
+      usd: 0.001,
+      inputTokens: 100,
+      outputTokens: 20,
+    });
+
+    expect(m.tokenCounter).not.toHaveBeenCalled();
   });
 
   it('over the daily token cap is refused with the same 422 an empty balance gets', async () => {

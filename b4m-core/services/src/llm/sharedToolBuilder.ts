@@ -451,6 +451,7 @@ export function buildSharedTools(
     llm,
     {
       deep_research: config.deep_research,
+      edit_file: config.edit_file,
       image_generation: config.image_generation,
       edit_image: config.image_generation,
       audio_generation: config.audio_generation,

@@ -44,6 +44,7 @@ import {
 } from '@bike4mind/services/llm/shadowTier';
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import {
@@ -130,6 +131,17 @@ export async function isCreditsEnforced(): Promise<boolean> {
   return Boolean(getSettingsValue('enforceCredits', settings));
 }
 
+function throttleUser(req: MeteredRequest) {
+  return req.user
+    ? {
+        id: req.user.id,
+        isAdmin: persistedIsAdmin(req.user),
+        tags: req.user.tags,
+        throttle: req.user.throttle,
+      }
+    : undefined;
+}
+
 /** Reserve `usd` against the caller's billing owner; a no-op hold when enforceCredits is off. */
 export async function reserveCompletionCredits(
   req: MeteredRequest,
@@ -138,9 +150,10 @@ export async function reserveCompletionCredits(
   { organizationId, holdTtlMs }: { organizationId?: string | null; holdTtlMs?: number } = {}
 ): Promise<CreditReservation> {
   // Restricted-tier daily token cap; refused like an empty balance.
-  if (req.user && isShadowTier(req.user)) {
+  const user = throttleUser(req);
+  if (user && isShadowTier(user)) {
     const { dailyTokenCap } = await loadShadowTierSettings(adminSettingsRepository);
-    if (!(await reserveShadowTokenBudget(req.user, dailyTokenCap, { cache: cacheRepository }))) {
+    if (!(await reserveShadowTokenBudget(user, dailyTokenCap, { cache: cacheRepository }))) {
       throw insufficientCreditsError(
         creditService.holdInsufficientCreditsMessage(
           featureLabel,
@@ -233,7 +246,7 @@ export async function settleCompletion(
     })
     .catch(err => req.logger.warn('[meterPlatformCompletion] usage event failed', err));
   await recordShadowTokenUsage(
-    req.user!,
+    throttleUser(req)!,
     charge.inputTokens +
       charge.outputTokens +
       (charge.cacheReadInputTokens ?? 0) +

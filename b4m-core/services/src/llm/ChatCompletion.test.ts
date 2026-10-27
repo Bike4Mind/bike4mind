@@ -1087,6 +1087,26 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('withholds research keys and limits delegation when the requested model is already allowlisted', async () => {
+      const { body } = wireRestrictedTurn();
+      const requested = { ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0], supportsTools: true };
+      mockedGetAvailableModels.mockResolvedValue([requested, { ...cheapModel, supportsTools: true }] as never);
+      restrict({}, [requested.id]);
+      mockSession.agentIds = ['some-agent-id'];
+      const buildTools = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildTools.mockClear();
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        const args = buildTools.mock.calls[0]?.[0];
+        expect(args?.config?.deep_research?.model).toBe(requested.id);
+        expect(args?.config?.deep_research?.apiKeys).toBeUndefined();
+        expect(args?.subagentModels?.map(model => model.id)).toEqual([requested.id]);
+      } finally {
+        buildTools.mockRestore();
+      }
+    });
+
     it('current_model_details reports the requested model while the substitute runs', async () => {
       const { body } = wireRestrictedTurn();
       const requested = { ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0], supportsTools: true };

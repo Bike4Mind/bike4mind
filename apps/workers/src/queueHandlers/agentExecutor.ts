@@ -1915,7 +1915,7 @@ async function processExecution(
         adminSettingsEnforceCredits: false, // Agent executor handles billing per-iteration, not per-tool
         models,
       },
-      subagentModels: shadowModelInfo ? [shadowModelInfo] : runnableModels,
+      subagentModels: shadowSettings && runModelInfo ? [runModelInfo] : runnableModels,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // The delegation tools are injected as OBJECTS keyed on these two deps, never on
       // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
@@ -2126,8 +2126,8 @@ async function processExecution(
 
     const subagentToolConfig = buildSubagentToolConfig({
       model: agentModel,
-      // An OpenAI key swaps deep_research onto GPT-4.1; a substituted run keeps its own model.
-      apiKeyTable: shadowModelInfo ? undefined : (apiKeyTable as ApiKeyTable),
+      // An OpenAI key swaps the analysis model; restricted users keep their own.
+      apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
       videoConfig: await buildAgentVideoToolConfig(
@@ -3897,7 +3897,9 @@ async function processSubagentDispatch(
     });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${childModel}"`);
     llm.currentModel = runModel;
-    const childRunnableModels = shadowModelInfo ? [shadowModelInfo] : runnableModels;
+    const childRunnableModels = shadowSettings
+      ? [shadowModelInfo ?? modelInfo].filter((m): m is NonNullable<typeof m> => !!m)
+      : runnableModels;
 
     const modelAdmission = await createModelAdmission(user as IUserDocument, models);
     const admissionRefusal = await modelAdmission.assert(childModel).then(
@@ -4198,7 +4200,7 @@ async function processSubagentDispatch(
     };
     const subagentToolConfig = buildSubagentToolConfig({
       model: runModel,
-      apiKeyTable: apiKeyTable as ApiKeyTable,
+      apiKeyTable: shadowSettings ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
       // No videoConfig or musicConfig: this path offers no native tools (see the buildSharedTools call
@@ -4367,6 +4369,9 @@ async function processSubagentDispatch(
       // `lattice_*`; the orchestrator dedupes against `parentTools`.
       optInTools: subagentLatticeTools,
       availableModels: childRunnableModels,
+      substituteIdentity: shadowModelInfo
+        ? { substituteId: shadowModelInfo.id, identityId: childModel, displayName: modelInfo?.name }
+        : undefined,
       // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
       // orchestrator cannot test whether a grandchild's model is serviceable and
       // falls back to pairing this child's backend with the grandchild's model id

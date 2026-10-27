@@ -47,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn().mockResolvedValue(undefined) }));
 
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { apiKeyRateLimit } from './apiKeyRateLimit';
 import { rateLimit as rateLimitMiddleware } from './rateLimit';
 import { buildRateLimitKeys } from '@server/utils/apiKeyRateLimitCheck';
@@ -215,6 +216,18 @@ describe('apiKeyRateLimit restricted-tier owner', () => {
 
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit-Minute', rateLimit.requestsPerMinute);
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit-Day', rateLimit.requestsPerDay);
+  });
+
+  it('exempts a stored admin whose API key withholds the admin role', async () => {
+    const { req, res } = withOwner({ isAdmin: true, throttle: { tier: 'shadow' } });
+    const owner = req.user as typeof req.user & { isAdmin: boolean };
+    withholdAdminRole(owner);
+    expect(owner.isAdmin).toBe(false);
+
+    expect(await run(apiKeyRateLimit(), req, res)).toBeUndefined();
+
+    expect(loadShadowTierSettingsMock).not.toHaveBeenCalled();
+    expect(vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)).toHaveBeenCalledTimes(2);
   });
 
   it('makes no extra cache call for other owners', async () => {
