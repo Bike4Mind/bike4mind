@@ -24,6 +24,11 @@ vi.mock('./ModelServersSettings', () => ({
   modelServersSummary: () => 'Only this computer',
   useModelServers: () => [null, () => undefined, null],
 }));
+vi.mock('./CuratedListSettings', () => ({
+  CuratedListSettings: () => null,
+  curatedListSummary: () => 'Bundled',
+  useCuratedListSettings: () => [null, () => undefined],
+}));
 vi.mock('./useAppUpdate', async () => {
   const { initialUpdateState } = await import('@shared/update');
   return { useAppUpdate: () => ({ state: initialUpdateState('', false), blockedBy: null }) };

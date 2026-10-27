@@ -23,6 +23,8 @@ import { LocalContextSettings, localContextSummary, useLocalContextSetting } fro
 import { LocalHistorySettings } from './LocalHistorySettings';
 import type { ModelServerView } from '@shared/modelServers';
 import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
+import type { CuratedListSettings as CuratedListSettingsState } from '@shared/models';
+import { CuratedListSettings, curatedListSummary, useCuratedListSettings } from './CuratedListSettings';
 import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
 import {
   ArrowLeftIcon,
@@ -157,6 +159,19 @@ function localContextEntry(
     label: 'Local model context',
     summary: localContextSummary(setting),
     control: <LocalContextSettings setting={setting} onChange={onChange} error={error} fit={fit} />,
+  };
+}
+
+function curatedListEntry(
+  settings: CuratedListSettingsState | null,
+  onEnabled: (enabled: boolean) => void
+): ConfigEntry {
+  return {
+    id: 'curated-list',
+    icon: <DownloadIcon />,
+    label: 'Curated models list',
+    summary: curatedListSummary(settings),
+    control: <CuratedListSettings settings={settings} onEnabled={onEnabled} />,
   };
 }
 
@@ -305,6 +320,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
+  const [curatedList, setCuratedEnabled] = useCuratedListSettings();
 
   return {
     general: [
@@ -312,6 +328,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
+      curatedListEntry(curatedList, setCuratedEnabled),
       localHistoryEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),

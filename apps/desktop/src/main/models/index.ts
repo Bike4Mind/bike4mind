@@ -1,10 +1,16 @@
-import { ipcMain } from 'electron';
+import { join } from 'node:path';
+import { app, ipcMain } from 'electron';
 import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers, probeHardware } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { ModelPull } from '@shared/models';
+import type { CuratedList, ModelPull } from '@shared/models';
 import { localHardware } from '../chat/localContextSizing';
 import { appWindows } from '../windows';
-import { loadCuratedManifest } from './loadCuratedManifest';
+import { BUNDLED_CURATED_TEXT } from './curated/bundled';
+import { CuratedSource } from './curated/CuratedSource';
+import { CuratedStore } from './curated/CuratedStore';
+import { curatedDevOverrides } from './curated/devKey';
+import { resolveCuratedUrl } from './curated/fetchCurated';
+import { PRODUCTION_CURATED_KEYS } from './curated/keys';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
 
 const MAX_TEXT = 512;
@@ -19,6 +25,26 @@ const invalid = { ok: false, error: { kind: 'invalid', message: 'Invalid request
 const warn = (message: string) => console.warn(message);
 
 /**
+ * The curated list's source. The URL is baked in at build time from B4M_CURATED_MANIFEST_URL (see the `define`
+ * block in electron.vite.config.ts); a fork that sets nothing, or a build with no trusted key, uses its bundled list.
+ */
+function curatedSource(onChange: () => void): CuratedSource {
+  const allowLoopbackHttp = !app.isPackaged;
+  // A constant false in release builds, so the test key and its module are not in the bundle at all.
+  const dev = __B4M_CURATED_DEV_KEYS__ ? curatedDevOverrides(app.isPackaged, process.env) : null;
+  return new CuratedSource({
+    url: resolveCuratedUrl(dev?.url ?? process.env.B4M_CURATED_MANIFEST_URL, allowLoopbackHttp),
+    keys: [...PRODUCTION_CURATED_KEYS, ...(dev?.keys ?? [])],
+    store: new CuratedStore(join(app.getPath('userData'), 'model-hub', 'curated')),
+    bundledText: BUNDLED_CURATED_TEXT,
+    desktopVersion: app.getVersion(),
+    allowLoopbackHttp,
+    log: warn,
+    onChange,
+  });
+}
+
+/**
  * The Models screen's backend. Hugging Face is only reached from here, never the renderer. The app keeps no
  * Hugging Face token, so gated and private repos cannot be verified or pulled yet.
  */
@@ -26,6 +52,7 @@ export function registerModels({ localContext }: Pick<ModelHubServiceDeps, 'loca
   const send = (channel: string, payload?: ModelPull[]) => {
     for (const window of appWindows()) window.webContents.send(channel, payload);
   };
+  const source = curatedSource(() => send(IPC_CHANNELS.modelsCuratedChanged));
   const service = new ModelHubService({
     // The same daemon OllamaLocal chats with, so a pulled model shows up in the picker.
     runtime: new OllamaRuntime({ healthTimeoutMs: RUNTIME_HEALTH_TIMEOUT_MS }),
@@ -34,7 +61,7 @@ export function registerModels({ localContext }: Pick<ModelHubServiceDeps, 'loca
     // Chat's own probe, so badges and chat size context from the same reading of this machine.
     hardware: () => localHardware.profile().then(profile => profile ?? probeHardware()),
     localContext,
-    curated: loadCuratedManifest(warn),
+    curated: () => source.current(),
     onPullsChanged: pulls => send(IPC_CHANNELS.modelsPullsChanged, pulls),
     onInstalledChanged: () => send(IPC_CHANNELS.modelsInstalledChanged),
     warn,
@@ -53,7 +80,20 @@ export function registerModels({ localContext }: Pick<ModelHubServiceDeps, 'loca
     const id = text(repo);
     return id ? service.detail(id) : invalid;
   });
-  ipcMain.handle(IPC_CHANNELS.modelsListCurated, () => service.curated());
+  // Opening Models lists the curated models, so this is where a due check starts; it never blocks the list.
+  ipcMain.handle(IPC_CHANNELS.modelsListCurated, async (): Promise<CuratedList> => {
+    await source.loaded();
+    void source.checkIfDue();
+    return { ...(await service.curated()), source: source.view() };
+  });
+  ipcMain.handle(IPC_CHANNELS.modelsCheckCuratedList, () => source.checkNow());
+  ipcMain.handle(IPC_CHANNELS.modelsCuratedSettings, async () => {
+    await source.loaded();
+    return source.settings();
+  });
+  ipcMain.handle(IPC_CHANNELS.modelsCuratedSetEnabled, (_event, enabled: unknown) =>
+    typeof enabled === 'boolean' ? source.setEnabled(enabled) : source.settings()
+  );
   ipcMain.handle(IPC_CHANNELS.modelsGetCuratedPull, (_event, entryId: unknown, buildId: unknown) => {
     const entry = text(entryId);
     const build = text(buildId);

@@ -37,7 +37,7 @@ function copyTreeSitterWasm(): Plugin {
  * directory, which only exists so a local packaging run is one command rather than a long
  * prefix. Absent both, the value is empty and the feature it gates is off.
  */
-function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL'): string {
+function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL' | 'B4M_CURATED_MANIFEST_URL'): string {
   return process.env[name] ?? loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
 }
 
@@ -55,9 +55,14 @@ export default defineConfig(({ mode }) => {
       // The release feed is baked in the same way and for the same reasons, plus one more:
       // this repo is public, and a feed url is a host or a bucket behind one. Empty for a fork,
       // which then builds an app with updates switched off rather than one pointed at ours.
+      // The signed curated models list is baked the same way; empty means the bundled list only.
+      // The curated test key is trusted only by a build made with B4M_CURATED_DEV_KEYS=1 in the shell (never
+      // `.env`), and then only unpackaged; packages/scripts `curated:check-build` fails a build that has it.
       define: {
         'process.env.B4M_DEFAULT_API_URL': JSON.stringify(baked(mode, 'B4M_DEFAULT_API_URL')),
         'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
+        'process.env.B4M_CURATED_MANIFEST_URL': JSON.stringify(baked(mode, 'B4M_CURATED_MANIFEST_URL')),
+        __B4M_CURATED_DEV_KEYS__: JSON.stringify(process.env.B4M_CURATED_DEV_KEYS === '1'),
       },
       // `@bike4mind/utils` is bundled rather than left external, and only main does this.
       // Main uses one subpath of it, `/artifactParser` - 20 kB that imports nothing but
