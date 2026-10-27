@@ -19,6 +19,7 @@
  */
 
 import { secrets } from './secrets';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -121,11 +122,13 @@ if (isMonitoredStage) {
     ),
   });
 
+  const mentionArgs = alarmSlackMentionFunctionArgs();
   dlqAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...mentionArgs.environment },
+      permissions: mentionArgs.permissions,
     },
     {
       transform: {

@@ -20,11 +20,11 @@ function makeEvent(...payloads: unknown[]): SNSEvent {
   } as unknown as SNSEvent;
 }
 
-/** Fallback text plus the serialized blocks, so assertions cover everything posted. */
+/** Fallback text plus the serialized blocks and attachments, so assertions cover everything posted. */
 function postedText(callIndex = 0): string {
   const [, init] = mockFetch.mock.calls[callIndex];
   const body = JSON.parse(init.body as string);
-  return `${body.text}\n${JSON.stringify(body.blocks)}`;
+  return `${body.text}\n${JSON.stringify(body.blocks)}\n${JSON.stringify(body.attachments)}`;
 }
 
 const noTasksAlarm = {
