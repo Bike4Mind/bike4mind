@@ -37,7 +37,11 @@ import {
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { deepseekReasoningParams, deepseekSamplingParams, deepseekStopSequences } from './deepseekParams';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
-import { appendIdentityReminderToMessages, buildIdentityReminder } from './identityReminder';
+import {
+  appendIdentityReminderToMessages,
+  buildIdentityReminder,
+  shouldOmitIdentityReminder,
+} from './identityReminder';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { normalizeOpenAIFinishReason } from './stopReason';
 
@@ -846,7 +850,7 @@ export class DeepSeekBackend implements ICompletionBackend {
     options: Partial<ICompletionOptions>
   ): OpenAI.ChatCompletionMessageParam[] {
     return convertMessagesToOpenAIFormat(
-      options.omitIdentityReminder
+      shouldOmitIdentityReminder(options)
         ? messages
         : appendIdentityReminderToMessages(messages, buildIdentityReminder(model, options.modelDisplayName)),
       { preserveReasoningContent: true }

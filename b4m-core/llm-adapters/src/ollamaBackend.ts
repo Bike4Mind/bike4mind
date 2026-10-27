@@ -23,7 +23,11 @@ import { Ollama, Message as OllamaMessage, Options as OllamaOptions, Tool, ToolC
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
-import { appendIdentityReminderToMessages, buildIdentityReminder } from './identityReminder';
+import {
+  appendIdentityReminderToMessages,
+  buildIdentityReminder,
+  shouldOmitIdentityReminder,
+} from './identityReminder';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { attachFullToolResult, truncateToolResult } from './recordToolResult';
 import {
@@ -320,7 +324,7 @@ export class OllamaBackend implements ICompletionBackend {
     // Applied after the strip to what is actually sent, and on a copy: the tool round below
     // recurses with the caller's `messages`, so mutating would stack a reminder per round.
     const conversationMessages = offerTools ? messages : stripToolDependentMessages(messages);
-    const requestMessages = options.omitIdentityReminder
+    const requestMessages = shouldOmitIdentityReminder({ ...options, tools: offerTools ? options.tools : undefined })
       ? conversationMessages
       : appendIdentityReminderToMessages(conversationMessages, buildIdentityReminder(model, options.modelDisplayName));
     const baseRequest = {

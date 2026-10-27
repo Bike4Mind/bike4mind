@@ -22,7 +22,7 @@ import {
   type ICompletionResponseChunk,
 } from '../backend';
 import { DispatchModel } from '../dispatchModel';
-import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
 import { BaseBedrockBackend } from './base';
 import { createInlineReasoningScanner, type InlineReasoningScanner } from './inlineReasoning';
 
@@ -260,9 +260,8 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
       .join('\n');
 
     // Appended before the demote-to-user branch below, so a system-only payload carries the
-    // line too. Skipped for bare-completion callers (API promptMode raw) - must stay in sync
-    // with the same flag in the other backends.
-    const systemText = options.omitIdentityReminder
+    // line too. Only tools actually sent can replace the reminder on this request.
+    const systemText = shouldOmitIdentityReminder({ ...options, tools: sendTools ? options.tools : undefined })
       ? callerSystemText
       : appendIdentityReminder(callerSystemText, buildIdentityReminder(model, options.modelDisplayName));
 
