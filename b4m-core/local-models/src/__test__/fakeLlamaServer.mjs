@@ -2,6 +2,7 @@
 // FAKE_LLAMA_MODE: ok | crash | hang | ignore-term | wrong-model. FAKE_LLAMA_LOAD_MS: /health answers 503 this long.
 // FAKE_LLAMA_BIND_FAILS: a counter file; while it holds a number above 0, decrement it and fail to bind.
 // FAKE_LLAMA_RECORD: write the argv and environment names seen to this file.
+// FAKE_LLAMA_VERSION: the `--version` text after `version: `.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
@@ -14,7 +15,8 @@ const log = line => process.stderr.write(`0.00.000.000 I ${line}\n`);
 const fail = line => process.stderr.write(`0.00.000.000 E ${line}\n`);
 
 if (args.includes('--version')) {
-  process.stderr.write('version: 0.7.0-dev (build 11912, commit fake)\nbuilt with fake for tests\n');
+  const version = process.env.FAKE_LLAMA_VERSION ?? '0.7.0-dev (build 11912, commit fake)';
+  process.stderr.write(`version: ${version}\nbuilt with fake for tests\n`);
   process.exit(0);
 }
 

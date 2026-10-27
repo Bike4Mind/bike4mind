@@ -86,7 +86,7 @@ export interface LoadedModel {
   expiresAt: string | null;
 }
 
-export type RuntimeKind = 'ollama' | 'openai-compatible';
+export type RuntimeKind = 'ollama' | 'openai-compatible' | 'llama-server';
 
 export interface RuntimeCapabilities {
   canPull: boolean;

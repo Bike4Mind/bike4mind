@@ -22,11 +22,14 @@ export {
   HubAccessError,
   HubRateLimitError,
   LlamaServerExitError,
+  LlamaServerVersionError,
   LocalRuntimeError,
+  ModelFileBusyError,
   ModelNotFoundError,
   RuntimeConnectionError,
   RuntimeHttpError,
   RuntimeProtocolError,
+  RuntimeStorageError,
   RuntimeUnsupportedError,
 } from './errors';
 export { isAbliteratedModel } from './abliterated';
@@ -91,23 +94,29 @@ export {
   type DownloadResult,
   type DownloadTarget,
 } from './download';
-export { GgufModelStore, type GgufModelStoreOptions, type StoredGgufModel } from './ggufStore';
+export { GgufModelStore, type GgufModelStoreOptions, type PartialGgufFile, type StoredGgufModel } from './ggufStore';
 export {
   DEFAULT_LLAMA_SERVER_CONTEXT_SIZE,
   DEFAULT_LLAMA_SERVER_START_TIMEOUT_MS,
   DEFAULT_LLAMA_SERVER_STOP_TIMEOUT_MS,
-  LlamaServerRuntime,
+  MIN_LLAMA_SERVER_BUILD,
   findLlamaServer,
   startLlamaServer,
   type FindLlamaServerOptions,
   type LlamaServerBinary,
   type LlamaServerExit,
   type LlamaServerProcess,
-  type LlamaServerRuntimeOptions,
   type LlamaServerTuning,
   type StartLlamaServerOptions,
-  type StartModelOptions,
 } from './llamaServer';
+export {
+  DEFAULT_LLAMA_SERVER_PULL_QUANT,
+  LLAMA_SERVER_RUNTIME_ID,
+  LlamaServerRuntime,
+  parseLlamaServerPullRef,
+  type LlamaServerRuntimeOptions,
+  type StartModelOptions,
+} from './llamaServerRuntime';
 export {
   probeHardware,
   type ExecLike,

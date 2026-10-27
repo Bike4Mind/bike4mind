@@ -53,17 +53,28 @@ const ref = build && (await hub.verifyOllamaRef(detail, build));
 if (ref) await new OllamaRuntime().pull(ref);
 ```
 
-`LlamaServerRuntime` manages llama.cpp's `llama-server` over a directory of GGUF files the caller owns. `findLlamaServer({ path })` checks a configured or bundled binary (or, without `path`, the first `llama-server` on PATH) by running `--version`; nothing downloads a binary or a model on its own. `store` lists, adds (copies, with sibling shards), removes and downloads GGUF files; `store.download(hub, build)` fetches a Hugging Face build from its pinned resolve URLs, resumes a `.partial` file with a Range request, checks size and sha256, and keeps the token off the CDN. `start(model)` runs one server per model on a free `127.0.0.1` port with `--offline --no-ui --jinja`, a 4096-token context by default, and a fresh API key passed in the environment (not argv), then waits for `/health` and checks `/v1/models` with that key. The returned process exposes `baseUrl`, `apiKey`, `model` and `runtime` (an `OpenAICompatibleRuntime` holding the key) for chat; `exited` and `onExit` report a crash, `stop()` sends SIGTERM then SIGKILL, and servers still running when the Node process emits `exit` are killed (a parent killed by a signal it does not handle leaves them running, so call `stopAll()` from your own signal handlers). A process that exits before it is ready rejects with `LlamaServerExitError` (`portInUse` when the port was taken; a free port is retried twice), and a failed hash check with `DownloadVerificationError`.
+`LlamaServerRuntime` manages llama.cpp's `llama-server` over a directory of GGUF files the caller owns. It is a `LocalRuntime` with id and kind `llama-server`; its `baseUrl` is the models directory as a `file:` URL, since each server listens on its own port. `findLlamaServer({ path })` checks a configured or bundled binary (or, without `path`, the first qualifying `llama-server` on PATH) by running `--version`, and requires build `MIN_LLAMA_SERVER_BUILD` (b5501, the first with `--offline`) or newer; an older or unnumbered build throws `LlamaServerVersionError`, and `health()` reports the same without throwing. Nothing downloads a binary or a model on its own.
+
+`store` lists, adds (copies, with sibling shards), removes and downloads GGUF files, and lists or discards partial downloads (`partials()`, `discardPartial(name)`; `remove(name)` also deletes a name that has only a partial download). File names may hold only letters, digits, space and `._+-()[]`. Every write holds `<file>.lock`, so a second download, copy or removal of the same file, in this process or another, fails with `ModelFileBusyError`; a lock left by a process that died on the same host is taken over. File errors reject with `RuntimeStorageError`, whose `code` is the errno code. `store.download(hub, build)` fetches a Hugging Face build from its pinned resolve URLs, resumes a `.partial` file with a Range request after re-hashing the bytes it keeps (progress status `resuming`), checks the size on disk and the sha256 before renaming it into place, and keeps the token off the CDN; a file with no published sha256 starts over instead of resuming. `pull('hf.co/<repo>:<quant>')` downloads the build whose quant label matches, ignoring case (`Q4_K_M` when the ref names none), and `list()` shows only complete, non-projector models.
+
+`start(model)` runs one server per model on a free `127.0.0.1` port with `--offline --no-webui --jinja`, a 4096-token context by default, and a fresh API key passed in the environment (not argv), then waits for `/health` and checks `/v1/models` with that key. `extraArgs` accepts only tuning flags (batch sizes, flash attention, KV cache types, memory mapping, slots, GPU split and fit, MoE offload, RoPE and YaRN, sampling defaults, reasoning, chat template, projector, cache reuse, warmup, embeddings), each value as its own argument since llama-server does not parse `--flag=value`; any other flag throws. The returned process exposes `baseUrl`, `apiKey` and `model` for chat; `exited` and `onExit` report a crash, and `stop()` sends SIGTERM then SIGKILL. `stop(model)` on a server that is still loading cancels it, and its `start` rejects; `running()` and `loaded()` list only servers that are ready. A process that exits before it is ready rejects with `LlamaServerExitError` (`portInUse` when the port was taken; a free port is retried twice), and a failed hash check with `DownloadVerificationError`.
+
+Servers still running when the Node process emits `exit` are killed. A signal ends Node without `exit` unless the host handles it, so the host must stop the servers in its own SIGINT and SIGTERM handlers, or they keep running as orphans:
 
 ```ts
-import { HuggingFaceHub, LlamaServerRuntime, findLlamaServer } from '@bike4mind/local-models';
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => void llama.stopAll().finally(() => process.exit(0)));
+}
+```
+
+```ts
+import { LlamaServerRuntime, findLlamaServer } from '@bike4mind/local-models';
 
 const binary = await findLlamaServer({ path: bundledLlamaServerPath });
 const llama = new LlamaServerRuntime({ binaryPath: binary.path, modelsDir });
-const hub = new HuggingFaceHub();
-const detail = await hub.getModel('ggml-org/SmolLM2-135M-GGUF');
-const model = await llama.store.download(hub, detail.builds[0], { signal, onProgress });
-const server = await llama.start(model.name, { contextSize: 8192 });
+await llama.pull('hf.co/ggml-org/SmolLM2-135M-GGUF:Q4_K_M', { signal, onProgress });
+const [model] = await llama.list();
+const server = await llama.start(model.name, { contextSize: 8192, extraArgs: ['--flash-attn', 'on'] });
 // POST `${server.baseUrl}/v1/chat/completions` with `Authorization: Bearer ${server.apiKey}` and `model: server.model`
 await llama.stopAll();
 ```
@@ -73,3 +84,5 @@ await llama.stopAll();
 Live check against real runtimes (skipped unless the variables are set; set either runtime alone, `LOCAL_MODELS_LIVE_OPENAI_KEY` only for a server started with a key, `LOCAL_MODELS_LIVE_OLLAMA_MODELS` to pull something other than `qwen2.5:0.5b`, and `LOCAL_MODELS_LIVE_HF` to query the Hub, which with Ollama also pulls and removes a 105 MB SmolLM2 build): `LOCAL_MODELS_LIVE_OLLAMA=http://127.0.0.1:11434 LOCAL_MODELS_LIVE_OPENAI=http://127.0.0.1:8080 LOCAL_MODELS_LIVE_OPENAI_KEY=<key> LOCAL_MODELS_LIVE_HF=https://huggingface.co pnpm --filter @bike4mind/local-models test live`
 
 GGUF live checks, in the same file pattern: `LOCAL_MODELS_LIVE_OLLAMA_STORE=<OLLAMA_MODELS dir>` compares each `LOCAL_MODELS_LIVE_OLLAMA_MODELS` blob with `inspect` and verbose `/api/show`; `LOCAL_MODELS_LIVE_GGUF_FILES=<a.gguf,b.gguf>` loads each file into Ollama and compares it with `inspect` (both need `LOCAL_MODELS_LIVE_OLLAMA`); `LOCAL_MODELS_LIVE_HF` (any non-empty value) reads Qwen2.5 (compared with a local copy listed in `LOCAL_MODELS_LIVE_GGUF_FILES`), Qwen3-30B-A3B, gpt-oss-20b and the split Qwen3-235B-A22B headers from Hugging Face, with `LOCAL_MODELS_LIVE_HF_TOKEN` optional: `pnpm --filter @bike4mind/local-models test gguf.live`
+
+Live check of llama-server (skipped unless both are set; the GGUF file is copied into a temporary models directory, so a small one keeps it quick): `LOCAL_MODELS_LIVE_LLAMA_SERVER=<path to llama-server> LOCAL_MODELS_LIVE_LLAMA_SERVER_GGUF=<path to a .gguf file> pnpm --filter @bike4mind/local-models test llamaServer.live`
