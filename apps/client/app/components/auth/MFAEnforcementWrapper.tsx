@@ -311,7 +311,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
           data-testid="mfa-enforcement-sign-out-btn"
           variant="plain"
           color="neutral"
-          onClick={() => logout()}
+          onClick={() => logout(undefined, { onError: () => toast.error("Couldn't sign out. Please try again.") })}
           loading={logoutIsPending}
         >
           Sign out and sign in again
