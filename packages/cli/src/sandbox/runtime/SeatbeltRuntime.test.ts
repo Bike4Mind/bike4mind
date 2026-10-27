@@ -132,6 +132,26 @@ describe('SeatbeltRuntime', () => {
       expect(profile).toContain('(allow file-write* (subpath "/private/tmp"))');
     });
 
+    it('allows writes to standard device files after the global write deny', () => {
+      const profile = runtime.generateProfile({
+        command: 'git status > /dev/null',
+        cwd: '/Users/test/project',
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: false,
+      });
+
+      const deny = profile.indexOf('(deny file-write*)');
+      for (const allow of [
+        '(allow file-write* (literal "/dev/null"))',
+        '(allow file-write* (literal "/dev/zero"))',
+        '(allow file-write* (literal "/dev/dtracehelper"))',
+        '(allow file-write* (subpath "/dev/fd"))',
+      ]) {
+        expect(profile.indexOf(allow)).toBeGreaterThan(deny);
+      }
+      expect(profile).not.toContain('(subpath "/dev")');
+    });
+
     it('denies network when network is disabled (fail-closed)', () => {
       const profile = runtime.generateProfile({
         command: 'curl https://example.com',

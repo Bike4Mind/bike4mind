@@ -36,19 +36,26 @@ function escapeSeatbeltPath(p: string): string {
 
 const MDNS_RESPONDER_SOCKET = '/private/var/run/mDNSResponder';
 
+const DEVICE_WRITE_ALLOWS = [
+  '(allow file-write* (literal "/dev/null"))',
+  '(allow file-write* (literal "/dev/zero"))',
+  '(allow file-write* (literal "/dev/dtracehelper"))',
+  '(allow file-write* (subpath "/dev/fd"))',
+];
+
 function assertPort(port: number): void {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid sandbox proxy port: ${port}`);
   }
 }
 
-/** Unresolvable paths keep their deny at the unresolved location instead of failing profile generation. */
-function resolveContainerPath(p: string): string {
+/** Unresolvable paths keep their rule at the unresolved location instead of failing profile generation. */
+function resolveProfilePath(p: string): string {
   try {
     return resolveSandboxPath(p);
   } catch (error) {
     if (error instanceof Error && 'code' in error && ['EACCES', 'ELOOP', 'EPERM'].includes(String(error.code))) {
-      logger.debug(`Sandbox: using unresolved container socket path ${p}: ${error.code}`);
+      logger.debug(`Sandbox: using unresolved profile path ${p}: ${error.code}`);
       return p;
     }
     throw error;
@@ -65,8 +72,8 @@ function containerSocketDenies(): { network: string[]; fileWrite: string[] } {
   const network = new Set<string>();
   const fileWrite = new Set<string>();
   for (const entry of getContainerSocketPaths()) {
-    const resolvedParent = path.join(resolveContainerPath(path.dirname(entry.path)), path.basename(entry.path));
-    for (const candidate of [resolvedParent, resolveContainerPath(entry.path)]) {
+    const resolvedParent = path.join(resolveProfilePath(path.dirname(entry.path)), path.basename(entry.path));
+    for (const candidate of [resolvedParent, resolveProfilePath(entry.path)]) {
       const filter = entry.directory ? 'subpath' : 'path-literal';
       const escaped = escapeSeatbeltPath(candidate);
       network.add(`(deny network-outbound (remote unix-socket (${filter} "${escaped}")))`);
@@ -144,14 +151,22 @@ export class SeatbeltRuntime implements SandboxRuntime {
       lines.push('; Deny all file writes globally');
       lines.push('(deny file-write*)');
       lines.push('');
+      // Seatbelt matches the resolved path, so a symlinked location (os.tmpdir() is under
+      // /var -> /private/var) needs its target listed too.
+      const writable = (p: string) => [...new Set([p, resolveProfilePath(p)])];
       lines.push('; Allow writes to working directory');
-      lines.push(`(allow file-write* (subpath "${escapeSeatbeltPath(cwd)}"))`);
+      for (const p of writable(cwd)) lines.push(`(allow file-write* (subpath "${escapeSeatbeltPath(p)}"))`);
       lines.push('');
       // Allow writes to temp directories (needed for many tools)
       lines.push('; Allow writes to temp directories');
       lines.push(`(allow file-write* (subpath "/tmp"))`);
       lines.push(`(allow file-write* (subpath "/private/tmp"))`);
-      lines.push(`(allow file-write* (subpath "${escapeSeatbeltPath(os.tmpdir())}"))`);
+      for (const p of writable(os.tmpdir())) lines.push(`(allow file-write* (subpath "${escapeSeatbeltPath(p)}"))`);
+      lines.push('');
+      // `> /dev/null`, `> /dev/stderr` and git's own /dev/null opens. Writing through /dev/fd only
+      // reuses a descriptor the process already holds, and cannot upgrade a read-only one.
+      lines.push('; Allow writes to standard device files');
+      lines.push(...DEVICE_WRITE_ALLOWS);
       lines.push('');
     }
 
