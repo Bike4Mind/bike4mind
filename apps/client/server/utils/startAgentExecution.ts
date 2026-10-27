@@ -27,6 +27,7 @@ import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import type { ApiKeyInfo } from '@server/cli/auth';
 import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
@@ -36,7 +37,7 @@ import {
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
-import { pinnableMessageFileIds } from '@server/managers/pinnableMessageFileIds';
+import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -184,7 +185,8 @@ export async function startAgentExecution(
 ): Promise<StartAgentExecutionResult> {
   const { userId } = input;
 
-  if (input.confidenceOverrides && !(await isAdminUser(userId))) {
+  // A key without the admin scope does not carry its owner's admin role (see withholdAdminRole).
+  if (input.confidenceOverrides && (adminRoleWithheldFor(input.apiKeyInfo) || !(await isAdminUser(userId)))) {
     logger.warn('[Start] Non-admin caller sent confidenceOverrides', { userId });
     return {
       ok: false,

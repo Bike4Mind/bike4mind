@@ -82,7 +82,9 @@ vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner },
 }));
 vi.mock('@server/auth/turnAuth', () => ({}));
-vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
+vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
+  SubscriptionOwnerType: { Organization: 'organization' },
+}));
 
 import '@pages/api/organizations/[id]/index';
 

@@ -26,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: Route) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => vi.fn() }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();

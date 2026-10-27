@@ -1012,6 +1012,118 @@ describe('search_knowledge_base alternate-model billing', () => {
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: VOYAGE_3, provider: 'voyageai' }));
   });
 
+  // The check is reached only when all three billing repos arrived, and the holder it sees is
+  // built from the wired plan resolver, so both halves of operationalBilling made it through.
+  it('passes the host billing repos and plan resolver through to the recorder', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+    });
+    const activePlans = { hasActivePlan: vi.fn() };
+    const billingCheck = vi.fn().mockResolvedValue(false);
+    const base = billingContext();
+    const ctx = {
+      ...base,
+      operationalBillingCheck: billingCheck,
+      db: { ...base.db, operationalBilling: { creditTransactions: {}, users: {}, organizations: {}, activePlans } },
+    } as ToolContext;
+
+    await run(ctx);
+
+    expect(billingCheck).toHaveBeenCalledWith(expect.objectContaining({ activePlans }));
+    expect(ctx.db.usageEvents!.record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+  });
+
+  it.each([
+    { activeOrganizationId: undefined, selectedOrganizationId: 'old-org', expectedOrganization: null },
+    {
+      activeOrganizationId: 'active-org',
+      selectedOrganizationId: 'old-org',
+      expectedOrganization: { id: 'active-org' },
+    },
+    {
+      activeOrganizationId: 'active-org',
+      selectedOrganizationId: undefined,
+      expectedOrganization: { id: 'active-org' },
+    },
+  ])(
+    'uses the turn payer with active org $activeOrganizationId and selected org $selectedOrganizationId',
+    async ({ activeOrganizationId, selectedOrganizationId, expectedOrganization }) => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        ...emptySemanticResult(),
+        results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      });
+      const billingCheck = vi.fn().mockResolvedValue(false);
+      const findById = vi.fn().mockResolvedValue({ id: 'active-org' });
+      const activePlans = { hasActivePlan: vi.fn() };
+      const base = billingContext();
+      const ctx = {
+        ...base,
+        user: { ...base.user, organizationId: selectedOrganizationId },
+        organizationId: activeOrganizationId,
+        operationalBillingCheck: billingCheck,
+        db: {
+          ...base.db,
+          organizations: { findById },
+          operationalBilling: { creditTransactions: {}, users: {}, organizations: {}, activePlans },
+        },
+      } as ToolContext;
+
+      await run(ctx);
+
+      expect(billingCheck).toHaveBeenCalledExactlyOnceWith({
+        user: ctx.user,
+        organization: expectedOrganization,
+        activePlans,
+      });
+      expect(ctx.db.usageEvents!.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerId: activeOrganizationId ?? 'u1',
+        })
+      );
+      if (activeOrganizationId) expect(findById).toHaveBeenCalledExactlyOnceWith(activeOrganizationId);
+      else expect(findById).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['missing', 'unavailable'] as const)(
+    'keeps search results without billing a fallback payer when org resolution is %s',
+    async outcome => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        ...emptySemanticResult(),
+        results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      });
+      const billingCheck = vi.fn().mockResolvedValue(true);
+      const findById =
+        outcome === 'missing'
+          ? vi.fn().mockResolvedValue(null)
+          : vi.fn().mockRejectedValue(new Error('org store down'));
+      const base = billingContext();
+      const ctx = {
+        ...base,
+        organizationId: 'active-org',
+        operationalBillingCheck: billingCheck,
+        db: {
+          ...base.db,
+          organizations: { findById },
+          operationalBilling: {
+            creditTransactions: {},
+            users: {},
+            organizations: {},
+            activePlans: { hasActivePlan: vi.fn() },
+          },
+        },
+      } as ToolContext;
+
+      const result = await run(ctx);
+
+      expect(result).toContain('body');
+      expect(billingCheck).not.toHaveBeenCalled();
+      expect(ctx.db.usageEvents!.record).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalled();
+    }
+  );
+
   it('bills only the primary model when no alternates were embedded', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
       ...emptySemanticResult(),
@@ -1053,6 +1165,7 @@ describe('search_knowledge_base alternate-model billing', () => {
     const findOrg = vi.fn().mockRejectedValue(new Error('db unavailable'));
     const ctx = billingContext({
       user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+      organizationId: 'org1',
       db: {
         fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
         fabfilechunks: { findVectorsByFabFileIds: vi.fn() },

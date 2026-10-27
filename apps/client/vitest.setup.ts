@@ -135,3 +135,17 @@ vi.mock('@/app/contexts/WebsocketContext', () => ({
     isConnected: false,
   }),
 }));
+
+// The paid-only API key switch (apiKeyAccessGate.ts) reads admin settings and subscriptions, and
+// defaults to paid on hosted, so every test that authenticates a key or CLI session would need a
+// seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.
+// The real module is not spread in: it imports the Subscription model, which suites that stub
+// @bike4mind/database cannot load.
+vi.mock('@server/utils/apiKeyAccessGate', () => ({
+  API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
+  CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
+  SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
+  isApiKeyAccessAllowed: async () => true,
+  assertApiKeyAccessAllowed: async () => undefined,
+  assertCliSessionAllowed: async () => undefined,
+}));

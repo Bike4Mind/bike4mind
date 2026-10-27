@@ -29,10 +29,21 @@ class BikeForMindAPI {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(`API Error: ${error.error.message}`);
+      const text = await response.text();
+      let message = text;
+      try {
+        const body = JSON.parse(text);
+        message = body.error?.message ?? (typeof body.error === 'string' ? body.error : text);
+      } catch {
+        // Not JSON: keep the raw text
+      }
+      throw Object.assign(new Error(`API Error: ${message}`), {
+        status: response.status,
+        retryAfter: Number(response.headers.get('Retry-After')) || undefined,
+      });
     }
 
+    if (response.status === 204) return undefined;
     return response.json();
   }
 
@@ -40,14 +51,14 @@ class BikeForMindAPI {
     return this.request(endpoint);
   }
 
-  async post(endpoint: string, data: any) {
+  async post(endpoint: string, data?: unknown) {
     return this.request(endpoint, {
       method: 'POST',
       body: JSON.stringify(data)
     });
   }
 
-  async put(endpoint: string, data: any) {
+  async put(endpoint: string, data: unknown) {
     return this.request(endpoint, {
       method: 'PUT', 
       body: JSON.stringify(data)
@@ -63,7 +74,7 @@ class BikeForMindAPI {
 
 // Usage
 const api = new BikeForMindAPI('your-jwt-token');
-const users = await api.get('/api/users');
+const agents = await api.get('/api/agents');
 ```
 
 ### Python
@@ -91,15 +102,21 @@ class BikeForMindAPI:
         )
         
         if not response.ok:
-            error = response.json()
-            raise Exception(f"API Error: {error['error']['message']}")
+            try:
+                error = response.json().get('error')
+                message = error.get('message') if isinstance(error, dict) else error
+            except ValueError:
+                message = None
+            raise requests.HTTPError(f"API Error: {message or response.text}", response=response)
         
+        if response.status_code == 204:
+            return None
         return response.json()
     
     def get(self, endpoint):
         return self._request('GET', endpoint)
     
-    def post(self, endpoint, data):
+    def post(self, endpoint, data=None):
         return self._request('POST', endpoint, data)
     
     def put(self, endpoint, data):
@@ -110,27 +127,19 @@ class BikeForMindAPI:
 
 # Usage
 api = BikeForMindAPI('your-jwt-token')
-users = api.get('/api/users')
+agents = api.get('/api/agents')
 ```
 
 ## Common Use Cases
 
-### User Management
+### Agent Management
 
 ```typescript
-// Get current user profile
-const profile = await api.get('/api/users/me');
+// List your agents
+const agents = await api.get('/api/agents');
 
-// List users in organization
-const users = await api.get('/api/users?organizationId=org_123');
-
-// Update user preferences
-await api.put('/api/users/me', {
-  preferences: {
-    theme: 'dark',
-    language: 'en'
-  }
-});
+// Get one agent
+const agent = await api.get('/api/agents/agent_123');
 ```
 
 ### Agent Operations
@@ -143,15 +152,20 @@ const agent = await api.post('/api/agents', {
   personality: {
     majorMotivation: 'Analyzer',
     minorMotivation: 'Teacher',
-    responseStyle: 'detailed'
+    flaw: 'None',
+    quirk: 'None'
   },
-  capabilities: ['code_review', 'best_practices'],
+  capabilities: [JSON.stringify({
+    triggerWords: ['@review', '@code'],
+    responseStyle: 'detailed',
+    specialBehaviors: ['code_review', 'best_practices']
+  })],
   triggerWords: ['@review', '@code'],
   isPublic: false
 });
 
 // List all available agents
-const agents = await api.get('/api/agents?public=true');
+const agents = await api.get('/api/agents'); // accessible agents
 
 // Attach agent to a session
 await api.post(`/api/sessions/${sessionId}/agents`, {
@@ -225,16 +239,17 @@ class BikeForMindWebSocket {
     };
   }
 
-  private send(data: any) {
+  private send(data: unknown) {
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
     }
   }
 
-  private handleMessage(message: any) {
+  private handleMessage(message: unknown) {
+    if (typeof message !== 'object' || message === null || !('type' in message)) return;
     switch (message.type) {
       case 'agent_attached':
-        console.log('Agent attached:', message.agent);
+        console.log('Agent attached:', message);
         break;
       case 'agent_response':
         console.log('Agent response:', message);
@@ -262,37 +277,7 @@ ws.subscribeToSession('session_123');
 
 ### Error Handling with Retry Logic
 
-```typescript
-async function apiCallWithRetry(
-  apiCall: () => Promise<any>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<any> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await apiCall();
-    } catch (error) {
-      if (attempt === maxRetries) {
-        throw error;
-      }
-
-      // Check if error is retryable
-      if (error.code === 'RATE_LIMIT_EXCEEDED' || error.code === 'SERVICE_UNAVAILABLE') {
-        const delay = baseDelay * Math.pow(2, attempt - 1);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-
-      throw error; // Don't retry for non-retryable errors
-    }
-  }
-}
-
-// Usage
-const result = await apiCallWithRetry(async () => {
-  return api.get('/api/users');
-});
-```
+Retry only 429, 500 and 503, wait the `Retry-After` seconds on a 429, and never retry 400, 401, 403, 413 or 422. The `request` method above attaches `status` and `retryAfter` to the error it throws, so the [retry helper](./completions/examples/javascript.md#retry-helper) works with it unchanged. The full retry table is in [Completions errors](./completions/errors.md#retry-guidance).
 
 ### Pagination Helper
 
@@ -311,7 +296,7 @@ async function getAllPages<T>(
     
     allItems.push(...response.data);
     
-    hasMore = response.pagination.hasNext;
+    hasMore = response.hasMore;
     page++;
   }
 
@@ -319,15 +304,15 @@ async function getAllPages<T>(
 }
 
 // Usage
-const allUsers = await getAllPages(api, '/api/users');
+const allAgents = await getAllPages(api, '/api/agents');
 ```
 
 ## cURL Examples
 
 ### Basic Authentication
 ```bash
-# Get user profile
-curl -X GET https://app.bike4mind.com/api/users/me \
+# List your agents
+curl -X GET https://app.bike4mind.com/api/agents \
   -H "Authorization: Bearer $JWT_TOKEN"
 ```
 
@@ -341,9 +326,10 @@ curl -X POST https://app.bike4mind.com/api/agents \
     "description": "Helps with research tasks",
     "personality": {
       "majorMotivation": "Explorer",
-      "responseStyle": "analytical"
+      "flaw": "None",
+      "quirk": "None"
     },
-    "capabilities": ["research", "analysis"]
+    "capabilities": ["{\"responseStyle\":\"analytical\",\"specialBehaviors\":[\"research\",\"analysis\"]}"]
   }'
 ```
 
@@ -359,16 +345,16 @@ curl -X POST https://app.bike4mind.com/api/ai/transcribe \
 ```bash
 # Using jq for JSON processing
 response=$(curl -s -w "%{http_code}" \
-  -X GET https://app.bike4mind.com/api/users \
+  -X GET https://app.bike4mind.com/api/agents \
   -H "Authorization: Bearer $JWT_TOKEN")
 
 http_code="${response: -3}"
 body="${response%???}"
 
 if [ "$http_code" -eq 200 ]; then
-  echo "Success: $body" | jq .
+  printf '%s\n' "$body" | jq .
 else
-  echo "Error ($http_code): $body" | jq .error
+  printf '%s\n' "$body" | jq .error
 fi
 ```
 
@@ -390,8 +376,8 @@ export function useAgents(searchTerm?: string) {
       try {
         setLoading(true);
         const api = new BikeForMindAPI(userToken);
-        const response = await api.get(`/api/agents?search=${searchTerm || ''}`);
-        setAgents(response.agents);
+        const response = await api.get(`/api/agents?query=${encodeURIComponent(searchTerm || '')}`);
+        setAgents(response.data);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -418,7 +404,7 @@ export function useAPI() {
 
   const api = new BikeForMindAPI(userToken);
 
-  const callAPI = async (apiCall: () => Promise<any>) => {
+  const callAPI = async (apiCall: () => Promise<unknown>) => {
     try {
       loading.value = true;
       error.value = null;

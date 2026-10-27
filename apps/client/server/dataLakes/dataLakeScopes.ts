@@ -10,6 +10,7 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import type { ApiKeyInfo } from '@server/cli/auth';
 import { requestTurnAuth, type TurnAuth } from '@server/auth/turnAuth';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 
 /**
@@ -88,14 +89,17 @@ export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
 
 /**
  * The persisted run fields derived from the request's credential (`req.apiKeyInfo`, undefined for a
- * signed-in session): always the turn auth, plus the scope denials when there are any.
+ * signed-in session): always the turn auth, plus the scope denials and the withheld admin role when
+ * the key calls for them.
  */
 export function credentialExecutionFields(apiKeyInfo: ApiKeyCredential | undefined): TurnAuth & {
   scopeDeniedTools?: string[];
+  adminRoleWithheld?: boolean;
 } {
   const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo });
   return {
     ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
+    ...(adminRoleWithheldFor(apiKeyInfo) ? { adminRoleWithheld: true } : {}),
     ...requestTurnAuth({ apiKeyInfo }),
   };
 }

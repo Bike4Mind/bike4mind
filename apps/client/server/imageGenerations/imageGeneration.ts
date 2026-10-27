@@ -18,7 +18,7 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { SessionEvents } from '@server/utils/eventBus';
@@ -26,6 +26,7 @@ import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAcce
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { imageCreditHolds } from '@server/billing/imageCreditHolds';
 
 let _imageGeneration: ImageGenerationService | undefined;
 export const getImageGeneration = (): ImageGenerationService => {
@@ -53,6 +54,7 @@ export const getImageGeneration = (): ImageGenerationService => {
       // Owner-wide lake arms for the input-image lookup, parity with the chat/agent attachment
       // doors - a lake-only image the workbench admitted must still resolve as an image-gen input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),
+      creditHolds: imageCreditHolds,
       startImageGenerationProcess: async body => {
         const queueUrl = getSourceQueueUrl('imageGenerationQueue');
         imageLogger.log('Queueing image generation', {

@@ -38,6 +38,7 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -135,7 +136,7 @@ CHARTS: in a text/html artifact, chart.js@4 (the blessed path above, data baked 
 
 SINGLE-FILE RULE (every artifact type): one deliverable = ONE <artifact> = ONE file, and that is the strong default. For every type except React, NEVER use a relative/sibling import (./ or ../) in any form (import-from, side-effect import, export-from, require) - the sandbox detects and hard-rejects them before rendering. Inline every sub-component, hook, context, helper, dataset, and asset. If the user asks to "split into files/modules," honor the SPIRIT - keep one file, separate concerns with commented sections and well-named functions - and note artifacts are single-file by design. React is the one exception, below.
 
-REACT MULTI-FILE (exception to the single-file rule): prefer ONE self-contained file. Split a React app across several <artifact> tags ONLY when the user explicitly asks for multiple files/modules or the app is genuinely too large for one file. Then: emit every file in the SAME reply; each sibling's identifier must equal its import basename exactly (\`import Chronosphere from "./Chronosphere"\` -> \`identifier="Chronosphere"\`); exactly ONE entry file, the one nothing else imports, has \`export default\`; siblings may use named and/or default exports; use flat names (no directories) and no import cycles; the same npm allowlist applies. A published/shared React app must still be a single file.
+REACT MULTI-FILE (exception to the single-file rule): prefer ONE self-contained file. Split a React app across several <artifact> tags ONLY when the user explicitly asks for multiple files/modules or the app is genuinely too large for one file. Then: emit every file in the SAME reply; each sibling's identifier must equal its import basename exactly (\`import Chronosphere from "./Chronosphere"\` -> \`identifier="Chronosphere"\`); exactly ONE entry file, the one nothing else imports, has \`export default\`; siblings may use named and/or default exports; use flat names (no directories) and no import cycles; the same npm allowlist applies. A split React app can be published/shared as one page as long as every file is in the same reply.
 
 REACT ARTIFACTS: the entry file (the only file, unless split as above) has ONE \`export default\`. Do NOT import React or its hooks - React, useState, useEffect, useRef, useMemo, useCallback, useReducer, useContext, createContext are pre-injected globals; reference them bare. The ONLY importable packages are: lucide-react, recharts, mathjs, lodash, d3, papaparse, xlsx - use one clean import line each (\`import X from 'pkg'\` or single-line \`import { a, b } from 'pkg'\`), never mixed \`import React, { useState }\`. Nothing else resolves (no react-router/next/zustand/framer-motion/three/p5/howler/styled-components) - for multiple screens use a \`view\` useState + conditional render; hand-roll WebGL/Canvas2D/physics/noise.
 
@@ -433,6 +434,8 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'thinkingVisibilityFree',
+  'thinkingVisibilityPaid',
   'defaultFreeCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
@@ -442,6 +445,7 @@ export const SettingKeySchema = z.enum([
   'turnstileEnabled',
   'turnstileFailClosed',
   'turnstileSiteKey',
+  'signupRiskScoring',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -597,6 +601,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitFreePerMin',
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
+  'apiKeyAccess',
 
   // OVERWATCH ROLLUP CRON SETTINGS
   'overwatchRollupSync',
@@ -941,8 +946,7 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
   key: K;
   dependsOn?: [K] extends [SettingKey] ? SettingKey : string;
   type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  schema: z.ZodType<any, any, any>;
+  schema: z.ZodType;
   defaultValue?: string | number | boolean | object | undefined;
   options?: string[];
 };
@@ -1184,6 +1188,47 @@ export enum ServerStatusEnum {
 
 /** Platform cap on custom MCP connections per user (design #4845). */
 export const CUSTOM_MCP_MAX_CONNECTIONS_PER_USER = 20;
+
+export const SIGNUP_RISK_SIGNALS = [
+  'riskyDomain',
+  'burstCohort',
+  'datacenterNetwork',
+  'quickApiKey',
+  'fastSpend',
+  'generatedLocalPart',
+] as const;
+export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
+
+const signupRiskWeight = (defaultValue: number) => z.number().min(0).max(100).prefault(defaultValue);
+
+/**
+ * Weights and thresholds for `scoreSignupRisk` (b4m-core/services/src/userService/signupRiskScore.ts).
+ * The defaults are generic placeholders: a deployment tunes the real values in admin settings.
+ * Both levels are strict so a mistyped signal or field name is refused on save instead of silently ignored.
+ */
+export const SignupRiskScoringSchema = z
+  .object({
+    weights: z
+      .object({
+        riskyDomain: signupRiskWeight(25),
+        burstCohort: signupRiskWeight(30),
+        datacenterNetwork: signupRiskWeight(15),
+        quickApiKey: signupRiskWeight(15),
+        fastSpend: signupRiskWeight(20),
+        generatedLocalPart: signupRiskWeight(10),
+      })
+      .strict()
+      .prefault({}),
+    /** A first API key minted within this many minutes of signup counts as quick. */
+    quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
+    /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
+    fastSpendCredits: z.number().positive().prefault(1000),
+    /** A score at or above this needs review. */
+    reviewThreshold: z.number().min(1).max(100).prefault(50),
+  })
+  .strict();
+
+export type SignupRiskScoring = z.infer<typeof SignupRiskScoringSchema>;
 
 export const CUSTOM_MCP_POLICY_MODES = ['off', 'presets_only', 'allowlist', 'any'] as const;
 export type CustomMcpPolicyMode = (typeof CUSTOM_MCP_POLICY_MODES)[number];
@@ -2008,6 +2053,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'turnstileEnabled', order: 5 },
       { key: 'turnstileFailClosed', order: 6 },
       { key: 'turnstileSiteKey', order: 7 },
+      { key: 'signupRiskScoring', order: 8 },
     ],
   },
   KNOWLEDGE: {
@@ -2111,6 +2157,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitFreePerMin', order: 1 },
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
+      { key: 'apiKeyAccess', order: 4 },
     ],
   },
   API_KEY_TRUST: {
@@ -2123,6 +2170,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
       { key: 'maxActiveKeysUntrusted', order: 3 },
       { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+    ],
+  },
+  THINKING_VISIBILITY: {
+    id: 'thinkingVisibilityService',
+    name: 'Model Thinking Visibility',
+    description: 'How much model reasoning each account tier is shown, on every chat, API, CLI and agent surface',
+    icon: 'Psychology',
+    settings: [
+      { key: 'thinkingVisibilityFree', order: 1 },
+      { key: 'thinkingVisibilityPaid', order: 2 },
     ],
   },
   DATA_LAKE_AUDIT: {
@@ -2148,6 +2205,9 @@ export const API_SERVICE_GROUPS = {
     settings: { key: SettingKey; order: number }[];
   };
 };
+
+/** Hosted deployments always meter credits (self-host may turn it off); read per call so tests can flip the env. */
+export const isEnforceCreditsLocked = (): boolean => process.env.B4M_SELF_HOST !== 'true';
 
 export const settingsMap = {
   DefaultAPIModel: makeStringSetting({
@@ -3004,6 +3064,21 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,
   }),
+  // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
+  // tightening it also cuts off keys that already exist.
+  apiKeyAccess: makeStringSetting({
+    key: 'apiKeyAccess',
+    name: 'API Key Access',
+    // Self-host has no billing stack (see enforceCredits), so keys stay open there; hosted
+    // defaults to paid-only so the gate is live without an admin write.
+    defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
+    description:
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
+    options: ['all', 'paid', 'disabled'],
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 4,
+  }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',
     name: 'Tag Line Main',
@@ -3369,12 +3444,12 @@ export const settingsMap = {
   billOperationalUsage: makeBooleanSetting({
     key: 'billOperationalUsage',
     name: 'Bill Operational Usage',
-    // Default OFF: operational-model and embedding spend (auto-naming, summarization,
-    // tagging, context summarization, KB query embeddings) is recorded as platform COGS
-    // but not deducted from the user/org. Turn ON to also debit credits for that spend.
+    // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
+    // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
+    // whether paying accounts are billed for it too, and turning it on is a pricing change.
     defaultValue: false,
     description:
-      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings) is billed to the user/org. Off = recorded as platform cost only.',
+      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier users paying for themselves (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3448,6 +3523,30 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  // Tiers resolve in b4m-core/services/src/thinkingVisibility.ts. Multi-turn tool replay is
+  // unaffected: provider thinking blocks still go back to the provider whatever the level.
+  thinkingVisibilityFree: makeStringSetting({
+    key: 'thinkingVisibilityFree',
+    name: 'Thinking Visibility: Free Accounts',
+    defaultValue: 'summary',
+    description:
+      'Model reasoning shown to accounts with no purchase, active plan or admin approval. "raw" shows it as the provider sent it. "summary" shows it only from models whose provider returns a summary instead of the raw trace (Claude 4 and later) and hides the rest; for other models the completions API does not request reasoning at all. "none" hides all reasoning text, but completions API callers that run tools themselves still receive the provider\'s summarized thinking blocks on Claude 4 and later, because those blocks must be echoed back on the next turn. Changes reach running servers within about 5 minutes (settings cache).',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 1,
+  }),
+  thinkingVisibilityPaid: makeStringSetting({
+    key: 'thinkingVisibilityPaid',
+    name: 'Thinking Visibility: Paid Accounts',
+    defaultValue: 'raw',
+    description:
+      'Model reasoning shown to admins and to accounts with a credit purchase, admin approval, or an active plan (own or org seat; only subscriptions in the active status count, so trialing, past-due and canceled plans do not). Same levels as the free-account setting.',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 2,
   }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
@@ -3568,6 +3667,18 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     dependsOn: 'turnstileEnabled',
+  }),
+  signupRiskScoring: makeObjectSetting({
+    key: 'signupRiskScoring',
+    name: 'Signup Risk Scoring',
+    defaultValue: SignupRiskScoringSchema.parse({}),
+    description:
+      "Weights (0-100 each) for the signals that make up a new account's 0-100 risk score, the minutes " +
+      'and credits that set off the quick-API-key and fast-spend signals, and the score at which an account ' +
+      'needs review. The score is capped at 100.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: SignupRiskScoringSchema,
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

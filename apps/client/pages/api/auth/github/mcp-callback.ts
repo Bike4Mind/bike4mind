@@ -6,11 +6,11 @@ import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { McpServerName } from '@bike4mind/common';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
-import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, clearStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { encryptEnvVariables } from '@server/security/tokenEncryption';
+import { encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 function getJwtSecret(): string {

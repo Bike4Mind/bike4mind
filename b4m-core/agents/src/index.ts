@@ -18,6 +18,8 @@ export {
 export type { RepeatedCallGuardOptions, RepeatedCallRecord } from './repeatedCallGuard';
 export { PERSONA_ALLOWED_SUBAGENTS } from './types';
 export { isContextLimitError } from './errors';
+export { usableEvidenceConfidence } from './iterationConfidence';
+export type { ScoredToolCall } from './iterationConfidence';
 export type {
   AgentCheckpoint,
   AgentContext,

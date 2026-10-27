@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 
 // Model admission reads admin settings from the real repository; these tests exercise other gates.
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
@@ -233,6 +234,19 @@ describe('processSubagentDispatch tool deps', () => {
       );
       expect(llm.currentModel).toBe(SUCCESSOR_ID);
       expect(deps.model).toBe(SUCCESSOR_ID);
+    } finally {
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
+    }
+  });
+
+  it('withholds the owner admin role on a child of a run whose key lacks the admin scope', async () => {
+    const { agentExecutionRepository, User } = await import('@bike4mind/database');
+    vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, isAdmin: true } as never);
+    vi.mocked(agentExecutionRepository.findById).mockResolvedValue({ ...childDoc, adminRoleWithheld: true } as never);
+    try {
+      const deps = await dispatchWithSession(baseSession);
+
+      expect((deps.user as { isAdmin?: boolean }).isAdmin).toBe(false);
     } finally {
       vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
     }

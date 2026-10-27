@@ -9,7 +9,7 @@ import type { OverwatchUtm } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { laneMetadata } from './lane';
-import { pseudonymizeUserId } from './pseudonymize';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 
 const NOT_CONFIGURED = 'not-configured';
 const EMIT_TIMEOUT_MS = 2_000;

@@ -117,6 +117,7 @@ export const EmailEvents = {
       to: z.string(),
       subject: z.string(),
       body: z.string(),
+      category: z.literal('otc').optional(),
       attachments: z
         .array(
           z.object({

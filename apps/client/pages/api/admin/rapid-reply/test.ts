@@ -4,8 +4,9 @@ import { adminSettingsRepository } from '@bike4mind/database/infra';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services/llm';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { requestTurnAuth } from '@server/auth/turnAuth';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { sessionRepository } from '@bike4mind/database';
@@ -44,14 +45,35 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       throw new BadRequestError('mainModelId is required for testing');
     }
 
+    // mainModelId comes straight from the body, so bound it before it lands in the audit entry.
+    const auditModelId = String(mainModelId).slice(0, 200);
+    const recordTestRun = async (success: boolean) =>
+      recordAdminActionFromRequest(req, {
+        action: 'settings.rapid_reply.test_run',
+        target: { kind: 'settings', id: auditModelId, displayName: `Rapid reply test for ${auditModelId}` },
+        summary: `ran rapid reply test for ${auditModelId}`,
+        details: {
+          mainModelId: auditModelId,
+          success,
+          simulateLatencyMs: Number.isFinite(simulateLatency) ? simulateLatency : undefined,
+        },
+      });
+    const recordFailedRunAndRethrow = async (error: unknown): Promise<never> => {
+      await recordTestRun(false);
+      throw error;
+    };
+
     // Get system settings
-    const settings = await adminSettingsRepository.getSettingsValue('RapidReplySettings');
+    const settings = await adminSettingsRepository
+      .getSettingsValue('RapidReplySettings')
+      .catch(recordFailedRunAndRethrow);
     if (!settings) {
-      throw new Error('Rapid Reply settings not found. Please configure settings first.');
+      return recordFailedRunAndRethrow(new Error('Rapid Reply settings not found. Please configure settings first.'));
     }
 
     // Check if Rapid Reply is enabled
     if (!settings.enabled) {
+      await recordTestRun(false);
       return res.json({
         success: false,
         message: 'Rapid Reply is currently disabled in settings',
@@ -64,8 +86,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     // Find mapping for the main model
-    const mapping = await rapidReplyMappingRepository.findByMainModel(mainModelId);
+    const mapping = await rapidReplyMappingRepository.findByMainModel(mainModelId).catch(recordFailedRunAndRethrow);
     if (!mapping) {
+      await recordTestRun(false);
       return res.json({
         success: false,
         message: `No Rapid Reply mapping found for model: ${mainModelId}`,
@@ -83,6 +106,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     // Check if mapping is enabled
     if (!mapping.enabled) {
+      await recordTestRun(false);
       return res.json({
         success: false,
         message: `Rapid Reply mapping for ${mainModelId} is disabled`,
@@ -101,7 +125,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     // Find applicable prompts
-    const prompts = await rapidReplyPromptRepository.findByModelPair(mapping.id);
+    const prompts = await rapidReplyPromptRepository.findByModelPair(mapping.id).catch(recordFailedRunAndRethrow);
     const activePrompts = prompts.filter(p => p.isActive);
 
     // Actually test the rapid reply process with proper measurement
@@ -529,45 +553,52 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       recommendations.push('Mapping max tokens exceeds default setting. Consider adjusting for consistency.');
     }
 
-    await rapidReplyAuditLogRepository.createLog({
-      entityType: 'settings',
-      entityId: 'test',
-      action: 'update',
-      changes: {
-        testConfiguration: {
-          after: {
-            mainModelId,
-            testInput: testInput.substring(0, 50) + (testInput.length > 50 ? '...' : ''),
-            actualRapidReplyLatency,
-            actualRapidReplyTtfvt,
-            actualResponseLength,
-            latencyCheck,
-            mappingFound: true,
-            promptsAvailable: activePrompts.length,
-            testSuccess: !errorMessage,
-            tokensUsed: actualTokensUsed,
-            estimatedCost: actualCost,
-            responseGenerated: !!rapidReplyResponse,
-            timing: {
-              testStartTime,
-              rapidReplyStartTime,
-              rapidReplyEndTime,
-              testEndTime,
+    const testSuccess = !errorMessage && !!rapidReplyResponse;
+
+    await rapidReplyAuditLogRepository
+      .createLog({
+        entityType: 'settings',
+        entityId: 'test',
+        action: 'update',
+        changes: {
+          testConfiguration: {
+            after: {
+              mainModelId,
+              testInput: testInput.substring(0, 50) + (testInput.length > 50 ? '...' : ''),
+              actualRapidReplyLatency,
+              actualRapidReplyTtfvt,
+              actualResponseLength,
+              latencyCheck,
+              mappingFound: true,
+              promptsAvailable: activePrompts.length,
+              testSuccess,
+              tokensUsed: actualTokensUsed,
+              estimatedCost: actualCost,
+              responseGenerated: !!rapidReplyResponse,
+              timing: {
+                testStartTime,
+                rapidReplyStartTime,
+                rapidReplyEndTime,
+                testEndTime,
+              },
             },
           },
         },
-      },
-      userId: req.user!.id,
-      userEmail: req.user!.email || undefined,
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent'],
-      metadata: {
-        testRun: true,
-        simulatedLatency: simulateLatency,
-      },
-    });
+        userId: req.user!.id,
+        userEmail: req.user!.email || undefined,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        metadata: {
+          testRun: true,
+          simulatedLatency: simulateLatency,
+        },
+      })
+      .catch(async (error: unknown) => {
+        await recordTestRun(testSuccess);
+        throw error;
+      });
 
-    const testSuccess = !errorMessage && !!rapidReplyResponse;
+    await recordTestRun(testSuccess);
 
     console.log(
       `${testSuccess ? '✅' : '❌'} Test ${testSuccess ? 'completed' : 'failed'} for ${mainModelId} - TTFVT: ${rapidReplyTtfvt}ms, Latency: ${actualRapidReplyLatency}ms, Length: ${actualResponseLength}`

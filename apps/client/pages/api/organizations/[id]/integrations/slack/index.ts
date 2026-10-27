@@ -10,7 +10,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { NotFoundError } from '@bike4mind/utils';
 import { IOrgSlackWorkspaceDocument, IOrgSlackWorkspaceResponse } from '@bike4mind/common';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 
 function toResponse(
   doc: IOrgSlackWorkspaceDocument & { createdAt: Date; updatedAt: Date }

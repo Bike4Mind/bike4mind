@@ -16,6 +16,8 @@ import {
   isChunkClaimLostError,
   DuplicateFabFileError,
   isDuplicateFabFileError,
+  UrlBlockedError,
+  isUrlBlockedError,
   StorageLimitError,
   describeStorageLimitError,
   isStorageLimitError,
@@ -94,6 +96,25 @@ describe('isZodError', () => {
   it('returns true for objects with name ZodError', () => {
     const fakeZod = { name: 'ZodError' };
     expect(isZodError(fakeZod)).toBe(true);
+  });
+});
+
+describe('isUrlBlockedError', () => {
+  it('returns true for a real UrlBlockedError, which is also a 400 BadRequestError', () => {
+    const err = new UrlBlockedError('URL blocked for security reasons');
+    expect(isUrlBlockedError(err)).toBe(true);
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err.statusCode).toBe(HttpStatus.BadRequest);
+  });
+
+  it('returns true for an error from another module realm that only carries the name', () => {
+    expect(isUrlBlockedError(Object.assign(new BadRequestError('blocked'), { name: 'UrlBlockedError' }))).toBe(true);
+  });
+
+  it('returns false for a plain BadRequestError and for non-errors', () => {
+    expect(isUrlBlockedError(new BadRequestError('Unsupported file type'))).toBe(false);
+    expect(isUrlBlockedError(undefined)).toBe(false);
+    expect(isUrlBlockedError(null)).toBe(false);
   });
 });
 

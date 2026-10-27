@@ -44,7 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   questRepository: { findOne: h.questFindOne },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: h.getOperationsModel },
 }));
 

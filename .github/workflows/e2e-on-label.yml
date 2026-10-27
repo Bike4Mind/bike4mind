@@ -13,7 +13,7 @@ jobs:
     # (label is maintainer-added). No AWS credentials here: the dev role's OIDC trust
     # rejects the pull_request subject, and preview runs never `sst shell` anyway.
     if: github.event.label.name == 'run-e2e' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: E2E Tests
     timeout-minutes: 20
     continue-on-error: true
@@ -116,10 +116,18 @@ jobs:
           fi
           pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
 
+      - name: Scrub E2E secrets from test output
+        id: scrub
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        env:
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+        run: python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
         # found" warning that reads like the run lost its report.
-        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report-${{ steps.config.outputs.stage }}-label

@@ -3,9 +3,9 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User } from '@bike4mind/database';
 import { getTokens, GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/google/drive/common';
-import { encryptToken } from '@server/security/tokenEncryption';
-import { verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
-import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { verifyStateToken, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
+import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { GOOGLE_DRIVE_CONNECT_ERROR } from '@client/shared/googleDriveConnectErrors';
 import type { Request } from 'express';
 

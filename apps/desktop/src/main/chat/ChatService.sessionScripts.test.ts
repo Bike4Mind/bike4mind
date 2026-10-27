@@ -1,15 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/chat';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+import { bashExecute } from './tools/shellTools';
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -20,6 +21,11 @@ function toolTurn(id: string, name: string, input: Record<string, unknown>): str
 }
 
 type Round = [string, Record<string, unknown>];
+
+// npm and npx stubs first on PATH. What is checked here is whether a command is asked about, and a
+// real npm boot plus the vitest or prettier it runs can outlast the 5 s settle wait on a loaded runner.
+const stub = vi.hoisted(() => ({ bin: '' }));
+vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
 
 describe('ChatService running a script written in the same session', () => {
   let service: ChatService;
@@ -41,6 +47,14 @@ describe('ChatService running a script written in the same session', () => {
       timeout: 5000,
       interval: 10,
     });
+
+  beforeAll(async () => {
+    stub.bin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-scripts-bin-')));
+    for (const tool of ['npm', 'npx']) {
+      await writeFile(join(stub.bin, tool), '#!/bin/sh\nexit 0\n', 'utf8');
+      await chmod(join(stub.bin, tool), 0o755);
+    }
+  });
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-scripts-')));
@@ -77,6 +91,7 @@ describe('ChatService running a script written in the same session', () => {
   afterEach(() => {
     service.dispose();
     for (const stream of streams) stream.end();
+    vi.restoreAllMocks();
   });
 
   /** One reply of `rounds`; each round waits for the previous round's call to settle. */
@@ -305,19 +320,28 @@ describe('ChatService running a script written in the same session', () => {
   });
 
   it('runs a test runner unasked after only a test file was edited', async () => {
+    // Exercise approval without launching npm or a nested test runner from the temporary project.
+    const run = vi.spyOn(bashExecute, 'run').mockResolvedValue('ok');
+    const command = 'npx --no-install vitest run src/a.test.ts';
     const id = await session('auto');
-    await reply(id, [write('src/a.test.ts', 'export {};\n'), shell('npx --no-install vitest run src/a.test.ts')]);
+    await reply(id, [write('src/a.test.ts', 'export {};\n'), shell(command)]);
 
     await settled('bash_execute');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+    expect(calls('bash_execute', 'done')).toHaveLength(1);
+    expect(run).toHaveBeenCalledExactlyOnceWith({ command, cwd: root }, expect.objectContaining({ sessionId: id }));
   });
 
   it('runs a formatter through npx unasked after a source edit', async () => {
+    const run = vi.spyOn(bashExecute, 'run').mockResolvedValue('ok');
+    const command = 'npx --no-install prettier --check src.ts';
     const id = await session('auto');
-    await reply(id, [write('src.ts', 'export {};\n'), shell('npx --no-install prettier --check src.ts')]);
+    await reply(id, [write('src.ts', 'export {};\n'), shell(command)]);
 
     await settled('bash_execute');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+    expect(calls('bash_execute', 'done')).toHaveLength(1);
+    expect(run).toHaveBeenCalledExactlyOnceWith({ command, cwd: root }, expect.objectContaining({ sessionId: id }));
   });
 
   it('asks before git told to run a program through -c, with nothing written', async () => {
@@ -329,10 +353,12 @@ describe('ChatService running a script written in the same session', () => {
   });
 
   it('asks before a test runner after its config was edited', async () => {
+    const run = vi.spyOn(bashExecute, 'run').mockResolvedValue('ok');
     const id = await session('auto');
     await reply(id, [write('vitest.config.ts', 'export default {};\n'), shell('npx --no-install vitest run')]);
 
     await awaitCall('bash_execute', 'awaiting-approval');
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('does not count a script another conversation wrote', async () => {

@@ -196,8 +196,8 @@ ArtifactSchema.index({ deletedAt: 1 }); // Soft delete queries
 ArtifactSchema.index({ sourceQuestId: 1 });
 // Public v1 artifact list (listOwnedBeforeId): equality on owner and live, then the _id keyset
 // (scanned in reverse for newest first).
-// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: prod
-// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: the
+// build is fire-and-forget and would start on a cold Lambda boot, on a user request.
 ArtifactSchema.index({ userId: 1, deletedAt: 1, _id: 1 });
 
 // Text search index for title and description

@@ -10,7 +10,7 @@ export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps
     // Loaded on first use: only jobs requested from Slack need the Slack package, its server wiring and the
     // encryption key (tokenEncryption reads its secrets when the module loads).
     const [{ decryptToken }, { initializeSlackPackage }, { SlackClient }] = await Promise.all([
-      import('@server/security/tokenEncryption'),
+      import('@bike4mind/server-utils/security/tokenEncryption'),
       import('@server/integrations/slack/slackPackageInit'),
       import('@bike4mind/slack'),
     ]);
