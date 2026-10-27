@@ -22,7 +22,7 @@ import {
   USERNAME_RULES_MESSAGE,
   usernameSchema,
 } from '@bike4mind/common';
-import { releasePendingFreeCredits } from './freeCredits';
+import { type FreeCreditAdapters, releasePendingFreeCredits } from './freeCredits';
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
 import { assertUsernameNotReserved } from './reservedUsername';
@@ -93,6 +93,8 @@ interface RegisterUserAdapters {
    * Used by OTC registration where email ownership is already verified.
    */
   skipInviteCheck?: boolean;
+  /** Forwarded to the staged signup grant's first assessment (see FreeCreditAdapters). */
+  collectRiskSignals?: FreeCreditAdapters['collectRiskSignals'];
 }
 
 export const registerUser = async (
@@ -450,6 +452,7 @@ export const registerViaOTC = async (
       },
       reason: 'OTC registration (email verified)',
       logger,
+      collectRiskSignals: adapters.collectRiskSignals,
     });
     // On failure the patch is empty, so the pending tag and amount survive as the retry
     // breadcrumb while the user is still verified and let in.

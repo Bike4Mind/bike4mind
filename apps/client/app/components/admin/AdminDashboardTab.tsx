@@ -8,6 +8,7 @@ import { UsageBySourceCard } from './EventMetrics/components/UsageBySourceCard';
 import { AnalyticsTermHelp } from './EventMetrics/components/AnalyticsTermHelp';
 import { OverviewTab } from './EventMetrics/components/OverviewTab';
 import { useAdminActivitySummary } from './useAdminActivitySummary';
+import { NewSignupsTile } from './Signups/NewSignupsTile';
 
 const DASHBOARD_SHORTCUTS = [
   {
@@ -105,6 +106,17 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
           </Grid>
         </Box>
       )}
+
+      <Stack spacing={1}>
+        <Typography level="h2">
+          Signups
+          <AnalyticsTermHelp
+            term="Signups"
+            description="New accounts, in your local time. Likely legit excludes accounts the suspected-signup signals flag, such as bursts of accounts on one domain, machine-regular signup cadence, or bot traffic. Suspected accounts are counted separately and can be reviewed on the Users tab."
+          />
+        </Typography>
+        <NewSignupsTile onReview={() => onNavigate(AdminTab.Users)} />
+      </Stack>
 
       <Stack spacing={1}>
         <Typography level="h2">

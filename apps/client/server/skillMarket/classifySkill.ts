@@ -105,6 +105,7 @@ export function buildClassifierUserMessage(snapshot: ISkillSnapshot, nonce: stri
     `author description: ${snapshot.description}`,
     `argument hint: ${snapshot.argumentHint ?? '(none)'}`,
     `declared tools: ${(snapshot.allowedTools ?? []).join(', ') || '(none)'}`,
+    `declared Claude Code tools: ${(snapshot.claudeCodeAllowedTools ?? []).join(', ') || '(none)'}`,
     'body:',
     snapshot.body,
     close,

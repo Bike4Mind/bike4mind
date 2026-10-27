@@ -275,6 +275,7 @@ export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(
     body: { type: String, required: true, maxlength: 50_000 },
     argumentHint: { type: String, maxlength: 200 },
     allowedTools: { type: [String] },
+    claudeCodeAllowedTools: { type: [String], default: undefined },
     disableModelInvocation: { type: Boolean, default: false },
 
     // Scope discriminator. Exactly one of userId / organizationId / isSystem

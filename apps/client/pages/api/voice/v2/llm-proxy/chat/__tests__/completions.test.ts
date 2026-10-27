@@ -23,6 +23,8 @@ const {
   mockProcess,
   mockWriteStaticCompletion,
   mockInvokeOptions,
+  mockSseChunk,
+  processState,
 } = vi.hoisted(() => ({
   mockVerifyVoiceSessionToken: vi.fn(),
   mockFindDuplicateQuests: vi.fn(),
@@ -32,6 +34,8 @@ const {
   mockProcess: vi.fn(),
   mockWriteStaticCompletion: vi.fn(),
   mockInvokeOptions: vi.fn(),
+  mockSseChunk: vi.fn(),
+  processState: { terminalError: undefined as Error | undefined },
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
@@ -105,6 +109,7 @@ vi.mock('@bike4mind/services/llm', () => ({
     invoke = (...args: unknown[]) => mockInvoke(...args);
   },
   ChatCompletionProcess: class {
+    terminalError = processState.terminalError;
     process = (...args: unknown[]) => mockProcess(...args);
   },
 }));
@@ -112,10 +117,13 @@ vi.mock('@bike4mind/services/llm', () => ({
 vi.mock('@bike4mind/voice', () => ({
   buildClientToolPassthrough: () => ({}),
   currentTurnUserMessage: () => 'hello there',
-  diffAccumulated: () => '',
+  diffAccumulated: (sent: string, visible: string) => visible.slice(sent.length),
   extractSystemPrompt: () => '',
   emitInitialBuffer: () => {},
-  openAiSseChunk: () => 'chunk',
+  openAiSseChunk: (...args: unknown[]) => {
+    mockSseChunk(...args);
+    return 'chunk';
+  },
   openAiSseDone: () => 'done',
   stripSpokenThinking: (text: string) => text,
   writeStaticCompletion: (...args: unknown[]) => mockWriteStaticCompletion(...args),
@@ -168,6 +176,7 @@ function primeSuccessfulTurn() {
   mockGetSettingsMap.mockResolvedValue({});
   mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
   mockProcess.mockResolvedValue(undefined);
+  processState.terminalError = undefined;
 }
 
 describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
@@ -182,6 +191,17 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
     const expected = ['list_my_data_lakes', 'create_data_lake', 'save_content_to_data_lake'];
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual(expected);
     expect((mockProcess.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual(expected);
+  });
+
+  // A fixed budget reads as a caller choice, so the model-aware default never applies and a
+  // reasoning model spends the whole 4096 thinking.
+  it('sends no fixed max_tokens, so the budget is sized per model', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    type Body = { body: { params: Record<string, unknown> } };
+    for (const call of [mockInvoke.mock.calls[0][0], mockProcess.mock.calls[0][0]] as Body[]) {
+      expect(call.body.params).not.toHaveProperty('max_tokens');
+    }
   });
 
   // Speech streams from the raw reply, so a choices block would be read aloud.
@@ -503,6 +523,19 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
     await handler(makeReq() as never, { ...makeRes(), status } as never);
 
     expect402(status);
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - settled budget error', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  it('speaks the settled reply before closing, rather than going silent', async () => {
+    processState.terminalError = new Error('budget');
+    mockInvoke.mockResolvedValue({ id: 'quest-1', replies: ['Out of room.'], reply: 'Out of room.' });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockSseChunk).toHaveBeenCalledWith(expect.objectContaining({ contentDelta: 'Out of room.' }));
   });
 });
 

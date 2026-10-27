@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
+  OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
@@ -348,6 +349,23 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
  */
 export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
+  quest_id: z.string(),
+  sessionId: z.string().optional(),
+});
+
+/**
+ * 422 on `wait: true`. `errorCode` is `output_budget_exhausted` when a reasoning model spent the caller's
+ * whole `max_tokens` thinking; it is optional because schema-validation 422s carry none. `quest_id` and
+ * `sessionId` are present only on that settled-turn case.
+ */
+export const ChatWaitUnprocessableErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE).optional(),
+  quest_id: z.string().optional(),
+  sessionId: z.string().optional(),
+});
+
+/** 502 on `wait: true`: the turn settled as an error upstream; `quest_id` is the settled quest. */
+export const ChatWaitUpstreamErrorSchema = ApiErrorSchema.extend({
   quest_id: z.string(),
   sessionId: z.string().optional(),
 });

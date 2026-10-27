@@ -6,6 +6,7 @@
  */
 
 import { BadRequestError } from '@bike4mind/utils';
+import { splitAllowedTools } from '@bike4mind/common/utils/skillMd';
 import { validateToolList } from './agentValidation';
 
 const SKILL_NAME_MAX = 64;
@@ -67,4 +68,12 @@ export function validateSkillArgumentHint(value: unknown): string | undefined {
 export function validateSkillAllowedTools(value: unknown): string[] | undefined {
   // Reuse the agent validator - same 100-entry / 256-char-per-entry bounds apply.
   return validateToolList(value, 'allowedTools');
+}
+
+/**
+ * Same bounds as allowedTools, but no name check: these are Claude Code tool names, never run here.
+ * Entries are split to one tool each so the scan sees what the SKILL.md export will grant.
+ */
+export function validateSkillClaudeCodeAllowedTools(value: unknown): string[] | undefined {
+  return validateToolList(value, 'claudeCodeAllowedTools')?.flatMap(splitAllowedTools);
 }

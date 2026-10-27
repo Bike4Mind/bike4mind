@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import { request as httpRequest, type Server } from 'http';
 import express from 'express';
+import { OutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import type { z } from 'zod';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
@@ -1008,6 +1009,32 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
       message,
     });
     expect(text).not.toContain('secret-model-name');
+  });
+
+  it('classifies an exhausted caller max_tokens in-band and logs it at warn', async () => {
+    mockExecuteCompletion.mockImplementationOnce(
+      failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'secret-model-name'))
+    );
+
+    const text = await (await post({ ...COMPLETION, max_tokens: 256 })).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'output_budget_exhausted' });
+    expect(text).not.toContain('secret-model-name');
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['non-positive', 0],
+  ])('keeps a %s max_tokens budget that ran out as provider_error, still at warn', async (_label, maxTokens) => {
+    mockLoggerError.mockClear();
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'm')));
+
+    const text = await (
+      await post(maxTokens === undefined ? COMPLETION : { ...COMPLETION, max_tokens: maxTokens })
+    ).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'provider_error' });
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+    expect(mockLoggerError).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
   });
 
   it('classifies a Bedrock AccessDeniedException as provider_rejected and logs its status', async () => {
