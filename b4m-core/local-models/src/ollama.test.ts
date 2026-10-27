@@ -462,11 +462,15 @@ describe('OllamaRuntime.pull', () => {
     await expect(runtimeFor(server).pull('qwen3:8b', { idleTimeoutMs: 500 })).resolves.toBeUndefined();
   });
 
-  it.each([0, -1, NaN])('rejects idleTimeoutMs %s before contacting the runtime', async idleTimeoutMs => {
+  it.each([0, -1, -Infinity, NaN])('rejects idleTimeoutMs %s before contacting the runtime', async idleTimeoutMs => {
     server = await startFakeServer({});
-    await expect(runtimeFor(server).pull('qwen3:8b', { idleTimeoutMs })).rejects.toThrow(
-      'idleTimeoutMs must be a positive number or Infinity'
-    );
+    const runtime = runtimeFor(server);
+    const pull = runtime.pull('qwen3:8b', { idleTimeoutMs });
+    await expect(pull).rejects.toBeInstanceOf(LocalRuntimeError);
+    await expect(pull).rejects.toMatchObject({
+      runtimeId: runtime.id,
+      message: `idleTimeoutMs must be a positive number or Infinity, got ${idleTimeoutMs}`,
+    });
     expect(server.requests).toHaveLength(0);
   });
 

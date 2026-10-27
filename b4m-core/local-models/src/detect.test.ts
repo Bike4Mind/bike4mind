@@ -121,17 +121,27 @@ describe('detectRuntimes', () => {
     expect(found[0]?.configured).toBe(true);
   });
 
-  it('counts a FastAPI-style 401 on a default port as a keyed runtime', async () => {
-    const guarded = await serve({ 'GET /v1/models': json({ detail: 'Invalid API key' }, 401) });
+  it.each([401, 403])('counts a FastAPI-style %i on a default port as a keyed runtime', async status => {
+    const guarded = await serve({ 'GET /v1/models': json({ detail: 'Invalid API key' }, status) });
     const found = await detectRuntimes({
       defaultHosts: [guarded.baseUrl],
       fetch: routedFetch({}),
     });
-    expect(found.map(entry => entry.health)).toEqual([{ ok: false, version: null, error: 'Requires an API key' }]);
+    expect(found.map(entry => [entry.runtime.kind, entry.configured, entry.health])).toEqual([
+      ['openai-compatible', false, { ok: false, version: null, error: 'Requires an API key' }],
+    ]);
   });
 
-  it('ignores a default-port 401 whose detail is not a string', async () => {
-    const other = await serve({ 'GET /v1/models': json({ detail: [{ msg: 'x' }] }, 401) });
+  it.each([undefined, null, 0, false, {}, [{ msg: 'x' }]])(
+    'ignores a default-port auth error whose detail is %j',
+    async detail => {
+      const other = await serve({ 'GET /v1/models': json({ detail }, 401) });
+      expect(await detectRuntimes({ defaultHosts: [other.baseUrl], fetch: routedFetch({}) })).toEqual([]);
+    }
+  );
+
+  it.each([400, 404, 500])('does not count a FastAPI-style %i as a keyed runtime', async status => {
+    const other = await serve({ 'GET /v1/models': json({ detail: 'Not available' }, status) });
     expect(await detectRuntimes({ defaultHosts: [other.baseUrl], fetch: routedFetch({}) })).toEqual([]);
   });
 

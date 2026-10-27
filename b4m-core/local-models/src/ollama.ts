@@ -256,7 +256,7 @@ export class OllamaRuntime implements LocalRuntime {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
       clearTimeout(timer);
-      // Infinity (or a delay past 2^31-1) would otherwise fire after 1ms; treat it as "no watchdog".
+      // Infinity disables the watchdog; clamp finite delays to avoid Node's 1ms overflow fallback.
       if (Number.isFinite(idleTimeoutMs))
         timer = setTimeout(() => idle.abort(idleError), Math.min(idleTimeoutMs, MAX_TIMER_MS));
     };
