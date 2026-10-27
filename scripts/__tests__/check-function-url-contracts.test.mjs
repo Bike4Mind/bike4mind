@@ -14,7 +14,7 @@ import {
 } from '../check-function-url-contracts.mjs';
 
 /**
- * Behavior tests for scripts/check-function-url-contracts.mjs, the third scan of
+ * Behavior tests for scripts/check-function-url-contracts.mjs, scan 4 of
  * scripts/check-contract-gate.sh. The pure helpers are tested directly; the
  * structural outcomes (missing handler, overlay handler, missing infra/) run the
  * real CLI against a throwaway tree.

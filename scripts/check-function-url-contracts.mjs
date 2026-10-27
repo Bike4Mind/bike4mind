@@ -10,7 +10,7 @@
 //
 // The repo-guards CI job installs nothing, so this is a hand-written scanner
 // rather than esbuild/typescript. Known limits: a `defineLambdaRoute(` inside a
-// string literal counts as a use (shared with the other two scans), and the import
+// string literal counts as a use (shared with the earlier scans), and the import
 // walk proves a routed module is reachable from the handler, not that the exported
 // handler delegates to it, so importing any value from a routed module passes.
 // Declarations it cannot see: only the literal `new sst.aws.Function(` is found, so an
