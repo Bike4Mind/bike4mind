@@ -13,6 +13,7 @@ import { laneMetadata } from './lane';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { rewardInviterForFirstAnswer } from '@server/referrals/firstAnswerReward';
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is
 // app/utils/funnelEvents.ts. Users flagged isSynthetic are handled differently by each: the client
@@ -192,6 +193,7 @@ export async function emitEmailVerifiedFunnelEvents(opts: {
       event: 'credits_granted',
       metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
     }),
+    rewardInviterForFirstAnswer(opts.user.id),
   ]);
 }
 
@@ -214,6 +216,7 @@ export async function recordFirstValue(opts: {
     const res = await User.updateOne({ _id: opts.user.id, firstValueAt: null }, { $set: { firstValueAt: now } });
     if (res.modifiedCount !== 1) return false;
     await opts.onRecorded?.();
+    await rewardInviterForFirstAnswer(opts.user.id);
     const createdAt = opts.user.createdAt ? new Date(opts.user.createdAt).getTime() : NaN;
     return await emitFunnelEvent({
       user: opts.user,
