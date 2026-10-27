@@ -480,22 +480,25 @@ export function DataTable<Row>({
 
 type Section<Row> = { id: string; header?: ReactNode; rows: Row[] };
 
-/** Splits the page into the given groups, in their order, then a headerless section for the rest. */
+/**
+ * Splits the page into the given groups, in their order, then a headerless section for the rest.
+ * Rows keep page order inside a group so a group never overrides the requested sort.
+ */
 function groupSections<Row>(
   rows: readonly Row[],
   getRowId: (row: Row) => string,
   groups: readonly DataTableGroup[] | undefined
 ): Section<Row>[] {
   if (!groups) return [{ id: 'all', rows: [...rows] }];
-  const byId = new Map(rows.map(row => [getRowId(row), row]));
   const placed = new Set<string>();
   const sections: Section<Row>[] = [];
   for (const group of groups) {
-    const groupRows = group.rowIds.flatMap(id => {
-      const row = byId.get(id);
-      if (!row || placed.has(id)) return [];
+    const members = new Set(group.rowIds);
+    const groupRows = rows.filter(row => {
+      const id = getRowId(row);
+      if (!members.has(id) || placed.has(id)) return false;
       placed.add(id);
-      return [row];
+      return true;
     });
     if (groupRows.length > 0) sections.push({ id: group.id, header: group.header, rows: groupRows });
   }
