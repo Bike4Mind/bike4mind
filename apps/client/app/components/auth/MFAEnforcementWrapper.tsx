@@ -27,6 +27,9 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // seeing the toggle. That refusal is authoritative even if the status query then errors.
   const [enrollmentRefused, setEnrollmentRefused] = useState(false);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+  // Setup answered 409: the server's own DB read says this account is enrolled, so this tab's
+  // status/user caches are stale (e.g. on /new right after enrolling during sign-in).
+  const [enrolledOnServer, setEnrolledOnServer] = useState(false);
 
   // Get MFA enforcement setting from admin settings
   const enforceMFA = adminSettings?.enforceMFA === 'true';
@@ -65,12 +68,19 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       },
       onError: (error: any) => {
         if (isStepUpCancelled(error)) return;
+        if (error.response?.status === 409) {
+          setEnrolledOnServer(true);
+          void queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
+          void queryClient.invalidateQueries({ queryKey: ['user'] });
+          void queryClient.invalidateQueries({ queryKey: ['auth', 'identify'] });
+          return;
+        }
         // Extract the actual error message from axios response
         const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
         toast.error(errorMessage);
       },
     });
-  }, [setupMFAMutate]);
+  }, [setupMFAMutate, queryClient]);
 
   // The server refuses a session that owes enrollment as soon as its own settings cache sees
   // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on the
@@ -236,7 +246,12 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // If MFA is enforced and user hasn't configured it, block access.
   // A failed status query normally leaves the app alone, but an observed enrollment refusal is
   // the server telling us this session owes enrollment, so it blocks regardless.
-  if (enforceMFA && (!mfaQueryFailed || enrollmentRefused) && (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)) {
+  if (
+    enforceMFA &&
+    !enrolledOnServer &&
+    (!mfaQueryFailed || enrollmentRefused) &&
+    (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)
+  ) {
     return (
       <Box
         data-testid="mfa-enforcement-required-screen"

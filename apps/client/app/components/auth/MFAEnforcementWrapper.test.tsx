@@ -131,6 +131,35 @@ describe('MFAEnforcementWrapper - auto-setup does not loop on persistent failure
   });
 });
 
+describe('MFAEnforcementWrapper - stale caches after enrolling at sign-in', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    // The status/user caches still say "not enrolled", but the server already has MFA on.
+    get.mockResolvedValue({ data: { enabled: false } });
+    post.mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 409'), {
+        response: { status: 409, data: { error: 'MFA is already enabled for this account.' } },
+      })
+    );
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('lets the user in on a 409 from setup instead of showing the setup error', async () => {
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    expect(mfaSetupCalls()).toBe(1);
+    expect(screen.queryByTestId('mfa-enforcement-retry-btn')).toBeNull();
+    expect(toastError).not.toHaveBeenCalled();
+    // The stale status cache is refreshed rather than trusted.
+    await waitFor(() => expect(get.mock.calls.filter(([url]) => url === '/api/auth/mfa/status').length).toBe(2));
+  });
+});
+
 describe('MFAEnforcementWrapper - dismissed verification prompt', () => {
   beforeEach(() => {
     post.mockReset();
