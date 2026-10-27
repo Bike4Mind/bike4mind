@@ -151,8 +151,18 @@ describe('UserProfileView', () => {
     it('lists the profile commands in the palette, with Suspend disabled for a suspended account', () => {
       setup(buildProfile({ isBanned: true }));
 
-      expect(screen.getByTestId('admin-command-credits-btn')).toBeEnabled();
-      expect(screen.getByTestId('admin-command-suspend-btn')).toBeDisabled();
+      fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+
+      expect(screen.getByRole('option', { name: 'Adjust credits' })).toBeEnabled();
+      expect(screen.getByRole('option', { name: 'Suspend account' })).toBeDisabled();
+    });
+
+    it('does not repeat the header actions in the command strip', () => {
+      setup();
+
+      expect(screen.queryByTestId('admin-command-credits-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('admin-command-suspend-btn')).not.toBeInTheDocument();
+      expect(screen.getByTestId('admin-command-revoke-btn')).toBeInTheDocument();
     });
 
     it('Revoke API keys opens the audited revoke flow for this user only', () => {
