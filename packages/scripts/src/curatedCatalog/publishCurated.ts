@@ -115,6 +115,8 @@ export async function publishCandidate(candidate: CuratedCandidate, deps: Publis
   const order = [versioned, `${versioned}.sig`, LATEST_SIG, LATEST];
   if (plan.kind === 'first-publish') log(`plan: first publish of sequence ${sequence}`);
   else if (plan.kind === 'already-live') log(`plan: finish the interrupted publish of sequence ${sequence}`);
+  else if (plan.kind === 'recover')
+    log(`plan: sequence ${plan.liveSequence} -> ${sequence}, below live: it revokes ${plan.revokes.join(', ')}`);
   else log(`plan: sequence ${plan.liveSequence} -> ${sequence}`);
   log(`plan: write ${order.join(', ')}, then invalidate ${LATEST} and ${LATEST_SIG}`);
   if (deps.dryRun) return EXIT.ok;

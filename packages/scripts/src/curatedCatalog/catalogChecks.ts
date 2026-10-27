@@ -138,13 +138,16 @@ export type PublishPlan =
   | { kind: 'publish'; liveSequence: number }
   | { kind: 'already-live'; liveSequence: number }
   | { kind: 'behind-live'; liveSequence: number; reason: string }
+  /** Below a live list whose every signer the candidate revokes, so clients drop that list and take this one. */
+  | { kind: 'recover'; liveSequence: number; revokes: string[] }
   | { kind: 'refused'; reason: string };
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer.from(b));
 
 /**
  * Compares a verified candidate with the verified live list. Lower or equal-but-different is `behind-live`, which the
- * workflow reports as a sync lag. Refused: a step over MAX_SEQUENCE_STEP, revocations without a recovery
+ * workflow reports as a sync lag, unless it is `recover`: recovery-signed and revoking every key that signed the live
+ * list, as after a leaked key published a high sequence. Refused: a step over MAX_SEQUENCE_STEP, revocations without a recovery
  * signature, a rewritten changelog, a dropped revocation or an earlier `updatedAt`.
  */
 export function planPublish(candidate: CuratedCandidate, live: CuratedCandidate | null): PublishPlan {
@@ -152,12 +155,19 @@ export function planPublish(candidate: CuratedCandidate, live: CuratedCandidate 
   const liveSequence = live?.catalog.sequence ?? 0;
   if (live && next.sequence === liveSequence && sameBytes(candidate.manifest, live.manifest))
     return { kind: 'already-live', liveSequence };
-  if (live && next.sequence <= liveSequence)
+  if (live && next.sequence <= liveSequence) {
+    // Mirrors Desktop's CuratedSource: revocations apply before the sequence rule, so a live list signed only by keys
+    // this list revokes is dropped, and a recovery signature is never revoked.
+    const supersedes =
+      candidate.signers.some(key => key.role === 'recovery') &&
+      live.signers.every(key => key.role !== 'recovery' && next.revokedKeyIds.includes(key.keyId));
+    if (supersedes) return { kind: 'recover', liveSequence, revokes: live.signers.map(key => key.keyId) };
     return {
       kind: 'behind-live',
       liveSequence,
       reason: `sequence ${next.sequence} is not above live sequence ${liveSequence}`,
     };
+  }
   if (next.sequence - liveSequence > MAX_SEQUENCE_STEP)
     return {
       kind: 'refused',
