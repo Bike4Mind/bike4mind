@@ -857,6 +857,18 @@ export function localBackend(runtimeId: string): string {
 }
 
 /**
+ * Held by a device-local conversation with no model to pick. Malformed on purpose: `isLocalModel`
+ * is true so it never goes hosted, `parseLocalModelId` is null so it names no model.
+ */
+export const NO_LOCAL_MODEL = 'local:';
+
+/** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
+export function pickLocalModel(models: readonly { id: string }[], remembered?: string | null): string | null {
+  if (remembered && models.some(model => model.id === remembered)) return remembered;
+  return models[0]?.id ?? null;
+}
+
+/**
  * One model this deployment offers, as the picker renders it.
  *
  * Sourced from `GET /api/models`, which builds the list from the calling account's effective
