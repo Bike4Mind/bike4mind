@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DownloadOptions } from './download';
-import { LocalRuntimeError, ModelNotFoundError } from './errors';
-import { GgufModelStore } from './ggufStore';
+import { LocalRuntimeError, ModelFileBusyError, ModelNotFoundError, RuntimeStorageError } from './errors';
+import { lockFile } from './fileLock';
+import { GgufModelStore, assertFileName } from './ggufStore';
 import type { HubGgufFile, HuggingFaceHub } from './huggingface';
 import type { PullProgress } from './types';
 
@@ -119,8 +120,8 @@ describe('GgufModelStore', () => {
     expect((await store.add(source, { name: 'copy.gguf' })).name).toBe('copy.gguf');
 
     await expect(store.add(source)).rejects.toThrow('tiny-Q4_K_M.gguf already exists in the models directory');
-    await expect(store.add(source, { name: '../escape.gguf' })).rejects.toThrow('is not a GGUF file name');
-    await expect(store.add(source, { name: 'model.bin' })).rejects.toThrow('is not a GGUF file name');
+    await expect(store.add(source, { name: '../escape.gguf' })).rejects.toThrow('is not a usable GGUF file name');
+    await expect(store.add(source, { name: 'model.bin' })).rejects.toThrow('is not a usable GGUF file name');
     await expect(store.add(await sourceFile('fake.gguf', Buffer.from('PK\x03\x04 not gguf')))).rejects.toThrow(
       'fake.gguf is not a GGUF file'
     );
@@ -173,7 +174,7 @@ describe('GgufModelStore', () => {
     ]);
   });
 
-  it('refuses a file that exists at another size, unsafe names, and a second download of the same file', async () => {
+  it('refuses a file that exists at another size and unsafe names', async () => {
     const store = freshStore();
     const { hub } = fakeHub();
     await mkdir(store.dir, { recursive: true });
@@ -182,20 +183,105 @@ describe('GgufModelStore', () => {
       'x.gguf already exists with a different size'
     );
     await expect(store.download(hub, hubFile('weights.safetensors'))).rejects.toBeInstanceOf(LocalRuntimeError);
+    await expect(store.download(hub, hubFile('Q4/a,b.gguf'))).rejects.toThrow('is not a usable GGUF file name');
+  });
 
-    let release: () => void = () => undefined;
-    const slow: Pick<HuggingFaceHub, 'download'> = {
-      download: async (file, destination) => {
-        await new Promise<void>(done => (release = done));
-        await writeFile(destination, gguf(file.sizeBytes));
-        return { path: destination, sizeBytes: file.sizeBytes, sha256: null, resumedBytes: 0 };
+  it('accepts only portable file names', () => {
+    for (const name of ['Qwen2.5-0.5B-Instruct-Q4_K_M.gguf', 'model (copy) [v2]+fix.GGUF', 'con-model.gguf']) {
+      expect(() => assertFileName(name)).not.toThrow();
+    }
+    for (const name of [
+      'a,b.gguf',
+      'a:b.gguf',
+      'CON.gguf',
+      'nul.gguf',
+      'com1.gguf',
+      'LPT9.gguf',
+      ' lead.gguf',
+      '.hidden.gguf',
+      `mod${String.fromCharCode(0xe8)}le.gguf`,
+      'a;b.gguf',
+      'sub/x.gguf',
+      'x.gguf.',
+      `${'a'.repeat(196)}.gguf`,
+    ]) {
+      expect(() => assertFileName(name), name).toThrow(LocalRuntimeError);
+    }
+  });
+
+  it('marks a split model incomplete unless every shard name matches exactly', async () => {
+    const store = freshStore();
+    await mkdir(store.dir, { recursive: true });
+    for (const name of ['q-00001-of-00002.gguf', 'q-00002-of-00002.GGUF', 'U-00001-of-00002.GGUF']) {
+      await writeFile(join(store.dir, name), gguf());
+    }
+    await writeFile(join(store.dir, 'U-00002-of-00002.GGUF'), gguf());
+    const models = await store.list();
+    expect(models.map(({ name, complete }) => ({ name, complete }))).toEqual([
+      { name: 'U-00001-of-00002.GGUF', complete: true },
+      { name: 'q-00001-of-00002.gguf', complete: false },
+    ]);
+    await store.remove('U-00001-of-00002.GGUF');
+    expect((await readdir(store.dir)).sort()).toEqual(['q-00001-of-00002.gguf', 'q-00002-of-00002.GGUF']);
+  });
+
+  it('copies a split model whose extension is upper case', async () => {
+    const first = await sourceFile('M-00001-of-00002.GGUF');
+    await writeFile(first.replace('00001-of', '00002-of'), gguf());
+    const added = await freshStore().add(first);
+    expect(added).toMatchObject({ name: 'M-00001-of-00002.GGUF', complete: true, sizeBytes: 128 });
+  });
+
+  it('lists, discards and removes partial downloads', async () => {
+    const store = freshStore();
+    await mkdir(store.dir, { recursive: true });
+    await writeFile(join(store.dir, 'p.gguf.partial'), Buffer.alloc(10));
+    await writeFile(join(store.dir, 'r-00002-of-00002.gguf.partial'), Buffer.alloc(20));
+    expect(await store.partials()).toEqual([
+      { name: 'p.gguf', path: join(store.dir, 'p.gguf.partial'), sizeBytes: 10, modifiedAt: expect.any(String) },
+      {
+        name: 'r-00002-of-00002.gguf',
+        path: join(store.dir, 'r-00002-of-00002.gguf.partial'),
+        sizeBytes: 20,
+        modifiedAt: expect.any(String),
       },
-    };
-    const first = store.download(slow, hubFile('y.gguf'));
-    await expect(store.download(slow, hubFile('y.gguf'))).rejects.toThrow('y.gguf is already downloading');
-    await new Promise(done => setTimeout(done, 10));
-    release();
-    expect((await first).name).toBe('y.gguf');
-    expect((await stat(join(store.dir, 'y.gguf'))).size).toBe(64);
+    ]);
+    await store.discardPartial('p.gguf');
+    await expect(store.discardPartial('p.gguf')).rejects.toBeInstanceOf(ModelNotFoundError);
+    await store.remove('r-00002-of-00002.gguf');
+    expect(await store.partials()).toEqual([]);
+    await expect(store.remove('none.gguf')).rejects.toBeInstanceOf(ModelNotFoundError);
+    expect(await readdir(store.dir)).toEqual([]);
+  });
+
+  it('refuses to add, remove or discard a file another writer holds', async () => {
+    const store = freshStore();
+    await store.add(await sourceFile('held.gguf'));
+    await writeFile(join(store.dir, 'other.gguf.partial'), Buffer.alloc(4));
+    const locks = [
+      await lockFile(join(store.dir, 'held.gguf'), 'test'),
+      await lockFile(join(store.dir, 'new.gguf'), 'test'),
+    ];
+    const other = await lockFile(join(store.dir, 'other.gguf'), 'test');
+    try {
+      await expect(store.add(await sourceFile('new.gguf'))).rejects.toBeInstanceOf(ModelFileBusyError);
+      await expect(store.remove('held.gguf')).rejects.toMatchObject({ name: 'ModelFileBusyError', pid: process.pid });
+      await expect(store.discardPartial('other.gguf')).rejects.toBeInstanceOf(ModelFileBusyError);
+    } finally {
+      for (const lock of [...locks, other]) await lock.release();
+    }
+    expect((await readdir(store.dir)).sort()).toEqual(['held.gguf', 'other.gguf.partial']);
+    await store.remove('held.gguf');
+    await store.discardPartial('other.gguf');
+    expect(await readdir(store.dir)).toEqual([]);
+  });
+
+  it('reports file errors as RuntimeStorageError with the errno code', async () => {
+    const blocker = await sourceFile('not-a-dir.gguf');
+    const store = new GgufModelStore({ dir: join(blocker, 'models') });
+    const error = await store.add(await sourceFile('a.gguf')).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RuntimeStorageError);
+    expect(error).toMatchObject({ code: 'ENOTDIR', runtimeId: 'llama-server' });
+    await expect(store.list()).rejects.toBeInstanceOf(RuntimeStorageError);
   });
 });

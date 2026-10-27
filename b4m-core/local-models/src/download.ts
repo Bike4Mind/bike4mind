@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { open, rename, rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { DownloadVerificationError, LocalRuntimeError, RuntimeConnectionError, RuntimeProtocolError } from './errors';
+import { lockFile, onDisk, storageError } from './fileLock';
 import type { FetchLike, PullProgress } from './types';
 
 export const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
@@ -13,8 +14,8 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 export interface DownloadOptions {
   signal?: AbortSignal;
   /**
-   * `status` is `resuming` while the bytes kept from an earlier attempt are re-hashed, then `downloading`,
-   * `verifying` and `success`.
+   * `status` is `resuming` while the bytes kept from an earlier attempt are re-hashed (`completedBytes` counts
+   * the bytes hashed), then `downloading`, `verifying` and `success`.
    */
   onProgress?: (progress: PullProgress) => void;
   /** Fails the download when no bytes arrive for this long (ms). Infinity disables the check. */
@@ -32,7 +33,7 @@ export interface DownloadResult {
   sizeBytes: number;
   /** Null when the source published no hash, so only the size was checked. */
   sha256: string | null;
-  /** Bytes kept from an earlier attempt; 0 for a fresh download or when the server ignored the range. */
+  /** Bytes kept from an earlier attempt; 0 for a fresh download, a source without a hash, or an ignored range. */
   resumedBytes: number;
 }
 
@@ -51,8 +52,10 @@ class ProgressCallbackError {
 
 /**
  * Downloads `target` to `destination` through `<destination>.partial`, resuming that file with a Range request,
- * and renames it into place only after its size and sha256 match. Cancelling rejects with the signal's reason and
- * keeps the partial file; a mismatch deletes it.
+ * and renames it into place only after its size and sha256 match. `<destination>.lock` keeps a second download
+ * or copy of the same file, in any process, out (`ModelFileBusyError`). Cancelling rejects with the signal's
+ * reason and keeps the partial file; a mismatch deletes it. Without a published sha256 the bytes already on
+ * disk cannot be checked, so the download starts over. File errors reject with `RuntimeStorageError`.
  */
 export async function downloadFile(
   transport: DownloadTransport,
@@ -60,9 +63,25 @@ export async function downloadFile(
   destination: string,
   options: DownloadOptions = {}
 ): Promise<DownloadResult> {
+  options.signal?.throwIfAborted();
+  const lock = await lockFile(destination, transport.runtimeId);
+  try {
+    return await downloadLocked(transport, target, destination, options);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function downloadLocked(
+  transport: DownloadTransport,
+  target: DownloadTarget,
+  destination: string,
+  options: DownloadOptions
+): Promise<DownloadResult> {
   const { runtimeId } = transport;
   const name = basename(destination);
   const partial = `${destination}.partial`;
+  const disk = <T>(operation: () => Promise<T>) => onDisk(runtimeId, partial, operation);
   const total = target.sizeBytes;
   const expectedSha = target.sha256?.toLowerCase() ?? null;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS;
@@ -78,7 +97,7 @@ export async function downloadFile(
       timer = setTimeout(() => idle.abort(idleError), Math.min(idleTimeoutMs, MAX_TIMER_MS));
   };
   const signal = options.signal ? AbortSignal.any([options.signal, idle.signal]) : idle.signal;
-  const handle = await open(partial, 'a');
+  const handle = await disk(() => open(partial, 'a'));
   let lastReport = 0;
   const report = (status: string, completedBytes: number, force = false) => {
     const now = Date.now();
@@ -103,16 +122,26 @@ export async function downloadFile(
   };
 
   try {
-    let offset = (await handle.stat()).size;
-    if (offset > total) {
-      await handle.truncate(0);
+    let offset = (await disk(() => handle.stat())).size;
+    if (offset > total || (offset > 0 && !expectedSha)) {
+      await disk(() => handle.truncate(0));
       offset = 0;
     }
     let resumedBytes = offset;
     let hash: Hash | null = expectedSha ? createHash('sha256') : null;
     if (hash && offset > 0) {
       report('resuming', 0, true);
-      for await (const chunk of createReadStream(partial, { end: offset - 1, signal })) hash.update(chunk as Buffer);
+      let hashed = 0;
+      try {
+        for await (const chunk of createReadStream(partial, { end: offset - 1, signal })) {
+          hash.update(chunk as Buffer);
+          hashed += (chunk as Buffer).length;
+          report('resuming', hashed);
+        }
+      } catch (error) {
+        if (error instanceof ProgressCallbackError || signal.aborted) throw error;
+        throw storageError(runtimeId, partial, error);
+      }
     }
 
     arm();
@@ -122,7 +151,7 @@ export async function downloadFile(
       if (response.status === 416 && offset > 0 && !retriedRange) {
         await response.body?.cancel().catch(() => undefined);
         retriedRange = true;
-        await handle.truncate(0);
+        await disk(() => handle.truncate(0));
         offset = resumedBytes = 0;
         hash = expectedSha ? createHash('sha256') : null;
         continue;
@@ -135,7 +164,7 @@ export async function downloadFile(
           throw new RuntimeProtocolError(`${runtimeId} answered the resume of ${name} with the wrong range`, runtimeId);
         }
       } else if (offset > 0) {
-        await handle.truncate(0);
+        await disk(() => handle.truncate(0));
         offset = resumedBytes = 0;
         hash = expectedSha ? createHash('sha256') : null;
       }
@@ -148,7 +177,7 @@ export async function downloadFile(
           if (done) break;
           arm();
           if (offset + value.length > total) throw await mismatch('size', String(total), `more than ${total}`);
-          await handle.write(value);
+          await disk(() => handle.write(value));
           hash?.update(value);
           offset += value.length;
           report('downloading', offset);
@@ -164,10 +193,12 @@ export async function downloadFile(
     }
 
     report('verifying', offset, true);
+    const written = (await disk(() => handle.stat())).size;
+    if (written !== total) throw await mismatch('size', String(total), String(written));
     const actualSha = hash?.digest('hex') ?? null;
     if (expectedSha && actualSha !== expectedSha) throw await mismatch('sha256', expectedSha, actualSha ?? '');
-    await handle.close();
-    await rename(partial, destination);
+    await disk(() => handle.close());
+    await onDisk(runtimeId, destination, () => rename(partial, destination));
     report('success', offset, true);
     return { path: destination, sizeBytes: offset, sha256: actualSha, resumedBytes };
   } catch (error) {

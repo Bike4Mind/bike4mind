@@ -128,3 +128,46 @@ export class LlamaServerExitError extends LocalRuntimeError {
     this.name = 'LlamaServerExitError';
   }
 }
+
+/** A llama-server binary older than the build whose flags this package relies on. */
+export class LlamaServerVersionError extends LocalRuntimeError {
+  constructor(
+    readonly path: string,
+    /** Null when the binary's version line carries no build number. */
+    readonly found: number | null,
+    readonly required: number
+  ) {
+    super(
+      `llama-server at ${path} is ${found === null ? 'an unnumbered build' : `build ${found}`}; build ${required} or newer is required`,
+      'llama-server'
+    );
+    this.name = 'LlamaServerVersionError';
+  }
+}
+
+/** A local file operation failed (disk full, permission, missing directory). `code` is the errno code. */
+export class RuntimeStorageError extends LocalRuntimeError {
+  constructor(
+    message: string,
+    runtimeId: string,
+    readonly path: string,
+    readonly code: string | null,
+    options: { cause: unknown }
+  ) {
+    super(message, runtimeId, options);
+    this.name = 'RuntimeStorageError';
+  }
+}
+
+/** Another download or copy, in this process or another, is writing the same model file. */
+export class ModelFileBusyError extends LocalRuntimeError {
+  constructor(
+    runtimeId: string,
+    readonly path: string,
+    /** The lock holder's pid, when the lock file names one. */
+    readonly pid: number | null
+  ) {
+    super(`${path} is being written by another download or copy${pid ? ` (pid ${pid})` : ''}`, runtimeId);
+    this.name = 'ModelFileBusyError';
+  }
+}

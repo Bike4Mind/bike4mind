@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import type { ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,10 +8,12 @@ import {
   DownloadVerificationError,
   HubAccessError,
   LocalRuntimeError,
+  ModelFileBusyError,
   ModelNotFoundError,
   RuntimeConnectionError,
   RuntimeHttpError,
   RuntimeProtocolError,
+  RuntimeStorageError,
 } from './errors';
 import { HuggingFaceHub, type HubGgufFile } from './huggingface';
 import type { PullProgress } from './types';
@@ -130,7 +132,8 @@ describe('HuggingFaceHub.download', () => {
     expect(result.resumedBytes).toBe(half);
     expect(result.sha256).toBe(SHA);
     expect(cdn.requests[1]?.headers.range).toBe(`bytes=${half}-`);
-    expect(progress[0]?.status).toBe('resuming');
+    expect(progress[0]).toEqual({ status: 'resuming', completedBytes: 0, totalBytes: BYTES.length });
+    expect(progress.find(event => event.status === 'downloading')?.completedBytes).toBe(half);
     expect((await readFile(target)).equals(BYTES)).toBe(true);
   });
 
@@ -185,6 +188,69 @@ describe('HuggingFaceHub.download', () => {
     const result = await client.download({ ...file, sha256: null }, destination('nohash'));
     expect(result.sha256).toBeNull();
     expect(result.sizeBytes).toBe(BYTES.length);
+  });
+
+  it('starts over instead of resuming bytes it cannot check when the Hub publishes no hash', async () => {
+    const { cdn, client, file } = await hubWithCdn(blob(BYTES));
+    const target = destination('nohash-resume');
+    await writeFile(`${target}.partial`, Buffer.alloc(1000, 7));
+    const result = await client.download({ ...file, sha256: null }, target);
+    expect(result.resumedBytes).toBe(0);
+    expect(cdn.requests[0]?.headers.range).toBeUndefined();
+    expect((await readFile(target)).equals(BYTES)).toBe(true);
+  });
+
+  it('lets one download at a time write a file and refuses the second as busy', async () => {
+    const half = BYTES.length / 2;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(done => (release = done));
+    const { cdn, client, file } = await hubWithCdn((_request, response) => {
+      response.writeHead(200, { 'content-length': String(BYTES.length) });
+      response.write(BYTES.subarray(0, half), () => void gate.then(() => response.end(BYTES.subarray(half))));
+    });
+    const target = destination('concurrent');
+    const first = client.download(file, target);
+    while (((await stat(`${target}.partial`).catch(() => null))?.size ?? 0) < half)
+      await new Promise(r => setTimeout(r, 10));
+    const second = await client.download(file, target).catch((caught: unknown) => caught);
+    expect(second).toBeInstanceOf(ModelFileBusyError);
+    expect(second).toMatchObject({ pid: process.pid, path: target });
+    release();
+    expect((await first).sha256).toBe(SHA);
+    expect(cdn.requests).toHaveLength(1);
+    expect((await readFile(target)).equals(BYTES)).toBe(true);
+    await expect(stat(`${target}.lock`)).rejects.toThrow();
+  });
+
+  it('fails the size check when the file on disk grew behind its back', async () => {
+    const half = BYTES.length / 2;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(done => (release = done));
+    const { client, file } = await hubWithCdn((_request, response) => {
+      response.writeHead(200, { 'content-length': String(BYTES.length) });
+      response.write(BYTES.subarray(0, half), () => void gate.then(() => response.end(BYTES.subarray(half))));
+    });
+    const target = destination('grown');
+    const pending = client.download(file, target).catch((caught: unknown) => caught);
+    while (((await stat(`${target}.partial`).catch(() => null))?.size ?? 0) < half)
+      await new Promise(r => setTimeout(r, 10));
+    await appendFile(`${target}.partial`, 'rogue');
+    release();
+    expect(await pending).toMatchObject({
+      name: 'DownloadVerificationError',
+      check: 'size',
+      expected: String(BYTES.length),
+      actual: String(BYTES.length + 5),
+    });
+    await expect(stat(target)).rejects.toThrow();
+  });
+
+  it('reports file errors as RuntimeStorageError with the errno code', async () => {
+    const { client, file } = await hubWithCdn(blob(BYTES));
+    const target = join(dir, 'no-such-dir', 'x.gguf');
+    const error = await client.download(file, target).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RuntimeStorageError);
+    expect(error).toMatchObject({ code: 'ENOENT', path: `${target}.lock` });
   });
 
   it('keeps what arrived when the connection drops early', async () => {
