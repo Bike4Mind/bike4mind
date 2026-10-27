@@ -12396,7 +12396,7 @@
                   },
                   "body": {
                     "type": "string",
-                    "description": "The SKILL.md body. Omitted from list responses."
+                    "description": "The SKILL.md body. Omitted from marketplace list responses; included in the review queue."
                   },
                   "argument_hint": {
                     "type": [
@@ -12817,7 +12817,7 @@
                   },
                   "body": {
                     "type": "string",
-                    "description": "The SKILL.md body. Omitted from list responses."
+                    "description": "The SKILL.md body. Omitted from marketplace list responses; included in the review queue."
                   },
                   "argument_hint": {
                     "type": [
@@ -13178,7 +13178,7 @@
                           },
                           "body": {
                             "type": "string",
-                            "description": "The SKILL.md body. Omitted from list responses."
+                            "description": "The SKILL.md body. Omitted from marketplace list responses; included in the review queue."
                           },
                           "argument_hint": {
                             "type": [
@@ -13547,7 +13547,7 @@
                   },
                   "body": {
                     "type": "string",
-                    "description": "The SKILL.md body. Omitted from list responses."
+                    "description": "The SKILL.md body. Omitted from marketplace list responses; included in the review queue."
                   },
                   "argument_hint": {
                     "type": [
@@ -13867,7 +13867,7 @@
                   },
                   "body": {
                     "type": "string",
-                    "description": "The SKILL.md body. Omitted from list responses."
+                    "description": "The SKILL.md body. Omitted from marketplace list responses; included in the review queue."
                   },
                   "argument_hint": {
                     "type": [
@@ -14069,7 +14069,7 @@
                         },
                         "body": {
                           "type": "string",
-                          "description": "The SKILL.md body. Omitted from list responses."
+                          "description": "The SKILL.md body. Omitted from marketplace list responses; included in the review queue."
                         },
                         "argument_hint": {
                           "type": [
@@ -14400,7 +14400,7 @@
                         },
                         "body": {
                           "type": "string",
-                          "description": "The SKILL.md body. Omitted from list responses."
+                          "description": "The SKILL.md body. Omitted from marketplace list responses; included in the review queue."
                         },
                         "argument_hint": {
                           "type": [
@@ -14481,7 +14481,7 @@
                   },
                   "body": {
                     "type": "string",
-                    "description": "The SKILL.md body. Omitted from list responses."
+                    "description": "The SKILL.md body. Omitted from marketplace list responses; included in the review queue."
                   },
                   "argument_hint": {
                     "type": [

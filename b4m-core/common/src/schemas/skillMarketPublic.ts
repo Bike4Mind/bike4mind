@@ -20,7 +20,10 @@ export const SkillListingVisibilitySchema = z.enum(['public', 'organization', 'u
 export const PublicSkillSnapshotSchema = z.object({
   name: z.string(),
   description: z.string(),
-  body: z.string().optional().describe('The SKILL.md body. Omitted from list responses.'),
+  body: z
+    .string()
+    .optional()
+    .describe('The SKILL.md body. Omitted from marketplace list responses; included in the review queue.'),
   argument_hint: z.string().nullable(),
   allowed_tools: z.array(z.string()),
   disable_model_invocation: z.boolean(),

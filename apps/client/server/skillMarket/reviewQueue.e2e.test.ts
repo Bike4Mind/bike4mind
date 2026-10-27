@@ -61,13 +61,13 @@ describe('loadVersionQueue (real mongod)', () => {
     const c = await held(await listing('organization', ORG), 1, new Date(T0.getTime() + 1000));
     const [first, second] = [a, b].sort();
 
-    const p1 = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 2 });
-    expect(ids(p1.rows)).toEqual([first, second]);
-    expect(p1.next).toEqual({ at: T0, id: second });
+    const p1 = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 1 });
+    expect(ids(p1.rows)).toEqual([first]);
+    expect(p1.next).toEqual({ at: T0, id: first });
 
     const p2 = await loadVersionQueue(orgAdmin, [ORG], { filter: 'pending', limit: 2, after: p1.next! });
-    expect(ids(p2.rows)).toEqual([c]);
-    expect(p2.next).toBeNull();
+    expect(ids(p2.rows)).toEqual([second, c]);
+    expect(p2.next).toEqual({ at: new Date(T0.getTime() + 1000), id: c });
   });
 
   it('skips a pending row the pointer never reached, but still advances past it', async () => {

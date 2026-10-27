@@ -5729,7 +5729,7 @@ export interface components {
         snapshot: {
           name: string;
           description: string;
-          /** @description The SKILL.md body. Omitted from list responses. */
+          /** @description The SKILL.md body. Omitted from marketplace list responses; included in the review queue. */
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
@@ -5832,7 +5832,7 @@ export interface components {
         snapshot: {
           name: string;
           description: string;
-          /** @description The SKILL.md body. Omitted from list responses. */
+          /** @description The SKILL.md body. Omitted from marketplace list responses; included in the review queue. */
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
@@ -5937,7 +5937,7 @@ export interface components {
           snapshot: {
             name: string;
             description: string;
-            /** @description The SKILL.md body. Omitted from list responses. */
+            /** @description The SKILL.md body. Omitted from marketplace list responses; included in the review queue. */
             body?: string;
             argument_hint: string | null;
             allowed_tools: string[];
@@ -6025,7 +6025,7 @@ export interface components {
         snapshot: {
           name: string;
           description: string;
-          /** @description The SKILL.md body. Omitted from list responses. */
+          /** @description The SKILL.md body. Omitted from marketplace list responses; included in the review queue. */
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
@@ -6124,7 +6124,7 @@ export interface components {
         snapshot: {
           name: string;
           description: string;
-          /** @description The SKILL.md body. Omitted from list responses. */
+          /** @description The SKILL.md body. Omitted from marketplace list responses; included in the review queue. */
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
@@ -6175,7 +6175,7 @@ export interface components {
           snapshot: {
             name: string;
             description: string;
-            /** @description The SKILL.md body. Omitted from list responses. */
+            /** @description The SKILL.md body. Omitted from marketplace list responses; included in the review queue. */
             body?: string;
             argument_hint: string | null;
             allowed_tools: string[];
@@ -6260,7 +6260,7 @@ export interface components {
           snapshot: {
             name: string;
             description: string;
-            /** @description The SKILL.md body. Omitted from list responses. */
+            /** @description The SKILL.md body. Omitted from marketplace list responses; included in the review queue. */
             body?: string;
             argument_hint: string | null;
             allowed_tools: string[];
@@ -6278,7 +6278,7 @@ export interface components {
         snapshot: {
           name: string;
           description: string;
-          /** @description The SKILL.md body. Omitted from list responses. */
+          /** @description The SKILL.md body. Omitted from marketplace list responses; included in the review queue. */
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
