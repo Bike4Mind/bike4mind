@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { MODEL_TOOL_NAMES } from './modelTools';
 import { createHttpHandler, isAuthorized, resolveHttpToken } from './serve';
 
 const TOKEN = 'correct-horse-battery-staple';
@@ -72,7 +73,7 @@ describe('HTTP handler', () => {
     params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '0.0.0' } },
   };
 
-  function post(url: string, authorization?: string): Promise<Response> {
+  function post(url: string, authorization?: string, message: object = initialize): Promise<Response> {
     return fetch(url, {
       method: 'POST',
       headers: {
@@ -80,9 +81,19 @@ describe('HTTP handler', () => {
         Accept: 'application/json, text/event-stream',
         ...(authorization ? { Authorization: authorization } : {}),
       },
-      body: JSON.stringify(initialize),
+      body: JSON.stringify(message),
     });
   }
+
+  it('never lists the local model tools', async () => {
+    const res = await post(await start(), `Bearer ${TOKEN}`, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { result?: { tools?: Array<{ name: string }> } };
+    const names = body.result?.tools?.map(tool => tool.name) ?? [];
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.filter(name => name.startsWith('models_'))).toEqual([]);
+    for (const name of MODEL_TOOL_NAMES) expect(names).not.toContain(name);
+  });
 
   it('responds 401 with a Bearer challenge when no header is sent', async () => {
     const res = await post(await start());

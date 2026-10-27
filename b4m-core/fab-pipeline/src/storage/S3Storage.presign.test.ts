@@ -218,3 +218,26 @@ describe('S3Storage.browserSigningOrigin', () => {
     expect(origin).toBe('');
   });
 });
+
+describe('S3Storage signed URL lifetime vs. signing credentials', () => {
+  const signedExpiry = async (credentialExpiration?: Date, signingDate = new Date()) => {
+    if (credentialExpiration) vi.stubEnv('AWS_CREDENTIAL_EXPIRATION', credentialExpiration.toISOString());
+    const storage = new S3Storage('files-bucket', 'us-east-2');
+    const url = new URL(await storage.getSignedUrl('owned/file.txt', 'get', { expiresIn: 3600, signingDate }));
+    return Number(url.searchParams.get('X-Amz-Expires'));
+  };
+
+  it('clamps the link to end a minute before credentials that expire inside the window', async () => {
+    const signingDate = new Date();
+    const credentialExpiration = new Date(signingDate.getTime() + 20 * 60 * 1000);
+    expect(await signedExpiry(credentialExpiration, signingDate)).toBe(19 * 60);
+  });
+
+  it('keeps the requested lifetime when the credentials outlive it', async () => {
+    expect(await signedExpiry(new Date(Date.now() + 6 * 60 * 60 * 1000))).toBe(3600);
+  });
+
+  it('keeps the requested lifetime for credentials with no expiration', async () => {
+    expect(await signedExpiry()).toBe(3600);
+  });
+});

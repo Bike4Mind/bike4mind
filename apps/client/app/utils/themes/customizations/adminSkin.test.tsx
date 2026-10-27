@@ -3,7 +3,15 @@ import { render, screen } from '@testing-library/react';
 import { Box, Button, Card, Modal, ModalDialog, Sheet, Typography } from '@mui/joy';
 import type { Components, Theme } from '@mui/joy/styles';
 import AppTheme from '../AppTheme';
-import { IN_ADMIN, IN_ADMIN_PORTAL, IN_ADMIN_ROW, adminSkinComponents, withAdminSkin } from './adminSkin';
+import {
+  IN_ADMIN,
+  IN_ADMIN_POPUP,
+  IN_ADMIN_PORTAL,
+  IN_ADMIN_ROW,
+  IN_ADMIN_TOOLTIP,
+  adminSkinComponents,
+  withAdminSkin,
+} from './adminSkin';
 
 const radiusOf = (testId: string) => getComputedStyle(screen.getByTestId(testId)).borderRadius;
 
@@ -79,7 +87,8 @@ describe('admin skin scope', () => {
     );
 
     expect(keys.length).toBeGreaterThan(0);
-    expect(keys.filter(key => ![IN_ADMIN, IN_ADMIN_PORTAL, IN_ADMIN_ROW].includes(key))).toEqual([]);
+    const scopes = [IN_ADMIN, IN_ADMIN_PORTAL, IN_ADMIN_POPUP, IN_ADMIN_TOOLTIP, IN_ADMIN_ROW];
+    expect(keys.filter(key => !scopes.includes(key))).toEqual([]);
   });
 });
 
@@ -97,6 +106,6 @@ describe('withAdminSkin', () => {
     expect(merged.JoyCard.defaultProps).toEqual({ variant: 'soft' });
     expect(merged.JoyCard.styleOverrides.root).toMatchObject({ color: 'red', [IN_ADMIN]: expect.any(Object) });
     const tooltipRoot = merged.JoyTooltip.styleOverrides.root as (props: object) => object;
-    expect(tooltipRoot({})).toMatchObject({ padding: '8px', [IN_ADMIN_PORTAL]: expect.any(Object) });
+    expect(tooltipRoot({})).toMatchObject({ padding: '8px', [IN_ADMIN_TOOLTIP]: expect.any(Object) });
   });
 });

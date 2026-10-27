@@ -23,6 +23,7 @@ type MfaHookOptions = {
 const mocks = vi.hoisted(() => ({
   sendOTC: vi.fn(),
   verifyOTC: vi.fn(),
+  startOAuthSignIn: vi.fn(),
   setCurrentUser: vi.fn(),
   trackSignupConversion: vi.fn(),
   applyRedirect: vi.fn(),
@@ -47,6 +48,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/auth', () => ({
   useSendOTC: () => ({ mutateAsync: mocks.sendOTC, isPending: false }),
   useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
+  useStartOAuthSignIn: () => mocks.startOAuthSignIn,
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: mocks.userState.currentUser }),
@@ -533,6 +535,69 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       expect(mocks.setCurrentUser).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('MultiStepLogin - OAuth sign-in start', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+    mocks.startOAuthSignIn.mockResolvedValue(undefined);
+  });
+
+  it.each([
+    ['login-google-btn', '/api/auth/google'],
+    ['login-github-btn', '/api/auth/github'],
+    ['login-okta-btn', '/api/auth/okta'],
+  ])('starts the provider sign-in through the challenge-aware hook from %s', async (testId, startUrl) => {
+    const user = userEvent.setup();
+    renderLogin();
+    await user.click(screen.getByTestId(testId));
+    expect(mocks.startOAuthSignIn).toHaveBeenCalledWith(startUrl);
+  });
+
+  it('routes an email-strategy redirect through the same hook', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ requiresRedirect: true, redirectUrl: '/api/auth/github' }),
+      })
+    );
+    renderLogin();
+    await user.type(textboxIn('login-email-input'), 'dev@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await waitFor(() => expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/github'));
+    expect(mocks.sendOTC).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the challenge error and stays on the page when the sign-in cannot start', async () => {
+    const user = userEvent.setup();
+    mocks.startOAuthSignIn.mockRejectedValue(new Error('Could not complete the verification check.'));
+    renderLogin();
+    await user.click(screen.getByTestId('login-google-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
+  });
+
+  it('returns to the email step when an email-strategy redirect cannot start', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ requiresRedirect: true, redirectUrl: '/api/auth/github' }),
+      })
+    );
+    mocks.startOAuthSignIn.mockRejectedValue(new Error('Could not complete the verification check.'));
+    renderLogin();
+    await user.type(textboxIn('login-email-input'), 'dev@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Could not complete the verification check.'));
+    expect(screen.getByTestId('login-continue-btn')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
 });
 
 // The "already logged in" bounce must gate on a LIVE session (currentUser + token), not on a

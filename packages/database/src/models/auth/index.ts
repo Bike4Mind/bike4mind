@@ -33,3 +33,5 @@ export * from './UserModel';
 export * from './VoiceIdModel';
 export * from './WsConnectTicketModel';
 export * from './GithubUnlockClaimModel';
+
+export * from './SignupProtectionModel';

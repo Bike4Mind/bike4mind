@@ -147,6 +147,12 @@ export const SECRET_ROTATION_CONFIG: {
     isAutomatic: false,
     rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
   },
+  SLACK_ALARMS_WEBHOOK_URL: {
+    description: 'Slack webhook for CloudWatch alarm notifications',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
+  },
   SLACK_SIGNING_SECRET: {
     description: 'Slack app signing secret for request verification',
     rotationIntervalDays: 180,
@@ -267,9 +273,9 @@ export const SECRET_ROTATION_CONFIG: {
     rotationProcess: 'Generate new random token and update SST Secret',
   },
   E2E_CLEANUP_SECRET: {
-    description: 'Shared secret for E2E test cleanup endpoints (/api/test/create-user, /api/test/cleanup)',
+    description: 'Header secret for the E2E test endpoints (/api/test/*)',
     rotationIntervalDays: 180,
     isAutomatic: false,
-    rotationProcess: 'Generate new random token and update SST Secret via set-sst-secrets workflow',
+    rotationProcess: 'Generate a new random token and update the per-tier deployer environment secret, then redeploy',
   },
 };

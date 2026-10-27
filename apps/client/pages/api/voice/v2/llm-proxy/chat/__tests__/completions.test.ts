@@ -505,3 +505,24 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
     expect402(status);
   });
 });
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - pipeline failure logging', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  it('logs the error with flat name, message and cause strings so an alert does not print [object Object]', async () => {
+    const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    mockInvoke.mockRejectedValue(new TypeError('fetch failed', { cause }));
+    const req = makeReq();
+
+    await handler(req as never, makeRes() as never);
+
+    expect(req.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorName: 'TypeError',
+        errorMessage: 'fetch failed',
+        errorCause: 'ECONNRESET: read ECONNRESET',
+      }),
+      '[voice-v2/llm-proxy] full pipeline failed'
+    );
+  });
+});

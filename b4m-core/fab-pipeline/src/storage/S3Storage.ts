@@ -25,6 +25,9 @@ const isInvalidRangeError = (error: unknown): boolean => {
   return e?.name === 'InvalidRange' || e?.$metadata?.httpStatusCode === 416;
 };
 
+// Headroom for clock skew between this host and S3 when clamping a link to its credentials.
+const CREDENTIAL_EXPIRY_MARGIN_MS = 60 * 1000;
+
 export class S3Storage extends BaseStorage {
   private s3: S3Client;
   private presignS3: S3Client;
@@ -261,8 +264,9 @@ export class S3Storage extends BaseStorage {
     } = {}
   ): Promise<string> {
     const bindLength = method !== 'get' && ContentLength !== undefined;
+    const client = audience === 'browser' ? this.presignS3 : this.s3;
     return await getSignedUrl(
-      audience === 'browser' ? this.presignS3 : this.s3,
+      client,
       method !== 'get'
         ? new PutObjectCommand({
             Bucket: this.bucketName,
@@ -278,11 +282,24 @@ export class S3Storage extends BaseStorage {
             ResponseContentDisposition,
           }),
       {
-        expiresIn,
+        expiresIn: await this.clampToCredentialLifetime(client, expiresIn, signingDate),
         ...(signingDate && { signingDate }),
         ...(bindLength && { signableHeaders: new Set(['content-length']) }),
       }
     );
+  }
+
+  /**
+   * A SigV4 link stops working when the temporary credentials that signed it expire, whatever
+   * X-Amz-Expires says, so never sign one that claims to outlive them. Callers that cache a link
+   * read its real lifetime back from X-Amz-Date + X-Amz-Expires (see fabFileService/get.ts).
+   */
+  private async clampToCredentialLifetime(client: S3Client, expiresIn: number, signingDate?: Date) {
+    const { expiration } = await client.config.credentials();
+    if (!expiration) return expiresIn;
+    const signedAt = (signingDate ?? new Date()).getTime();
+    const credentialSeconds = Math.floor((expiration.getTime() - CREDENTIAL_EXPIRY_MARGIN_MS - signedAt) / 1000);
+    return Math.max(1, Math.min(expiresIn, credentialSeconds));
   }
 
   /**

@@ -13,10 +13,11 @@ contributions. Omitting the table is a configuration error rather than an opt-ou
 
 `createSession` keeps this adapter optional for existing workspace-specific callers.
 
-## Signup assessment foundation
+## Staged signup grants and assessment
 
 `userService.evaluateSignupRisk` is a pure, server-owned evaluator exported from
-`@bike4mind/services`. It has no runtime signup caller or default enabled policy.
+`@bike4mind/services`. `releaseSignupTranche` runs it inside the grant transaction,
+using the private `signupGrantRiskPolicy` setting (disabled by default).
 For example, explicit disablement preserves a caller's validated entitlement:
 
 ```typescript
@@ -29,13 +30,66 @@ const decision = userService.evaluateSignupRisk({ enabled: false }, {}, signupCr
 band-telemetry adapters. The commit adapter must persist the assessment and grant
 changes atomically and return the stored winner on retries. Callers remain
 responsible for existing-account, paid, and staff exemptions; this helper does
-not implement them. Registration and grant integration remain separate work.
+not implement them. The staged engine enrolls only newly created eligible accounts;
+existing accounts and explicit invite allocations retain their legacy grant path.
+
+`releaseSignupTranche` persists `signupGrantAssessment`, the ledger, balance, and
+released stage atomically. Every positive payout also claims the same canonical-inbox
+entitlement used by legacy default grants inside that transaction. An inbox already
+claimed by another account receives no payout; zero-credit tranches wait until the
+first positive unlock to claim. A failed payout rolls the claim back for retry.
+The assessment is admin-only and excluded from self,
+public, and WebSocket responses. `collectRiskSignals`, when supplied by a trusted
+server integration, receives the persisted user. Without it, only persisted signup
+datacenter metadata is known; other observations remain unknown, never clean.
+An invalid policy or missing required observation releases zero initial credits.
+
+`unlockSignupGrant` accepts server-owned validators. A validator may return `true`
+to authorize the configured maximum, `false` to refuse, or
+`{ cumulativeCredits }` for an identity-specific cumulative entitlement bounded by
+the account's snapshotted signup plus unlock credits. The engine grants only
+`max(0, cumulativeCredits - creditsReleased)`. A validator may also return
+`{ unlockedOrgId }` to authorize the maximum and record the vouching organization
+on the grant; the org invite validator reserves a slot on the organization inside
+the payout transaction, capped at its current `seats`. Its durable lifetime counter
+survives account deletion and rolls back with a failed payout, so seat churn and
+concurrent unlocks cannot exceed the cap. Replays, weaker evidence, and
+different reasons cannot stack grants. Stronger evidence can release the remaining
+delta. Grant stage records money released, not current identity trust or revocation.
+Identity consumers own verification, identity deduplication, and revocation.
+
+Activity checks use persisted successful chat turns stamped at creation by a
+session-authenticated server invocation for an enrolled account. A retry through
+an API key or an internal caller clears that provenance. Imported, legacy, API-key,
+pending, and failed turns do not qualify. Private message/day thresholds are disabled by zero;
+distinct UTC days must also span the corresponding elapsed whole days. The
+first-party eligibility-check endpoint and Billing status provide a retryable path.
+Organization invitation unlocks have their own `signupGrantOrgInviteEnabled` rollout
+flag, disabled by default. Each organization can unlock at most its seat count
+over its lifetime; removing a member or deleting a recipient account does not
+replenish this budget. When enabled, Billing checks also retry persisted
+accepted organization invitations, so a failed credit release after successful
+acceptance remains recoverable after the invite leaves the pending inbox, even when
+activity unlocks are disabled.
+Card and phone integrations must supply their own trusted validators; declaring a
+reason does not enable a verification flow. Admin releases require an audit writer.
+The admin HTTP route rejects grants to the acting admin or their original account
+under impersonation, matching the existing credit-adjustment policy.
 
 If a grant is held with `status: 'unavailable'`, check for the `[signup-risk]`
-assessment warning and inspect policy validity and observation collection.
+assessment warning and inspect policy validity. A thrown observation collector
+instead warns that the grant remains pending for retry and rolls back the tranche;
+a transient infrastructure failure never becomes a permanent assessment.
 Missing required observations instead appear in the decision's `missing` array.
 Telemetry failures warn after commit and do not fail the grant. Diagnostics
 contain no raw policy, network observations, or collector error contents.
+
+Before enabling staging, retire existing quest subscriptions, restart subscriber
+fanout, and reconnect clients so every live stream uses the new private-field
+exclusions. Fanout persists subscription projections and does not rebuild an
+already-running stream when its projection changes; a pre-deployment stream can
+otherwise include activity provenance. Keep staging disabled until this rollout
+step is complete.
 
 `authEventRepository.recentDistinctSignups` in `@bike4mind/database` only accepts
 windows within the retained history and ending no later than the current time.

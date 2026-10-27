@@ -58,6 +58,9 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { LocalContextPreference } from './LocalContextPreference';
+import { registerLocalContextIpc } from './localContextIpc';
+import { localContextSizing, localHardware } from './localContextSizing';
 import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
@@ -87,7 +90,7 @@ import { SessionStore } from './SessionStore';
 import { LocalHistory } from './LocalHistory';
 import { registerHistoryIpc } from './historyIpc';
 import { captureHistoryPage } from './captureHistoryPage';
-import { OllamaLocal } from './OllamaLocal';
+import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -418,7 +421,10 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const local = new OllamaLocal((url, init) => net.fetch(url, init));
+  const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
+  void localHardware.profile();
+  const localSizing = localContextSizing({ setting: () => localContext.read() });
+  const local = new OllamaLocal((url, init) => net.fetch(url, init), localSizing);
   const models = new ModelCatalog(
     {
       logger,
@@ -580,6 +586,7 @@ export function registerChat(
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
     getApiClient: () => auth.getApiClient(),
+    isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,
     emit: event => {
       broadcast(event);
@@ -596,6 +603,15 @@ export function registerChat(
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
+  registerLocalContextIpc(ipcMain, {
+    preference: localContext,
+    forget: () => {
+      forgetLocalContexts();
+      localSizing.forget?.();
+      models.forgetLocal();
+    },
+    fit: () => local.contextFit(),
+  });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );
@@ -644,6 +660,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.skillMarketOpenSource, (_event, url: string) => skillMarket.openSourceUrl(url));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatSettleLocalModel, (_event, sessionId: string) =>
+    service.settleSessionModel(sessionId)
   );
   registerHistoryIpc(ipcMain, service, history);
   // Validated here rather than trusted, like the approval mode below: an unrecognised value

@@ -914,6 +914,16 @@ describe('Credits System group', () => {
     expect(indexed).toEqual(carried);
   });
 
+  // AdminSettingsTab sorts by each definition's own `order`, which these leave unset, so the
+  // admin Settings page renders them in settingsMap definition order, not the index order.
+  it('defines its settings in index order', () => {
+    const indexed = [...API_SERVICE_GROUPS.CREDITS.settings].sort((a, b) => a.order - b.order).map(entry => entry.key);
+    const defined = Object.values(settingsMap)
+      .filter(setting => setting.group === API_SERVICE_GROUPS.CREDITS.id)
+      .map(setting => setting.key);
+    expect(defined).toEqual(indexed);
+  });
+
   it('is not repeated in the User Management index', () => {
     expect(API_SERVICE_GROUPS.USER_MANAGEMENT.settings.map(entry => entry.key)).not.toContain('enforceCredits');
   });

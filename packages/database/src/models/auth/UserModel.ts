@@ -1,6 +1,7 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
 import {
   AuthStrategy,
+  PENDING_FREE_CREDITS_TAG,
   CollectionType,
   IAuthProviders,
   ISecurityQuestion,
@@ -12,6 +13,7 @@ import {
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
+  SIGNUP_GRANT_UNLOCK_REASONS,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
@@ -280,7 +282,19 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   /** Merge tags into one user's tags (idempotent via $addToSet). No-op on an empty list. */
   async addTagsToUser(userId: string, tags: string[]): Promise<void> {
     if (tags.length === 0) return;
+    // Legacy accounts can store null; $addToSet requires an array. The guard preserves concurrent tag additions.
+    await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
     await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
+  }
+
+  async clearPendingFreeCreditGrant(userId: string): Promise<IUserDocument | null> {
+    await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
+    const user = await this.model.findOneAndUpdate(
+      { _id: userId },
+      { $pull: { tags: PENDING_FREE_CREDITS_TAG }, $set: { pendingCreditGrant: null } },
+      { new: true }
+    );
+    return user?.toJSON() ?? null;
   }
 
   async pullSystemFilesForUsers(userIds: string[], fileIds: string[]): Promise<void> {
@@ -925,6 +939,22 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
+    signupGrantAssessment: { type: Schema.Types.Mixed, default: undefined },
+    signupGrant: {
+      type: new Schema(
+        {
+          stage: { type: String, enum: ['pending_email', 'signup', 'unlocked'], required: true },
+          signupCredits: { type: Number, min: 0, required: true },
+          unlockCredits: { type: Number, min: 0, required: true },
+          creditsReleased: { type: Number, min: 0, required: true },
+          nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
+          unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
+          unlockedOrgId: { type: String },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     lastCreditsPurchasedAt: { type: Date, default: null },
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },
@@ -1278,6 +1308,10 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+// Serves the per-organization org_invite unlock cap (apps/client/server/credits/orgInviteUnlock.ts).
+// Sparse: only accounts an org invite unlocked carry the field. Explicit name so the migration
+// 20260921235968 and autoIndex (mongo.ts) agree.
+UserSchema.index({ 'signupGrant.unlockedOrgId': 1 }, { sparse: true, name: 'signupGrant_unlockedOrgId' });
 UserSchema.index({ createdAt: 1 });
 // Serves the signupIpRetention cron's range scan for signups past the retention window. Sparse:
 // accounts created before signup network capture carry no signupMeta. Explicit name so migration
