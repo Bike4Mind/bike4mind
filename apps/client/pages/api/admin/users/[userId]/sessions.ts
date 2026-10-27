@@ -10,7 +10,7 @@ import { BadRequestError, ensureAdmin, NotFoundError, UnprocessableEntityError }
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
 /** Same projection as /api/users/me/sessions; never exposes the refresh-token hash. */
-const toAdminSession = (session: IAuthSessionDocument): AdminUserSession => ({
+const toAdminSession = (session: IAuthSessionDocument, callerSid: string | undefined): AdminUserSession => ({
   sid: session.sid,
   createdVia: session.createdVia,
   device: session.device,
@@ -18,6 +18,7 @@ const toAdminSession = (session: IAuthSessionDocument): AdminUserSession => ({
   createdAt: new Date(session.createdAt).toISOString(),
   expiresAt: new Date(session.expiresAt).toISOString(),
   impersonated: !!session.impersonatedBy,
+  current: session.sid === callerSid,
 });
 
 const parseUserId = (value: unknown): string => {
@@ -41,7 +42,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     const sessions = await authSessionService.listUserSessions(user.id, {
       db: { authSessions: authSessionRepository },
     });
-    return res.json({ items: sessions.map(toAdminSession) });
+    return res.json({ items: sessions.map(session => toAdminSession(session, req.user?.sid)) });
   })
   .delete(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);

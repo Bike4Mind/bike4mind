@@ -276,6 +276,8 @@ describe('listUserTimeline against a real database', () => {
       .sort({ createdAt: -1, _id: -1 })
       .limit(11)
       .explain('queryPlanner');
-    expect(JSON.stringify(plan)).toContain('credit_tx_owner_balance_events');
+    // Scoped to the winning plan so a rejected plan using the index cannot satisfy it.
+    const { queryPlanner } = (Array.isArray(plan) ? plan[0] : plan) as { queryPlanner: { winningPlan: unknown } };
+    expect(JSON.stringify(queryPlanner.winningPlan)).toContain('credit_tx_owner_balance_events');
   });
 });

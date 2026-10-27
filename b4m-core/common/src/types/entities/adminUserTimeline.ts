@@ -106,5 +106,5 @@ export const authMethodLabel = (raw: string | null | undefined): string | undefi
   return method === 'other' ? `Other (${raw?.trim()})` : AUTH_METHOD_LABELS[method];
 };
 
-/** A user's active session as an admin sees it: the self-service DTO without the caller-relative `current`. */
-export type AdminUserSession = Omit<IActiveSessionDto, 'current'>;
+/** A user's active session as an admin sees it; `current` flags the admin's own session, which cannot be revoked here. */
+export type AdminUserSession = IActiveSessionDto;

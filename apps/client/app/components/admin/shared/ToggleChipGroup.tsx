@@ -67,7 +67,7 @@ export function ToggleChipGroup<T extends string>({
           onClick={button.onClick}
           data-testid={`${testId}-${button.key}`}
           sx={{
-            height: 32,
+            height: { xs: 44, md: 36 },
             px: 1.75,
             border: 0,
             borderRadius: '8px',

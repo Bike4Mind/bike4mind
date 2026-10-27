@@ -128,9 +128,17 @@ describe('/api/admin/users/[userId]/sessions', () => {
           createdAt: '2026-10-01T10:00:00.000Z',
           expiresAt: '2026-11-01T10:00:00.000Z',
           impersonated: false,
+          current: false,
         },
       ]);
       expect(JSON.stringify(items)).not.toContain('secret-hash');
+    });
+
+    it("flags the admin's own session as current", async () => {
+      const { res, promise } = call('GET', { user: { id: 'admin1', sid: 'sid-1', isAdmin: true } });
+      await promise;
+      const { items } = res._getJSONData() as { items: Array<{ current: boolean }> };
+      expect(items[0].current).toBe(true);
     });
   });
 

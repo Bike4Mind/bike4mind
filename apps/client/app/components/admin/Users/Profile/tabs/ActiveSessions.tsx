@@ -74,17 +74,22 @@ export const ActiveSessions: React.FC<{ user: AdminUserProfile }> = ({ user }) =
     {
       id: 'actions',
       label: 'Actions',
-      render: row => (
-        <Button
-          size="sm"
-          variant="plain"
-          color="danger"
-          onClick={() => setTarget({ kind: 'one', session: row })}
-          data-testid="user-sessions-revoke-btn"
-        >
-          Sign out
-        </Button>
-      ),
+      render: row =>
+        row.current ? (
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="user-sessions-current-label">
+            This session
+          </Typography>
+        ) : (
+          <Button
+            size="sm"
+            variant="plain"
+            color="danger"
+            onClick={() => setTarget({ kind: 'one', session: row })}
+            data-testid="user-sessions-revoke-btn"
+          >
+            Sign out
+          </Button>
+        ),
     },
   ];
 

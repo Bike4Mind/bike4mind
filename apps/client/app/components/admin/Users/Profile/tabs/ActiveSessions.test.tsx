@@ -19,6 +19,7 @@ const SESSIONS = [
     createdAt: '2026-10-01T09:00:00.000Z',
     expiresAt: '2026-11-01T09:00:00.000Z',
     impersonated: false,
+    current: false,
   },
   {
     sid: 'sid-2',
@@ -27,6 +28,7 @@ const SESSIONS = [
     createdAt: '2026-10-19T08:00:00.000Z',
     expiresAt: '2026-10-20T08:00:00.000Z',
     impersonated: true,
+    current: false,
   },
 ];
 
@@ -126,6 +128,16 @@ describe('ActiveSessions', () => {
     mocks.get.mockRejectedValue(new Error('boom'));
     renderSessions();
     expect(await screen.findByText('Sessions could not be loaded.')).toBeInTheDocument();
+  });
+
+  it("offers no sign-out on the admin's own current session", async () => {
+    mocks.get.mockResolvedValue({ data: { items: [{ ...SESSIONS[0], current: true }, SESSIONS[1]] } });
+    renderSessions();
+    const rows = await screen.findAllByTestId('user-sessions-row');
+
+    expect(within(rows[0]).queryByTestId('user-sessions-revoke-btn')).toBeNull();
+    expect(within(rows[0]).getByTestId('user-sessions-current-label')).toHaveTextContent('This session');
+    expect(within(rows[1]).getByTestId('user-sessions-revoke-btn')).toBeInTheDocument();
   });
 
   it('says so when there are no active sessions', async () => {
