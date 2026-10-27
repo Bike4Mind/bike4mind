@@ -407,7 +407,7 @@ describe('CuratedSource', () => {
     logged(/revoked-keys.json was unreadable; rebuilt it from the cached curated list/);
   });
 
-  it('keeps the remote list off when an unreadable revoked set cannot be rebuilt', async () => {
+  it('accepts only a recovery-signed list while an unreadable revoked set is rebuilt, then repairs the file', async () => {
     const three = listText(3);
     server.publish(3, three, sigText(three, [signing], 3));
     await source().checkNow();
@@ -415,12 +415,26 @@ describe('CuratedSource', () => {
     server.requests = [];
 
     const restarted = source();
-    await restarted.checkNow();
-    expect(restarted.settings().available).toBe(false);
-    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'off' });
-    expect(server.requests).toEqual([]);
-    expect(await readFile(join(dir, 'revoked-keys.json'), 'utf8')).toBe('{"not":"a list"}');
+    await restarted.loaded();
+    expect(restarted.settings().available).toBe(true);
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
     logged(/revoked-keys.json is unreadable and no recovery-signed cached list can rebuild it/);
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [signing], 4));
+    await restarted.checkIfDue();
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    expect(await readFile(join(dir, 'revoked-keys.json'), 'utf8')).toBe('{"not":"a list"}');
+    logged(/only a recovery-signed list can rebuild the unreadable revoked-keys.json/);
+
+    const five = listText(5, list => (list.revokedKeyIds = [signing.key.keyId]));
+    server.publish(5, five, sigText(five, [recovery], 5));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 5, check: 'updated' });
+    expect(JSON.parse(await readFile(join(dir, 'revoked-keys.json'), 'utf8'))).toEqual([signing.key.keyId]);
+    const six = listText(6);
+    server.publish(6, six, sigText(six, [signing], 6));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ sequence: 5, check: 'failed' });
   });
 
   it('retries a revocation that could not be saved, and applies it from the cached list after a restart', async () => {

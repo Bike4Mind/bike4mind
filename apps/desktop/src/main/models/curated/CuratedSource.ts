@@ -64,8 +64,8 @@ export class CuratedSource {
   #cached: Copy | null = null;
   #state: CuratedCheckState = { lastSuccessAt: null, lastAttemptAt: null, failures: 0, floors: {} };
   #revoked = new Set<string>();
-  // Set when revoked-keys.json is unreadable and nothing trusted can rebuild it.
-  #blocked = false;
+  // Set while revoked-keys.json is unreadable and only a recovery-signed list may rebuild it.
+  #repairing = false;
   #enabled = true;
   #status: 'idle' | 'checking' | Outcome = 'idle';
   #inFlight: Promise<void> | null = null;
@@ -91,7 +91,7 @@ export class CuratedSource {
   }
 
   get available(): boolean {
-    return this.#source !== null && this.#deps.keys.length > 0 && !this.#blocked;
+    return this.#source !== null && this.#deps.keys.length > 0;
   }
 
   /** Resolves once the setting and the cached copy are read; the bundled list is current until then. */
@@ -201,9 +201,10 @@ export class CuratedSource {
       }
       const recovered = verdict?.ok ? this.#revocations(verdict) : null;
       if (!revoked.intact && recovered === null) {
-        this.#blocked = true;
+        this.#repairing = true;
+        this.#state = { ...this.#state, lastSuccessAt: null };
         this.#log(
-          'revoked-keys.json is unreadable and no recovery-signed cached list can rebuild it; using the bundled list'
+          'revoked-keys.json is unreadable and no recovery-signed cached list can rebuild it; using the bundled list until a recovery-signed list does'
         );
         return;
       }
@@ -345,7 +346,19 @@ export class CuratedSource {
    * higher than the current list and the floor accepts; anything else keeps the current list.
    */
   async #consider(verdict: Extract<Verdict, { ok: true }>, bytes: Uint8Array, signature: Uint8Array): Promise<Outcome> {
-    const added = this.#revocations(verdict)?.filter(id => !this.#revoked.has(id)) ?? [];
+    const revocations = this.#revocations(verdict);
+    if (this.#repairing) {
+      if (revocations === null) {
+        this.#log(
+          'rejected the curated list: only a recovery-signed list can rebuild the unreadable revoked-keys.json'
+        );
+        return 'rejected';
+      }
+      if (!(await this.#revoke(revocations))) return 'failed';
+      this.#repairing = false;
+      this.#log('rebuilt revoked-keys.json from a recovery-signed curated list');
+    }
+    const added = revocations?.filter(id => !this.#revoked.has(id)) ?? [];
     // An unsaved revocation still holds this session; failing the check makes the next one apply it again.
     const unsaved = added.length > 0 && !(await this.#revoke(added));
     if (added.length > 0) {
