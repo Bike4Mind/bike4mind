@@ -50,7 +50,7 @@ export async function createAgent(agentData: Partial<IAgent>, userId: string, la
   }
 
   // Normalizes agentData in place, so the fields below read the validated values.
-  validateAgentUpdate(agentData, label);
+  await validateAgentUpdate(agentData, userId, label);
 
   // Always use a default description if empty or undefined
   // This ensures the MongoDB schema validation passes
