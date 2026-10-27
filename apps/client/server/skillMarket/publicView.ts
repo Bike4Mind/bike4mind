@@ -115,6 +115,7 @@ export function toPublicDetail(
 ): SkillListingDetail {
   const { listing, version, ratings, myImport, viewer } = detail;
   return {
+    // Must stay in sync with the privileged flag in buildListingDetail (detail.ts).
     listing: toPublicListing(listing, { privileged: allowPrivileged && (viewer.isAuthor || viewer.canDelist) }),
     version: version ? toPublicVersion(version) : null,
     ratings: ratings.map(r => ({
