@@ -500,7 +500,7 @@ function scanTools(
   }
 
   // `Bash(git add:*)` restricts Bash to a command prefix, but it is still Bash.
-  const riskyClaudeCodeTools = splitAllowedTools((snapshot.claudeCodeAllowedTools ?? []).join(', ')).filter(
+  const riskyClaudeCodeTools = splitAllowedTools(snapshot.claudeCodeAllowedTools).filter(
     tool => !CLAUDE_CODE_READ_ONLY_TOOLS.has(tool.split('(')[0].trim())
   );
   if (riskyClaudeCodeTools.length > 0) {

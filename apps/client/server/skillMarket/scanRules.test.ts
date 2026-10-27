@@ -106,6 +106,12 @@ describe('runDeterministicScan - malicious corpus is rejected', () => {
     );
   });
 
+  it('holds a Bash entry that follows an entry with an unclosed paren', () => {
+    expect(scan(skill('Do it.', { claudeCodeAllowedTools: ['Read(x', 'Bash'] })).map(f => f.rule)).toContain(
+      'high_risk_tools'
+    );
+  });
+
   it('treats an unknown Claude Code tool as high-risk', () => {
     expect(scan(skill('Do it.', { claudeCodeAllowedTools: ['mcp__shell__run'] })).map(f => f.rule)).toContain(
       'high_risk_tools'
