@@ -17,9 +17,9 @@ import { ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE, COMPLETION_TOOL_ERROR_CODES }
 import { ChatToolModeSchema } from './promptMeta';
 
 /**
- * Smallest output budget every provider we route to accepts (OpenAI rejects `max_output_tokens`
- * below 16 with a 400). Enforced at the /api/chat boundary and floored again in the OpenAI
- * adapter for callers that bypass the schema (agents, CLI, pinned session settings).
+ * OpenAI's minimum output budget (it rejects `max_output_tokens` below 16 with a 400), the
+ * strictest we route to. Enforced for all models at the /api/chat boundary and floored again in
+ * the OpenAI adapter for callers that bypass the schema (agents, CLI, pinned session settings).
  */
 export const MIN_OUTPUT_TOKENS = 16;
 
