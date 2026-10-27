@@ -117,9 +117,17 @@ export interface HubGgufProjector extends HubGgufFile {
  * Why a build has no Ollama ref. Hugging Face's registry refuses sharded GGUFs, needs a quant scheme in the tag,
  * serves the first file in path order whose name ends with the tag (`ambiguous`: no tag reaches this one), and
  * resolves only `main`. `unsupported-name`: the repo id, or every tail of the file name, breaks Ollama's name rules.
+ * `unsupported-quant`: no tail of the file name is a tag the registry accepts, because its quant label (e.g.
+ * `Q4_K_L`) is rejected.
  */
 export type OllamaRefIssue =
-  'split' | 'incomplete' | 'no-quant-label' | 'unsupported-name' | 'pinned-revision' | 'ambiguous';
+  | 'split'
+  | 'incomplete'
+  | 'no-quant-label'
+  | 'unsupported-quant'
+  | 'unsupported-name'
+  | 'pinned-revision'
+  | 'ambiguous';
 
 export interface HubGgufBuild {
   /**
@@ -127,7 +135,7 @@ export interface HubGgufBuild {
    * it keeps its first shard's path instead.
    */
   id: string;
-  /** Upper-case quant label as the Hub reads it from the file name, e.g. `Q4_K_M` or `UD-Q4_K_XL`. */
+  /** Upper-case quant label read from the file name, e.g. `Q4_K_M` or `UD-Q4_K_XL`; `Q4_K_L` and kin are ours. */
   quant: string | null;
   /** The file, or every shard in order. */
   files: HubGgufFile[];
@@ -175,17 +183,21 @@ export interface HubModelDetail extends HubModelSummary {
 }
 
 // The Hub labels a GGUF by the last quant scheme in its upper-cased file name (scheme list from huggingface.js
-// packages/tasks/src/gguf.ts). Longest first, so Q4_0_4_4 is not read as Q4_0; the registry tells those apart.
+// packages/tasks/src/gguf.ts, plus the `_XL` schemes).
+// Longest first, so Q4_0_4_4 is not read as Q4_0; the registry tells those apart.
 const QUANT_SCHEMES = [
   'F32 F16 BF16 Q4_0 Q4_1 Q4_1_SOME_F16 Q4_2 Q4_3 Q8_0 Q5_0 Q5_1 Q2_K Q3_K_S Q3_K_M Q3_K_L Q4_K_S Q4_K_M Q5_K_S',
   'Q5_K_M Q6_K IQ2_XXS IQ2_XS Q2_K_S IQ3_XS IQ3_XXS IQ1_S IQ4_NL IQ3_S IQ3_M IQ2_S IQ2_M IQ4_XS IQ1_M Q4_0_4_4',
   'Q4_0_4_8 Q4_0_8_8 TQ1_0 TQ2_0 MXFP4_MOE MXFP4 NVFP4 Q1_0 Q2_0 Q2_K_XL Q3_K_XL Q4_K_XL Q5_K_XL Q6_K_XL Q8_K_XL',
 ].flatMap(line => line.split(' '));
+const QUANT_SCHEME_RE = new RegExp(QUANT_SCHEMES.join('|'));
+// bartowski's `_L` builds (the `_M` mix with Q8_0 embed/output weights). The registry rejects these as tags with
+// "not a valid quantization scheme", so they are labelled but never get an Ollama ref.
+const REGISTRY_REJECTED_QUANTS = new Set(['Q4_K_L', 'Q5_K_L', 'Q8_K_L']);
 const QUANT_RE = new RegExp(
-  `(?:UD-)?(?:${QUANT_SCHEMES.sort((a, b) => b.length - a.length).join('|')})(?:_[A-Z]+)?`,
+  `(?:UD-)?(?:${[...QUANT_SCHEMES, ...REGISTRY_REJECTED_QUANTS].sort((a, b) => b.length - a.length).join('|')})(?:_[A-Z]+)?`,
   'g'
 );
-const QUANT_SCHEME_RE = new RegExp(QUANT_SCHEMES.join('|'));
 
 // Ollama's tag rule (name.go): alphanumeric or `_` first, then `_ . -`, at most 80 characters.
 const OLLAMA_TAG_RE = /^[A-Za-z0-9_][\w.-]{0,79}$/;
@@ -509,13 +521,17 @@ function groupGgufFiles(
           ? 'split'
           : !build.quant
             ? 'no-quant-label'
-            : !repoOk || !tag
+            : !repoOk
               ? 'unsupported-name'
-              : pinned
-                ? 'pinned-revision'
-                : !plans.get(build.id)?.unique
-                  ? 'ambiguous'
-                  : null;
+              : !tag
+                ? [...REGISTRY_REJECTED_QUANTS].some(rejected => build.quant?.includes(rejected))
+                  ? 'unsupported-quant'
+                  : 'unsupported-name'
+                : pinned
+                  ? 'pinned-revision'
+                  : !plans.get(build.id)?.unique
+                    ? 'ambiguous'
+                    : null;
       return {
         ...build,
         ollamaRef: issue || !tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`,

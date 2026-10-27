@@ -55,7 +55,7 @@ export const createCompletionContract = defineEndpoint({
     '`400` rather than run without it.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
     'a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
-    'credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB ' +
+    'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a body over 25 MB ' +
     '`413`, any other body that fails schema validation `422`, insufficient credits `422` with ' +
     '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model ' +
     'whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). ' +
@@ -120,7 +120,7 @@ export const createCompletionContract = defineEndpoint({
       description:
         "Temporarily unavailable: the model's provider is not configured on this deployment, or the self-hosted " +
         'model server that lists it (Ollama, local image) is unreachable (`errorCode: "provider_not_configured"`), ' +
-        'or the database is unreachable (no `errorCode`). Retry later.',
+        'or the database is unreachable, including while verifying the plan of a free-tier model caller (no `errorCode`). Retry later.',
       schema: ProviderNotConfiguredErrorSchema,
     },
   },

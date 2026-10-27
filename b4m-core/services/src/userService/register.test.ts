@@ -3,6 +3,7 @@ import { registerUser, registerViaOTC, RegisterUserParameters } from './register
 import { BadRequestError } from '@bike4mind/utils';
 import {
   CURRENT_POLICY_VERSION,
+  RegInviteSource,
   RegInviteStatusType,
   PENDING_FREE_CREDITS_TAG,
   RESERVED_USERNAME_MESSAGE,
@@ -288,6 +289,88 @@ describe('registerUser', () => {
     it('does not enforce binding for invites without an email (admin bulk codes)', async () => {
       // default mockInvite has no email field
       await expect(registerUser(baseParams, mockAdapters)).resolves.toBeDefined();
+    });
+  });
+
+  describe('inviter attribution and invite quota', () => {
+    const createdUser = () => mockAdapters.db.users.create.mock.calls[0][0];
+
+    it('saves the sender of a referral invite on the new user', async () => {
+      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+        ...mockInvite,
+        email: baseParams.email,
+        source: RegInviteSource.referral,
+      });
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBe('inviterId');
+    });
+
+    it('leaves the inviter unset for an email-bound, non-unlimited invite an admin issued (no referral source)', async () => {
+      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+        ...mockInvite,
+        email: baseParams.email,
+        unlimitedUse: false,
+      });
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
+    });
+
+    it('leaves the inviter unset for an admin bulk code (no email)', async () => {
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
+    });
+
+    it('leaves the inviter unset for an unlimited code, even with an email', async () => {
+      mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({
+        ...mockInvite,
+        email: baseParams.email,
+        source: RegInviteSource.referral,
+        unlimitedUse: true,
+      });
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
+    });
+
+    it('leaves the inviter unset when there is no invite code', async () => {
+      const findBySettingName = mockAdapters.db.adminSettings.findBySettingName;
+      mockAdapters.db.adminSettings.findBySettingName = vi
+        .fn()
+        .mockImplementation((name: string) =>
+          name === 'allowOpenRegistration' ? Promise.resolve({ settingValue: true }) : findBySettingName(name)
+        );
+      await registerUser({ ...baseParams, inviteCode: undefined }, mockAdapters);
+      expect(createdUser().referredByUserId).toBeNull();
+    });
+
+    it('starts a new user with 3 invites when the setting is unset', async () => {
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().numReferralsAvailable).toBe(3);
+    });
+
+    it.each([-1, 2.5, 'abc', 5000])('falls back to 3 invites when ReferralInvitesPerUser is %s', async configured => {
+      const findBySettingName = mockAdapters.db.adminSettings.findBySettingName;
+      mockAdapters.db.adminSettings.findBySettingName = vi
+        .fn()
+        .mockImplementation((name: string) =>
+          name === 'ReferralInvitesPerUser' ? Promise.resolve({ settingValue: configured }) : findBySettingName(name)
+        );
+      await registerUser(baseParams, mockAdapters);
+      expect(createdUser().numReferralsAvailable).toBe(3);
+    });
+
+    it('starts a new user with the configured number of invites, including 0', async () => {
+      const findBySettingName = mockAdapters.db.adminSettings.findBySettingName;
+      for (const configured of [7, 0]) {
+        mockAdapters.db.users.create.mockClear();
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue({ ...mockInvite });
+        mockAdapters.db.adminSettings.findBySettingName = vi
+          .fn()
+          .mockImplementation((name: string) =>
+            name === 'ReferralInvitesPerUser' ? Promise.resolve({ settingValue: configured }) : findBySettingName(name)
+          );
+        await registerUser(baseParams, mockAdapters);
+        expect(createdUser().numReferralsAvailable).toBe(configured);
+      }
     });
   });
 

@@ -1,8 +1,5 @@
-import {
-  getEmbeddingModelCapabilities,
-  servableEmbeddingDimensions,
-  type SupportedEmbeddingModel,
-} from '@bike4mind/common';
+import type { SupportedEmbeddingModel } from '../schemas/embedding';
+import { getEmbeddingModelCapabilities, servableEmbeddingDimensions } from './catalog';
 
 /**
  * How a requested output width is produced for one model.
@@ -18,8 +15,9 @@ export type EmbeddingDimensionPlan =
   | { kind: 'truncate'; dimensions: number }
   | { kind: 'unsupported'; message: string };
 
-// A `discrete` catalog entry promises the provider forwards `outputDimension` (fab-pipeline
-// VoyageAIEmbeddingService today); Bedrock and Ollama ignore it, so their models are declared `fixed`.
+// A `discrete` catalog entry promises the provider forwards `outputDimension`. Today the runtime forwarder is
+// fab-pipeline's VoyageAIEmbeddingService, reached through embedTexts; the Voyage provider in
+// utils/embeddingProviders honours it too. Bedrock and Ollama ignore it, so their models are declared `fixed`.
 export function planEmbeddingDimensions(
   model: SupportedEmbeddingModel,
   requested: number | undefined

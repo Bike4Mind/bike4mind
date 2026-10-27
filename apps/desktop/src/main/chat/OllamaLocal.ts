@@ -25,6 +25,14 @@ const showSchema = z.object({
   ...remoteFields,
 });
 
+async function ollamaError(response: Response): Promise<Error> {
+  const message = await httpError(response);
+  // Ollama answers "model '...' not found" once the model is deleted, e.g. from the Models screen.
+  if (response.status === 404 && /model .* not found/i.test(message))
+    return new Error('This model was removed from Ollama. Pick another model.');
+  return new Error(message);
+}
+
 function usesRemoteModel(model: { remote_host?: string; remote_model?: string }): boolean {
   return !!(model.remote_host?.trim() || model.remote_model?.trim());
 }
@@ -129,7 +137,7 @@ export class OllamaLocal {
       response = await post(sent);
       measured = await refusedSize(response);
     }
-    if (!response.ok || !response.body) throw new Error(await httpError(response));
+    if (!response.ok || !response.body) throw await ollamaError(response);
     if (left > 0) onTrimmed?.(left);
     // Recorded now, not only on the done frame, so a reply stopped early still makes the next turn compact.
     if (whole !== undefined) onEvent({ type: 'content', usage: { inputTokens: whole } });
@@ -191,7 +199,7 @@ export class OllamaLocal {
       body: body ? JSON.stringify(body) : undefined,
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}.`);
+    if (!response.ok) throw await ollamaError(response);
     return response.json();
   }
 }

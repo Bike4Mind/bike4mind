@@ -4,12 +4,18 @@ import { createSubscriber } from '@client/app/utils/subscriberAPICalls';
 import { useCommonStyles } from '../hooks/useCommonStyles';
 import { useTheme } from '@mui/joy/styles';
 import { gray } from '@client/app/utils/themes/colors';
+import type { SubscriberSource } from '@bike4mind/common';
 
-const SubscriberForm = () => {
+type SubscriberFormProps = {
+  initialEmail?: string;
+  source?: SubscriberSource;
+};
+
+const SubscriberForm = ({ initialEmail = '', source }: SubscriberFormProps) => {
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
-    email: '',
+    email: initialEmail,
   });
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [error, setError] = useState('');
@@ -22,7 +28,7 @@ const SubscriberForm = () => {
     setError('');
 
     try {
-      await createSubscriber(formData);
+      await createSubscriber({ ...formData, source });
       setIsSubmitted(true);
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Something went wrong. Please try again.');
@@ -73,6 +79,7 @@ const SubscriberForm = () => {
               <Input
                 required
                 type={field.type}
+                slotProps={{ input: { 'data-testid': `subscriber-form-${field.name}-input` } }}
                 value={formData[field.name as keyof typeof formData]}
                 onChange={e => setFormData(prev => ({ ...prev, [field.name]: e.target.value }))}
                 sx={{

@@ -4,7 +4,7 @@
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
 import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
-import { minifyRouterFunction } from './routerFunctionCode';
+import { minifyRouterFunction, noindexResponseInjection } from './routerFunctionCode';
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
@@ -240,14 +240,14 @@ const routerInstance = shouldUseSharedRouter
       // Attach both edge functions on every stage that owns its router (deployed +
       // shared-dev). The viewer-request function stamps the origin-verify secret and the
       // user-file marker BEFORE SST's URI rewrite; the viewer-response function reads the
-      // marker to apply the CSP backstop, and additionally injects permissive CORS on personal
-      // `sst dev` stages.
+      // marker to apply the CSP backstop, adds x-robots-tag noindex on every non-production
+      // stage, and additionally injects permissive CORS on personal `sst dev` stages.
       edge: {
         viewerRequest: {
           injection: $interpolate`${usercontentGateInjection}${originVerifyInjection}${userFileMarkerInjection}`,
         },
         viewerResponse: {
-          injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
+          injection: userFileCspInjection + noindexResponseInjection($app.stage) + ($dev ? devCorsInjection : ''),
         },
       },
       transform: {

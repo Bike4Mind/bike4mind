@@ -4,6 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * Tool search on executeCompletion: refusals land before any credit is reserved, what reaches the
  * adapter for each backend, and provider blocks reach onChunk untouched.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
