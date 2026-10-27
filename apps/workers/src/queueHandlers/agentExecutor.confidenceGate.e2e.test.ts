@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import type { IMessage } from '@bike4mind/common';
@@ -127,6 +128,9 @@ let server: MongoMemoryServer;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  // The seeded user has no paid plan and test-model is not on the free-tier allowlist.
+  const { AdminSettings } = await import('@bike4mind/database');
+  await AdminSettings.create({ settingName: 'freeTierModelGateEnabled', settingValue: 'false' });
 });
 
 afterAll(async () => {

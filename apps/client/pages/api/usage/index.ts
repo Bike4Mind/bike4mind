@@ -7,7 +7,7 @@ import {
   type UsageOwnerType,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 

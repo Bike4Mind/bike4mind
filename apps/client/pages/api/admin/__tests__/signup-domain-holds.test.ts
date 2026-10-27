@@ -126,6 +126,15 @@ describe('signup domain hold decisions', () => {
     expect(release).not.toHaveBeenCalled();
     expect(res._getJSONData()).toMatchObject({ creditsReleased: 0, remaining: 1, nextCursor: null });
   });
+  it('matches trailing-dot addresses only within the reviewed domain', async () => {
+    const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
+    await handlers.post(req, res);
+    const filter = find.mock.calls[0][0];
+    const domainMatch = new RegExp(filter.email.$regex, filter.email.$options);
+    expect(domainMatch.test('person@example.net.')).toBe(true);
+    expect(domainMatch.test('person@example.net')).toBe(true);
+    expect(domainMatch.test('person@example.network')).toBe(false);
+  });
   it('counts a failed release as still pending', async () => {
     release.mockResolvedValue({ creditsGranted: 0, tags: null });
     const { req, res } = makeRequest({ domain: 'example.net', action: 'release' });
@@ -166,6 +175,8 @@ describe('signup domain hold decisions', () => {
   it('confirmation grants no credits', async () => {
     const { req, res } = makeRequest({ domain: 'example.net', action: 'confirm' });
     await handlers.post(req, res);
+    expect(reviewUpdate.mock.calls[0][1]).toMatchObject({ $set: { status: 'blocked' } });
+    expect(res._getJSONData()).toMatchObject({ status: 'blocked' });
     expect(release).not.toHaveBeenCalled();
     expect(find).not.toHaveBeenCalled();
   });

@@ -1,6 +1,6 @@
 import { gitHubLakeAuthGrantRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { decryptToken, encryptToken } from '@server/security/tokenEncryption';
+import { decryptToken, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { ForbiddenError, InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import {

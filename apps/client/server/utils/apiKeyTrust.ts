@@ -32,8 +32,8 @@ export async function resolveApiKeyTrust(
 }
 
 /**
- * Request-time ceiling for a personal key whose owner is untrusted, so keys minted before the
- * gate existed are throttled rather than revoked. Lifts on its own once the owner becomes
+ * Request-time ceiling for a personal key whose owner passes the API access policy but is
+ * untrusted. Such existing keys are throttled rather than revoked. Lifts once the owner becomes
  * trusted. Org-billed keys are exempt, as they are at mint time. The key's own lower limit wins.
  */
 export async function applyUntrustedRateLimit(

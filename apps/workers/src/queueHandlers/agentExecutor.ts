@@ -77,8 +77,10 @@ import { Permission } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
+import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -145,7 +147,7 @@ import {
   makeDagDispatcher,
   onDagNodeTerminal,
 } from './agentExecutorDag';
-import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
+import { collectDagChildArtifactBlocks } from '@bike4mind/server-utils/utils/agentDagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services/llm';
 import { filterRunnableModels, type LLMModelConfig, type ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
@@ -192,6 +194,7 @@ import {
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
+import { createSubagentTextDeltaSender } from './agentExecutor.subagentTextDelta';
 import {
   aggregationWakeStartIteration as wakeStartIterationOf,
   aggregationGraceReasonOf,
@@ -286,7 +289,8 @@ const AGENT_HISTORY_QUEST_COUNT = 20;
 
 /**
  * Confidence-gate threshold for the web agent execution flow.
- * Iteration-average confidence below this triggers a pause for human review.
+ * An iteration whose every non-failed tool call scores below this counts toward a
+ * pause for human review (see `evaluateConfidenceGate`).
  * Shared default across autonomous agent flows - the value below
  * which a run is considered "not autonomous-safe". A persisted gate stalls
  * the execution in `paused` until the client responds via `gate_response`,
@@ -1001,9 +1005,12 @@ async function processExecution(
 
     await agentExecutionRepository.updateConnectionId(executionId, connectionId);
 
-    // Load user
-    const user = await User.findById(execution.userId);
-    if (!user) throw new Error(`User ${execution.userId} not found`);
+    // Load user. A run started by a key without the admin scope sees the owner as a non-admin,
+    // as the HTTP doors do through apiKeyAuth.
+    const storedUser = await User.findById(execution.userId);
+    if (!storedUser) throw new Error(`User ${execution.userId} not found`);
+    const user = execution.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
+    const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
 
     // Validate session ownership
     const loadedSession = await sessionRepository.findById(execution.sessionId);
@@ -1441,6 +1448,12 @@ async function processExecution(
     const approvedTools = [...(execution.approvedTools ?? [])];
     const deniedTools = [...(execution.deniedTools ?? [])];
 
+    // MAX_STEP_CONTENT keeps one frame under the 128KB API Gateway limit, past which
+    // `createWsSender` would silently drop it.
+    const subagentTextDeltas = createSubagentTextDeltaSender(
+      payload => sendWs('subagent_text_delta', { executionId, ...payload }),
+      MAX_STEP_CONTENT
+    );
     const subagentTracker: ServerSubagentTracker = {
       onStart: async info => {
         // Background children are treated as TOP-LEVEL for cap/billing purposes:
@@ -1461,6 +1474,7 @@ async function processExecution(
           linkedQuestId: execution.linkedQuestId,
           ...executionTurnAuth(execution),
           ...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),
+          ...(execution.adminRoleWithheld && { adminRoleWithheld: true }),
           query: info.task,
           model: info.model,
           // Snapshot of the parent's lists: a Lambda-dispatched child rebuilds its tool gate
@@ -1558,6 +1572,7 @@ async function processExecution(
         return child.id;
       },
       onStep: async ({ childExecutionId, agentName, step, iteration }) => {
+        await subagentTextDeltas.flush(childExecutionId);
         const truncatedStep =
           step.content.length > MAX_STEP_CONTENT
             ? { ...step, content: step.content.slice(0, MAX_STEP_CONTENT) + '\n\n...(truncated)' }
@@ -1570,29 +1585,8 @@ async function processExecution(
           step: truncatedStep,
         });
       },
-      // Forward streaming token deltas so the parent UI renders partial subagent
-      // responses live within each iteration. Fire-and-forget so a slow
-      // WS send cannot stall the agent loop - the orchestrator already wraps
-      // this in .catch(), but we also avoid awaiting here to keep the LLM
-      // callback non-blocking.
-      //
-      // Defense-in-depth: split deltas larger than MAX_STEP_CONTENT into
-      // multiple frames so a pathological chunk (e.g., a buffering adapter
-      // coalescing many tokens, or a single large code block) cannot exceed
-      // the 128KB API Gateway frame limit and get silently dropped by
-      // `createWsSender`. Reuses the same ceiling `onStep` enforces.
-      onTextDelta: async ({ childExecutionId, agentName, iteration, delta }) => {
-        for (let offset = 0; offset < delta.length; offset += MAX_STEP_CONTENT) {
-          const chunk = delta.slice(offset, offset + MAX_STEP_CONTENT);
-          await sendWs('subagent_text_delta', {
-            executionId,
-            childExecutionId,
-            agentName,
-            iteration,
-            delta: chunk,
-          });
-        }
-      },
+      // Ordered, chunked forwarding lives in agentExecutor.subagentTextDelta.ts.
+      onTextDelta: subagentTextDeltas.send,
       onChildProgress: async ({ childExecutionId, status }) => {
         await sendWs('subagent_progress', {
           executionId,
@@ -1633,6 +1627,7 @@ async function processExecution(
         if (credits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, credits);
         }
+        await subagentTextDeltas.flush(childExecutionId);
         await sendWs('subagent_completed', {
           executionId,
           childExecutionId,
@@ -1668,6 +1663,7 @@ async function processExecution(
         if (partialCredits > 0) {
           await agentExecutionRepository.incrementCreditsUsed(executionId, partialCredits);
         }
+        await subagentTextDeltas.flush(childExecutionId);
         await sendWs('subagent_failed', {
           executionId,
           childExecutionId,
@@ -1737,6 +1733,7 @@ async function processExecution(
         linkedQuestId: execution.linkedQuestId,
         ...executionTurnAuth(execution),
         scopeDeniedTools: execution.scopeDeniedTools,
+        adminRoleWithheld: execution.adminRoleWithheld,
         approvedTools,
         deniedTools,
         spawnedByExecutionId: executionId,
@@ -1791,6 +1788,7 @@ async function processExecution(
       userId: execution.userId,
       user: user as IUserDocument,
       logger,
+      thinkingVisibility,
       // The run's active account, already membership-checked at start; lake-creating tools scope to it.
       organizationId: execution.organizationId,
       // How the run was started; the key also attributes a lake write a tool drives, as on the chat doors.
@@ -2263,6 +2261,9 @@ async function processExecution(
       // continuations (baked into the checkpoint) and when artifacts are off.
       ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
       ...buildReActAgentRuntimeConfig(execution),
+      thinkingVisibility,
+      modelBackend: modelInfo?.backend,
+      modelAdapterFamily: modelInfo?.adapterFamily,
     });
 
     // Restore from checkpoint if continuing
@@ -3682,8 +3683,10 @@ async function processSubagentDispatch(
     await agentExecutionRepository.updateConnectionId(childExecutionId, connectionId);
 
     // Auth + ownership checks (mirror processExecution).
-    const user = await User.findById(child.userId);
-    if (!user) throw new Error(`User ${child.userId} not found`);
+    const storedUser = await User.findById(child.userId);
+    if (!storedUser) throw new Error(`User ${child.userId} not found`);
+    const user = child.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
+    const thinkingVisibility = await resolveThinkingVisibility(user as IUserDocument);
     const loadedSession = await sessionRepository.findById(child.sessionId);
     if (!loadedSession) throw new Error(`Session ${child.sessionId} not found`);
     if (loadedSession.userId !== child.userId) {
@@ -3923,6 +3926,7 @@ async function processSubagentDispatch(
       userId: child.userId,
       user: user as IUserDocument,
       logger,
+      thinkingVisibility,
       organizationId: child.organizationId,
       ...executionTurnAuth(child),
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
@@ -4289,6 +4293,7 @@ async function processSubagentDispatch(
       userId: child.userId,
       llm,
       logger,
+      thinkingVisibility,
       parentTools: tools,
       // Granted to this dispatched subagent only when its `allowedTools` names
       // `lattice_*`; the orchestrator dedupes against `parentTools`.

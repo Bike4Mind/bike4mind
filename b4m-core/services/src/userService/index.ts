@@ -5,6 +5,7 @@ export * from './adminUpdate';
 export * from './register';
 export * from './reservedUsername';
 export * from './freeCredits';
+export * from './signupRisk';
 export * from './disposableEmail';
 export * from './signupRiskScore';
 export * from './sourceTag';
@@ -28,7 +29,8 @@ export * from './moderationPolicy';
 export * from './accountState';
 export * from './flagDisputePending';
 export * from './requestModerationAppeal';
-
+export * from './signupClusterKeys';
+export * from './signupCohorts';
 export * from './signupBurstDetector';
 export * from './signupProtection';
 export * from './domainIntelligence';

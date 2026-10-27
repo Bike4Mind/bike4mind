@@ -10,6 +10,13 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
+const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown[] }));
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: (opts: unknown) => {
+    rateLimitOptions.push(opts);
+    return (_req: any, _res: any, next: any) => next?.();
+  },
+}));
 
 // passport.authenticate is invoked as passport.authenticate(strategy, opts, cb)(req, res, next);
 // the mock lets each test drive the (err, user, info) triple passport would normally supply.
@@ -28,7 +35,7 @@ vi.mock('@server/auth/tokenGenerator', () => ({
     createAccessToken: () => ({ accessToken: 'jwt-access', refreshToken: 'jwt-refresh' }),
   },
 }));
-vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({ verifyStateToken: vi.fn() }));
 
 const mockResolveSecondFactor = vi.fn();
 const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
@@ -67,7 +74,7 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 
 // Import after mocks are registered.
 import { logEvent } from '@server/utils/analyticsLog';
-import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@server/auth/jwtStateStore';
+import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { logAuthAudit } from '@server/utils/authAudit';
 
 const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { clientId: string }> => ({
@@ -76,10 +83,10 @@ const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { client
 });
 import handler from '@pages/api/auth/[strategy]/callback';
 
-function makeReqRes(headers: Record<string, string> = {}) {
+function makeReqRes(headers: Record<string, string> = {}, query: Record<string, string> = {}) {
   const { req, res } = createMocks({
     method: 'GET',
-    query: { strategy: 'github', state: 'state-token' },
+    query: { strategy: 'github', state: 'state-token', ...query },
     headers: { host: 'localhost:3000', 'user-agent': 'vitest', ...headers },
     url: '/api/auth/github/callback',
   });
@@ -87,14 +94,20 @@ function makeReqRes(headers: Record<string, string> = {}) {
 }
 
 /** Drive the handler as if passport's verify callback resolved with (err, user, info). */
-async function runCallback(err: unknown, user: unknown, info: unknown, headers?: Record<string, string>) {
+async function runCallback(
+  err: unknown,
+  user: unknown,
+  info: unknown,
+  headers?: Record<string, string>,
+  query?: Record<string, string>
+) {
   // The handler does not await passport's callback, so hold on to the promise it returns and wait
   // for that: a fixed tick races any await added above the code under test.
   let passportCallback: Promise<unknown> | undefined;
   mockAuthenticate.mockImplementation((_strategy: string, _opts: any, cb: any) => () => {
     passportCallback = cb(err, user, info);
   });
-  const { req, res } = makeReqRes(headers);
+  const { req, res } = makeReqRes(headers, query);
   await handler(req, res, vi.fn());
   await passportCallback;
   return res;
@@ -116,7 +129,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     expect(JSON.stringify(loggedArg)).not.toContain('E11000');
 
     const redirectUrl = res._getRedirectUrl();
-    expect(redirectUrl).toBe('/login?error=Authentication%20failed');
+    expect(redirectUrl).toBe('/login?error=callback_error');
     expect(redirectUrl).not.toContain('victim');
     expect(redirectUrl).not.toContain('E11000');
   });
@@ -128,9 +141,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_expired' }));
-    expect(res._getRedirectUrl()).toBe(
-      `/login?error=${encodeURIComponent('Your login request expired. Please try again.')}`
-    );
+    expect(res._getRedirectUrl()).toBe('/login?error=invalid_state');
   });
 
   it('maps state_missing and state_invalid to their own distinct canonical reasons', async () => {
@@ -139,7 +150,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
       message: 'Missing state parameter',
     });
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_missing' }));
-    expect(missingRes._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(missingRes._getRedirectUrl()).toBe('/login?error=callback_error');
 
     vi.clearAllMocks();
 
@@ -148,7 +159,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
       message: 'Invalid authorization state.',
     });
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_invalid' }));
-    expect(invalidRes._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(invalidRes._getRedirectUrl()).toBe('/login?error=callback_error');
   });
 
   it('default-denies an unrecognized or absent code to internal - raw info.message never substitutes for reason', async () => {
@@ -162,7 +173,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
 
     const withNoInfo = await runCallback(null, undefined, undefined);
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'internal' }));
-    expect(withNoInfo._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(withNoInfo._getRedirectUrl()).toBe('/login?error=callback_error');
     void withUnknownCode;
   });
 
@@ -173,7 +184,64 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'forbidden_system_user' }));
-    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+  });
+});
+
+describe('[strategy]/callback - !user branch log level', () => {
+  it.each([
+    'registration_closed',
+    'state_expired',
+    'state_invalid',
+    'state_missing',
+    'duplicate_account',
+    'forbidden_system_user',
+  ])('logs the expected %s outcome at warn, below the level the alert channel pages on', async code => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCallback(null, undefined, { code });
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', { code });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('logs a cancelled consent (?error=access_denied) at warn with its own reason', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // What passport-oauth2 passes to fail() when the provider redirects back with access_denied.
+    const info = { message: 'The user has denied your application access.' };
+
+    const res = await runCallback(null, undefined, info, undefined, { error: 'access_denied' });
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', info);
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'access_denied' }));
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('keeps an unrecognized failure at error', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCallback(null, undefined, { message: 'Failed to obtain access token' });
+
+    expect(errorSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', {
+      message: 'Failed to obtain access token',
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});
+
+describe('[strategy]/callback - guards', () => {
+  it('rate limits the callback at 10/min per client IP in the oauth-callback bucket', () => {
+    expect(rateLimitOptions).toEqual([{ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }]);
   });
 });
 
@@ -198,13 +266,11 @@ describe('[strategy]/callback - banned user gate', () => {
 });
 
 describe('[strategy]/callback - invite gate', () => {
-  it('surfaces registration_closed with an invite-only message', async () => {
+  it('surfaces registration_closed as a login error code', async () => {
     const res = await runCallback(null, undefined, { code: 'registration_closed' });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'registration_closed' }));
-    expect(res._getRedirectUrl()).toBe(
-      `/login?error=${encodeURIComponent('This instance is invite-only. Ask an administrator for an invite.')}`
-    );
+    expect(res._getRedirectUrl()).toBe('/login?error=registration_closed');
   });
 });
 

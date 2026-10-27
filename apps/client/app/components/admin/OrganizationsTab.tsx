@@ -30,7 +30,7 @@ import { IOrganizationDocument, WithId, isValidAdminActionReason } from '@bike4m
 import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
 import { useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { toast } from 'sonner';
-import OrganizationProfileUpdated from './OrganizationProfileUpdated';
+import OrganizationProfileModal from './OrganizationProfileModal';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import AddIcon from '@mui/icons-material/Add';
 import SortIcon from '@mui/icons-material/Sort';
@@ -51,41 +51,9 @@ import {
 import { useGetPendingOrganizationUsers } from '@client/app/hooks/data/user';
 import SearchBar from '@client/app/components/Session/SearchBar';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { useShallow } from 'zustand/react/shallow';
 import { openInNewTab } from '@client/app/utils/externalLinks';
-
-const PAGE_LIMIT_OPTIONS = [5, 10, 20];
-
-interface OrganizationsTabParams {
-  page: number;
-  limit: number;
-  search: string;
-  personal: boolean | undefined;
-  sortBy: 'name' | 'createdAt' | 'updatedAt';
-  sortDirection: 'asc' | 'desc';
-}
-
-const useOrganizationsTab = create<{
-  params: OrganizationsTabParams;
-  setParams: (params: Partial<OrganizationsTabParams>) => void;
-}>()(
-  persist(
-    (set, get) => ({
-      params: {
-        page: 1,
-        limit: 10,
-        search: '',
-        personal: undefined,
-        sortBy: 'name' as const,
-        sortDirection: 'asc' as const,
-      },
-      setParams: params => set({ params: { ...get().params, ...params } }),
-    }),
-    { name: 'admin-organizations-tab-01' }
-  )
-);
+import { ORGS_PAGE_LIMIT_OPTIONS, organizationsPageToClampTo } from './organizationsTabSearch';
+import { useOpenOrganizationId, useOrganizationsParams, useOrganizationsTabUrlSync } from './useOrganizationsTabParams';
 
 /**
  * Adjust Seats modal, extracted so it can fetch pending invites for the org
@@ -156,7 +124,7 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
 
 const OrganizationsTab: React.FC = () => {
   const isMobile = useIsMobile();
-  const [selectedOrg, setSelectedOrg] = useState<WithId<IOrganizationDocument> | null>(null);
+  const { setOrgId } = useOpenOrganizationId();
   const [membersOrg, setMembersOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newOrgName, setNewOrgName] = useState('');
@@ -179,11 +147,12 @@ const OrganizationsTab: React.FC = () => {
   const [revokeOrg, setRevokeOrg] = useState<WithId<IOrganizationDocument> | null>(null);
   const [revokeReason, setRevokeReason] = useState('');
 
-  const [params, setParams] = useOrganizationsTab(useShallow(state => [state.params, state.setParams]));
+  useOrganizationsTabUrlSync();
+  const [params, setParams] = useOrganizationsParams();
 
   const [totalOrganizations, setTotalOrganizations] = useState<number>(0);
 
-  const { data, isLoading, refetch } = useSearchOrganizations({
+  const { data, isLoading, isFetching, refetch } = useSearchOrganizations({
     page: params.page,
     limit: params.limit,
     search: params.search,
@@ -202,6 +171,13 @@ const OrganizationsTab: React.FC = () => {
   useEffect(() => {
     setTotalOrganizations(curr => data?.totalOrganizations ?? curr);
   }, [data?.totalOrganizations]);
+
+  // A linked or restored page can be past the end of the list.
+  const totalPages = data?.totalPages ?? 0;
+  useEffect(() => {
+    const page = organizationsPageToClampTo({ page: params.page, totalPages, isFetching });
+    if (page !== undefined) setParams({ page });
+  }, [isFetching, totalPages, params.page, setParams]);
 
   const createOrganizationMutation = useCreateOrganization();
   const grantOrgMutation = useGrantOrganization();
@@ -435,7 +411,7 @@ const OrganizationsTab: React.FC = () => {
         itemsPerPage={params.limit}
         onItemsPerPageChange={l => setParams({ limit: l, page: 1 })}
         totalItems={totalOrganizations}
-        pageLimitOptions={PAGE_LIMIT_OPTIONS}
+        pageLimitOptions={ORGS_PAGE_LIMIT_OPTIONS}
       />
 
       {isMobile ? (
@@ -474,7 +450,7 @@ const OrganizationsTab: React.FC = () => {
                         color="primary"
                         size="sm"
                         startDecorator={<EditIcon sx={{ fontSize: 14 }} />}
-                        onClick={() => setSelectedOrg(org)}
+                        onClick={() => setOrgId(org.id)}
                       >
                         Edit
                       </Button>
@@ -602,7 +578,7 @@ const OrganizationsTab: React.FC = () => {
                             color="primary"
                             size="sm"
                             startDecorator={<EditIcon sx={{ fontSize: 14 }} />}
-                            onClick={() => setSelectedOrg(org)}
+                            onClick={() => setOrgId(org.id)}
                           >
                             Edit
                           </Button>
@@ -701,26 +677,12 @@ const OrganizationsTab: React.FC = () => {
           itemsPerPage={params.limit}
           onItemsPerPageChange={l => setParams({ limit: l, page: 1 })}
           totalItems={totalOrganizations}
-          pageLimitOptions={PAGE_LIMIT_OPTIONS}
+          pageLimitOptions={ORGS_PAGE_LIMIT_OPTIONS}
         />
       </Box>
 
       {/* Organization Profile Modal */}
-      {selectedOrg && (
-        <Modal open={!!selectedOrg} onClose={() => setSelectedOrg(null)}>
-          <ModalDialog size="lg" sx={{ maxHeight: '80vh', overflow: 'auto' }}>
-            <ModalClose />
-            <OrganizationProfileUpdated
-              org={selectedOrg}
-              onClose={() => {
-                setSelectedOrg(null);
-                refetch();
-              }}
-              activeDays={30}
-            />
-          </ModalDialog>
-        </Modal>
-      )}
+      <OrganizationProfileModal onClosed={refetch} />
 
       {/* Members Modal */}
       {membersOrg && (

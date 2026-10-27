@@ -13,7 +13,7 @@ const SIZE_PATTERN = /^(\d+)x(\d+)$/;
  * of positive numbers. Lets callers tell a resolution that breaks a rule apart from
  * a value that expresses no resolution at all ('auto', 'wide', undefined).
  */
-function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
+export function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
   if (typeof size !== 'string') {
     return null;
   }

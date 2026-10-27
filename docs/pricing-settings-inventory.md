@@ -44,6 +44,12 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `allowOpenRegistration` | Growth and Pricing > Signup and starter credits | Registration (`b4m-core/services/src/userService/register.ts`), the login and register pages through `/api/settings/serverConfigPublic`, OTP and OAuth sign-in through `isOpenRegistrationAllowed` (`apps/client/server/utils/auth/openRegistration.ts`), and the starter-credit amount (`getOpenSignupStarterCredits` in `apps/client/server/utils/starterCredits.ts`). | no. Decides who receives `defaultFreeCredits`, so it changes platform cost, not price. | Signup and starter credits |
 | `defaultFreeCredits` | Growth and Pricing > Signup and starter credits | The verified-email grant (`b4m-core/services/src/userService/freeCredits.ts`, `register.ts`), the new-user welcome and plan cards (`NewUserWelcome.tsx`, `PlansSection.tsx`, `CreditsExplanation.tsx`), the publish share footer, the entitlements registry, and three backfill scripts in `packages/scripts`. | no. A free grant. | Signup and starter credits |
 | `ReferralCreditsAmount` | **Two editors**: Growth and Pricing > Signup and starter credits, and Admin Settings > User Management > Referrals | The referred-user grant at registration (`register.ts`), the referral send route (`apps/client/pages/api/reg-invites/refer.ts`) and the "invited person gets N credits" line (`ReferralModal.tsx`). | no. A free grant. | Signup and starter credits |
+| `ReferralFirstAnswerCredits` | Growth and Pricing > Referral rewards for inviters | Defined only; the payout reads it in a later change. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralFirstPaymentCredits` | Growth and Pricing > Referral rewards for inviters | Defined only; the payout reads it in a later change. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralSecondPaymentCredits` | Growth and Pricing > Referral rewards for inviters | Defined only; the payout reads it in a later change. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralHoldDays` | Growth and Pricing > Referral rewards for inviters | Defined only; the payout reads it in a later change. | no. A hold period. | Signup and starter credits |
+| `ReferralInvitesPerUser` | Growth and Pricing > Referral rewards for inviters | The starting invite count at registration (`register.ts`). New signups only. | no. A limit. | Usage limits |
+| `ReferralAlertRewardsPerDay` | Growth and Pricing > Referral rewards for inviters | Defined only; the alert reads it in a later change. | no. An alert threshold. | Usage limits |
 | `blockDisposableEmails` | Admin Settings > User Management > Credits System | `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), called from registration, the email-verified grant (`apps/client/server/auth/emailVerifiedGrants.ts`) and the OAuth starting-grant backfill. | no. Stops free-credit farming. | Signup and starter credits |
 | `blockedEmailDomains` | Admin Settings > User Management > Credits System | `isAdminBlockedEmailDomain` inside `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), so the same readers as `blockDisposableEmails`. Entries are normalized and validated on save in `apps/client/pages/api/settings/update.ts`. | no. Stops free-credit farming from domains the disposable list misses. | Signup and starter credits |
 | `syntheticUserEmailDomains` | Admin Settings > User Management > Credits System | Funnel analytics (`apps/client/server/analytics/funnel.ts`), and the reserved `persona-` username check (`b4m-core/services/src/userService/reservedUsername.ts`), which lets a verified email on one of these domains choose that prefix. | no. Flags test accounts. | Signup and starter credits |
@@ -139,6 +145,49 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`) appear because they 
 - `apps/client/app/components/referrals/ReferralModal.tsx`
 - `apps/client/pages/api/reg-invites/refer.ts`
 - `b4m-core/services/src/userService/register.ts`
+
+</details>
+
+<details><summary><code>ReferralFirstAnswerCredits</code> (2 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+
+</details>
+
+<details><summary><code>ReferralFirstPaymentCredits</code> (2 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+
+</details>
+
+<details><summary><code>ReferralSecondPaymentCredits</code> (2 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+
+</details>
+
+<details><summary><code>ReferralHoldDays</code> (2 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+
+</details>
+
+<details><summary><code>ReferralInvitesPerUser</code> (3 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
+- `b4m-core/services/src/userService/register.ts`
+
+</details>
+
+<details><summary><code>ReferralAlertRewardsPerDay</code> (2 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/AdminSettingsTab.tsx`
 
 </details>
 
@@ -269,7 +318,7 @@ No match outside the definition and tests.
 - `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `apps/client/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/users/[userId]/grant-subscription.ts`
 - `apps/client/server/services/organizationService.ts`
 - `b4m-core/common/src/constants/organization.ts`
@@ -283,7 +332,7 @@ No match outside the definition and tests.
 - `apps/client/app/components/admin/AdminSettingsTab.tsx`
 - `apps/client/app/components/admin/OrganizationsTab.tsx`
 - `apps/client/app/hooks/data/teamPlanSettings.ts`
-- `apps/client/lib/subscriptions/schema.ts`
+- `packages/server-utils/src/lib/subscriptions/schema.ts`
 - `apps/client/pages/api/admin/organizations/[id]/convert-to-paid.ts`
 - `apps/client/pages/api/admin/organizations/[id]/seats.ts`
 - `apps/client/pages/api/admin/organizations/grant.ts`

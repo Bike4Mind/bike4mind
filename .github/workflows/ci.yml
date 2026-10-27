@@ -327,8 +327,9 @@ jobs:
 
   lint:
     needs: core-build
-    # Standard runner: ESLint is I/O-bound, not CPU/memory-bound. Off the capped
-    # ubuntu-latest-m pool to free a slot per PR.
+    # MEDIUM, not the 2-core tier: typed linting (b4m/no-raw-entity-response) holds the client
+    # TypeScript program, so ESLint needs 3-4 GB of heap - past Node's RAM-derived default on a
+    # 2-core runner. The heap is pinned in the root lint:* scripts, not inherited from the runner.
     runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Lint
     timeout-minutes: 15
@@ -390,7 +391,7 @@ jobs:
       # Uncached on purpose: ESLint's cache keys on the linted file, not the core types the type-aware
       # b4m/no-raw-entity-response rule reads, and node_modules (cache dir included) is restored above.
       - name: Lint (errors only)
-        run: pnpm exec eslint . --quiet
+        run: pnpm lint:ci
 
   # OpenAPI contract gate: the spec is generated from the same Zod schemas that
   # validate requests at runtime, so it cannot drift silently - UNLESS a schema
@@ -1154,7 +1155,7 @@ jobs:
   # of this repo to the internal deployer, so there is no deploy to gate; this
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
-  # Red when ANY CI leg (changes/core-build/repo-guards/typecheck/lint/test/cli-e2e/help-docs/
+  # Red when ANY CI leg (changes/core-build/repo-guards/typecheck/lint/test-shards/cli-e2e/help-docs/
   # verify-docs-build/docs-scan-gate/published-dts)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e and repo-guards, and a skipped
@@ -1165,6 +1166,11 @@ jobs:
   # `!cancelled()` rather than `always()`: in a run cancelled by cancel-in-progress the unfinished
   # legs end `cancelled`, not the literal `failure`, so `always()` reported a false green on the
   # required check with nothing tested. Gated this way the job itself ends `cancelled`.
+  #
+  # Needs `test-shards` directly, not the `test` aggregator, so the two fan-in
+  # jobs wait for a runner side by side instead of in series: under runner
+  # contention each serial hop costs ~10-15 min of queue wait for ~5 s of work.
+  # The shard assertion below must stay equivalent to the one in `test`.
   #
   # NOTE: this job name IS the required-check context. Renaming it must happen
   # in lockstep with editing both rulesets, or a required check with no matching
@@ -1179,7 +1185,7 @@ jobs:
       - typecheck
       - lint
       - openapi
-      - test
+      - test-shards
       - cli-e2e
       - help-docs
       - verify-docs-build
@@ -1196,17 +1202,23 @@ jobs:
           TYPECHECK: ${{ needs.typecheck.result }}
           LINT: ${{ needs.lint.result }}
           OPENAPI: ${{ needs.openapi.result }}
-          TEST: ${{ needs.test.result }}
+          DEPLOYABLE: ${{ needs.changes.outputs.deployable }}
+          TEST_SHARDS: ${{ needs.test-shards.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
           HELP_DOCS: ${{ needs.help-docs.result }}
           VERIFY_DOCS: ${{ needs.verify-docs-build.result }}
           DOCS_SCAN: ${{ needs.docs-scan-gate.result }}
           PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD repo-guards=$REPO_GUARDS typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test-shards=$TEST_SHARDS cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
+          # Same rule as the `test` aggregator: on a deployable run every shard must succeed.
+          if [ "$DEPLOYABLE" = "true" ] && [ "$TEST_SHARDS" != "success" ]; then
+            echo "::error::Test shards did not all pass; failing the required check."
+            exit 1
+          fi
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1

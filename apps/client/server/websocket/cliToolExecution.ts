@@ -1,3 +1,4 @@
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { CliToolRequestAction } from '@bike4mind/common';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
@@ -62,16 +63,19 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       return { statusCode: 200 };
     }
     try {
-      const user = await verifyJwtToken(accessToken);
+      const user = await verifyJwtToken(accessToken, { requireApiAccess: true });
       userId = user.id;
       userEmail = user.email ?? undefined;
       await checkRateLimit(userId, undefined, { bucket: 'ws' });
-    } catch {
+    } catch (error) {
       await sendToConnection(connectionId, endpoint, {
         action: 'cli_tool_response' as const,
         requestId,
         success: false,
-        error: 'Authentication failed. Provide a valid API key or JWT token.',
+        error:
+          error instanceof ForbiddenError || isAuthInfraFailure(error)
+            ? error.message
+            : 'Authentication failed. Provide a valid API key or JWT token.',
       });
       return { statusCode: 200 };
     }

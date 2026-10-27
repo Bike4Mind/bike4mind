@@ -1,7 +1,8 @@
 import { insufficientCreditsError, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, userRepository } from '@bike4mind/database';
-import { creditService, isOperationalBillingEnabled } from '@bike4mind/services';
+import { areCreditsEnforced, creditService, isOperationalBillingEnabled } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
+import { activePlanResolver } from '@server/entitlements/activeSubscriptions';
 
 /**
  * What one queued operational call is priced at for gating purposes. Deliberately a nominal
@@ -107,7 +108,7 @@ function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
  */
 async function operationalSpendSettlesFree(logger?: Logger): Promise<boolean> {
   try {
-    const { OperationsModelService } = await import('@client/services/operationsModelService');
+    const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
     const { modelInfo } = await OperationsModelService.getOperationsModel();
     return settlesFreeForAnyVolume(modelInfo);
   } catch (err) {
@@ -181,22 +182,28 @@ export async function checkSessionOperationalCredits({
 }: SessionOperationalCreditPreflightArgs): Promise<SessionOperationalCreditVerdict> {
   if (operationCount <= 0) return { allowed: true };
 
-  // Gated on the exact pair recordOperationalUsage requires to debit, via the shared helper:
-  // operational billing defaults OFF, and a deployment that never bills for this work must not
-  // start rejecting it. Inside the fail-open boundary like the reads below: AdminSettingsCache
-  // awaits findAll() on a cache miss with no error handling of its own, so a cold container or
-  // a TTL expiry during a mongo blip would otherwise reject - and on the project-attach path
-  // that lands after withTransaction has already committed.
-  try {
-    const billingEnabled = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger);
-    if (!billingEnabled) return { allowed: true };
-  } catch (err) {
+  const settingsDb = { adminSettings: adminSettingsRepository };
+  // Which billing read threw, so the shared alarm line below can tell them apart.
+  let failedRead: 'settings' | 'activePlan' = 'settings';
+  const gateDisabled = (err: unknown): SessionOperationalCreditVerdict => {
     // error, not warn: the fail-open is correct but it means the gate stopped enforcing, which is
     // indistinguishable from the ungated behavior it replaced. These two strings are the only
     // evidence that happened, so they are deliberately distinctive enough to hang a
     // LogMetricFilter alarm on without touching this code (infra/alarms.ts:807).
-    logger?.error('[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings', err);
+    logger?.error('[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings', err, {
+      failedRead,
+    });
     return { allowed: true };
+  };
+
+  // A deployment that does not meter credits never bills this work, so skip the holder reads.
+  // Inside the fail-open boundary: AdminSettingsCache awaits findAll() on a cache miss with no
+  // error handling of its own, and on the project-attach path a throw lands after
+  // withTransaction has already committed.
+  try {
+    if (!(await areCreditsEnforced(settingsDb, logger))) return { allowed: true };
+  } catch (err) {
+    return gateDisabled(err);
   }
 
   // Best-effort resolution, matching the semantic-search pre-flight: a billing-store blip must
@@ -223,6 +230,26 @@ export async function checkSessionOperationalCredits({
   // No user means nothing to attribute or bill: recordSessionOperationalUsage skips the same
   // case, so there is no spend for this gate to guard.
   if (!billingUser) return { allowed: true };
+
+  // Gated on exactly what recordOperationalUsage requires to debit, via the shared helper and the
+  // same holder recordSessionOperationalUsage passes: a holder that would never be billed for this
+  // work must not start being rejected.
+  try {
+    const billingEnabled = await isOperationalBillingEnabled(settingsDb, logger, {
+      user: billingUser,
+      organization: billingOrg,
+      activePlans: {
+        hasActivePlan: id =>
+          activePlanResolver.hasActivePlan(id).catch((err: unknown) => {
+            failedRead = 'activePlan';
+            throw err;
+          }),
+      },
+    });
+    if (!billingEnabled) return { allowed: true };
+  } catch (err) {
+    return gateDisabled(err);
+  }
 
   const requiredCredits = operationCount * MIN_CREDITS_PER_OPERATION;
 

@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { IUserDocument } from '@bike4mind/common';
-import { isMfaEnrollmentOwed } from '@server/auth/mfaEnforcement';
+import { isMfaEnrollmentOwed } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 

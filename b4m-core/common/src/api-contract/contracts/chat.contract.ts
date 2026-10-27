@@ -132,7 +132,12 @@ export const chatContract = defineEndpoint({
         'together (they are mutually exclusive).',
       schema: ApiErrorSchema,
     },
-    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+    429: {
+      description:
+        'Per-user rate limit exceeded. A free-tier daily credit cap hit is distinguished by ' +
+        '`errorCode: daily_free_limit_reached` and a `Retry-After` header until the next UTC midnight.',
+      schema: ApiErrorSchema,
+    },
     504: {
       description:
         'A `wait: true` turn ran past the request deadline. The turn is already ended: its quest ' +

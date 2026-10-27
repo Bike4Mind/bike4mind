@@ -25,6 +25,7 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
+import { AdminLayoutRoute } from './components/admin/AdminLayout';
 import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
@@ -37,7 +38,12 @@ import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
 import { legacyUserLinkRedirect, parseUserProfileSearch } from './components/admin/Users/Profile/userProfileSearch';
 import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
-import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
+import {
+  isIntegrationsPageSource,
+  SUBSCRIBER_SOURCES,
+  type IntegrationsPageSource,
+  type SubscriberSource,
+} from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
 // /new and /notebooks/$id render through one shell (see notebookShellRoute).
@@ -1002,6 +1008,9 @@ const subscribeRoute = createRoute({
       <SubscribePage />
     </Suspense>
   ),
+  validateSearch: (search: Record<string, unknown>): { source?: SubscriberSource } => ({
+    source: SUBSCRIBER_SOURCES.find(source => source === search.source),
+  }),
 });
 
 // Artifacts demo route (replaces /artifacts-demo.tsx)
@@ -1171,46 +1180,37 @@ const activateRoute = createRoute({
   },
 });
 
-// Admin route (replaces /admin/index.tsx)
-export const adminRoute = createRoute({
+// Admin layout: every admin page renders inside it, so the guard, the providers and the sidebar
+// are wired once (AdminLayoutRoute) and no admin page can go full-screen. Pathless, so the
+// children keep their URLs and every `to: '/admin'` stays typed against the console's search.
+const adminLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'admin-layout',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => <AdminLayoutRoute fallback={<RouteLoadingFallback />} />,
+});
+
+// The tabbed admin console (replaces /admin/index.tsx)
+export const adminRoute = createRoute({
+  getParentRoute: () => adminLayoutRoute,
   path: '/admin',
-  beforeLoad: async ({ location, search }) => {
-    await enforceConsentRedirect(location);
+  beforeLoad: async ({ search }) => {
     // The user view used to be a modal held in `?userId=`; keep those shared links working.
     const legacyUserLink = legacyUserLinkRedirect(search);
     if (legacyUserLink) throw redirect(legacyUserLink);
   },
-  component: () => (
-    <RestrictedPage requireAdmin={true}>
-      {/* These providers are not usually needed in an unprotected page. This prevents unnecessary API fetch */}
-      <ProviderBundle>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          <Admin />
-        </Suspense>
-      </ProviderBundle>
-    </RestrictedPage>
-  ),
+  component: Admin,
   // `tab` (a stable slug, never the positional AdminTab enum value - see common/utils/deepLinks)
   // makes the console addressable, and each tab's own params come from the registry in
   // adminTabParams.ts, which the tab-sync hook rebuilds the URL from too.
   validateSearch: parseAdminSearch,
 });
 
-// Admin user profile. Guarded exactly like adminRoute, which redirects its legacy `?userId=` here.
+// Admin user profile; adminRoute redirects its legacy `?userId=` here.
 export const adminUserProfileRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => adminLayoutRoute,
   path: '/admin/users/$userId',
-  beforeLoad: ({ location }) => enforceConsentRedirect(location),
-  component: () => (
-    <RestrictedPage requireAdmin={true}>
-      <ProviderBundle>
-        <Suspense fallback={<RouteLoadingFallback />}>
-          <AdminUserProfilePage />
-        </Suspense>
-      </ProviderBundle>
-    </RestrictedPage>
-  ),
+  component: AdminUserProfilePage,
   validateSearch: parseUserProfileSearch,
 });
 
@@ -1335,8 +1335,7 @@ const routeTree = rootRoute.addChildren([
   gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
-  adminRoute,
-  adminUserProfileRoute,
+  adminLayoutRoute.addChildren([adminRoute, adminUserProfileRoute]),
   ...builtStandalonePremiumRoutes,
   ...builtPublicPremiumRoutes,
   // Slack integration routes (no layout)
@@ -1387,5 +1386,9 @@ export const router = createRouter({
 declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router;
+  }
+  interface HistoryState {
+    // Prefill for /subscribe; see useJoinWaitlist.
+    waitlistEmail?: string;
   }
 }

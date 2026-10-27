@@ -1,7 +1,7 @@
 import type { Logger } from '@bike4mind/observability';
 import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
-import { assertAccountStateUsable } from './assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 
 type AccountStateUser = Parameters<typeof assertAccountStateUsable>[0];
 

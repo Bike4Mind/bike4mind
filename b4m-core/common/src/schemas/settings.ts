@@ -38,6 +38,7 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -135,7 +136,7 @@ CHARTS: in a text/html artifact, chart.js@4 (the blessed path above, data baked 
 
 SINGLE-FILE RULE (every artifact type): one deliverable = ONE <artifact> = ONE file, and that is the strong default. For every type except React, NEVER use a relative/sibling import (./ or ../) in any form (import-from, side-effect import, export-from, require) - the sandbox detects and hard-rejects them before rendering. Inline every sub-component, hook, context, helper, dataset, and asset. If the user asks to "split into files/modules," honor the SPIRIT - keep one file, separate concerns with commented sections and well-named functions - and note artifacts are single-file by design. React is the one exception, below.
 
-REACT MULTI-FILE (exception to the single-file rule): prefer ONE self-contained file. Split a React app across several <artifact> tags ONLY when the user explicitly asks for multiple files/modules or the app is genuinely too large for one file. Then: emit every file in the SAME reply; each sibling's identifier must equal its import basename exactly (\`import Chronosphere from "./Chronosphere"\` -> \`identifier="Chronosphere"\`); exactly ONE entry file, the one nothing else imports, has \`export default\`; siblings may use named and/or default exports; use flat names (no directories) and no import cycles; the same npm allowlist applies. A published/shared React app must still be a single file.
+REACT MULTI-FILE (exception to the single-file rule): prefer ONE self-contained file. Split a React app across several <artifact> tags ONLY when the user explicitly asks for multiple files/modules or the app is genuinely too large for one file. Then: emit every file in the SAME reply; each sibling's identifier must equal its import basename exactly (\`import Chronosphere from "./Chronosphere"\` -> \`identifier="Chronosphere"\`); exactly ONE entry file, the one nothing else imports, has \`export default\`; siblings may use named and/or default exports; use flat names (no directories) and no import cycles; the same npm allowlist applies. A split React app can be published/shared as one page as long as every file is in the same reply.
 
 REACT ARTIFACTS: the entry file (the only file, unless split as above) has ONE \`export default\`. Do NOT import React or its hooks - React, useState, useEffect, useRef, useMemo, useCallback, useReducer, useContext, createContext are pre-injected globals; reference them bare. The ONLY importable packages are: lucide-react, recharts, mathjs, lodash, d3, papaparse, xlsx - use one clean import line each (\`import X from 'pkg'\` or single-line \`import { a, b } from 'pkg'\`), never mixed \`import React, { useState }\`. Nothing else resolves (no react-router/next/zustand/framer-motion/three/p5/howler/styled-components) - for multiple screens use a \`view\` useState + conditional render; hand-roll WebGL/Canvas2D/physics/noise.
 
@@ -356,6 +357,12 @@ export const SettingKeySchema = z.enum([
   'EnableReferralToSlack',
   'EnableReferralToEmail',
   'ReferralCreditsAmount',
+  'ReferralFirstAnswerCredits',
+  'ReferralFirstPaymentCredits',
+  'ReferralSecondPaymentCredits',
+  'ReferralHoldDays',
+  'ReferralInvitesPerUser',
+  'ReferralAlertRewardsPerDay',
   'registrationLink',
   'FeedbackReceiveEmail',
   'FeedbackReceiveEmailNonProd',
@@ -433,6 +440,18 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'thinkingVisibilityFree',
+  'thinkingVisibilityPaid',
+  'otcLimitSendPerEmailPerIp',
+  'otcLimitSendPerEmailPerIpDaily',
+  'otcLimitSendPerEmail',
+  'otcLimitRegisterPerDomainHourly',
+  'otcLimitRegisterPerDomainDaily',
+  'otcLimitSendPerIpDistinctEmails',
+  'otcLimitSendPerIpTotal',
+  'otcLimitSendPerIpDaily',
+  'otcLimitVerifyPerEmailPerIp',
+  'otcLimitVerifyPerIp',
   'signupBurstThreshold',
   'signupBurstWindowHours',
   'signupBurstAutoHold',
@@ -440,6 +459,9 @@ export const SettingKeySchema = z.enum([
   'holdSignupsFromDomainsYoungerThanDays',
   'domainIntelligenceTimeoutMs',
   'defaultFreeCredits',
+  'freeTierDailySpendCapCredits',
+  'freeTierDay1SpendCapCredits',
+  'freeTierDays2To7SpendCapCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
@@ -449,6 +471,7 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'signupAnomaly',
 
   // WEATHER SERVICE SETTINGS
   'EnableWeatherService',
@@ -604,6 +627,11 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitFreePerMin',
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
+  'apiKeyAccess',
+
+  // FREE-TIER MODEL ALLOWLIST
+  'freeTierModelGateEnabled',
+  'freeTierAllowedModels',
 
   // OVERWATCH ROLLUP CRON SETTINGS
   'overwatchRollupSync',
@@ -948,8 +976,7 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
   key: K;
   dependsOn?: [K] extends [SettingKey] ? SettingKey : string;
   type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  schema: z.ZodType<any, any, any>;
+  schema: z.ZodType;
   defaultValue?: string | number | boolean | object | undefined;
   options?: string[];
 };
@@ -2052,17 +2079,21 @@ export const API_SERVICE_GROUPS = {
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
-      { key: 'syntheticUserEmailDomains', order: 4 },
-      { key: 'turnstileEnabled', order: 5 },
-      { key: 'turnstileFailClosed', order: 6 },
-      { key: 'turnstileSiteKey', order: 7 },
-      { key: 'signupBurstThreshold', order: 8 },
-      { key: 'signupBurstWindowHours', order: 9 },
-      { key: 'signupBurstAutoHold', order: 10 },
-      { key: 'signupRiskScoring', order: 11 },
-      { key: 'enableDomainIntelligence', order: 12 },
-      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 13 },
-      { key: 'domainIntelligenceTimeoutMs', order: 14 },
+      { key: 'freeTierDailySpendCapCredits', order: 4 },
+      { key: 'freeTierDay1SpendCapCredits', order: 5 },
+      { key: 'freeTierDays2To7SpendCapCredits', order: 6 },
+      { key: 'syntheticUserEmailDomains', order: 7 },
+      { key: 'turnstileEnabled', order: 8 },
+      { key: 'turnstileFailClosed', order: 9 },
+      { key: 'turnstileSiteKey', order: 10 },
+      { key: 'signupBurstThreshold', order: 11 },
+      { key: 'signupBurstWindowHours', order: 12 },
+      { key: 'signupBurstAutoHold', order: 13 },
+      { key: 'signupRiskScoring', order: 14 },
+      { key: 'signupAnomaly', order: 15 },
+      { key: 'enableDomainIntelligence', order: 16 },
+      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 17 },
+      { key: 'domainIntelligenceTimeoutMs', order: 18 },
     ],
   },
   KNOWLEDGE: {
@@ -2166,6 +2197,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitFreePerMin', order: 1 },
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
+      { key: 'apiKeyAccess', order: 4 },
     ],
   },
   API_KEY_TRUST: {
@@ -2178,6 +2210,45 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
       { key: 'maxActiveKeysUntrusted', order: 3 },
       { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+    ],
+  },
+  FREE_TIER_MODELS: {
+    id: 'freeTierModelsService',
+    name: 'Free-Tier Models',
+    description: 'Which text models accounts without a paid plan may call, on every surface',
+    icon: 'Security',
+    settings: [
+      { key: 'freeTierModelGateEnabled', order: 1 },
+      { key: 'freeTierAllowedModels', order: 2 },
+    ],
+  },
+  THINKING_VISIBILITY: {
+    id: 'thinkingVisibilityService',
+    name: 'Model Thinking Visibility',
+    description: 'How much model reasoning each account tier is shown, on every chat, API, CLI and agent surface',
+    icon: 'Psychology',
+    settings: [
+      { key: 'thinkingVisibilityFree', order: 1 },
+      { key: 'thinkingVisibilityPaid', order: 2 },
+    ],
+  },
+  SIGN_IN_CODE_LIMITS: {
+    id: 'signInCodeLimitsService',
+    name: 'Sign-in Code Limits',
+    description:
+      'Tightens the email sign-in code rate limits during an incident. Each value can only lower its built-in limit; 0 keeps the built-in. Changes take up to 5 minutes to apply.',
+    icon: 'Security',
+    settings: [
+      { key: 'otcLimitSendPerEmailPerIp', order: 1 },
+      { key: 'otcLimitSendPerEmailPerIpDaily', order: 2 },
+      { key: 'otcLimitSendPerEmail', order: 3 },
+      { key: 'otcLimitRegisterPerDomainHourly', order: 4 },
+      { key: 'otcLimitRegisterPerDomainDaily', order: 5 },
+      { key: 'otcLimitSendPerIpDistinctEmails', order: 6 },
+      { key: 'otcLimitSendPerIpTotal', order: 7 },
+      { key: 'otcLimitSendPerIpDaily', order: 8 },
+      { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
+      { key: 'otcLimitVerifyPerIp', order: 10 },
     ],
   },
   DATA_LAKE_AUDIT: {
@@ -2203,6 +2274,9 @@ export const API_SERVICE_GROUPS = {
     settings: { key: SettingKey; order: number }[];
   };
 };
+
+/** Hosted deployments always meter credits (self-host may turn it off); read per call so tests can flip the env. */
+export const isEnforceCreditsLocked = (): boolean => process.env.B4M_SELF_HOST !== 'true';
 
 export const settingsMap = {
   DefaultAPIModel: makeStringSetting({
@@ -3059,6 +3133,21 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,
   }),
+  // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
+  // tightening it also cuts off keys that already exist.
+  apiKeyAccess: makeStringSetting({
+    key: 'apiKeyAccess',
+    name: 'API Key Access',
+    // Self-host has no billing stack (see enforceCredits), so keys stay open there; hosted
+    // defaults to paid-only so the gate is live without an admin write.
+    defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
+    description:
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
+    options: ['all', 'paid', 'disabled'],
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 4,
+  }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',
     name: 'Tag Line Main',
@@ -3104,6 +3193,72 @@ export const settingsMap = {
     // ReferralModal renders this for every non-admin sender - no secret, just the number
     // displayed in the "invited person gets N credits" line.
     userReadable: true,
+  }),
+  ReferralFirstAnswerCredits: makeNumberSetting({
+    key: 'ReferralFirstAnswerCredits',
+    name: 'Referral Reward: First Answer',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits the inviter earns when an invited friend, with a verified email, gets their first answer. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
+  }),
+  ReferralFirstPaymentCredits: makeNumberSetting({
+    key: 'ReferralFirstPaymentCredits',
+    name: 'Referral Reward: First Payment',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+    category: 'Referrals',
+  }),
+  ReferralSecondPaymentCredits: makeNumberSetting({
+    key: 'ReferralSecondPaymentCredits',
+    name: 'Referral Reward: Second Payment',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+    category: 'Referrals',
+  }),
+  ReferralHoldDays: makeNumberSetting({
+    key: 'ReferralHoldDays',
+    name: 'Referral Reward Hold (days)',
+    defaultValue: 14,
+    int: true,
+    min: 0,
+    max: 365,
+    description:
+      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
+  }),
+  ReferralInvitesPerUser: makeNumberSetting({
+    key: 'ReferralInvitesPerUser',
+    name: 'Referral Invites Per User',
+    defaultValue: 3,
+    int: true,
+    min: 0,
+    max: 1000,
+    description:
+      'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
+    category: 'Referrals',
+  }),
+  ReferralAlertRewardsPerDay: makeNumberSetting({
+    key: 'ReferralAlertRewardsPerDay',
+    name: 'Referral Reward Alert Threshold',
+    defaultValue: 50,
+    int: true,
+    min: 1,
+    max: 1_000_000,
+    description:
+      'Alert admins when more than this many referral rewards are created within 24 hours. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
   }),
   EnableReferralToEmail: makeBooleanSetting({
     key: 'EnableReferralToEmail',
@@ -3424,12 +3579,12 @@ export const settingsMap = {
   billOperationalUsage: makeBooleanSetting({
     key: 'billOperationalUsage',
     name: 'Bill Operational Usage',
-    // Default OFF: operational-model and embedding spend (auto-naming, summarization,
-    // tagging, context summarization, KB query embeddings) is recorded as platform COGS
-    // but not deducted from the user/org. Turn ON to also debit credits for that spend.
+    // Default OFF on hosted and self-host alike: free-tier accounts are billed for this spend
+    // whenever Enforce Credits is on (isOperationalBillingEnabled), so the toggle only decides
+    // whether paying accounts are billed for it too, and turning it on is a pricing change.
     defaultValue: false,
     description:
-      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings) is billed to the user/org. Off = recorded as platform cost only.',
+      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings, file indexing) is billed to every user/org. Off = billed only to free-tier users paying for themselves (no credit purchase or active plan) and recorded as platform cost for everyone else. Requires Enforce Credits.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3504,6 +3659,196 @@ export const settingsMap = {
     order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
+  // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
+  // the model picker (apps/client/server/utils/callerModelList.ts).
+  freeTierModelGateEnabled: makeBooleanSetting({
+    key: 'freeTierModelGateEnabled',
+    name: 'Free-Tier Model Gate',
+    // Self-host has no billing stack, so every account would read as free; the gate is hosted-only by default.
+    defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
+    description:
+      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) to the free-tier text models, on web chat, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
+    order: 1,
+  }),
+  freeTierAllowedModels: makeObjectSetting<string[]>({
+    key: 'freeTierAllowedModels',
+    name: 'Free-Tier Allowed Models',
+    defaultValue: [
+      ChatModels.CLAUDE_5_5_HAIKU,
+      ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+      ChatModels.CLAUDE_4_5_HAIKU,
+      ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
+      ChatModels.GPT5_4_MINI,
+      ChatModels.GPT5_4_NANO,
+      ChatModels.GEMINI_3_1_FLASH_LITE,
+      ChatModels.GEMINI_2_5_FLASH_LITE,
+    ],
+    description:
+      'Text model IDs free accounts may call while the Free-Tier Model Gate is on, one per line. The Default API Model is always allowed so a free account can still chat. A model missing here, including a newly added one, is paid-only.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
+    order: 2,
+    dependsOn: 'freeTierModelGateEnabled',
+    schema: z.array(z.string()),
+  }),
+  // Tiers resolve in b4m-core/services/src/thinkingVisibility.ts. Multi-turn tool replay is
+  // unaffected: provider thinking blocks still go back to the provider whatever the level.
+  thinkingVisibilityFree: makeStringSetting({
+    key: 'thinkingVisibilityFree',
+    name: 'Thinking Visibility: Free Accounts',
+    defaultValue: 'summary',
+    description:
+      'Model reasoning shown to accounts with no purchase, active plan or admin approval. "raw" shows it as the provider sent it. "summary" shows it only from models whose provider returns a summary instead of the raw trace (Claude 4 and later) and hides the rest; for other models the completions API does not request reasoning at all. "none" hides all reasoning text, but completions API callers that run tools themselves still receive the provider\'s summarized thinking blocks on Claude 4 and later, because those blocks must be echoed back on the next turn. Changes reach running servers within about 5 minutes (settings cache).',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 1,
+  }),
+  thinkingVisibilityPaid: makeStringSetting({
+    key: 'thinkingVisibilityPaid',
+    name: 'Thinking Visibility: Paid Accounts',
+    defaultValue: 'raw',
+    description:
+      'Model reasoning shown to admins and to accounts with a credit purchase, admin approval, or an active plan (own or org seat; only subscriptions in the active status count, so trialing, past-due and canceled plans do not). Same levels as the free-account setting.',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 2,
+  }),
+  otcLimitSendPerEmailPerIp: makeNumberSetting({
+    key: 'otcLimitSendPerEmailPerIp',
+    name: 'Sign-in Codes: Send: Per Inbox per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 5,
+    int: true,
+    description: 'Codes one IP may have sent to one inbox in 15 minutes. Built-in: 5. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 1,
+  }),
+  otcLimitSendPerEmailPerIpDaily: makeNumberSetting({
+    key: 'otcLimitSendPerEmailPerIpDaily',
+    name: 'Sign-in Codes: Send: Per Inbox per IP (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 15,
+    int: true,
+    description: 'Codes one IP may have sent to one inbox in a day. Built-in: 15. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 2,
+  }),
+  otcLimitSendPerEmail: makeNumberSetting({
+    key: 'otcLimitSendPerEmail',
+    name: 'Sign-in Codes: Send: Per Inbox (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 15,
+    int: true,
+    description: 'Codes one inbox may receive from all IPs combined in 15 minutes. Built-in: 15. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 3,
+  }),
+  otcLimitRegisterPerDomainHourly: makeNumberSetting({
+    key: 'otcLimitRegisterPerDomainHourly',
+    name: 'Sign-in Codes: New Accounts per Domain (per hour)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 5,
+    int: true,
+    description:
+      'Accounts that may be created by sign-in code on one email domain in an hour. Personal mail providers, partner domains, self-host installs and domains with an account verified over a week ago are exempt. Built-in: 5. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 4,
+  }),
+  otcLimitRegisterPerDomainDaily: makeNumberSetting({
+    key: 'otcLimitRegisterPerDomainDaily',
+    name: 'Sign-in Codes: New Accounts per Domain (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 20,
+    int: true,
+    description:
+      'Accounts that may be created by sign-in code on one email domain in a day. Personal mail providers, partner domains, self-host installs and domains with an account verified over a week ago are exempt. Built-in: 20. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 5,
+  }),
+  otcLimitSendPerIpDistinctEmails: makeNumberSetting({
+    key: 'otcLimitSendPerIpDistinctEmails',
+    name: 'Sign-in Codes: Send: Distinct Inboxes per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 15,
+    int: true,
+    description: 'Distinct inboxes one IP may request codes for in 15 minutes. Built-in: 15. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 6,
+  }),
+  otcLimitSendPerIpTotal: makeNumberSetting({
+    key: 'otcLimitSendPerIpTotal',
+    name: 'Sign-in Codes: Send: Per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 40,
+    int: true,
+    description: 'Code requests one IP may make in 15 minutes. Built-in: 40. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 7,
+  }),
+  otcLimitSendPerIpDaily: makeNumberSetting({
+    key: 'otcLimitSendPerIpDaily',
+    name: 'Sign-in Codes: Send: Per IP (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 200,
+    int: true,
+    description: 'Code requests one IP may make in a day. Built-in: 200. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 8,
+  }),
+  otcLimitVerifyPerEmailPerIp: makeNumberSetting({
+    key: 'otcLimitVerifyPerEmailPerIp',
+    name: 'Sign-in Codes: Verify: Wrong Guesses per Address per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 10,
+    int: true,
+    description: 'Wrong codes one IP may enter for one address in 15 minutes. Built-in: 10. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 9,
+  }),
+  otcLimitVerifyPerIp: makeNumberSetting({
+    key: 'otcLimitVerifyPerIp',
+    name: 'Sign-in Codes: Verify: Per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 60,
+    int: true,
+    description: 'Code checks one IP may make in 15 minutes. Built-in: 60. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 10,
+  }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
     name: 'Block Disposable Emails',
@@ -3525,69 +3870,6 @@ export const settingsMap = {
     // refuses invalid entries and readers filter with partitionDomainList.
     schema: z.array(z.string()),
   }),
-  signupBurstThreshold: makeNumberSetting({
-    key: 'signupBurstThreshold',
-    name: 'Signup Burst Threshold',
-    defaultValue: 5,
-    int: true,
-    min: 3,
-    max: 1000,
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    description: 'Minimum verified signups with generated email patterns before a domain is held for review.',
-  }),
-  signupBurstWindowHours: makeNumberSetting({
-    key: 'signupBurstWindowHours',
-    name: 'Signup Burst Window (hours)',
-    defaultValue: 6,
-    int: true,
-    min: 1,
-    max: 168,
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    description: 'Rolling window for verified signup pattern detection.',
-  }),
-  signupBurstAutoHold: makeBooleanSetting({
-    key: 'signupBurstAutoHold',
-    name: 'Auto-hold Signup Bursts',
-    defaultValue: false,
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    description:
-      'Hold patterned signup domains for admin review and defer their pending free credits. Granted balances are never changed. Review in Signup Domain Holds.',
-  }),
-  enableDomainIntelligence: makeBooleanSetting({
-    key: 'enableDomainIntelligence',
-    name: 'Hold Risky Signup Domains',
-    defaultValue: true,
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    description:
-      'Hold the free credits of signups from domains on only the aggregate disposable list, freshly registered domains, or domains whose mail is handled by a known disposable provider. Lookups fail open. Review in Signup Domain Holds.',
-  }),
-  holdSignupsFromDomainsYoungerThanDays: makeNumberSetting({
-    key: 'holdSignupsFromDomainsYoungerThanDays',
-    name: 'Hold Signups From Domains Younger Than (days)',
-    defaultValue: 30,
-    int: true,
-    min: 0,
-    max: 365,
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    description:
-      'Registration age (from RDAP) below which a signup domain is held for review. 0 turns the age check off.',
-  }),
-  domainIntelligenceTimeoutMs: makeNumberSetting({
-    key: 'domainIntelligenceTimeoutMs',
-    name: 'Domain Lookup Timeout (ms)',
-    defaultValue: 2000,
-    int: true,
-    min: 250,
-    max: 5000,
-    category: 'Users',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    description: 'Budget for the RDAP and MX lookups on an uncached signup domain. A timeout lets the signup through.',
-  }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
     // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
@@ -3596,6 +3878,39 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
+    category: 'Users',
+  }),
+  freeTierDailySpendCapCredits: makeNumberSetting({
+    key: 'freeTierDailySpendCapCredits',
+    name: 'Free Tier Daily Spend Cap',
+    defaultValue: 200,
+    int: true,
+    min: 0,
+    description:
+      'Daily credit allowance for a free-tier account older than 7 days, counted per UTC calendar day. Once spend for the day reaches this cap, new requests are refused with a 429 until the next UTC midnight; the request that crosses the cap is not cut off, so a day can end slightly over it. Set to 0 to disable the cap for every free-tier account, including the day-1 and days 2-7 tiers.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  freeTierDay1SpendCapCredits: makeNumberSetting({
+    key: 'freeTierDay1SpendCapCredits',
+    name: 'Free Tier Day-1 Spend Cap',
+    defaultValue: 500,
+    int: true,
+    min: 0,
+    description:
+      'Daily spend cap for a free-tier account during its first 24 hours (by account age; spend still resets at UTC midnight). Higher than the steady-state cap to let genuine new users explore. Set to 0 to fall back to the steady-state cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  freeTierDays2To7SpendCapCredits: makeNumberSetting({
+    key: 'freeTierDays2To7SpendCapCredits',
+    name: 'Free Tier Days 2-7 Spend Cap',
+    defaultValue: 300,
+    int: true,
+    min: 0,
+    description:
+      'Daily spend cap for a free-tier account aged 24 hours to 7 days. Intermediate ramp between the day-1 allowance and the steady-state cap. Set to 0 to fall back to the steady-state cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanMinSeats: makeNumberSetting({
@@ -3687,6 +4002,37 @@ export const settingsMap = {
     category: 'Users',
     dependsOn: 'turnstileEnabled',
   }),
+  signupBurstThreshold: makeNumberSetting({
+    key: 'signupBurstThreshold',
+    name: 'Signup Burst Threshold',
+    defaultValue: 5,
+    int: true,
+    min: 3,
+    max: 1000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Minimum verified signups with generated email patterns before a domain is held for review.',
+  }),
+  signupBurstWindowHours: makeNumberSetting({
+    key: 'signupBurstWindowHours',
+    name: 'Signup Burst Window (hours)',
+    defaultValue: 6,
+    int: true,
+    min: 1,
+    max: 168,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Rolling window for verified signup pattern detection.',
+  }),
+  signupBurstAutoHold: makeBooleanSetting({
+    key: 'signupBurstAutoHold',
+    name: 'Auto-hold Signup Bursts',
+    defaultValue: false,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Hold patterned signup domains for admin review and defer their pending free credits. Granted balances are never changed. Review in Signup Domain Holds.',
+  }),
   signupRiskScoring: makeObjectSetting({
     key: 'signupRiskScoring',
     name: 'Signup Risk Scoring',
@@ -3698,6 +4044,56 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     schema: SignupRiskScoringSchema,
+  }),
+  signupAnomaly: makeObjectSetting({
+    key: 'signupAnomaly',
+    name: 'Signup anomaly detection',
+    defaultValue: { signupBaseline: 0, apiKeyBaseline: 0, thresholdMultiplier: 2, minimumCount: 10 },
+    description:
+      'Expected hourly signups and API keys, multiplier above baseline, and minimum event count. ' +
+      'Generic defaults only; tune these for your deployment. Domain hints are review signals, not proof of abuse.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+    schema: z
+      .object({
+        signupBaseline: z.number().int().min(0).max(1000000),
+        apiKeyBaseline: z.number().int().min(0).max(1000000),
+        thresholdMultiplier: z.number().min(1).max(100),
+        minimumCount: z.number().int().min(1).max(1000000),
+      })
+      .strict(),
+  }),
+  enableDomainIntelligence: makeBooleanSetting({
+    key: 'enableDomainIntelligence',
+    name: 'Hold Risky Signup Domains',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Hold the free credits of signups from domains on only the aggregate disposable list, freshly registered domains, or domains whose mail is handled by a known disposable provider. Lookups fail open. Review in Signup Domain Holds.',
+  }),
+  holdSignupsFromDomainsYoungerThanDays: makeNumberSetting({
+    key: 'holdSignupsFromDomainsYoungerThanDays',
+    name: 'Hold Signups From Domains Younger Than (days)',
+    defaultValue: 30,
+    int: true,
+    min: 0,
+    max: 365,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Registration age (from RDAP) below which a signup domain is held for review. 0 turns the age check off.',
+  }),
+  domainIntelligenceTimeoutMs: makeNumberSetting({
+    key: 'domainIntelligenceTimeoutMs',
+    name: 'Domain Lookup Timeout (ms)',
+    defaultValue: 2000,
+    int: true,
+    min: 250,
+    max: 5000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Budget for the RDAP and MX lookups on an uncached signup domain. A timeout lets the signup through.',
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

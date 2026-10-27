@@ -21,7 +21,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 import { PassportOAuthStateStore, OAUTH_NONCE_HASH_REQ_KEY } from './passportOAuthStateStore';
-import { STATE_NONCE_COOKIE_NAME } from './oauthFlowCookie';
+import { STATE_NONCE_COOKIE_NAME } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import type OAuth2Strategy from 'passport-oauth2';
 import { createHash } from 'crypto';
 

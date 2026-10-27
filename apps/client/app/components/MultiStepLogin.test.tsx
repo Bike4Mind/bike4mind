@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   setCurrentUser: vi.fn(),
   trackSignupConversion: vi.fn(),
   applyRedirect: vi.fn(),
+  navigate: vi.fn(),
   // Mutable so the "already logged in" tests can vary the session state. Not reset by
   // vi.clearAllMocks() (it only touches mock fns) - each describe's beforeEach resets these.
   userState: { currentUser: null as unknown },
@@ -77,7 +78,7 @@ vi.mock('@client/app/hooks/data/passkeys', () => ({
   passkeysSupported: () => false,
 }));
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mocks.navigate,
   useRouter: () => ({ history: {} }),
 }));
 // finishLogin calls applyRedirect(router.history, ...); stub it so the empty history is inert.
@@ -120,6 +121,15 @@ const renderLogin = (props: React.ComponentProps<typeof MultiStepLogin> = {}) =>
 const textboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('textbox');
 const checkboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('checkbox');
 
+// useJoinWaitlist passes the email as a history-state updater, never in the query string.
+const expectWaitlistNavigation = (source: string, email: string | undefined) => {
+  expect(mocks.navigate).toHaveBeenCalledWith(
+    expect.objectContaining({ to: '/subscribe', search: { source }, state: expect.any(Function) })
+  );
+  const { state } = mocks.navigate.mock.calls.at(-1)[0];
+  expect(state({ key: 'k' })).toEqual({ key: 'k', waitlistEmail: email });
+};
+
 // Drives the flow from the email step to the register-username step (email -> code ->
 // registrationRequired). Assumes mocks.verifyOTC's FIRST call resolves registrationRequired.
 const advanceToUsernameStep = async (user: ReturnType<typeof userEvent.setup>, email = 'new@test.com') => {
@@ -149,6 +159,65 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       ok: true,
       json: async () => ({ requiresRedirect: false }),
     }) as unknown as typeof fetch;
+  });
+
+  it('links invite-only visitors to the registration form', async () => {
+    renderLogin({ enableRegister: false });
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    await userEvent.setup().click(screen.getByTestId('signup-text'));
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/register', search: undefined });
+  });
+
+  it('offers invite-only visitors the waitlist with their typed email', async () => {
+    const user = userEvent.setup();
+    renderLogin({ enableRegister: false });
+
+    await user.type(textboxIn('login-email-input'), ' new@test.com ');
+    await user.click(screen.getByTestId('login-join-waitlist-link'));
+
+    expectWaitlistNavigation('login_signup_closed', 'new@test.com');
+  });
+
+  it('hides the waitlist link when registration is open', () => {
+    renderLogin({ enableRegister: true });
+    expect(screen.queryByTestId('login-join-waitlist-link')).not.toBeInTheDocument();
+  });
+
+  it('turns an email-code signup refusal into a waitlist action carrying the verified email', async () => {
+    const user = userEvent.setup();
+    mocks.verifyOTC.mockResolvedValueOnce({
+      registrationRequired: true,
+      registrationAllowed: false,
+      email: 'new@test.com',
+      pendingToken: 'ptok-closed',
+    });
+    renderLogin({ enableRegister: false });
+
+    await user.type(textboxIn('login-email-input'), 'new@test.com');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await user.type(within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
+    await user.click(screen.getByTestId('login-verify-btn'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
+    const [, options] = mocks.toast.error.mock.calls[0];
+    expect(options.action.label).toBe('auth.joinWaitlist');
+    options.action.onClick();
+    expectWaitlistNavigation('login_signup_closed', 'new@test.com');
+  });
+
+  it('lets keyboard users open invite-only registration', async () => {
+    const user = userEvent.setup();
+    renderLogin({ enableRegister: false });
+    const signup = screen.getByTestId('signup-text');
+    expect(signup.tagName).toBe('BUTTON');
+    expect(signup).toHaveAttribute('type', 'button');
+    for (let tabCount = 0; tabCount < 10 && document.activeElement !== signup; tabCount += 1) {
+      await user.tab();
+    }
+    expect(signup).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/register', search: undefined });
+    expect(mocks.sendOTC).not.toHaveBeenCalled();
   });
 
   it('hydrates currentUser with a FLAT user (not the nested {user} wrapper) after inline registration', async () => {
@@ -425,7 +494,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     await user.click(screen.getByTestId('login-continue-btn'));
     await user.type(within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
     await user.click(screen.getByTestId('login-verify-btn'));
-    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
 
     await user.click(screen.getByTestId('login-verify-btn'));
 
@@ -457,7 +526,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
       await user.type(otcInput, '12345678');
       await user.click(screen.getByTestId('login-verify-btn'));
 
-      await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
+      await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed', expect.anything()));
       expect(mocks.toast.dismiss).toHaveBeenCalledWith('otc-code-sent');
       // Must NOT strand the user on the username step, and must not create a session.
       expect(screen.queryByTestId('login-register-username-input')).not.toBeInTheDocument();
@@ -783,4 +852,38 @@ describe('MultiStepLogin - second-factor handoff', () => {
       expect(mocks.toast[toastKind as 'error' | 'info']).toHaveBeenCalledTimes(1);
     }
   );
+});
+
+describe('MultiStepLogin - OAuth registration_closed redirect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+  });
+
+  afterEach(() => {
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('explains the invite gate and offers the waitlist, then strips the code from the URL', async () => {
+    window.history.replaceState({}, '', '/login?error=registration_closed');
+    renderLogin({ enableRegister: false });
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(expect.stringMatching(/invite-only/), expect.anything())
+    );
+    const [, options] = mocks.toast.error.mock.calls[0];
+    options.action.onClick();
+    expectWaitlistNavigation('oauth_signup_closed', undefined);
+    expect(window.location.search).toBe('');
+  });
+
+  it('adds no waitlist action to other sign-in errors', async () => {
+    window.history.replaceState({}, '', '/login?error=callback_error');
+    renderLogin({ enableRegister: false });
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
+    const [, options] = mocks.toast.error.mock.calls[0];
+    expect(options.action).toBeUndefined();
+  });
 });

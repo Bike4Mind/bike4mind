@@ -11,8 +11,8 @@ import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { z } from 'zod';

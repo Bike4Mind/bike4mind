@@ -1,6 +1,6 @@
 import { User } from '@bike4mind/database';
 import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
-import { assertAccountStateUsable } from './assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 
 export interface JwtPayloadClaims {
   id: string;

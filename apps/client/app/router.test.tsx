@@ -244,6 +244,16 @@ describe('integrationsRoute validateSearch', () => {
   });
 });
 
+describe('admin layout', () => {
+  it('mounts the console and the user profile under one layout route', () => {
+    const consoleParent = adminRoute.options.getParentRoute();
+    expect(adminUserProfileRoute.options.getParentRoute()).toBe(consoleParent);
+    expect(consoleParent.id).toBe('/admin-layout');
+    expect(adminRoute.fullPath).toBe('/admin');
+    expect(adminUserProfileRoute.fullPath).toBe('/admin/users/$userId');
+  });
+});
+
 describe('admin user profile route', () => {
   const USER_ID = '0123456789abcdef01234567';
   const adminBeforeLoad = (search: Record<string, unknown>) =>

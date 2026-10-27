@@ -12,7 +12,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // CORS + rate-limit middlewares are exercised in their own tests; no-op here.
 vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 const mockVerifyEmbedApiKey = vi.fn();
 vi.mock('@server/cli/auth', () => ({

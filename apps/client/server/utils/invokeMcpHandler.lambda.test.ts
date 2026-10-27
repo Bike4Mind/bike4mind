@@ -42,7 +42,7 @@ vi.mock('@bike4mind/server-utils/services/mcpCircuitBreakers', () => ({
   CircuitBreakerError,
 }));
 
-vi.mock('@server/utils/mcpCall', () => ({
+vi.mock('@bike4mind/server-utils/utils/mcpCall', () => ({
   handler: mockLocalMcpHandler,
 }));
 

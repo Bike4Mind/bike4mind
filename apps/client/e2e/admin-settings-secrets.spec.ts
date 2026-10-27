@@ -32,17 +32,14 @@ type SettingDoc = { settingName: string; settingValue: unknown };
 async function gotoAdminSettings(page: Page, adminPage: { gotoAdmin: () => Promise<void> }) {
   await adminPage.gotoAdmin();
 
-  // Admin Settings lives in the "General Ops" accordion, which is collapsed on load, and a
-  // collapsed panel's contents are not visible - so the section has to be opened before the
-  // nav button can be clicked. The nav also renders twice (desktop rail and mobile drawer),
-  // so every lookup takes the on-screen one.
-  const section = page.getByRole('button', { name: 'General Ops' }).filter({ visible: true }).first();
-  await expect(section).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-  if ((await section.getAttribute('aria-expanded')) !== 'true') {
-    await section.click();
-  }
-
+  // The nav renders twice (desktop sidebar and mobile drawer, mounted only while open), so
+  // every lookup takes the on-screen one; on a phone the drawer is opened first.
   const navButton = page.getByTestId('admin-settings-btn').filter({ visible: true }).first();
+  const mobileMenu = page.getByTestId('admin-mobile-menu-btn').filter({ visible: true });
+  await expect(navButton.or(mobileMenu.first())).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+  if (!(await navButton.isVisible())) {
+    await mobileMenu.first().click();
+  }
   await expect(navButton).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   await navButton.scrollIntoViewIfNeeded();
   await navButton.click();

@@ -3,6 +3,7 @@ import {
   AuthEvents,
   HTTPError,
   InternalServerError,
+  TooManyRequestsError,
   UnprocessableEntityError,
   isOAuthClientIdShape,
   redactUserSecretsForSelf,
@@ -19,6 +20,7 @@ import {
   oauthClientRepository,
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
+import { withTransaction } from '@bike4mind/db-core';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 import { isPartnerDomainSignupAllowed } from '@server/utils/auth/partnerSignupBypass';
 import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
@@ -38,6 +40,7 @@ import {
   ipSubject,
   otcCounterLimit,
   reserveOtcEmailBudget,
+  reserveOtcRegistrationDomainBudget,
 } from '@server/utils/otcLimits';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
@@ -76,9 +79,14 @@ const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, a
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(otcCounterLimit({ bucket: 'verify-ip', ...OTC_LIMITS.verify.perIp, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'verify-ip', window: OTC_LIMITS.verify.perIp, subject: ipSubject }))
   .post(async (req, res) => {
     const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
+    const parsedInviteCode = z.string().trim().optional().safeParse(req.body.inviteCode);
+    if (!parsedInviteCode.success) {
+      return res.status(400).json({ error: 'Invalid invite code' });
+    }
+    const inviteCode = parsedInviteCode.data;
 
     if (!email || !code) {
       return res.status(400).json({ error: 'Email and code are required' });
@@ -362,6 +370,7 @@ const handler = baseApi({ auth: false })
 
     // Only the claim winner is the bootstrap user; anyone else registers under the normal rules.
     let bootstrapClaimId: string | null = null;
+    let domainBudget: Awaited<ReturnType<typeof reserveOtcRegistrationDomainBudget>> | undefined;
 
     // Register + finalize (email-verified state, deferred free-credit grant) in one
     // service call. registerViaOTC grants credits BEFORE dropping the pending tag, so
@@ -372,54 +381,71 @@ const handler = baseApi({ auth: false })
       bootstrapClaimId = bootstrap.eligible ? await claimBootstrapAdmin() : null;
       const partnerDomainAllowed =
         bootstrapClaimId === null && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
-      newUser = await userService.registerViaOTC(
-        {
-          username: username.trim(),
-          email: normalizedEmail,
-          name: username.trim(),
-          password: '',
-          // P0-B abuse gate: registerUser rejects creation unless these are present and
-          // current, so a new OTC account is gated at creation just like the credentials path. The
-          // client collects both before submitting (register form, or the inline username step).
-          acceptedPolicyVersion,
-          ageAttestation,
-          sourceClientId: parseSourceClientId(req.body.sourceClientId),
-          metadata: req.body.clientData
-            ? {
-                loginTime: new Date(),
-                userAgent: req.body.clientData.userAgent || 'Unknown',
-                browser: req.body.clientData.browser || 'Unknown',
-                operatingSystem: req.body.clientData.operatingSystem || 'Unknown',
-                deviceType: req.body.clientData.deviceType || 'Desktop',
-                screenResolution: req.body.clientData.screenResolution || 'Unknown',
-                viewportSize: req.body.clientData.viewportSize || 'Unknown',
-                colorDepth: req.body.clientData.colorDepth || 0,
-                pixelDepth: req.body.clientData.pixelDepth || 0,
-                devicePixelRatio: req.body.clientData.devicePixelRatio || 1,
-                ip: getClientIp(req),
-              }
-            : undefined,
-        },
-        {
-          db: {
-            users: userRepository,
-            signupProtection,
-            adminSettings: adminSettingsRepository,
-            registrationInvites: registrationInviteRepository,
-            subscribers: subscriberRepository,
-            creditTransactions: creditTransactionRepository,
-            oauthClients: oauthClientRepository,
-            creditLots: creditLotRepository,
+      // A self-host install's staff all share one fresh domain, and a partner domain is one an
+      // admin already vouched for, so neither is capped (see OTC_REGISTER_DOMAIN_BUDGETS).
+      domainBudget =
+        isSelfHost || partnerDomainAllowed ? undefined : await reserveOtcRegistrationDomainBudget(normalizedEmail);
+      if (domainBudget && 'retryAfter' in domainBudget) {
+        res.setHeader('Retry-After', String(domainBudget.retryAfter));
+        throw new TooManyRequestsError('Too many new accounts on this email domain. Please try again later.');
+      }
+      const register = () =>
+        userService.registerViaOTC(
+          {
+            username: username.trim(),
+            email: normalizedEmail,
+            name: username.trim(),
+            password: '',
+            inviteCode,
+            // P0-B abuse gate: registerUser rejects creation unless these are present and
+            // current, so a new OTC account is gated at creation just like the credentials path. The
+            // client collects both before submitting (register form, or the inline username step).
+            acceptedPolicyVersion,
+            ageAttestation,
+            sourceClientId: parseSourceClientId(req.body.sourceClientId),
+            metadata: req.body.clientData
+              ? {
+                  loginTime: new Date(),
+                  userAgent: req.body.clientData.userAgent || 'Unknown',
+                  browser: req.body.clientData.browser || 'Unknown',
+                  operatingSystem: req.body.clientData.operatingSystem || 'Unknown',
+                  deviceType: req.body.clientData.deviceType || 'Desktop',
+                  screenResolution: req.body.clientData.screenResolution || 'Unknown',
+                  viewportSize: req.body.clientData.viewportSize || 'Unknown',
+                  colorDepth: req.body.clientData.colorDepth || 0,
+                  pixelDepth: req.body.clientData.pixelDepth || 0,
+                  devicePixelRatio: req.body.clientData.devicePixelRatio || 1,
+                  ip: getClientIp(req),
+                }
+              : undefined,
           },
-          logger: req.logger,
-          skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
-        }
-      );
+          {
+            db: {
+              users: userRepository,
+              signupProtection,
+              adminSettings: adminSettingsRepository,
+              registrationInvites: registrationInviteRepository,
+              subscribers: subscriberRepository,
+              creditTransactions: creditTransactionRepository,
+              oauthClients: oauthClientRepository,
+              creditLots: creditLotRepository,
+            },
+            logger: req.logger,
+            skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
+          }
+        );
+      // Roll back the losing account when concurrent signups redeem one single-use invite.
+      newUser = inviteCode ? await withTransaction(register, { logger: req.logger }) : await register();
     } catch (err) {
       if (bootstrapClaimId) {
         await releaseBootstrapAdminClaim(bootstrapClaimId).catch(releaseErr =>
           req.logger.error('Self-host bootstrap claim release failed', releaseErr)
         );
+      }
+      if (domainBudget && 'refund' in domainBudget) {
+        await domainBudget
+          .refund()
+          .catch(refundErr => req.logger.error('OTC registration domain budget refund failed', refundErr));
       }
       // Registration failed AFTER the single-use nonce was rotated above, so the token the
       // client is holding can never validate again - without a re-issue every retry dies as a

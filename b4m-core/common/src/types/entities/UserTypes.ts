@@ -44,6 +44,7 @@ export interface INetworkMeta {
   country: string | null;
   /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
   isDatacenter: boolean | null;
+  ja4?: string | null;
 }
 
 export interface ISignupMeta extends INetworkMeta {
@@ -97,6 +98,11 @@ export interface IMFAConfig {
   backupCodes: string[];
   setupAt: Date;
   lastUsedAt?: Date;
+  /**
+   * Plaintext backup codes (comma-joined) for a setup not yet verified, so a repeat setup call
+   * can re-serve the codes the user already saved. Encrypted at rest; cleared on enable.
+   */
+  pendingBackupCodes?: string;
   // Server-side attempt tracking (can't be bypassed by refresh/cancel)
   failedAttempts?: number;
   lastFailedAttempt?: Date;
@@ -277,6 +283,11 @@ export interface IUser extends ICreditHolder {
    * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
+  /**
+   * Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under. Unset
+   * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
+   */
+  freeCreditClaimEmail?: string | null;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
@@ -441,6 +452,8 @@ export interface IUser extends ICreditHolder {
 
   numReferralsAvailable: number;
   regInvites: Array<IRegInviteDocument['id']>;
+  /** Sender of the referral invite this account redeemed; unset for accounts that signed up without one. */
+  referredByUserId?: string | null;
 
   /**
    * This field is used to store the current selected organization ID.
@@ -720,6 +733,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   /** Username counterpart of {@link IUserRepository.existsOtherUserWithEmail}. */
   existsOtherUserWithUsername: (username: string, excludeUserId?: string) => Promise<boolean>;
   /**
+   * Whether a live, unbanned, non-system user whose email is on `domain` or a subdomain of it
+   * verified that email no later than `verifiedBefore`. An unindexed suffix scan: call it rarely and cache the answer.
+   */
+  existsVerifiedUserOnEmailDomain: (domain: string, verifiedBefore: Date) => Promise<boolean>;
+  /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
    * group type is revoked and its instances are soft-deleted). Named for the scope so a caller
    * cannot mistake it for a single-user operation.
@@ -765,6 +783,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   atomicReserveMfaAttempt: (userId: string) => Promise<{ reserved: boolean; user: IUserDocument | null }>;
   atomicClaimTotpStep: (userId: string, step: number) => Promise<boolean>;
   atomicConsumeBackupCode: (userId: string, codeHash: string) => Promise<boolean>;
+  /**
+   * Claim the one free-credit grant allowed per inbox. True when this account holds the claim
+   * (now or from an earlier attempt), false when another account already does.
+   */
+  claimFreeCreditGrant: (userId: string) => Promise<boolean>;
   /**
    * Enable MFA only while the stored secret is still `totpSecret` and MFA is still disabled.
    * Returns null when a concurrent setup replaced the secret, so a code verified against a

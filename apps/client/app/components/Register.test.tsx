@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   verifyOTC: vi.fn(),
   mutateAsync: vi.fn(),
   navigate: vi.fn(),
+  allowOpenRegistration: true,
   trackSignupConversion: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), dismiss: vi.fn() },
   mfa: { options: null as MfaHookOptions | null, begin: vi.fn() },
@@ -76,7 +77,7 @@ vi.mock('@client/app/hooks/useCommonStyles', () => ({
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useBrandingSettings: () => ({}),
-  usePublicConfig: () => ({ data: { allowOpenRegistration: true }, isLoading: false }),
+  usePublicConfig: () => ({ data: { allowOpenRegistration: mocks.allowOpenRegistration }, isLoading: false }),
 }));
 vi.mock('./common/MFAModal', () => ({ default: () => null }));
 vi.mock('next/image', () => ({ default: () => null }));
@@ -97,6 +98,10 @@ const renderRegister = () =>
   );
 
 describe('Register', () => {
+  beforeEach(() => {
+    mocks.allowOpenRegistration = true;
+  });
+
   // Regression guard for #59: the ToS/AUP/Privacy links in the acceptance-checkbox label must
   // point at the right policy pages and open in a new tab. (The underlying bug - clicks landing
   // on the checkbox's transparent input overlay instead of the anchor - is a visual stacking-order
@@ -189,6 +194,60 @@ describe('Register - second-factor handoff', () => {
     vi.clearAllMocks();
     localStorage.clear();
     mocks.mfa.options = null;
+    mocks.allowOpenRegistration = true;
+  });
+
+  it('allows invite-only email signup and preserves the invite across code retries', async () => {
+    mocks.allowOpenRegistration = false;
+    mocks.verifyOTC
+      .mockRejectedValueOnce({ message: 'Try again', pendingToken: 'ptok-retry' })
+      .mockResolvedValueOnce({ user: { id: 'invited-user' }, accessToken: 'full' });
+    const user = userEvent.setup();
+    renderRegister();
+
+    expect(screen.getByTestId('register-form')).toBeInTheDocument();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(screen.getByText('Google')).not.toBeVisible();
+    await user.type(within(screen.getByTestId('register-invite-input')).getByRole('textbox'), ' INVITE123 ');
+    await submitCode(user);
+    await waitFor(() => expect(mocks.verifyOTC).toHaveBeenCalledTimes(1));
+    expect(mocks.verifyOTC).toHaveBeenLastCalledWith(expect.objectContaining({ inviteCode: 'INVITE123' }));
+    await user.click(screen.getByTestId('register-verify-btn'));
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalledWith({ id: 'invited-user' }));
+    expect(mocks.verifyOTC).toHaveBeenLastCalledWith(
+      expect.objectContaining({ inviteCode: 'INVITE123', pendingToken: 'ptok-retry' })
+    );
+  });
+
+  it('requires an invite before sending a code on an invite-only instance', async () => {
+    mocks.allowOpenRegistration = false;
+    renderRegister();
+    const user = userEvent.setup();
+    await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+    await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+    expect(screen.getByTestId('register-submit-btn')).toBeDisabled();
+    expect(mocks.sendOTC).not.toHaveBeenCalled();
+  });
+
+  it('sends an invite-less visitor to the waitlist with the email they typed', async () => {
+    mocks.allowOpenRegistration = false;
+    renderRegister();
+    const user = userEvent.setup();
+    await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+    await user.click(screen.getByTestId('register-join-waitlist-link'));
+
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/subscribe', search: { source: 'register_signup_closed' } })
+    );
+    const { state } = mocks.navigate.mock.calls.at(-1)[0];
+    expect(state({})).toEqual({ waitlistEmail: 'new@test.com' });
+  });
+
+  it('hides the waitlist link when registration is open', () => {
+    renderRegister();
+    expect(screen.queryByTestId('register-join-waitlist-link')).not.toBeInTheDocument();
   });
 
   it('marks a freshly registered account first session before entering the app', async () => {

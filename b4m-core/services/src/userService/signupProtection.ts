@@ -58,7 +58,7 @@ export async function protectSignupCredits(
   )
     return false;
 
-  if (existing) return existing.status !== 'released';
+  if (existing) return (await repository.findReview(domain))?.status !== 'released';
   if (protection.mode === 'enforce') return false;
 
   const threshold = settingsMap.signupBurstThreshold.schema.parse(valueOf('signupBurstThreshold') ?? 5);

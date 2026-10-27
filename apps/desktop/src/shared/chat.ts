@@ -621,18 +621,27 @@ export interface ChatRelayOrigin {
 }
 
 /**
- * A turn the APP started on the user's standing instruction rather than anyone typing it: today
- * only auto-fix on a pull request (see main/pr/autoFix.ts). Carried on the queue entry and on
- * the message it becomes, so the thread can say who started it and a guard can hold the turn to
- * the rules the user agreed to (no force-push, no merge).
+ * A turn the APP started rather than anyone typing it. Carried on the queue entry and on the
+ * message it becomes, so the thread can say who started it.
+ *
+ * 'auto-fix' runs on the user's standing instruction for a pull request (see main/pr/autoFix.ts),
+ * and a guard holds it to the rules they agreed to (no force-push, no merge). 'background-exit'
+ * tells the model a background command it started has ended (see main/chat/backgroundWake.ts).
  */
-export interface ChatAutomaticOrigin {
-  kind: 'auto-fix';
-  prUrl: string;
-  prNumber: number;
-  /** One line for the thread's collapsed row, e.g. "2 failing checks on #611". */
-  summary: string;
-}
+export type ChatAutomaticOrigin =
+  | {
+      kind: 'auto-fix';
+      prUrl: string;
+      prNumber: number;
+      /** One line for the thread's collapsed row, e.g. "2 failing checks on #611". */
+      summary: string;
+    }
+  | {
+      kind: 'background-exit';
+      processIds: string[];
+      /** One line for the thread's collapsed row, e.g. "[a1b2c3d4] exited 0". */
+      summary: string;
+    };
 
 export interface ChatMessage {
   id: string;
@@ -819,6 +828,34 @@ export interface BackgroundProcessInfo {
  */
 export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
+export function localModelId(runtimeId: string, model: string): string {
+  return `local:${encodeURIComponent(runtimeId)}:${model}`;
+}
+
+/** `local:<encoded runtime>:<model>`; runtime ids can contain colons so they are URL-encoded, the model stays raw. */
+export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
+  const match = /^local:([^:]+):(.+)$/s.exec(id);
+  if (!match) return null;
+  try {
+    return { runtimeId: decodeURIComponent(match[1]), model: match[2] };
+  } catch {
+    return null;
+  }
+}
+
+/** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
+export function isLocalModel(id: string): boolean {
+  return id.startsWith('local:');
+}
+
+export function isLocalBackend(model: { backend?: string }): boolean {
+  return model.backend === 'ollama' || model.backend?.startsWith('local-') === true;
+}
+
+export function localBackend(runtimeId: string): string {
+  return `local-${runtimeId}`;
+}
+
 /**
  * One model this deployment offers, as the picker renders it.
  *
@@ -826,8 +863,6 @@ export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessI
  * provider keys - so this is genuinely per-deployment and per-account, and the desktop client
  * never ships a list of its own.
  */
-export const LOCAL_MODEL_PREFIX = 'local:ollama:';
-
 export interface ChatModelOption {
   id: string;
   name: string;
@@ -1230,6 +1265,8 @@ export type ChatStreamEvent =
    * summary failed, so the turn went out with the conversation as it was.
    */
   | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string }
+  /** A local model's prompt overflowed its context, so the oldest `dropped` messages were left out. */
+  | { type: 'context-trimmed'; sessionId: string; dropped: number }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`
@@ -1307,7 +1344,7 @@ export interface ChatQueuedMessage {
    */
   relay?: ChatRelayOrigin;
   /**
-   * Set when the app queued this on its own (auto-fix). Like a relay it never merges, never
+   * Set when the app queued this on its own (auto-fix, a background exit). Like a relay it never merges, never
    * goes back to the composer, and is not offered "send now".
    */
   automatic?: ChatAutomaticOrigin;

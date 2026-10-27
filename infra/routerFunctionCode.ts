@@ -18,3 +18,14 @@ export function minifyRouterFunction(code: string): string {
   }
   return minified;
 }
+
+export const NOINDEX_HEADER_VALUE = 'noindex, nofollow';
+
+// CloudFront skips viewer-response functions for origin errors and viewer-request responses.
+// Empty on production so its generated function stays byte-identical.
+export function noindexResponseInjection(stage: string): string {
+  if (stage === 'production') return '';
+  return `
+  event.response.headers["x-robots-tag"] = { value: "${NOINDEX_HEADER_VALUE}" };
+`;
+}

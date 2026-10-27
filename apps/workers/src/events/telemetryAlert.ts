@@ -13,7 +13,7 @@ import {
   telemetryDryRunResultRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { SlackClient } from '@bike4mind/slack';
 import { GitHubService } from '@server/services/githubService';
 import {

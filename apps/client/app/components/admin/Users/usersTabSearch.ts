@@ -28,6 +28,8 @@ export const DEFAULT_USERS_PARAMS: IGetUsersParams = {
   sortOrder: 'desc',
   orgSearch: ['all'],
   tags: [],
+  groupBy: undefined,
+  recentSignups: undefined,
 };
 
 export const USERS_PAGE_PARAM = 'page';
@@ -49,6 +51,8 @@ const USERS_VIEW_PARAMS = [
   USERS_ORDER_PARAM,
   USERS_ORG_PARAM,
   USERS_TAGS_PARAM,
+  'groupBy',
+  'recentSignups',
 ] as const;
 
 export const USERS_TAB_PARAMS = [...USERS_VIEW_PARAMS, USERS_USER_ID_PARAM] as const;
@@ -61,9 +65,14 @@ export type UsersSearch = {
   [USERS_ORG_PARAM]?: string[];
   [USERS_TAGS_PARAM]?: string[];
   [USERS_USER_ID_PARAM]?: string;
+  groupBy?: 'emailDomain';
+  recentSignups?: 'hour';
 };
 
-type UsersView = Pick<IGetUsersParams, 'page' | 'limit' | 'sortField' | 'sortOrder' | 'orgSearch' | 'tags'>;
+type UsersView = Pick<
+  IGetUsersParams,
+  'page' | 'limit' | 'sortField' | 'sortOrder' | 'orgSearch' | 'tags' | 'groupBy' | 'recentSignups'
+>;
 
 const parseLimit = (value: unknown): number | undefined => {
   const limit = toNumber(value);
@@ -74,15 +83,28 @@ const parseLimit = (value: unknown): number | undefined => {
 export const parseUserId = (value: unknown): string | undefined =>
   typeof value === 'string' && /^[0-9a-f]{24}$/.test(value) ? value : undefined;
 
-/** Per-key coercion for the route's `validateSearch`; anything invalid becomes undefined. */
-export const USERS_SEARCH_PARSERS: { readonly [K in keyof UsersSearch]-?: (value: unknown) => UsersSearch[K] } = {
-  [USERS_PAGE_PARAM]: parsePage,
+// A view param that fails to parse still asked for a view. Keeping the default page stops
+// `validateSearch` from reducing `?sort=bogus` to a bare visit that restores the saved view.
+const parseUsersPage = (value: unknown, search: Record<string, unknown> = {}): number | undefined =>
+  parsePage(value) ??
+  (USERS_VIEW_PARAMS.some(key => search[key] !== undefined) ? DEFAULT_USERS_PARAMS.page : undefined);
+
+/**
+ * Per-key coercion for the route's `validateSearch`, given the whole raw search as well; anything
+ * invalid becomes undefined.
+ */
+export const USERS_SEARCH_PARSERS: {
+  readonly [K in keyof UsersSearch]-?: (value: unknown, search?: Record<string, unknown>) => UsersSearch[K];
+} = {
+  [USERS_PAGE_PARAM]: parseUsersPage,
   [USERS_LIMIT_PARAM]: parseLimit,
   [USERS_SORT_PARAM]: oneOf(USERS_SORT_FIELDS),
   [USERS_ORDER_PARAM]: oneOf(SORT_ORDERS),
   [USERS_ORG_PARAM]: parseStringList,
   [USERS_TAGS_PARAM]: parseStringList,
   [USERS_USER_ID_PARAM]: parseUserId,
+  groupBy: oneOf(['emailDomain'] as const),
+  recentSignups: oneOf(['hour'] as const),
 };
 
 /**
@@ -99,6 +121,8 @@ export function usersViewFromSearch(search: Record<string, unknown>): UsersView 
     sortOrder: USERS_SEARCH_PARSERS[USERS_ORDER_PARAM](search[USERS_ORDER_PARAM]),
     orgSearch: parseStringList(search[USERS_ORG_PARAM]),
     tags: parseStringList(search[USERS_TAGS_PARAM]),
+    groupBy: USERS_SEARCH_PARSERS.groupBy(search.groupBy),
+    recentSignups: USERS_SEARCH_PARSERS.recentSignups(search.recentSignups),
   };
   if (Object.values(parsed).every(value => value === undefined)) return undefined;
   return {
@@ -108,6 +132,8 @@ export function usersViewFromSearch(search: Record<string, unknown>): UsersView 
     sortOrder: parsed.sortOrder ?? DEFAULT_USERS_PARAMS.sortOrder,
     orgSearch: parsed.orgSearch ?? DEFAULT_USERS_PARAMS.orgSearch,
     tags: parsed.tags ?? DEFAULT_USERS_PARAMS.tags,
+    groupBy: parsed.groupBy,
+    recentSignups: parsed.recentSignups,
   };
 }
 
@@ -137,6 +163,8 @@ export function usersViewToSearch(params: IGetUsersParams): Omit<UsersSearch, ty
       sameList(params.orgSearch, DEFAULT_USERS_PARAMS.orgSearch)
     ),
     [USERS_TAGS_PARAM]: parseStringList(params.tags),
+    groupBy: params.groupBy,
+    recentSignups: params.recentSignups,
   };
 }
 
@@ -148,6 +176,8 @@ export function isSameUsersView(a: IGetUsersParams, b: IGetUsersParams): boolean
     a.sortField === b.sortField &&
     a.sortOrder === b.sortOrder &&
     sameList(a.orgSearch, b.orgSearch) &&
-    sameList(a.tags, b.tags)
+    sameList(a.tags, b.tags) &&
+    a.groupBy === b.groupBy &&
+    a.recentSignups === b.recentSignups
   );
 }

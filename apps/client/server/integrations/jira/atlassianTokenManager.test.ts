@@ -14,7 +14,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({ clientId: 'cid', clientSecret: 'secret' }),
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v: string | null | undefined) => (v == null ? null : `enc:${v}`),
   decryptToken: (v: string | null | undefined) => (v == null ? null : String(v).replace(/^enc:/, '')),
   encryptEnvVariables: (vars: unknown) => vars,

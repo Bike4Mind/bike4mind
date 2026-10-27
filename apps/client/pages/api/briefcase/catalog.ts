@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { briefcaseService } from '@bike4mind/services';
 import { briefcasePromptRepository } from '@bike4mind/database';
 import { BriefcaseBatchRequestSchema, BriefcaseEvents, isOAuthSourceTag, type ICaller } from '@bike4mind/common';
