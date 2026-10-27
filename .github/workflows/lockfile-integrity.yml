@@ -70,6 +70,11 @@ jobs:
       - name: Check for premium overlay paths in pnpm-lock.yaml
         run: bash scripts/check-no-overlay-lockfile.sh
 
+      # `sst install` with an overlay mounted writes the secrets it contributes into the
+      # tracked sst-env.d.ts files, the same leak as the lockfile one above.
+      - name: Check sst-env.d.ts declares only core secrets
+        run: node scripts/check-sst-env-core-secrets.mjs
+
       - name: Run lockfile repair script tests
         run: bash .github/scripts/repair-lockfile-integrity.test.sh
 
