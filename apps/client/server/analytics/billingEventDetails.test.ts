@@ -11,7 +11,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlan }));
 
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   creditBuyerForEvents,
   planChangeDirection,

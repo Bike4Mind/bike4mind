@@ -1,4 +1,4 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
+import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
 import {
   AuthStrategy,
   CollectionType,
@@ -26,6 +26,10 @@ import { NETWORK_META_FIELDS } from './networkMetaFields';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
 }
 
 export interface IUserObject extends IUserDocument, Omit<Document, 'id'> {}
@@ -79,6 +83,8 @@ const MFASchema = new Schema(
     totpSecret: { type: String, required: true, select: false },
     totpEnabled: { type: Boolean, default: false },
     backupCodes: { type: [String], default: [], select: false },
+    // Encrypted like totpSecret; only present between setup and enable.
+    pendingBackupCodes: { type: String, select: false },
     setupAt: { type: Date, required: true },
     lastUsedAt: { type: Date, default: null },
     // Server-side attempt tracking (can't be bypassed by refresh/cancel)
@@ -413,15 +419,20 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   /**
    * Loads a user WITH the select:false MFA secrets - for server-side MFA verification only.
-   * `mfa.totpSecret` comes back decrypted; writing the snapshot back re-encrypts it (see
-   * encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
+   * `mfa.totpSecret` and `mfa.pendingBackupCodes` come back decrypted; writing the snapshot back
+   * re-encrypts them (see encryptTotpSecretInUpdate), so snapshot writers never persist the plaintext.
    */
   async findByIdWithMfaSecrets(id: string): Promise<IUserDocument | null> {
-    const result = await this.model.findOne({ _id: id }).select('+mfa.totpSecret +mfa.backupCodes');
+    const result = await this.model
+      .findOne({ _id: id })
+      .select('+mfa.totpSecret +mfa.backupCodes +mfa.pendingBackupCodes');
     if (!result) return null;
     const user: IUserDocument = result.toJSON();
     if (user.mfa?.totpSecret) {
       user.mfa.totpSecret = decryptAtRest(user.mfa.totpSecret);
+    }
+    if (user.mfa?.pendingBackupCodes) {
+      user.mfa.pendingBackupCodes = decryptAtRest(user.mfa.pendingBackupCodes);
     }
     return user;
   }
@@ -470,6 +481,35 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Claim the one free-credit grant allowed per inbox (canonicalizeEmail of the account's email).
+   * True when this account holds the claim, including from an earlier attempt, so a retried grant
+   * stays idempotent; false when another account already holds it. The unique
+   * freeCreditClaimEmail_1 index makes the claim atomic across concurrent signups; the pre-check
+   * covers a deployment whose index has not been built yet. An account without a usable email has
+   * nothing to dedupe on and is allowed.
+   */
+  async claimFreeCreditGrant(userId: string): Promise<boolean> {
+    const user = await this.model.findById(userId, { email: 1, freeCreditClaimEmail: 1 }).lean();
+    if (!user) return false;
+    if (user.freeCreditClaimEmail) return true;
+    const claimEmail = user.email ? canonicalizeEmail(user.email) : null;
+    if (!claimEmail) return true;
+
+    if (await this.model.exists({ freeCreditClaimEmail: claimEmail, _id: { $ne: userId } })) return false;
+    try {
+      const result = await this.model.updateOne(
+        { _id: userId, freeCreditClaimEmail: null },
+        { $set: { freeCreditClaimEmail: claimEmail } }
+      );
+      // A zero-match update means a concurrent call for this same account claimed first.
+      return result.modifiedCount === 1 || result.matchedCount === 0;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) return false;
+      throw error;
+    }
+  }
+
+  /**
    * Remove `codeHash` from the stored backup codes, only if it is still present. Returns true
    * exactly once per code, so a backup code cannot be consumed by two requests at once. A
    * whole-document write from a pre-read snapshot would instead restore a code another request
@@ -510,7 +550,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'mfa.lastUsedAt': new Date(),
           updatedAt: new Date(),
         },
-        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1 },
+        $unset: { 'mfa.lastFailedAttempt': 1, 'mfa.lockedUntil': 1, 'mfa.pendingBackupCodes': 1 },
       },
       { new: true }
     );
@@ -866,6 +906,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Invite-resolved credits awaiting proof of email ownership; paired with
     // the pending-free-credits tag and nulled once granted.
     pendingCreditGrant: { type: Number, default: null },
+    // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
+    // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
+    freeCreditClaimEmail: { type: String },
     lastCreditsPurchasedAt: { type: Date, default: null },
     tags: { type: [String], default: [] },
     level: { type: String, default: 'DemoUser' },
@@ -1173,6 +1216,17 @@ UserSchema.index(
   { unique: true, partialFilterExpression: { email: { $type: 'string' } }, name: 'email_1' }
 );
 
+// One free-credit grant per inbox: see claimFreeCreditGrant. Partial so unclaimed accounts are
+// not indexed. Existing deployments are backfilled and indexed by migration 20260921235965.
+UserSchema.index(
+  { freeCreditClaimEmail: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { freeCreditClaimEmail: { $type: 'string' } },
+    name: 'freeCreditClaimEmail_1',
+  }
+);
+
 // Case-insensitive email index for collation-based lookups (findByEmail).
 // The existing email_1 index is case-sensitive and won't be used by .collation() queries.
 UserSchema.index(
@@ -1201,11 +1255,17 @@ UserSchema.index({ 'authProviders.strategy': 1, 'authProviders.id': 1 }, { name:
 // Without it both scan the full users collection. Explicit name so the migration and autoIndex
 // (mongo.ts) agree - see the authProviders_strategy_id note above.
 UserSchema.index({ groups: 1 }, { name: 'user_groups' });
+UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fingerprint_window' });
 // Serves the forward member lookup in OrganizationRepository.findMemberUserIds, which the org
 // feedback report and its drill-down routes call on every request. Without it that read scans the
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
+UserSchema.index({ createdAt: 1 });
+// Serves the signupIpRetention cron's range scan for signups past the retention window. Sparse:
+// accounts created before signup network capture carry no signupMeta. Explicit name so migration
+// 20260921235973 and autoIndex agree - see the authProviders_strategy_id note above.
+UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_capturedAt', sparse: true });
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
@@ -1314,28 +1374,32 @@ function stripSecretlessMfaFromUpdate(this: Query<unknown, IUserDocument>) {
 }
 
 /**
- * Encrypts `mfa.totpSecret` on every update that writes it, so a read-only DB or backup exposure
- * cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
+ * Encrypts `mfa.totpSecret` (and `mfa.pendingBackupCodes`) on every update that writes it, so a
+ * read-only DB or backup exposure cannot mint second-factor codes. Covers the whole-subdocument forms (`{ mfa }`, `$set: { mfa }`)
  * that setupMFA and the snapshot writers (passkey authenticate, regenerate-backup-codes) use, and the
  * dotted `mfa.totpSecret` form. encryptAtRest leaves ciphertext untouched, so re-writing an
  * already-encrypted value is a no-op. Must stay in sync with the decrypt in findByIdWithMfaSecrets.
  */
+const MFA_ENCRYPTED_FIELDS = ['totpSecret', 'pendingBackupCodes'] as const;
+
 function encryptTotpSecretInUpdate(this: Query<unknown, IUserDocument>) {
   const update = this.getUpdate() as Record<string, unknown> | null;
   if (!update || Array.isArray(update)) return;
 
+  const encrypt = (value: string) => (isEncrypted(value) ? value : encryptAtRest(value));
   const encryptIn = (container: Record<string, unknown> | undefined) => {
     if (!container) return;
-    const mfa = container.mfa as { totpSecret?: unknown } | null | undefined;
-    if (mfa && typeof mfa === 'object' && typeof mfa.totpSecret === 'string') {
-      container.mfa = {
-        ...mfa,
-        totpSecret: isEncrypted(mfa.totpSecret) ? mfa.totpSecret : encryptAtRest(mfa.totpSecret),
-      };
+    const mfa = container.mfa as Record<string, unknown> | null | undefined;
+    if (mfa && typeof mfa === 'object') {
+      const encrypted = { ...mfa };
+      for (const field of MFA_ENCRYPTED_FIELDS) {
+        if (typeof encrypted[field] === 'string') encrypted[field] = encrypt(encrypted[field]);
+      }
+      container.mfa = encrypted;
     }
-    const dotted = container['mfa.totpSecret'];
-    if (typeof dotted === 'string') {
-      container['mfa.totpSecret'] = isEncrypted(dotted) ? dotted : encryptAtRest(dotted);
+    for (const field of MFA_ENCRYPTED_FIELDS) {
+      const dotted = container[`mfa.${field}`];
+      if (typeof dotted === 'string') container[`mfa.${field}`] = encrypt(dotted);
     }
   };
 
@@ -1380,6 +1444,10 @@ UserSchema.pre(['findOneAndUpdate', 'updateOne', 'updateMany'], encryptTotpSecre
 UserSchema.pre('save', function (next) {
   if (this.mfa?.totpSecret && !isEncrypted(this.mfa.totpSecret) && this.isModified('mfa.totpSecret')) {
     this.mfa.totpSecret = encryptAtRest(this.mfa.totpSecret);
+  }
+  const pendingCodes = this.mfa?.pendingBackupCodes;
+  if (pendingCodes && !isEncrypted(pendingCodes) && this.isModified('mfa.pendingBackupCodes')) {
+    this.mfa!.pendingBackupCodes = encryptAtRest(pendingCodes);
   }
   next();
 });

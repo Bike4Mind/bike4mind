@@ -28,7 +28,7 @@ export async function resolveContractAuth(
   const bearer = headers.authorization?.replace('Bearer ', '');
 
   if (contract.auth === 'jwtOnly') {
-    const user = await verifyJwtToken(bearer);
+    const user = await verifyJwtToken(bearer, { requireApiAccess: true });
     return { method: 'jwt', userId: user.id, user };
   }
 
@@ -48,9 +48,11 @@ export async function resolveContractAuth(
       // No valid API key - fall through to JWT (a valid-but-rate-limited key never
       // reaches here; verifyApiKey does not rate-limit, so success returns above).
       try {
-        const user = await verifyJwtToken(bearer);
+        const user = await verifyJwtToken(bearer, { requireApiAccess: true });
         return { method: 'jwt', userId: user.id, user };
       } catch (jwtError) {
+        // A session lookup outage is retryable even when a second supplied key is forbidden.
+        if (isAuthInfraFailure(jwtError)) throw jwtError;
         // Both failed: a recognised key whose owner is forbidden (suspended, disputed)
         // is the more useful answer than the JWT's 401.
         throw keyError instanceof ForbiddenError ? keyError : jwtError;

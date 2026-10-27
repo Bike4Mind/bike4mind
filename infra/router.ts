@@ -1,10 +1,11 @@
-// Intentional circular dependency: router.ts → waf.ts → wafPolicy.ts, and waf.ts is evaluated
-// after router.ts. This is safe because wafWebAcl is only consumed inside the transform.cdn
+// Intentional circular dependency: router.ts -> waf.ts -> wafPolicy.ts/wafAssociation.ts, and waf.ts is
+// evaluated after router.ts. This is safe because wafWebAcl is only consumed inside the transform.cdn
 // callback (lazy evaluation, not at import time). Do NOT access `router` from waf.ts at module
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
 import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
 import { minifyRouterFunction } from './routerFunctionCode';
+import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -152,6 +153,9 @@ export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
 const originVerifyInjection = $interpolate`
+  // Drops a viewer-forged copy. AWS docs show computed cloudfront-viewer-* headers already present here,
+  // so this may also drop the real JA4: remove it before adding JA4 to the origin request policy.
+  delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 
@@ -266,7 +270,8 @@ const routerInstance = shouldUseSharedRouter
             };
           }
 
-          // Attach SST-managed WAF if enabled (ENABLE_WAF=true).
+          // Attach the WAF if enabled (ENABLE_WAF=true): the stage-owned ACL, or the
+          // externally managed one looked up by name.
           // Uses SST v4's first-class webAclArn property on CdnArgs, which internally
           // maps to the CloudFront webAclId field — no manual transform chaining needed.
           if (wafWebAcl) {

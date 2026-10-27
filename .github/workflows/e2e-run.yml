@@ -274,11 +274,12 @@ jobs:
             pnpm sst shell --stage "$SST_STAGE" -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
           fi
 
-      - name: Scrub edge token from test output
+      - name: Scrub E2E secrets from test output
         id: scrub
         if: always() && steps.e2e.outputs.preview_skipped != 'true'
         env:
           E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
         run: python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
 
       - name: Upload Playwright report

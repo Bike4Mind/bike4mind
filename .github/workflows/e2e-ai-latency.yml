@@ -500,10 +500,18 @@ jobs:
           echo "Found pw-results.json candidates:"
           find . -type f -name 'pw-results.json' 2>/dev/null | head -20 || true
 
+      - name: Scrub E2E secrets from test output
+        id: scrub
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        env:
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+        run: python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
         # found" warning that reads like the run lost its report.
-        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
           name: ai-latency-${{ matrix.spec_file }}-${{ steps.sanitize.outputs.model_safe }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}

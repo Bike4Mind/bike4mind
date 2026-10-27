@@ -46,7 +46,7 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   publishTelemetryAlertCallback: vi.fn(),
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: () => 'xoxb-decrypted',
 }));
 

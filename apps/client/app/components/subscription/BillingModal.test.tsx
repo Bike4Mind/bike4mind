@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
-import { SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
 
 const state = vi.hoisted(() => ({

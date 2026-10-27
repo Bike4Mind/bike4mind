@@ -11,8 +11,10 @@ import os from 'os';
 import path from 'path';
 import { lstatSync, mkdirSync, statSync } from 'fs';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
+import { logger } from '../../utils/Logger.js';
 import {
   resolveSandboxPath,
+  getContainerSocketPaths,
   getProtectedWorkspacePaths,
   isBinaryAvailable,
   type SandboxRuntime,
@@ -100,6 +102,33 @@ export class BubblewrapRuntime implements SandboxRuntime {
       const kind = pathKind(deniedPath);
       if (kind === 'dir') args.push('--tmpfs', deniedPath);
       else if (kind === 'file') args.push('--ro-bind', '/dev/null', deniedPath);
+    }
+
+    // connect() works on a read-only bind, so container sockets need masking too.
+    // Only home entries are visible: /var/run and /run are never bound, so masking them leaves an empty mountpoint.
+    if (!options.allowContainerSockets) {
+      const isDenied = (p: string) => expandedDenied.some(d => p === d || p.startsWith(`${d}${path.sep}`));
+      for (const entry of getContainerSocketPaths()) {
+        let socketPath: string;
+        let kind: ReturnType<typeof pathKind>;
+        try {
+          socketPath = resolveSandboxPath(entry.path);
+          kind = pathKind(socketPath);
+        } catch (error) {
+          if (error instanceof Error && 'code' in error && ['EACCES', 'ELOOP'].includes(String(error.code))) {
+            logger.debug(`Sandbox: skipping unreadable container socket path ${entry.path}: ${error.code}`);
+            continue;
+          }
+          throw error;
+        }
+        if (isDenied(socketPath)) continue;
+        if (resolvedCwd === socketPath || resolvedCwd.startsWith(`${socketPath}${path.sep}`)) {
+          logger.debug(`Sandbox: not masking container socket path ${socketPath}, it contains the working directory`);
+          continue;
+        }
+        if (kind === 'dir') args.push('--tmpfs', socketPath);
+        else if (kind === 'file') args.push('--ro-bind', '/dev/null', socketPath);
+      }
     }
 
     // Write restrictions: if writeOnlyToWorkingDir, make home read-only

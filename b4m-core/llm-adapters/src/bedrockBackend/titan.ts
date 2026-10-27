@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { IMessage, type ModelInfo } from '@bike4mind/common';
 import { ChoiceEndReason, ChoiceStatus, ICompletionOptions, ICompletionResponseChunk } from '../backend';
 import { BaseBedrockBackend } from './base';
+import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
 interface TitanResultElement {
   tokenCount: number;
@@ -51,18 +52,31 @@ export default class TitanBedrockBackend extends BaseBedrockBackend {
     // Similar to Llama's format but adapted for Titan
     let prompt = '';
 
-    for (const message of messages) {
+    // The identity line rides on the last System: block so it sits with the final system layer;
+    // the pipeline can emit several. A call with no system message gets it as a leading block.
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : buildIdentityReminder(model, options.modelDisplayName);
+    const lastSystemIndex = identityReminder ? messages.findLastIndex(message => message.role === 'system') : -1;
+
+    for (const [index, message] of messages.entries()) {
       const rawContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
       // Clean any XML tags from historical messages
       const content = this.cleanContent(rawContent);
 
       if (message.role === 'system') {
-        prompt += `System: ${content}\n\n`;
+        const systemContent =
+          identityReminder && index === lastSystemIndex ? appendIdentityReminder(content, identityReminder) : content;
+        prompt += `System: ${systemContent}\n\n`;
       } else if (message.role === 'user') {
         prompt += `User: ${content}\n\n`;
       } else if (message.role === 'assistant') {
         prompt += `Assistant: ${content}\n\n`;
       }
+    }
+
+    if (identityReminder && lastSystemIndex === -1) {
+      prompt = `System: ${identityReminder}\n\n${prompt}`;
     }
 
     // Add the assistant prompt to start the response

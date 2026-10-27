@@ -74,7 +74,7 @@ vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createCompletionMeter: curation.createCompletionMeter,
   createRequestCompletionMeter: curation.createRequestCompletionMeter,
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       llm: { complete: curation.providerComplete },

@@ -8,15 +8,18 @@ import {
   ServiceUnavailableError,
   UnauthorizedError,
 } from '@bike4mind/common';
-import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
+import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@server/utils/analyticsLog';
 
-const { validateUserApiKeyMock, findByIdMock, applyUntrustedRateLimitMock } = vi.hoisted(() => ({
-  validateUserApiKeyMock: vi.fn(),
-  findByIdMock: vi.fn(),
-  applyUntrustedRateLimitMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit),
-}));
+const { validateUserApiKeyMock, findByIdMock, applyUntrustedRateLimitMock, isApiKeyAccessAllowedMock } = vi.hoisted(
+  () => ({
+    validateUserApiKeyMock: vi.fn(),
+    findByIdMock: vi.fn(),
+    applyUntrustedRateLimitMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit),
+    isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
+  })
+);
 
 vi.mock('@bike4mind/services', async importOriginal => ({
   // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
@@ -28,6 +31,10 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: findByIdMock } }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@server/utils/apiKeyTrust', () => ({ applyUntrustedRateLimit: applyUntrustedRateLimitMock }));
+vi.mock('@server/utils/apiKeyAccessGate', () => ({
+  API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
+  isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
@@ -256,7 +263,8 @@ describe('apiKeyAuth usage log stamping', () => {
   const loggedUsage = async (
     headers: Record<string, string>,
     validationExtra: Record<string, unknown> = {},
-    reqExtra: Record<string, unknown> = {}
+    reqExtra: Record<string, unknown> = {},
+    requiredScopes?: ApiKeyScope[]
   ) => {
     validateUserApiKeyMock.mockResolvedValue({
       isValid: true,
@@ -269,7 +277,7 @@ describe('apiKeyAuth usage log stamping', () => {
     const req = Object.assign(makeReq(), reqExtra);
     req.headers = { ...req.headers, ...headers };
     const res = makeRes();
-    await apiKeyAuth()(req, res, vi.fn() as unknown as NextFunction);
+    await apiKeyAuth(requiredScopes)(req, res, vi.fn() as unknown as NextFunction);
 
     const [event, onFinish] = (res.once as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(event).toBe('finish');
@@ -293,6 +301,23 @@ describe('apiKeyAuth usage log stamping', () => {
     expect(vi.mocked(logEvent).mock.calls[0][0]).toMatchObject({
       metadata: { endpoint: '/api/agents/[id]' },
     });
+  });
+
+  it('emits the USED analytics event for an ordinary key', async () => {
+    await loggedUsage({});
+    expect(logEvent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logEvent).mock.calls[0][0]).toMatchObject({ type: 'User API Key Used' });
+  });
+
+  it('skips the USED analytics event for an ingest key but still logs its usage', async () => {
+    const logged = await loggedUsage(
+      {},
+      { scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId: 'p1' },
+      { method: 'POST', originalUrl: '/api/overwatch/v1/events' },
+      [ApiKeyScope.OVERWATCH_INGEST_WRITE]
+    );
+    expect(logEvent).not.toHaveBeenCalled();
+    expect(logged).toMatchObject({ keyId: 'key-1', endpoint: '/api/overwatch/v1/events' });
   });
 
   it('stamps ownerType organization only for an org-billed key with an organization', async () => {
@@ -457,5 +482,106 @@ describe('apiKeyAuth admin role', () => {
     expect((await run(undefined, req)).passed).toBe(true);
     expect(req.user?.isAdmin).toBe(true);
     expect(validateUserApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('apiKeyAuth paid-only access switch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+    });
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false, isAdmin: true });
+  });
+
+  it('403s an existing key whose owner the setting denies, and logs without the raw key', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const req = makeReq();
+    const { passed, error } = await run(undefined, req);
+
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(error?.message).toBe('API keys require an active paid subscription');
+    expect(req.user).toBeUndefined();
+    expect(applyUntrustedRateLimitMock).not.toHaveBeenCalled();
+    const call = req.logger.warn.mock.calls.find(
+      ([msg]) => msg === 'API key rejected: apiKeyAccess setting denies this owner'
+    );
+    expect(call?.[1]).toMatchObject({ keyId: 'key-1', userId: 'user-1' });
+    expect(JSON.stringify(call)).not.toContain(KEY);
+  });
+
+  it('applies the trust ceiling after paid access succeeds', async () => {
+    validateUserApiKeyMock.mockResolvedValueOnce({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      billingOwnerType: CreditHolderType.User,
+    });
+    findByIdMock.mockResolvedValueOnce({ id: 'user-1', isBanned: false, emailVerified: false });
+    const clamped = { requestsPerMinute: 3, requestsPerDay: 1000 };
+    applyUntrustedRateLimitMock.mockResolvedValueOnce(clamped);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.apiKeyInfo?.rateLimit).toEqual(clamped);
+    expect(isApiKeyAccessAllowedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      applyUntrustedRateLimitMock.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('checks the owner before the admin role is withheld, with the key billing owner', async () => {
+    let isAdminAtCheck: boolean | undefined;
+    isApiKeyAccessAllowedMock.mockImplementationOnce(async user => {
+      isAdminAtCheck = (user as { isAdmin?: boolean }).isAdmin;
+      return true;
+    });
+    const req = makeReq();
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(isAdminAtCheck).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+        createdByUserId: undefined,
+      },
+      req
+    );
+  });
+
+  it('forwards trusted admin provisioning provenance to the gate without granting admin authority', async () => {
+    validateUserApiKeyMock.mockResolvedValueOnce({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      createdByUserId: 'admin-provisioner',
+    });
+    findByIdMock.mockResolvedValueOnce({ id: 'user-1', isBanned: false, isAdmin: false });
+    const req = makeReq();
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'user-1', isAdmin: false }),
+      expect.objectContaining({ createdByUserId: 'admin-provisioner' }),
+      req
+    );
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
+  it('fails closed with a 5xx, not a pass, when the access check cannot read', async () => {
+    isApiKeyAccessAllowedMock.mockRejectedValueOnce(new Error('db down'));
+    const { passed, error } = await run(undefined, makeReq());
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(InternalServerError);
   });
 });

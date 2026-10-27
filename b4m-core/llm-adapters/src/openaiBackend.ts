@@ -62,7 +62,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
-import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 import { selectedWifTokenSource, subjectTokenSource } from './wifTokenSource';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
@@ -2063,8 +2063,9 @@ export class OpenAIBackend implements ICompletionBackend {
     // The only synthesized text is the shared identity reminder, placed last to mirror the
     // Anthropic adapters. Bare-completion contract (API promptMode raw): synthesize
     // nothing, so the lead message is exactly the caller's own system text, or absent
-    // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
-    const mergedContent = options.omitIdentityReminder
+    // entirely. Also omitted while current_model_details is on the request (see
+    // shouldOmitIdentityReminder). Must stay in sync with anthropicBackend / bedrockBackend.
+    const mergedContent = shouldOmitIdentityReminder(options)
       ? callerSystem
       : appendIdentityReminder(callerSystem, buildIdentityReminder(model, options.modelDisplayName));
 

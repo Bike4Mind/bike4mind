@@ -1048,7 +1048,7 @@ export async function getCachedSignedUrl(
 
   const cachedSignedUrl = await db.caches.findByKey(key);
   if (cachedSignedUrl) {
-    return cachedSignedUrl.result;
+    return cachedSignedUrl.result as string;
   }
 
   const expiryInSeconds = 3600; // 1 hour

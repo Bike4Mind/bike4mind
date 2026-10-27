@@ -19,6 +19,7 @@ const mockResource = vi.hoisted(() => ({
 }));
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
 // The quest-processing-failure metric's emit seam.
@@ -480,7 +481,7 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     const res = await postCompletion(VALID_COMPLETION, { authorization: 'Bearer jwt-token' });
     const text = await res.text();
 
-    expect(mockAuth.verifyJwtToken).toHaveBeenCalledWith('jwt-token');
+    expect(mockAuth.verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
     expect(mockExecuteCompletion.mock.calls[0][0]).toMatchObject({ userId: 'u2' });
     expect(text).toContain('data: [DONE]');

@@ -203,6 +203,7 @@ import SetIntegrationAuditLogRetention from './20260921235951_set-integration-au
 import SetSlackAuditLogRetention from './20260921235952_set-slack-audit-log-retention';
 import SetLiveopsTriageConfigAuditLogRetention from './20260921235953_set-liveops-triage-config-audit-log-retention';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureAdvisorIndexes from './20260921235969_ensure-advisor-indexes';
 import EnsureFabFileOwnerOrganizationIndex from './20260921235970_ensure-fabfile-owner-organization-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReconcileOrgStampedFileStorageOwners from './20260921235971_reconcile-org-stamped-file-storage-owners';
@@ -213,6 +214,11 @@ import EnsureOverwatchRawEventExplorerIndex from './20260921235977_ensure-overwa
 import EnsureOverwatchUserDaySyntheticLaneIndex from './20260921235978_ensure-overwatch-user-day-synthetic-lane-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureAuthEventIndexes from './20260921235972_ensure-authevent-indexes';
+import EnsureAccountCreationIndexes from './20260921235974_ensure-account-creation-indexes';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureSignupFingerprintWindowIndex from './20260921235939_ensure-signup-fingerprint-window-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureUserSignupMetaCapturedAtIndex from './20260921235973_ensure-user-signupmeta-capturedat-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
@@ -227,6 +233,8 @@ import EnsureUserApiKeyAuditLogActorIndex from './20260921235944_ensure-userapik
 import ClearSuspensionMirroredIsModerated from './20260921235945_clear-suspension-mirrored-ismoderated';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -242,6 +250,7 @@ export type { MigrationFile };
 
 // 3. Reference the imported variable here:
 const coreMigrations: MigrationFile[] = [
+  EnsureAccountCreationIndexes,
   AddMementosToUsers,
   DemoToPaid,
   CreateAndPopulateQuests,
@@ -381,11 +390,13 @@ const coreMigrations: MigrationFile[] = [
   SetSlackAuditLogRetention,
   SetLiveopsTriageConfigAuditLogRetention,
   FoldOrganizationManagerIntoAdminUserIds,
+  BackfillFreeCreditClaimEmail,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureAdminAuditLogReadIndexes,
   BackfillAdminAuditCredits,
   EnsureUserApiKeyAuditLogActorIndex,
+  EnsureAdvisorIndexes,
   EnsureFabFileOwnerOrganizationIndex,
   ReconcileOrgStampedFileStorageOwners,
   ClearSuspensionMirroredIsModerated,
@@ -393,6 +404,8 @@ const coreMigrations: MigrationFile[] = [
   EnsureOverwatchUserDaySyntheticLaneIndex,
   EnsureArtifactSessionIdentifierIndex,
   EnsureAuthEventIndexes,
+  EnsureSignupFingerprintWindowIndex,
+  EnsureUserSignupMetaCapturedAtIndex,
   BackfillStorageLimitOverrides,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,

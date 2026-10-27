@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -180,6 +180,8 @@ describe('AdminGrowthPricingTab', () => {
       q: RATE_LIMIT_SETTINGS_SEARCH,
     });
     expect(RATE_LIMIT_SETTING_KEYS.length).toBeGreaterThan(0);
+    // Access policy shares the section, but this link opens only tier rate limits.
+    expect(RATE_LIMIT_SETTING_KEYS).not.toContain('apiKeyAccess');
     for (const key of RATE_LIMIT_SETTING_KEYS) {
       expect(key).toContain(RATE_LIMIT_SETTINGS_SEARCH);
       expect(settingsMap[key].category).toBe('SecOps');
@@ -191,5 +193,38 @@ describe('AdminGrowthPricingTab', () => {
     renderTab();
     expect(screen.getByTestId('admin-growth-pricing-loading')).toBeTruthy();
     expect(screen.queryByTestId('admin-growth-pricing-tab')).toBeNull();
+  });
+});
+
+describe('AdminGrowthPricingTab enforceCredits lock', () => {
+  const LOCKED_NOTE = 'Always on for hosted deployments';
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('locks the toggle and Save on a hosted deployment and says why', () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    renderTab();
+
+    expect((screen.getByTestId('admin-setting-enforceCredits-switch') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByTestId('admin-setting-enforceCredits-save-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('admin-setting-enforceCredits-helper').textContent).toBe(LOCKED_NOTE);
+  });
+
+  it('leaves the toggle editable on a self-host deployment', () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    renderTab();
+
+    expect((screen.getByTestId('admin-setting-enforceCredits-switch') as HTMLInputElement).disabled).toBe(false);
+    expect(screen.getByTestId('admin-setting-enforceCredits-helper').textContent).not.toContain(LOCKED_NOTE);
+  });
+
+  it('does not lock any other setting', () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    renderTab();
+
+    expect(screen.getByTestId('admin-setting-pricePerCredit-helper').textContent).not.toContain(LOCKED_NOTE);
+    expect((screen.getByTestId('admin-setting-allowOpenRegistration-switch') as HTMLInputElement).disabled).toBe(false);
   });
 });

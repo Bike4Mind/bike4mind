@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replace the E2E edge-allow token with a placeholder in Playwright output before upload.
+"""Replace E2E secrets with a placeholder in Playwright output before upload.
 
 Traces and HTML-report data record request headers verbatim, and the report artifact is
 readable by anyone who can read this repo. Zips are scrubbed recursively, and the HTML
@@ -7,7 +7,7 @@ report's inline base64 zip is decoded, scrubbed and re-encoded. Fails closed: ex
 if any archive cannot be parsed or any form of the token survives, and the workflow skips
 every upload and ingest step in that case.
 
-Usage: scrub-e2e-token.py <dir-or-file>...   (token from E2E_WAF_BYPASS_TOKEN; unset = no-op)
+Usage: scrub-e2e-token.py <dir-or-file>...   (E2E_WAF_BYPASS_TOKEN and E2E_CLEANUP_SECRET; both unset = no-op)
 """
 import base64
 import io
@@ -53,8 +53,12 @@ def leaked(data, token):
 
 
 def main(paths):
-    token = os.environ.get("E2E_WAF_BYPASS_TOKEN", "").encode()
-    if not token:
+    tokens = sorted({
+        value.encode()
+        for name in ("E2E_WAF_BYPASS_TOKEN", "E2E_CLEANUP_SECRET")
+        if (value := os.environ.get(name, ""))
+    }, key=len, reverse=True)
+    if not tokens:
         return 0
     failures = []
     for root in map(Path, paths):
@@ -64,10 +68,12 @@ def main(paths):
                 continue
             try:
                 data = f.read_bytes()
-                cleaned = scrub_bytes(f.name, data, token)
+                cleaned = data
+                for token in tokens:
+                    cleaned = scrub_bytes(f.name, cleaned, token)
                 if cleaned != data:
                     f.write_bytes(cleaned)
-                if leaked(cleaned, token):
+                if any(leaked(cleaned, token) for token in tokens):
                     failures.append(f"{f}: token form survives")
             except Exception as exc:  # fail closed on anything unparseable
                 failures.append(f"{f}: {exc}")

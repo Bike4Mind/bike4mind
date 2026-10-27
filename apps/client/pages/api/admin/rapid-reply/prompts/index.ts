@@ -2,6 +2,7 @@ import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
@@ -85,6 +86,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       userEmail: req.user!.email || undefined,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.rapid_reply_prompt.created',
+      target: { kind: 'settings', id: newPrompt.id, displayName: `Rapid reply prompt ${newPrompt.name}` },
+      summary: `created rapid reply prompt ${newPrompt.name}`,
+      details: { name: newPrompt.name, isActive: newPrompt.isActive },
     });
 
     return res.status(201).json(newPrompt);

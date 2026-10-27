@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { parseCookies } from './cookies';
+import { parseCookies } from '@bike4mind/server-utils/analytics/cookies';
 
 /**
  * A visit, expressed as a first-party cookie.

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { UnprocessableEntityError, type IMessage } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';

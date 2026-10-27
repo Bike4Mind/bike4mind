@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const DEFAULT_FIRST_MESSAGE = 'Hello! How can I help you today?';
@@ -143,6 +144,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
       throw error;
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.voice_agent.created',
+      target: { kind: 'settings', id: agent.id, displayName: body.name },
+      summary: `created voice agent ${body.name}`,
+      details: { elevenLabsAgentId, voiceId: body.voiceId, isDefault: isFirstVoiceAgent },
+    });
 
     return res.status(201).json({ agent });
   });

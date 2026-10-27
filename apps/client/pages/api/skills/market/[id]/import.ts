@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/[id]/import.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { SkillListing, SkillListingImport, SkillListingVersion, skillRepository } from '@bike4mind/database';
 import {
   BadRequestError,
