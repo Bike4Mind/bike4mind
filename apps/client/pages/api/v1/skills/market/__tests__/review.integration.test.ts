@@ -69,7 +69,10 @@ vi.mock('@server/auth/auth', async orig => ({
     next();
   },
 }));
-vi.mock('@server/skillMarket/reviewQueue', () => ({ loadVersionQueue: (...a: unknown[]) => h.queue(...a) }));
+vi.mock('@server/skillMarket/reviewQueue', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  loadVersionQueue: (...a: unknown[]) => h.queue(...a),
+}));
 vi.mock('@server/skillMarket/submitVersion', () => ({ decideVersion: (...a: unknown[]) => h.decide(...a) }));
 
 import {
