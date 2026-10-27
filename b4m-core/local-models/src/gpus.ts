@@ -173,9 +173,9 @@ async function kfdApuRule(root: string): Promise<KfdApuRule> {
 }
 
 /**
- * The memory ROCm can allocate on Strix Halo under `rule`. When KFD reports the TTM page limit it places allocations
- * in GTT, whose manager stops at the GTT size, so a smaller amdgpu.gttsize caps it too. An unknown rule takes the
- * smaller of the two.
+ * The memory ROCm can allocate on Strix Halo under `rule`. KFD reports the TTM page limit even when amdgpu.gttsize
+ * sets GTT lower, but those allocations land in GTT and its manager refuses them past the GTT size (amdgpu_gtt_mgr),
+ * so the GTT size caps it. An unknown rule takes the smaller of the carve-out and that budget.
  */
 async function strixHaloMemory(
   root: string,
