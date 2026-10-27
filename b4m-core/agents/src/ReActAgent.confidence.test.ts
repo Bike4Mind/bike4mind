@@ -114,4 +114,33 @@ describe('ReActAgent tool-result confidence', () => {
   it('scores an empty result from a tool without a validator as deterministic 0.3', async () => {
     expect(await scoreOf(createTool('   '))).toEqual({ confidence: 0.3, source: 'deterministic' });
   });
+
+  describe('takeIterationConfidence', () => {
+    type Scored = { iterationConfidences: number[]; iterationToolFailed: boolean[] };
+    const agentWith = (confidences: number[], failed: boolean[]) => {
+      const agent = new ReActAgent({
+        userId: 'test-user',
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        llm: createLlm(),
+        model: 'test-model',
+        tools: [],
+      } as unknown as AgentContext);
+      Object.assign(agent as unknown as Scored, { iterationConfidences: confidences, iterationToolFailed: failed });
+      return agent;
+    };
+
+    it('returns the strongest non-failed score and clears the batch', () => {
+      const agent = agentWith([0.3, 0.7, 0.9], [false, false, true]);
+
+      expect(agent.takeIterationConfidence()).toBe(0.7);
+      expect(agent.takeIterationConfidence()).toBeNull();
+    });
+
+    it('returns null and clears the batch when every call failed', () => {
+      const agent = agentWith([0.1, 0.1], [true, true]);
+
+      expect(agent.takeIterationConfidence()).toBeNull();
+      expect((agent as unknown as Scored).iterationConfidences).toEqual([]);
+    });
+  });
 });

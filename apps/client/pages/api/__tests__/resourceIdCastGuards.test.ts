@@ -128,7 +128,7 @@ vi.mock('@bike4mind/server-utils/chatCompletion/questTimeoutRecovery', () => ({
 vi.mock('@server/utils/sessionOwnership', () => ({ isSessionOwnedByUser: () => true }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: () => Promise.resolve([]) }));
 vi.mock('@bike4mind/mcp', () => ({ MCPClient: class {}, findForbiddenMcpEnvKeys: () => [] }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables: (v: unknown) => v,
   decryptEnvVariables: (v: unknown) => v,
 }));

@@ -11,38 +11,24 @@
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { z } from 'zod';
 import {
-  analyzeRouteSource,
-  buildScopeTable,
-  contractIndexFromOpenApi,
   extractApiPaths,
   formatCallerPath,
   isFallbackRoute,
   isInsideRepo,
-  isTestFile,
   matchCallerPath,
-  reexportedDefault,
   renderInventoryMarkdown,
   routeFromFile,
   routeMatchers,
-  type ContractIndex,
-  type RouteAnalysis,
   type RouteRecord,
-  type ScopeTable,
   type UnresolvedCall,
 } from './apiRouteInventory';
+import { analyzeApiRoutes, read, ROOT, sourceFiles } from './apiRouteSources';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const API_DIR = 'apps/client/pages/api';
 const CALLER_DIR = 'apps/client/app';
-const OPENAPI_DOCUMENT = 'apps/client/public/openapi.json';
 const DEFAULT_OUTPUT = 'docs/api-route-inventory.md';
-const SCOPE_SOURCE_DIRS = ['b4m-core/common/src', 'apps/client/server'];
-const SCOPE_SOURCE_PATTERN = /(UserApiKeyTypes|Scopes)\.ts$/;
-const SOURCE_PATTERN = /\.(ts|tsx)$/;
 
 /**
  * Files whose `/api/...` strings are not calls to this app: a hand-written API reference (it would
@@ -57,40 +43,6 @@ const overlayManifestSchema = z.object({
   name: z.string(),
   b4mContributions: z.object({ apiRouteStubs: z.array(z.object({ generatedPath: z.string() })).optional() }).optional(),
 });
-
-/** Repo-relative source files under `dir`, skipping tests and the gitignored premium-* codegen. */
-function sourceFiles(dir: string): string[] {
-  const absolute = path.join(ROOT, dir);
-  if (!existsSync(absolute)) return [];
-  return readdirSync(absolute, { recursive: true, encoding: 'utf8' })
-    .map(entry => path.posix.join(dir, entry.split(path.sep).join('/')))
-    .filter(file => SOURCE_PATTERN.test(file) && !isTestFile(file) && !/\/premium-[^/]+\//.test(file))
-    .sort();
-}
-
-const read = (file: string) => readFileSync(path.join(ROOT, file), 'utf8');
-
-/** Next's resolution of a relative route import: `x.ts`, `x.tsx`, then `x/index.ts`. */
-function resolveRouteModule(fromFile: string, specifier: string): string | null {
-  const base = path.posix.join(path.posix.dirname(fromFile), specifier);
-  const candidates = [`${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`];
-  return candidates.find(candidate => existsSync(path.join(ROOT, candidate))) ?? null;
-}
-
-type Analyzed = RouteAnalysis & { aliasOf?: string };
-
-/** Analyzes a route file, following a default re-export to the handler it actually serves. */
-function analyzeFile(file: string, route: string, scopeTable: ScopeTable, contracts: ContractIndex): Analyzed {
-  const text = read(file);
-  const reexport = reexportedDefault(file, text);
-  const target = reexport && resolveRouteModule(file, reexport.specifier);
-  const targetRoute = target && routeFromFile(target);
-  if (!reexport || !target || !targetRoute) return analyzeRouteSource(file, text, route, scopeTable, contracts);
-  return {
-    ...analyzeRouteSource(target, read(target), targetRoute, scopeTable, contracts, reexport.exportName),
-    aliasOf: targetRoute,
-  };
-}
 
 function overlayRoutes(): Array<{ route: string; file: string }> {
   const premiumDir = path.join(ROOT, 'packages/premium');
@@ -108,19 +60,7 @@ function overlayRoutes(): Array<{ route: string; file: string }> {
 }
 
 function collectRecords(includeOverlays: boolean): { records: RouteRecord[]; unresolved: UnresolvedCall[] } {
-  const scopeSources = Object.fromEntries(
-    SCOPE_SOURCE_DIRS.flatMap(sourceFiles)
-      .filter(file => SCOPE_SOURCE_PATTERN.test(file))
-      .map(file => [file, read(file)])
-  );
-  const scopeTable = buildScopeTable(scopeSources);
-  const contracts = contractIndexFromOpenApi(JSON.parse(read(OPENAPI_DOCUMENT)));
-
-  const records: RouteRecord[] = sourceFiles(API_DIR).flatMap(file => {
-    const route = routeFromFile(file);
-    if (!route) return [];
-    return [{ route, file, callers: [], ...analyzeFile(file, route, scopeTable, contracts) }];
-  });
+  const records: RouteRecord[] = analyzeApiRoutes().map(analysis => ({ ...analysis, callers: [] }));
   if (includeOverlays) {
     // Path only: the stubs re-export from the overlay packages, which the analyzer does not follow.
     records.push(

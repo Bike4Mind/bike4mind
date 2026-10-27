@@ -19,6 +19,7 @@ const mockResource = vi.hoisted(() => ({
 }));
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
 // The quest-processing-failure metric's emit seam.
@@ -52,7 +53,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: { record: vi.fn() },
   // Pulled in by the completions route for org-billed API keys; unused by these
   // personal/JWT cases but must exist or the mocked-module export getter throws.

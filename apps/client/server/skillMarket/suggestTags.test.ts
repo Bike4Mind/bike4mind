@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn() },
   getEffectiveApiKeyByBackend: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({ SkillListing: {} }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 
 import { normalizeSuggestedTags, suggestListingTags } from './suggestTags';
 import type { ClassifierLlm } from './classifySkill';

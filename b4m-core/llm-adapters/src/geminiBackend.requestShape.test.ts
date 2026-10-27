@@ -90,12 +90,15 @@ describe.each([
   });
 
   it('puts the joined system messages in config.systemInstruction', async () => {
-    const { requests } = await run();
+    const { requests } = await run({ options: { omitIdentityReminder: true } });
     expect(requests[0].config?.systemInstruction).toBe('You are terse.\nAnswer in French.');
   });
 
   it('leaves systemInstruction unset when there are no system messages', async () => {
-    const { requests } = await run({ msgs: [{ role: 'user', content: 'hi' }] });
+    const { requests } = await run({
+      msgs: [{ role: 'user', content: 'hi' }],
+      options: { omitIdentityReminder: true },
+    });
     expect(requests[0].config?.systemInstruction).toBeUndefined();
   });
 
@@ -248,7 +251,7 @@ describe.each([
   it('keeps the request shape and sums thinking tokens across a tool round', async () => {
     const { requests, infos } = await run({
       model: THINKING_MODEL,
-      options: { tools: [tool], executeTools: true },
+      options: { tools: [tool], executeTools: true, omitIdentityReminder: true },
       responses: [
         toolCallResponse({ promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 20 }),
         textResponse({ promptTokenCount: 30, candidatesTokenCount: 3, thoughtsTokenCount: 10 }),

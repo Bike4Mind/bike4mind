@@ -5,12 +5,15 @@ import express from 'express';
 import type { z } from 'zod';
 import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
 const mockLoggerError = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap }));
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
 vi.mock('@server/utils/apiKeyAccessGate', async () => {
@@ -25,6 +28,7 @@ vi.mock('@server/utils/apiKeyAccessGate', async () => {
   };
 });
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -72,7 +76,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: { record: vi.fn() },
   organizationRepository: {},
   cacheRepository: {},
@@ -122,6 +126,7 @@ import {
   BadRequestError,
   CompletionStreamEventSchema,
   createCompletionContract,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   ForbiddenError,
   HTTPError,
   InsufficientCreditsErrorSchema,
@@ -269,6 +274,13 @@ describe('JWT rate limiting', () => {
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
 
+  it('resolves thinking visibility for the caller', async () => {
+    expect((await postAs({})).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ getThinkingVisibility: resolveThinkingVisibility })
+    );
+  });
+
   /**
    * User-Agent wins, and x-b4m-client is only consulted when there is none - the same precedence
    * `resolveApiCompletionSource` uses, so the tier and the source attribution cannot disagree.
@@ -290,6 +302,20 @@ describe('JWT rate limiting', () => {
     const body = await expectJsonError(res, 429);
     expect(res.headers.get('retry-after')).toBe('900');
     expect(String(body.error)).toMatch(/^Rate limit exceeded/);
+  });
+
+  it('answers a free-tier daily cap refusal with 429, Retry-After and its errorCode, not a 422', async () => {
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free usage limit reached.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const res = await post();
+    const body = await expectJsonError(res, 429);
+    expect(res.headers.get('retry-after')).toBe('3600');
+    expect(body.errorCode).toBe(DAILY_FREE_LIMIT_REACHED_ERROR_CODE);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });
 
@@ -1105,5 +1131,26 @@ describe('POST /api/ai/v1/completions - admin role on the reloaded owner', () =>
     mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
     expect((await postAs({})).status).toBe(200);
     expect(scopeActorOfCall()).toBeUndefined();
+  });
+});
+
+describe('daily cap billing target', () => {
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT], organizationId },
+    });
+
+    const response = await post();
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', billingOrganizationId: organizationId })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
   });
 });

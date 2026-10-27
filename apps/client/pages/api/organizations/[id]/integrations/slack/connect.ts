@@ -14,13 +14,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { BadRequestError } from '@bike4mind/utils';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import {
   getSystemSlackAppCredentials,
   generateOrgSlackConnectStateToken,
   buildOrgSlackOAuthUrl,
 } from '@bike4mind/slack';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const handler = baseApi().post(
   asyncHandler<{}, { url: string }, unknown, { id?: string }>(async (req, res) => {

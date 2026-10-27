@@ -13,6 +13,7 @@ import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
+import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from '@shared/externalLinks';
@@ -128,6 +129,7 @@ void app.whenReady().then(async () => {
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
+  const models = registerModels();
   const {
     service: chat,
     background,
@@ -219,6 +221,7 @@ void app.whenReady().then(async () => {
   app.once('will-quit', () => {
     auth.dispose();
     fleet.dispose();
+    models.dispose();
     chat.dispose();
     claudeImport.dispose();
     pullRequests.dispose();

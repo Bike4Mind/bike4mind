@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { checkShareGrant, checkVisibility, toPublishUser } from '@server/services/publish';

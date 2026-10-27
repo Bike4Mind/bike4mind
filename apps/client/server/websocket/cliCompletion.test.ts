@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
+}));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({
   executeCompletion: (...args: unknown[]) => mockExecuteCompletion(...args),
 }));
@@ -15,7 +21,7 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   creditTransactionRepository: {},
   usageEventRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   userApiKeyRepository: { findById: vi.fn() },
   organizationRepository: {},
 }));
@@ -69,6 +75,14 @@ describe('cliCompletion websocket handler', () => {
     await run();
 
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'cli' }));
+  });
+
+  it('resolves thinking visibility for the caller', async () => {
+    await run();
+
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ getThinkingVisibility: resolveThinkingVisibility })
+    );
   });
 
   it('rate-limits the JWT path at the cli source, not the default cap', async () => {
@@ -339,4 +353,29 @@ it('relays a live CLI access refusal without starting a completion', async () =>
       error: 'CLI and desktop access requires an active paid subscription',
     })
   );
+});
+
+describe('daily cap billing target', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecuteCompletion.mockResolvedValue(undefined);
+  });
+
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      organizationId,
+    } as never);
+
+    await run();
+
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', billingOrganizationId: organizationId })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+  });
 });

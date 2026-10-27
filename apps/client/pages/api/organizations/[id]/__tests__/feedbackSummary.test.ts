@@ -47,7 +47,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
 // give every org - and for the single-item route every feedback id - its own private budget.
 const rateLimitOptions = vi.hoisted(() => [] as { limit: number; windowMs: number; bucket?: string }[]);
 
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: { limit: number; windowMs: number; bucket?: string }) => {
     rateLimitOptions.push(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();
@@ -55,7 +55,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 
 const verifyOrgAccess = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 
 const sendToQueue = vi.hoisted(() => vi.fn(async () => 'message-id'));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue }));

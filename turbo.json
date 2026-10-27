@@ -201,7 +201,8 @@
         "../../apps/workers/src/**",
         "../../packages/server-utils/src/**",
         "../services/src/**",
-        "../slack/src/**"
+        "../slack/src/**",
+        "../../packages/server-utils/src/**"
       ]
     },
     "test": {

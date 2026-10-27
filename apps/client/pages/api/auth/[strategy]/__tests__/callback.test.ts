@@ -35,7 +35,7 @@ vi.mock('@server/auth/tokenGenerator', () => ({
     createAccessToken: () => ({ accessToken: 'jwt-access', refreshToken: 'jwt-refresh' }),
   },
 }));
-vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({ verifyStateToken: vi.fn() }));
 
 const mockResolveSecondFactor = vi.fn();
 const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
@@ -74,7 +74,7 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 
 // Import after mocks are registered.
 import { logEvent } from '@server/utils/analyticsLog';
-import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@server/auth/jwtStateStore';
+import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { logAuthAudit } from '@server/utils/authAudit';
 
 const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { clientId: string }> => ({

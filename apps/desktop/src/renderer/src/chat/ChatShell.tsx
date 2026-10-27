@@ -10,8 +10,8 @@ import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { LOCAL_MODEL_PREFIX, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
-import { effectiveContextLimit } from '@shared/contextLimit';
+import { isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { SkillMarketPanel } from './SkillMarketPanel';
@@ -22,6 +22,8 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import type { ModelsInUse } from '../models/InstalledTab';
+import { ModelsScreen } from '../models/ModelsScreen';
 import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
@@ -57,7 +59,7 @@ import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
-import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
+import { describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
 import { ImageMenuProvider } from './ImageContextMenu';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
@@ -141,7 +143,7 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -336,6 +338,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
+  const modelsInUse = useMemo<ModelsInUse>(() => {
+    const localName = (id: string | undefined) =>
+      catalog.models.find(model => model.id === id && model.backend === 'local-ollama')?.name ?? null;
+    return {
+      active: localName(conversation.session?.model),
+      conversations: sessions.filter(session => !session.archived).flatMap(session => localName(session.model) ?? []),
+    };
+  }, [catalog.models, conversation.session?.model, sessions]);
   const blockedReason =
     modelOption?.supportsVision === false && draft.attachments.some(attachment => attachment.kind === 'image')
       ? `${modelOption.name} cannot read images. Pick a model that can, or remove the image before sending.`
@@ -407,8 +417,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   const composerUsage: ComposerUsage = useMemo(() => {
     const reply = latestReply(conversation.messages, turnOpen);
+    // The figure ChatService.autoCompact decides on, so red means the same thing on both sides.
+    const local = !!conversation.session?.model && isLocalModel(conversation.session.model);
     return {
-      contextTokens: contextTokens(reply),
+      contextTokens: occupiedTokens(conversation.messages, turnOpen, local),
       contextLimit: effectiveContextLimit(modelOption?.contextWindow),
       modelWindow: modelOption?.contextWindow ?? null,
       credits: credits.balance,
@@ -418,6 +430,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     };
   }, [
     conversation.messages,
+    conversation.session?.model,
     turnOpen,
     modelOption?.contextWindow,
     credits.balance,
@@ -656,6 +669,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         sectionError={sectionError}
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
+        onOpenModels={() => setScreen('models')}
         footer={account?.(
           <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
@@ -663,6 +677,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'models' ? (
+        <ModelsScreen onClose={() => setScreen('conversation')} inUse={modelsInUse} />
       ) : screen === 'skill-market' ? (
         <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (
@@ -1035,7 +1051,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             blockedReason={blockedReason}
             // Blocked rather than refused: a refused send has already cleared the box.
             notReady={
-              auth?.reauthRequired && !conversation.session?.model.startsWith(LOCAL_MODEL_PREFIX)
+              auth?.reauthRequired && !(conversation.session && isLocalModel(conversation.session.model))
                 ? 'Sign in'
                 : unbound
                   ? 'No folder'

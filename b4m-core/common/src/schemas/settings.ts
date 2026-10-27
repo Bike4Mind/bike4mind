@@ -38,6 +38,7 @@ import {
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
+import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -356,6 +357,12 @@ export const SettingKeySchema = z.enum([
   'EnableReferralToSlack',
   'EnableReferralToEmail',
   'ReferralCreditsAmount',
+  'ReferralFirstAnswerCredits',
+  'ReferralFirstPaymentCredits',
+  'ReferralSecondPaymentCredits',
+  'ReferralHoldDays',
+  'ReferralInvitesPerUser',
+  'ReferralAlertRewardsPerDay',
   'registrationLink',
   'FeedbackReceiveEmail',
   'FeedbackReceiveEmailNonProd',
@@ -433,7 +440,12 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'thinkingVisibilityFree',
+  'thinkingVisibilityPaid',
   'defaultFreeCredits',
+  'freeTierDailySpendCapCredits',
+  'freeTierDay1SpendCapCredits',
+  'freeTierDays2To7SpendCapCredits',
   'teamPlanMinSeats',
   'teamPlanMaxSeats',
   'teamPlanCreditsPerSeat',
@@ -943,8 +955,7 @@ export type SettingDefinition<K extends string = SettingKey> = Omit<BaseSetting,
   key: K;
   dependsOn?: [K] extends [SettingKey] ? SettingKey : string;
   type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  schema: z.ZodType<any, any, any>;
+  schema: z.ZodType;
   defaultValue?: string | number | boolean | object | undefined;
   options?: string[];
 };
@@ -2047,11 +2058,14 @@ export const API_SERVICE_GROUPS = {
       { key: 'billOperationalUsage', order: 1 },
       { key: 'blockDisposableEmails', order: 2 },
       { key: 'blockedEmailDomains', order: 3 },
-      { key: 'syntheticUserEmailDomains', order: 4 },
-      { key: 'turnstileEnabled', order: 5 },
-      { key: 'turnstileFailClosed', order: 6 },
-      { key: 'turnstileSiteKey', order: 7 },
-      { key: 'signupRiskScoring', order: 8 },
+      { key: 'freeTierDailySpendCapCredits', order: 4 },
+      { key: 'freeTierDay1SpendCapCredits', order: 5 },
+      { key: 'freeTierDays2To7SpendCapCredits', order: 6 },
+      { key: 'syntheticUserEmailDomains', order: 7 },
+      { key: 'turnstileEnabled', order: 8 },
+      { key: 'turnstileFailClosed', order: 9 },
+      { key: 'turnstileSiteKey', order: 10 },
+      { key: 'signupRiskScoring', order: 11 },
     ],
   },
   KNOWLEDGE: {
@@ -2168,6 +2182,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
       { key: 'maxActiveKeysUntrusted', order: 3 },
       { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+    ],
+  },
+  THINKING_VISIBILITY: {
+    id: 'thinkingVisibilityService',
+    name: 'Model Thinking Visibility',
+    description: 'How much model reasoning each account tier is shown, on every chat, API, CLI and agent surface',
+    icon: 'Psychology',
+    settings: [
+      { key: 'thinkingVisibilityFree', order: 1 },
+      { key: 'thinkingVisibilityPaid', order: 2 },
     ],
   },
   DATA_LAKE_AUDIT: {
@@ -3113,6 +3137,72 @@ export const settingsMap = {
     // displayed in the "invited person gets N credits" line.
     userReadable: true,
   }),
+  ReferralFirstAnswerCredits: makeNumberSetting({
+    key: 'ReferralFirstAnswerCredits',
+    name: 'Referral Reward: First Answer',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits the inviter earns when an invited friend, with a verified email, gets their first answer. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
+  }),
+  ReferralFirstPaymentCredits: makeNumberSetting({
+    key: 'ReferralFirstPaymentCredits',
+    name: 'Referral Reward: First Payment',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+    category: 'Referrals',
+  }),
+  ReferralSecondPaymentCredits: makeNumberSetting({
+    key: 'ReferralSecondPaymentCredits',
+    name: 'Referral Reward: Second Payment',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+    category: 'Referrals',
+  }),
+  ReferralHoldDays: makeNumberSetting({
+    key: 'ReferralHoldDays',
+    name: 'Referral Reward Hold (days)',
+    defaultValue: 14,
+    int: true,
+    min: 0,
+    max: 365,
+    description:
+      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
+  }),
+  ReferralInvitesPerUser: makeNumberSetting({
+    key: 'ReferralInvitesPerUser',
+    name: 'Referral Invites Per User',
+    defaultValue: 3,
+    int: true,
+    min: 0,
+    max: 1000,
+    description:
+      'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
+    category: 'Referrals',
+  }),
+  ReferralAlertRewardsPerDay: makeNumberSetting({
+    key: 'ReferralAlertRewardsPerDay',
+    name: 'Referral Reward Alert Threshold',
+    defaultValue: 50,
+    int: true,
+    min: 1,
+    max: 1_000_000,
+    description:
+      'Alert admins when more than this many referral rewards are created within 24 hours. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
+  }),
   EnableReferralToEmail: makeBooleanSetting({
     key: 'EnableReferralToEmail',
     name: 'Enable Referral to Email',
@@ -3512,6 +3602,30 @@ export const settingsMap = {
     order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
+  // Tiers resolve in b4m-core/services/src/thinkingVisibility.ts. Multi-turn tool replay is
+  // unaffected: provider thinking blocks still go back to the provider whatever the level.
+  thinkingVisibilityFree: makeStringSetting({
+    key: 'thinkingVisibilityFree',
+    name: 'Thinking Visibility: Free Accounts',
+    defaultValue: 'summary',
+    description:
+      'Model reasoning shown to accounts with no purchase, active plan or admin approval. "raw" shows it as the provider sent it. "summary" shows it only from models whose provider returns a summary instead of the raw trace (Claude 4 and later) and hides the rest; for other models the completions API does not request reasoning at all. "none" hides all reasoning text, but completions API callers that run tools themselves still receive the provider\'s summarized thinking blocks on Claude 4 and later, because those blocks must be echoed back on the next turn. Changes reach running servers within about 5 minutes (settings cache).',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 1,
+  }),
+  thinkingVisibilityPaid: makeStringSetting({
+    key: 'thinkingVisibilityPaid',
+    name: 'Thinking Visibility: Paid Accounts',
+    defaultValue: 'raw',
+    description:
+      'Model reasoning shown to admins and to accounts with a credit purchase, admin approval, or an active plan (own or org seat; only subscriptions in the active status count, so trialing, past-due and canceled plans do not). Same levels as the free-account setting.',
+    options: [...THINKING_VISIBILITY_LEVELS],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.THINKING_VISIBILITY.id,
+    order: 2,
+  }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
     name: 'Block Disposable Emails',
@@ -3541,6 +3655,39 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
+    category: 'Users',
+  }),
+  freeTierDailySpendCapCredits: makeNumberSetting({
+    key: 'freeTierDailySpendCapCredits',
+    name: 'Free Tier Daily Spend Cap',
+    defaultValue: 200,
+    int: true,
+    min: 0,
+    description:
+      'Daily credit allowance for a free-tier account older than 7 days, counted per UTC calendar day. Once spend for the day reaches this cap, new requests are refused with a 429 until the next UTC midnight; the request that crosses the cap is not cut off, so a day can end slightly over it. Set to 0 to disable the cap for every free-tier account, including the day-1 and days 2-7 tiers.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  freeTierDay1SpendCapCredits: makeNumberSetting({
+    key: 'freeTierDay1SpendCapCredits',
+    name: 'Free Tier Day-1 Spend Cap',
+    defaultValue: 500,
+    int: true,
+    min: 0,
+    description:
+      'Daily spend cap for a free-tier account during its first 24 hours (by account age; spend still resets at UTC midnight). Higher than the steady-state cap to let genuine new users explore. Set to 0 to fall back to the steady-state cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  freeTierDays2To7SpendCapCredits: makeNumberSetting({
+    key: 'freeTierDays2To7SpendCapCredits',
+    name: 'Free Tier Days 2-7 Spend Cap',
+    defaultValue: 300,
+    int: true,
+    min: 0,
+    description:
+      'Daily spend cap for a free-tier account aged 24 hours to 7 days. Intermediate ramp between the day-1 allowance and the steady-state cap. Set to 0 to fall back to the steady-state cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
   teamPlanMinSeats: makeNumberSetting({

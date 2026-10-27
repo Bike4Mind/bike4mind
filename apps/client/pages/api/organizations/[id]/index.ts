@@ -18,7 +18,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/er
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const updateOrgBodySchema = z.object({
   name: z.string().optional(),
