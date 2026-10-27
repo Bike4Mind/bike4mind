@@ -31,6 +31,7 @@ import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { resolveQuestErrorCode } from '@bike4mind/services/llm';
 import { getHttpStatus, isSafetyRefusalError } from '@bike4mind/utils';
+import { isOutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import {
   connectDB,
   mongoose,
@@ -126,14 +127,19 @@ function toJsonError(
 }
 
 /** A failure after onReady: a typed in-band frame that never carries the raw upstream body. */
-function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
+function toStreamErrorFrame(error: unknown, requestId: string, callerSetMaxTokens: boolean): SSEErrorEvent {
   const questCode = resolveQuestErrorCode(error);
   let frameError: unknown = error;
   let code: CompletionSseErrorCode | undefined = questCode;
   if (!questCode) {
     const status = error instanceof Error ? getHttpStatus(error) : undefined;
     // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
-    if (error instanceof Error && isSafetyRefusalError(error)) {
+    if (callerSetMaxTokens && isOutputBudgetExhaustedError(error)) {
+      frameError = new Error(
+        'The model used your whole max_tokens budget reasoning before it could answer. Raise max_tokens, or omit it to use the model default.'
+      );
+      code = 'output_budget_exhausted';
+    } else if (error instanceof Error && isSafetyRefusalError(error)) {
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
     } else if (isUpstreamCallerError(error)) {
@@ -390,15 +396,18 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
-      const level = jsonError.status < 500 ? 'warn' : 'error';
+      // A budget the caller chose is exhausted by their own request, not by an operator fault. The
+      // stream is always open by here (onReady precedes the provider call), so there is no JSON path.
+      const callerBudgetExhausted = body?.options?.maxTokens !== undefined && isOutputBudgetExhaustedError(error);
+      const level = jsonError.status < 500 || callerBudgetExhausted ? 'warn' : 'error';
       const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
       logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
       // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
-      if (!isUpstreamCallerError(error)) track(emitProcessingFailed('cli-sse', error));
+      if (!isUpstreamCallerError(error) && !callerBudgetExhausted) track(emitProcessingFailed('cli-sse', error));
 
       try {
         if (res.headersSent) {
-          write(serializeSSEEvent(toStreamErrorFrame(error, requestId)));
+          write(serializeSSEEvent(toStreamErrorFrame(error, requestId, callerBudgetExhausted)));
           end();
           if (heartbeat) clearInterval(heartbeat);
         } else {
