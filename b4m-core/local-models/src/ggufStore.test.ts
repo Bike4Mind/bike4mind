@@ -333,7 +333,11 @@ describe('GgufModelStore', () => {
       'a:b.gguf',
       'CON.gguf',
       'nul.gguf',
+      'nul .gguf',
+      'con  .gguf',
       'com1.gguf',
+      'COM0.gguf',
+      'lpt0.gguf',
       'LPT9.gguf',
       ' lead.gguf',
       '.hidden.gguf',
@@ -396,7 +400,9 @@ describe('GgufModelStore', () => {
   it('lists, discards and removes partial downloads, pruning emptied directories', async () => {
     const store = freshStore();
     await place(store, 'p.gguf.partial', Buffer.alloc(10));
+    await place(store, 'p.gguf.partial.json', Buffer.from('{}'));
     await place(store, 'org/repo/r-00002-of-00002.gguf.partial', Buffer.alloc(20));
+    await place(store, 'org/repo/r-00002-of-00002.gguf.partial.json', Buffer.from('{}'));
     expect(await store.partials()).toEqual([
       {
         name: 'org/repo/r-00002-of-00002.gguf',
@@ -408,6 +414,7 @@ describe('GgufModelStore', () => {
     ]);
     await store.discardPartial('p.gguf');
     await expect(store.discardPartial('p.gguf')).rejects.toBeInstanceOf(ModelNotFoundError);
+    await expect(store.discardPartial('no/such/dir.gguf')).rejects.toBeInstanceOf(ModelNotFoundError);
     await store.remove('org/repo/r-00002-of-00002.gguf');
     expect(await store.partials()).toEqual([]);
     await expect(store.remove('none.gguf')).rejects.toBeInstanceOf(ModelNotFoundError);

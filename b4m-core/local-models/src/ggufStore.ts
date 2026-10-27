@@ -21,11 +21,14 @@ const SHARD_RE = /-(\d{5})-of-(\d{5})(\.gguf)$/i;
 const GGUF_MAGIC = 'GGUF';
 const PARTIAL_SUFFIX = '.partial';
 const SOURCE_SUFFIX = '.source.json';
+/** Beside a `.partial`: the sha256 and size it was started for (see `download.ts`). */
+const PARTIAL_RECORD_SUFFIX = '.json';
 /** Leaves room for the `.partial`, `.lock` and `.source.json` suffixes under the usual 255-byte name limit. */
 const MAX_NAME_LENGTH = 200;
 const MAX_DEPTH = 8;
 const NAME_CHARS = /^[A-Za-z0-9 ._+\-()[\]]+$/;
-const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+// Windows ignores spaces before the extension when matching device names, so `nul .gguf` is NUL too.
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9]) *(\.|$)/i;
 
 /** Where a downloaded file came from, kept beside it as `<file>.source.json`. */
 export interface GgufFileSource {
@@ -313,11 +316,13 @@ export class GgufModelStore {
   async discardPartial(name: string, options: { force?: boolean } = {}): Promise<void> {
     assertModelName(name);
     const destination = this.#path(name);
+    const partial = `${destination}${PARTIAL_SUFFIX}`;
+    if (!(await exists(partial))) throw new ModelNotFoundError(RUNTIME_ID, name);
     const lock = await lockFile(destination, RUNTIME_ID, options);
     try {
-      const partial = `${destination}${PARTIAL_SUFFIX}`;
       if (!(await exists(partial))) throw new ModelNotFoundError(RUNTIME_ID, name);
-      await onDisk(RUNTIME_ID, partial, () => rm(partial, { force: true }));
+      for (const file of [partial, `${partial}${PARTIAL_RECORD_SUFFIX}`])
+        await onDisk(RUNTIME_ID, file, () => rm(file, { force: true }));
     } finally {
       await lock.release();
     }
@@ -399,7 +404,8 @@ export class GgufModelStore {
     const lock = await lockAll(paths, options);
     try {
       for (const path of paths) {
-        for (const file of [path, `${path}${PARTIAL_SUFFIX}`, `${path}${SOURCE_SUFFIX}`]) {
+        const partial = `${path}${PARTIAL_SUFFIX}`;
+        for (const file of [path, partial, `${partial}${PARTIAL_RECORD_SUFFIX}`, `${path}${SOURCE_SUFFIX}`]) {
           await onDisk(RUNTIME_ID, file, () => rm(file, { force: true }));
         }
       }
