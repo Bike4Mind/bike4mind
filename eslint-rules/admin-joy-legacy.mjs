@@ -120,7 +120,6 @@ const componentsByFile = {
   'Users/Details/UserSubscriptionStatus.tsx': ['Card'],
   'Users/LoginDetailsModal.tsx': ['Card', 'Modal'],
   'Users/MigrationDetails.tsx': ['Card', 'Modal'],
-  'Users/Profile/UserProfilePage.tsx': ['Modal'],
   'Users/SystemMessageModal.tsx': ['Modal'],
   'Users/UsersFilterBar.tsx': ['Card'],
   'Users/Views/FullUsersView.tsx': ['Card', 'Modal'],
