@@ -12,7 +12,7 @@ const paramsSchema = z.object({
 });
 
 // GET /api/admin/model-logs/[id] - the full promptMeta of one log, which the list route leaves out.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

@@ -1,4 +1,6 @@
 import React from 'react';
+import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -20,12 +22,16 @@ vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () =>
 import { fakeAdminRouter } from './__tests__/fakeAdminRouter';
 import { ModelLogsTab } from './ModelLogsTab';
 
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () =>
   render(
-    <CssVarsProvider theme={appTheme}>
-      <ModelLogsTab />
-    </CssVarsProvider>
+    <QueryClientProvider client={queryClient}>
+      <CssVarsProvider theme={appTheme}>
+        <ModelLogsTab />
+      </CssVarsProvider>
+    </QueryClientProvider>
   );
 
 const summary = (id: string) => ({
@@ -50,6 +56,7 @@ describe('ModelLogsTab', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-21T12:00:00'));
+    queryClient.clear();
     mocks.useModelLogs.mockReset();
     mocks.useModelLogDetail.mockReset();
   });
@@ -124,6 +131,23 @@ describe('ModelLogsTab', () => {
     expect(screen.getByText('Total Logs: 60')).toBeTruthy();
   });
 
+  it('stops at the final allowed page and explains how to reach additional matching logs', () => {
+    mocks.useModelLogDetail.mockReturnValue({ data: undefined, isError: false });
+    mocks.useModelLogs.mockReturnValue(
+      queryResult({ data: { logs: [summary('log-1')], total: MODEL_LOGS_MAX_PAGE * 10 + 1 } })
+    );
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsPage: MODEL_LOGS_MAX_PAGE }));
+    renderTab();
+
+    expect(mocks.useModelLogs).toHaveBeenCalledWith(expect.objectContaining({ page: MODEL_LOGS_MAX_PAGE, limit: 10 }));
+    expect(screen.getByText(`Page ${MODEL_LOGS_MAX_PAGE} of ${MODEL_LOGS_MAX_PAGE}`)).toBeTruthy();
+    expect(screen.getByTestId('model-logs-next-page-btn').hasAttribute('disabled')).toBe(true);
+    expect(screen.getByTestId('model-logs-page-limit').textContent).toContain(
+      'Narrow the filters to see additional logs.'
+    );
+    expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
+  });
+
   it('fetches a log detail only once it is expanded', async () => {
     mocks.useModelLogDetail.mockReturnValue({ data: { id: 'log-1', model: { name: 'gpt-4o' } }, isError: false });
     mocks.useModelLogs.mockReturnValue(
@@ -159,9 +183,11 @@ describe('ModelLogsTab', () => {
 
     mocks.useModelLogDetail.mockReturnValue({ data: undefined, isError: true, refetch });
     rerender(
-      <CssVarsProvider theme={appTheme}>
-        <ModelLogsTab />
-      </CssVarsProvider>
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={appTheme}>
+          <ModelLogsTab />
+        </CssVarsProvider>
+      </QueryClientProvider>
     );
     expect(screen.queryByTestId('model-logs-details-loading')).toBeNull();
     await userEvent.click(screen.getByTestId('admin-error-retry-btn'));
@@ -251,6 +277,39 @@ describe('ModelLogsTab', () => {
     expect(screen.queryByTestId('model-logs-empty')).toBeNull();
     expect(screen.queryByTestId('model-logs-error')).toBeNull();
     expect(screen.getByRole('progressbar')).toBeTruthy();
+  });
+
+  it('refreshes active details and marks collapsed details stale', async () => {
+    const fetchActiveDetail = vi.fn().mockResolvedValue({ id: 'active' });
+    const fetchCollapsedDetail = vi.fn().mockResolvedValue({ id: 'collapsed' });
+    const DetailQueries = () => {
+      useQuery({ queryKey: ['modelLogDetail', 'active'], queryFn: fetchActiveDetail, staleTime: Infinity });
+      useQuery({
+        queryKey: ['modelLogDetail', 'collapsed'],
+        queryFn: fetchCollapsedDetail,
+        enabled: false,
+        staleTime: Infinity,
+      });
+      return null;
+    };
+    queryClient.setQueryData(['modelLogDetail', 'collapsed'], { id: 'collapsed' });
+    mocks.useModelLogs.mockReturnValue(queryResult({ data: { logs: [], total: 0 } }));
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={appTheme}>
+          <DetailQueries />
+          <ModelLogsTab />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    await waitFor(() => expect(fetchActiveDetail).toHaveBeenCalledTimes(1));
+
+    await userEvent.click(screen.getByTestId('model-logs-refresh-btn'));
+
+    await waitFor(() => expect(fetchActiveDetail).toHaveBeenCalledTimes(2));
+    expect(fetchCollapsedDetail).not.toHaveBeenCalled();
+    expect(queryClient.getQueryState(['modelLogDetail', 'collapsed'])?.isInvalidated).toBe(true);
   });
 
   it('refetches on Refresh', async () => {

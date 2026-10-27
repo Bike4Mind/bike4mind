@@ -55,7 +55,22 @@ const createLog = () =>
       session: { id: 'session-1', userId: 'user-2' },
       model: { name: 'claude-sonnet-5' },
       functionCalls: [
-        { id: 'call-1', name: 'web_search', parameters: {}, returnValue: 'private tool output', success: true },
+        {
+          id: 'call-1',
+          name: 'web_search',
+          parameters: {},
+          returnValue: 'private tool output',
+          error: 'private tool error',
+          success: true,
+        },
+      ],
+      citables: [
+        {
+          id: 'file-1',
+          type: 'document',
+          title: 'Reference',
+          metadata: { sourceSystem: 'knowledge_base', chunkId: 'chunk-1', fullContext: 'private passage' },
+        },
       ],
     },
   });
@@ -91,6 +106,13 @@ describe('GET /api/admin/model-logs/[id]', () => {
       functionCalls: [expect.objectContaining({ name: 'web_search' })],
     });
     expect(JSON.stringify(body)).not.toContain('private tool output');
+    expect(JSON.stringify(body)).not.toContain('private tool error');
+    expect(JSON.stringify(body)).not.toContain('private passage');
+    expect(body.citables[0]).toMatchObject({
+      id: 'file-1',
+      title: 'Reference',
+      metadata: { sourceSystem: 'knowledge_base', chunkId: 'chunk-1' },
+    });
   });
 
   it.each([

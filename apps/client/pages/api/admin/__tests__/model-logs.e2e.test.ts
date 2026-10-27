@@ -261,6 +261,34 @@ describe('GET /api/admin/model-logs', () => {
     expect(past.res._getJSONData()).toMatchObject({ logs: [], total: 6 });
   });
 
+  it('keeps tied timestamps in a stable order across independently fetched pages', async () => {
+    const identifiers = Array.from(
+      { length: 30 },
+      (_, index) => new mongoose.Types.ObjectId((index + 1).toString(16).padStart(24, '0'))
+    );
+    await Quest.insertMany(
+      identifiers.map(_id => ({
+        _id,
+        sessionId: 'tied-timestamps',
+        type: 'message',
+        timestamp: new Date('2026-01-01T00:00:00Z'),
+        promptMeta: {
+          session: { id: 'tied-timestamps', userId: 'user-1' },
+          model: { name: 'tied-model' },
+        },
+      }))
+    );
+
+    const pages = await Promise.all(
+      [1, 2, 3].map(async page => {
+        const { req, res } = run({ model: 'tied-model', page: String(page), limit: '10' });
+        await handler(req, res);
+        return res._getJSONData().logs as { id: string }[];
+      })
+    );
+    expect(pages.flat().map(log => log.id)).toEqual([...identifiers].reverse().map(id => id.toString()));
+  });
+
   it('defaults page and limit and clamps an oversized limit', async () => {
     const defaults = run();
     await handler(defaults.req, defaults.res);

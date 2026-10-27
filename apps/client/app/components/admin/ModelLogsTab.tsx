@@ -16,6 +16,8 @@ import {
   Input,
   Divider,
 } from '@mui/joy';
+import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
+import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoIcon from '@mui/icons-material/Info';
@@ -145,6 +147,7 @@ const ModelLogDetails = ({ id }: { id: string }) => {
 };
 
 export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }) => {
+  const queryClient = useQueryClient();
   const [view, updateView] = useModelLogsView();
   const { page: currentPage, limit: itemsPerPage, startDate, endDate } = view;
   const modelFilter = view.model ?? ALL_MODELS;
@@ -174,11 +177,13 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
 
   const handleRefresh = () => {
     modelLogsQuery.refetch();
+    queryClient.invalidateQueries({ queryKey: ['modelLogDetail'] });
     onRefresh?.();
   };
 
   const totalCount = modelLogsQuery.data?.total ?? 0;
-  const totalPages = Math.ceil(totalCount / itemsPerPage);
+  const matchingPages = Math.ceil(totalCount / itemsPerPage);
+  const totalPages = Math.min(matchingPages, MODEL_LOGS_MAX_PAGE);
 
   // A linked page can be past the end of the current results; clamp once they have loaded. A
   // placeholder is the previous filter's page, so its total says nothing about this one.
@@ -379,6 +384,12 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
               </Card>
             ))}
           </Stack>
+          {matchingPages > MODEL_LOGS_MAX_PAGE && (
+            <Alert color="neutral" sx={{ mt: 2 }} data-testid="model-logs-page-limit">
+              You can browse the first {MODEL_LOGS_MAX_PAGE.toLocaleString()} pages. Narrow the filters to see
+              additional logs.
+            </Alert>
+          )}
           <PaginationControls
             currentPage={currentPage}
             totalPages={totalPages}

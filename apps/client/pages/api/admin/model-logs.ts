@@ -7,6 +7,7 @@ import type { PipelineStage, Types } from 'mongoose';
 import { z } from 'zod';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { dateParam } from '@server/utils/dateParam';
+import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 
 export const MODEL_LOGS_MAX_LIMIT = 100;
 const MODEL_LOGS_DEFAULT_LIMIT = 25;
@@ -17,7 +18,7 @@ const querySchema = z.object({
   endDate: dateParam.optional(),
   model: z.string().optional(),
   search: z.string().optional(),
-  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  page: z.coerce.number().int().min(1).max(MODEL_LOGS_MAX_PAGE).default(1),
   limit: z.coerce
     .number()
     .int()
@@ -124,7 +125,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
 
       const pipeline: PipelineStage[] = [
         { $match: query },
-        { $sort: { timestamp: -1 } },
+        { $sort: { timestamp: -1, _id: -1 } },
         { $skip: (page - 1) * limit },
         { $limit: limit },
         { $project: LIST_PROJECTION },
