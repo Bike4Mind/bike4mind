@@ -13,21 +13,23 @@ import {
   type PullOptions,
 } from '@bike4mind/local-models';
 import {
-  CancelledError,
   EXIT_CANCELLED,
-  abortable,
   confirmOnTerminal,
+  pullModel,
+  runModelsCommand,
+  type ModelsDeps,
+  type ModelsOptions,
+} from './modelsCommand.js';
+import {
+  CancelledError,
+  abortable,
   licenseFor,
   parsePullTarget,
   pickBuild,
-  pullModel,
   resolveRuntimeTarget,
-  runModelsCommand,
   type HubClient,
-  type ModelsDeps,
-  type ModelsOptions,
   type RuntimeTarget,
-} from './modelsCommand.js';
+} from '../models/localModels.js';
 import type { OllamaManifestInfo } from './ollamaRegistry.js';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';

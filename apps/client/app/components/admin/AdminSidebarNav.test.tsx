@@ -256,6 +256,31 @@ describe('SidebarNav', () => {
       fireEvent.keyDown(dashboard, { key: 'ArrowUp' });
       expect(filterInput()).toHaveFocus();
     });
+
+    it('takes `/` only when no page search claimed it first', () => {
+      // jsdom has no layout, so offsetParent is always null; the handler reads it as "filter visible".
+      const offsetParent = vi.spyOn(HTMLElement.prototype, 'offsetParent', 'get').mockReturnValue(document.body);
+      const pageSearch = document.createElement('input');
+      document.body.append(pageSearch);
+      const claim = (event: KeyboardEvent) => {
+        event.preventDefault();
+        pageSearch.focus();
+      };
+      try {
+        renderNav();
+        fireEvent.keyDown(document.body, { key: '/' });
+        expect(filterInput()).toHaveFocus();
+
+        (document.activeElement as HTMLElement).blur();
+        window.addEventListener('keydown', claim, true);
+        fireEvent.keyDown(document.body, { key: '/' });
+        expect(pageSearch).toHaveFocus();
+      } finally {
+        window.removeEventListener('keydown', claim, true);
+        pageSearch.remove();
+        offsetParent.mockRestore();
+      }
+    });
   });
 
   describe('collapse', () => {

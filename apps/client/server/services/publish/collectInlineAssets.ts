@@ -19,9 +19,10 @@ import type { SandboxAsset } from './renderSandboxedBundle';
  * headers; callers pass the ESCAPED index.html size as `reservedBytes`.
  *
  * Fetches run concurrently (bounded by CONCURRENCY) for latency, then the caps are
- * applied in a deterministic SECOND pass over the manifest order - so which assets
- * land in-budget never depends on network race ordering. Skipped assets are reported
- * (never silently dropped) so the caller can surface a degraded-render notice.
+ * applied in a deterministic SECOND pass over the manifest order (no-fallback assets
+ * first when `hasFallback` is given) - so which assets land in-budget never depends on
+ * network race ordering. Skipped assets are reported (never silently dropped) so the
+ * caller can surface a degraded-render notice.
  * `index.html` is excluded - it is the document, not an inlined asset. I/O is injected
  * via `load` to keep this unit-testable.
  */
@@ -42,6 +43,8 @@ export interface CollectInlineAssetsInput {
   totalMaxBytes?: number;
   /** Bytes of the response already spoken for (e.g. index.html); subtracted from the total budget. */
   reservedBytes?: number;
+  /** Paths the caller can still serve another way when they miss the budget; budgeted after the rest. */
+  hasFallback?: (path: string) => boolean;
 }
 
 export interface CollectInlineAssetsResult {
@@ -79,12 +82,15 @@ export async function collectInlineAssets(input: CollectInlineAssetsInput): Prom
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, paths.length) }, worker));
 
-  // Pass 2 - apply caps deterministically in manifest order.
+  // Pass 2 - apply caps deterministically in manifest order, assets with no fallback first so
+  // a stylesheet listed after the images is not the one left without a byte of budget.
   const assets = new Map<string, SandboxAsset>();
   const oversized: string[] = [];
   let runningTotal = 0;
   const mimeByPath = new Map(input.manifest.map(e => [e.path, e.mimeType]));
-  for (const path of paths) {
+  const hasFallback = input.hasFallback ?? (() => false);
+  const budgetOrder = [...paths.filter(p => !hasFallback(p)), ...paths.filter(hasFallback)];
+  for (const path of budgetOrder) {
     const data = fetched.get(path);
     if (!data) continue; // download failed — already recorded
     const mimeType = mimeByPath.get(path)!;
@@ -97,7 +103,8 @@ export async function collectInlineAssets(input: CollectInlineAssetsInput): Prom
     assets.set(path, { data, mimeType });
   }
 
-  // Stable ordering for callers/tests regardless of fetch-completion order.
+  // Stable ordering for callers/tests regardless of fetch-completion or budget order.
+  oversized.sort((a, b) => paths.indexOf(a) - paths.indexOf(b));
   failed.sort((a, b) => paths.indexOf(a) - paths.indexOf(b));
   return { assets, oversized, failed };
 }

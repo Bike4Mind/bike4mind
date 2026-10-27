@@ -1,3 +1,4 @@
+import { signupProtection } from '@server/auth/signupProtection';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -75,6 +76,7 @@ export async function releaseVerifiedPendingFreeCredits(
           creditTransactions: creditTransactionRepository,
           creditLots: creditLotRepository,
           users: userRepository,
+          signupProtection,
         },
         reason,
         logger,
@@ -89,21 +91,22 @@ export async function releaseVerifiedPendingFreeCredits(
 
   const granted = { creditsGranted: release.creditsGranted, currentCredits: release.currentCredits };
   try {
-    await userRepository.update({ id: user.id, ...release.patch });
+    const updated = await userRepository.clearPendingFreeCreditGrant(user.id);
+    if (!updated) throw new Error('User no longer available after pending credit release');
+    logger.info(`Released ${release.creditsGranted} pending free credits to user ${user.id} (${reason})`);
+    return { ...granted, tags: updated.tags ?? [] };
   } catch (error) {
     // The credits landed under an idempotent transactionId, so the backfill script can safely
     // re-run the release to clear the tag.
     logger.error(`Released pending free credits for user ${user.id} but the tag removal failed`, error);
     return { ...granted, tags: null };
   }
-  logger.info(`Released ${release.creditsGranted} pending free credits to user ${user.id} (${reason})`);
-  return { ...granted, tags: release.patch.tags ?? null };
 }
 
 /**
  * The deferred flat grant, then the verified domain's signup grant (credits, partner org, tags,
- * entitlements). Order matters: the release $sets the whole tags array from the caller's snapshot,
- * so the partner-tag $addToSet must run after it or the release would erase those tags.
+ * entitlements). Partner tags are applied after the flat release so callers can merge tagsApplied
+ * into the returned tag snapshot.
  */
 export async function applyEmailVerifiedGrants(params: {
   user: PendingFreeCreditUser;

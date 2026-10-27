@@ -75,7 +75,8 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
           </IconButton>
         ) : null
       }
-      placeholder="Search users"
+      placeholder="Search users (/)"
+      slotProps={{ input: { 'data-admin-search': true, 'aria-label': 'Search users', 'aria-keyshortcuts': '/' } }}
       value={search}
       onChange={event => onSearchChange(event.target.value)}
       sx={{ flex: 1, minWidth: 0 }}

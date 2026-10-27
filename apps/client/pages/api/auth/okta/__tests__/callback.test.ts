@@ -136,6 +136,7 @@ vi.mock('@server/analytics/funnel', () => ({
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import handler from '@pages/api/auth/okta/callback';
 
 const STATE = 'state-token';
@@ -881,5 +882,34 @@ describe('/api/auth/okta/callback - second factor', () => {
       strategy: AuthStrategy.Okta,
       trustedDevice,
     });
+  });
+});
+
+describe('/api/auth/okta/callback - IdP error log level', () => {
+  function runWithIdpError(error: string) {
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { state: STATE, error, error_description: 'Reset password is not allowed at this time.' },
+      headers: { host: 'localhost:3000', 'user-agent': 'vitest' },
+      url: '/api/auth/okta/callback',
+    });
+    Object.assign(req, { logger: reqLogger });
+    return handler(req as any, res as any);
+  }
+
+  it('logs access_denied (the IdP refusing this user) at warn', async () => {
+    await runWithIdpError('access_denied');
+
+    expect(Logger.warn).toHaveBeenCalledWith('[Okta Callback] OAuth error from Okta:', {
+      error: 'access_denied',
+      errorDescription: 'Reset password is not allowed at this time.',
+    });
+    expect(Logger.error).not.toHaveBeenCalledWith('[Okta Callback] OAuth error from Okta:', expect.anything());
+  });
+
+  it('keeps any other IdP error at error', async () => {
+    await runWithIdpError('invalid_request');
+
+    expect(Logger.error).toHaveBeenCalledWith('[Okta Callback] OAuth error from Okta:', expect.anything());
   });
 });

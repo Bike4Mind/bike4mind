@@ -33,3 +33,5 @@ export * from './flagDisputePending';
 export * from './requestModerationAppeal';
 export * from './signupClusterKeys';
 export * from './signupCohorts';
+export * from './signupBurstDetector';
+export * from './signupProtection';

@@ -112,8 +112,8 @@ export function shouldTriggerFallback(error: Error): boolean {
     return true;
   }
 
-  // Check for TypeError: terminated (from undici/fetch)
-  if (error.name === 'TypeError' && message.includes('terminated')) {
+  // Check for TypeError: terminated / fetch failed (from undici/fetch)
+  if (error.name === 'TypeError' && (message.includes('terminated') || message === 'fetch failed')) {
     return true;
   }
 

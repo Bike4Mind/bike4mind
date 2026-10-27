@@ -49,6 +49,17 @@ describe('AdminStringListSettingField', () => {
     );
   });
 
+  it('saves the edited entries on Cmd/Ctrl+S from the focused card', () => {
+    renderField([]);
+    fireEvent.change(input(), { target: { value: 'reviewer@example.com' } });
+    fireEvent.keyDown(screen.getByLabelText(`${setting.name} settings editor`), { key: 's', metaKey: true });
+
+    expect(mutate).toHaveBeenCalledWith(
+      { key: 'ImageModerationReviewerEmails', value: ['reviewer@example.com'] },
+      expect.anything()
+    );
+  });
+
   it('shows the server refusal for an invalid address', () => {
     updateError = new Error('Not a valid email address: "nope"');
     renderField([]);

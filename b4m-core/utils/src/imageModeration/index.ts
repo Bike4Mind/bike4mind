@@ -5,7 +5,7 @@ import {
   InvalidImageFormatException,
   InvalidParameterException,
 } from '@aws-sdk/client-rekognition';
-import imageSize from 'image-size';
+import { imageSize } from 'image-size';
 import { Logger } from '@bike4mind/observability';
 import { imagePixelCount, MAX_IMAGE_PIXELS } from '../imageResize';
 import { extractAnimationFrames } from './animatedFrames';
