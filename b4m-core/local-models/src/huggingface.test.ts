@@ -782,6 +782,31 @@ describe('HuggingFaceHub Ollama refs', () => {
     expect(await hub.verifyOllamaRef(pinned, changed)).toBeNull();
   });
 
+  it('reads every layer a tag serves, and null for a tag the registry lacks', async () => {
+    const projector = 'a'.repeat(64);
+    const server = await serve({
+      [`GET /v2/${llama}/manifests/Q4_K_M`]: json({
+        schemaVersion: 2,
+        layers: [
+          { mediaType: 'application/vnd.ollama.image.model', digest: `sha256:${Q4_OID}`, size: 1 },
+          { mediaType: 'application/vnd.ollama.image.projector', digest: `sha256:${projector}`, size: 1 },
+          { mediaType: 'application/vnd.ollama.image.template', digest: `sha256:${'0'.repeat(64)}`, size: 1 },
+        ],
+      }),
+      [`GET /v2/${llama}/manifests/F16`]: json({ error: 'The requested GGUF file is not available' }, 400),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    expect(await hub.ollamaLayers(llama, 'Q4_K_M')).toEqual({
+      model: Q4_OID,
+      others: [
+        { mediaType: 'application/vnd.ollama.image.projector', digest: projector },
+        { mediaType: 'application/vnd.ollama.image.template', digest: '0'.repeat(64) },
+      ],
+    });
+    expect(await hub.ollamaLayers(llama, 'F16')).toBeNull();
+    await expect(hub.ollamaLayers(llama, '../x')).rejects.toThrow('Invalid Ollama tag');
+  });
+
   it('skips the request for builds no tag can pull and maps registry access errors', async () => {
     const server = await serve({
       ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),

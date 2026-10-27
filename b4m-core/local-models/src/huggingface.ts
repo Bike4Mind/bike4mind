@@ -19,7 +19,8 @@ import {
   runtimeEndpointId,
   type HttpClient,
 } from './http';
-import type { FetchLike } from './types';
+import { OLLAMA_MODEL_LAYER, REGISTRY_MANIFEST_ACCEPT, registryLayers, registryManifestSchema } from './ollamaRegistry';
+import type { FetchLike, OllamaRegistryLayers } from './types';
 
 export const DEFAULT_HUGGING_FACE_ENDPOINT = 'https://huggingface.co';
 
@@ -218,8 +219,6 @@ const QUANT_RE = new RegExp(
 // Ollama's tag rule (name.go): alphanumeric or `_` first, then `_ . -`, at most 80 characters.
 const OLLAMA_TAG_RE = /^[A-Za-z0-9_][\w.-]{0,79}$/;
 const OLLAMA_NAME_PART_MAX = 80;
-const OLLAMA_MODEL_LAYER = 'application/vnd.ollama.image.model';
-const REGISTRY_MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json';
 
 const SHARD_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
 const REPO_ID_RE = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,95}$/;
@@ -277,9 +276,7 @@ const treeEntrySchema = z.object({
 
 const errorBodySchema = z.object({ error: z.string() });
 
-const manifestSchema = z.object({
-  layers: z.array(z.object({ mediaType: z.string(), digest: z.string() })),
-});
+const manifestSchema = registryManifestSchema;
 
 type ModelEntry = z.infer<typeof modelEntrySchema>;
 type TreeEntry = z.infer<typeof treeEntrySchema>;
@@ -840,6 +837,27 @@ export class HuggingFaceHub {
       destination,
       options
     );
+  }
+
+  /**
+   * The layers Ollama's registry serves for `repo:tag`, from the manifest a pull reads; null when it has no such tag.
+   * Template and params come from the repo's `main`, so they can change without the GGUF changing.
+   */
+  async ollamaLayers(
+    repo: string,
+    tag: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<OllamaRegistryLayers | null> {
+    assertRepoId(repo);
+    if (!OLLAMA_TAG_RE.test(tag)) throw new LocalRuntimeError('Invalid Ollama tag', this.id);
+    const context = { signal: options.signal, repo, accept: REGISTRY_MANIFEST_ACCEPT, manifest: true };
+    try {
+      const { data } = await this.#getJson(`/v2/${repo}/manifests/${tag}`, manifestSchema, context);
+      return registryLayers(data);
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) return null;
+      throw error;
+    }
   }
 
   async #canDownload(
