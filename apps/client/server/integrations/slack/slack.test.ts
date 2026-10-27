@@ -238,7 +238,30 @@ describe('postMessageToSlack', () => {
     expect(mocks.post).toHaveBeenCalledWith(
       liveopsUrl,
       { text: 'ops alert' },
-      { headers: { 'Content-Type': 'application/json' } }
+      { headers: { 'Content-Type': 'application/json' }, timeout: 10_000 }
+    );
+  });
+  it('does not route security samples to a default webhook when security alerts are disabled', async () => {
+    mocks.config.SLACK_WEBHOOK_URL = SECRET_FALLBACK;
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackSecurityAlertsWebhookUrl: '   ',
+      SlackDefaultWebhookUrl: 'https://hooks.slack.com/services/general',
+    });
+    await expect(postMessageToSlack('signup sample addresses', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe(false);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('bounds a security notification and reports a timed out delivery', async () => {
+    const securityUrl = 'https://hooks.slack.com/services/security';
+    mocks.getSettingsMap.mockResolvedValue({ SlackSecurityAlertsWebhookUrl: securityUrl });
+    mocks.post.mockRejectedValue(new Error('timeout of 3000ms exceeded'));
+    await expect(postMessageToSlack('domain held', 'SlackSecurityAlertsWebhookUrl', { timeoutMs: 3000 })).resolves.toBe(
+      false
+    );
+    expect(mocks.post).toHaveBeenCalledWith(
+      securityUrl,
+      { text: 'domain held' },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 3000 }
     );
   });
 });

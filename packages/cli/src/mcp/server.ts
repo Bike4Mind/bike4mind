@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { B4mApiClient } from './b4mApiClient.js';
 import { registerTools } from './tools.js';
 import { registerSolverTools } from './solverTools.js';
+import { localModelToolsDeps, registerModelTools, type ModelToolsDeps } from './modelTools.js';
 import { registerResources } from './resources.js';
 import { registerPrompts } from './prompts.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
@@ -40,12 +41,16 @@ export function buildMcpServer(
 
 /**
  * {@link buildMcpServer} plus the tools only an authenticated, entitled caller gets, which the server
- * reports at startup. Stdio only: the HTTP transport trusts anything that can reach its socket, so
- * it uses the plain builder and never offers these.
+ * reports at startup, and the local model tools. Stdio only: the HTTP transport trusts anything that
+ * can reach its socket, so it uses the plain builder and never offers these.
  */
-export async function buildStdioMcpServer(options: BuildServerOptions): Promise<McpServer> {
+export async function buildStdioMcpServer(
+  options: BuildServerOptions,
+  modelTools: ModelToolsDeps = localModelToolsDeps(options.configStore)
+): Promise<McpServer> {
   const client = new B4mApiClient(options.baseURL, options.configStore, options.apiKey);
   const server = buildMcpServer(options, client);
   await registerSolverTools(server, client);
+  registerModelTools(server, modelTools);
   return server;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CLEAN_FINISH_REASONS,
+  CONTENT_FILTER_FINISH_REASON,
   DEGENERATE_FINISH_REASON,
   EARLY_STOP_FINISH_REASONS,
   REFUSAL_FINISH_REASON,
@@ -62,6 +63,11 @@ describe('usageEventStatusForFinish', () => {
   it('records a model refusal as a refusal, with no early-stop warning', () => {
     expect(usageEventStatusForFinish(REFUSAL_FINISH_REASON)).toBe('refusal');
     expect(buildEarlyStopStamp(REFUSAL_FINISH_REASON)).toBeNull();
+  });
+
+  it('records a provider content-filter block as a refusal, with no early-stop warning', () => {
+    expect(usageEventStatusForFinish(CONTENT_FILTER_FINISH_REASON)).toBe('refusal');
+    expect(buildEarlyStopStamp(CONTENT_FILTER_FINISH_REASON)).toBeNull();
   });
 
   it('defers to the early-stop stamp for degenerate and truncated replies', () => {

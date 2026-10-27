@@ -195,6 +195,15 @@ describe('shouldTriggerFallback', () => {
       const error = new TypeError('terminated');
       expect(shouldTriggerFallback(error)).toBe(true);
     });
+
+    it('should return true for TypeError: fetch failed (undici/fetch)', () => {
+      const error = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNRESET' }) });
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should not treat a non-TypeError "fetch failed" as a transport failure', () => {
+      expect(shouldTriggerFallback(new Error('fetch failed'))).toBe(false);
+    });
   });
 
   describe('Model-specific error messages', () => {
