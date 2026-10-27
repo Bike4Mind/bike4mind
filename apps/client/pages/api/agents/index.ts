@@ -50,10 +50,11 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
         userCredits,
       });
     } catch (error: any) {
-      console.error('Error creating agent:', error);
       if (error.name === 'BadRequestError' || error.statusCode === 400) {
+        req.logger.warn('Agent create rejected:', error.message);
         return res.status(400).json({ error: error.message });
       }
+      console.error('Error creating agent:', error);
       res.status(500).json({ error: 'Failed to create agent', details: error.message });
     }
   });
