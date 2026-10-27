@@ -38,7 +38,11 @@ describe('describeErrorCause', () => {
     const a = new Error('a');
     const b = new Error('b', { cause: a });
     a.cause = b;
-    expect(describeErrorCause(a)).toBe('Error: b');
+    expect(describeErrorCause(a)).toBe('Error: b <- Error: a');
+
+    const self = new Error('self');
+    self.cause = self;
+    expect(describeErrorCause(self)).toBe('Error: self');
 
     let deep = new Error('leaf');
     for (let i = 0; i < 20; i++) deep = new Error(`level-${i}`, { cause: deep });
