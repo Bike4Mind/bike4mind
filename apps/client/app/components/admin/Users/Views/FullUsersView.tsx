@@ -60,6 +60,9 @@ import { useNavigate } from '@tanstack/react-router';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { unsavedFieldKeys } from '../unsavedFieldLabels';
 import { stageFieldEdit } from '../stageFieldEdit';
+import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
+import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
+import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
 
 interface UsersViewProps {
   user: AdminUserProfile;
@@ -156,6 +159,46 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   const [localTab, setLocalTab] = useState<UserProfileTab>('overview');
   const activeTab = tab ?? localTab;
   const setActiveTab = onTabChange ?? setLocalTab;
+  const [profileAction, setProfileAction] = useState<'suspend' | 'revoke' | null>(null);
+  const [focusCredits, setFocusCredits] = useState(false);
+  const profileRoot = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!focusCredits || activeTab !== 'overview') return;
+    profileRoot.current?.querySelector<HTMLInputElement>('[data-admin-credits-input]')?.focus();
+    setFocusCredits(false);
+  }, [focusCredits, activeTab]);
+  const hasUnsavedChanges = Object.values(editedFields).some(changed => changed);
+  const profileCommands = useMemo<AdminCommand[]>(
+    () => [
+      {
+        id: 'credits',
+        label: 'Adjust credits',
+        shortcut: 'c',
+        run: () => {
+          setActiveTab('overview');
+          setFocusCredits(true);
+        },
+      },
+      {
+        id: 'suspend',
+        label: 'Suspend account',
+        shortcut: 's',
+        disabled: hasUnsavedChanges,
+        run: () => {
+          if (!hasUnsavedChanges) setProfileAction('suspend');
+        },
+      },
+      {
+        id: 'revoke',
+        label: 'Revoke API keys',
+        disabled: hasUnsavedChanges,
+        run: () => {
+          if (!hasUnsavedChanges) setProfileAction('revoke');
+        },
+      },
+    ],
+    [setActiveTab, hasUnsavedChanges]
+  );
 
   useEffect(() => {
     setFormState({ ...user });
@@ -301,8 +344,6 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       }
     );
   };
-
-  const hasUnsavedChanges = Object.values(editedFields).some(changed => changed);
 
   const overviewSections: OverviewSection[] = [
     {
@@ -539,6 +580,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
 
   return (
     <Card
+      ref={profileRoot}
       // On its own page the profile sits on the canvas; only the list card is a card.
       variant={isPage ? 'plain' : 'outlined'}
       key={user.id}
@@ -585,6 +627,16 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
       )}
 
       {/* Full content - always visible on sm+ or on the page, conditionally on xs */}
+      {isPage && (
+        <>
+          <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />
+          {hasUnsavedChanges && (
+            <Typography level="body-sm" data-testid="profile-action-unsaved-hint" sx={{ px: 1 }}>
+              Update or undo your changes before suspending the account or revoking API keys.
+            </Typography>
+          )}
+        </>
+      )}
       <Box sx={{ display: isPage ? 'block' : { xs: mobileExpanded ? 'block' : 'none', sm: 'block' } }}>
         {isPage ? <UserProfileHeader user={user} actions={quickActions} /> : cardHeader}
 
@@ -609,6 +661,17 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
           user={user}
           open={grantSubscriptionOpen}
           onClose={() => setGrantSubscriptionOpen(false)}
+        />
+      )}
+
+      {isPage && profileAction && (
+        <BulkAbuseResponseModal
+          selectedUserIds={[user.id]}
+          recordAction={profileAction}
+          onClose={() => setProfileAction(null)}
+          onExecuted={() => {
+            queryClient.invalidateQueries({ queryKey: ['users'] });
+          }}
         />
       )}
 

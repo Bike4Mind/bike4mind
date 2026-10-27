@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { MODEL_LOGS_MAX_PAGE } from '@client/shared/modelLogs';
 import {
   MODEL_LOGS_SEARCH_PARSERS,
   defaultModelLogsView,
@@ -21,6 +22,23 @@ describe('model logs params', () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each([MODEL_LOGS_MAX_PAGE, String(MODEL_LOGS_MAX_PAGE)])('accepts the final allowed page %j', value => {
+    expect(parsers.modelLogsPage(value)).toBe(MODEL_LOGS_MAX_PAGE);
+    expect(modelLogsViewFromSearch({ modelLogsPage: value }).page).toBe(MODEL_LOGS_MAX_PAGE);
+    expect(modelLogsViewToSearch({ ...defaultModelLogsView(), page: MODEL_LOGS_MAX_PAGE }).modelLogsPage).toBe(
+      MODEL_LOGS_MAX_PAGE
+    );
+  });
+
+  it.each([MODEL_LOGS_MAX_PAGE + 1, String(MODEL_LOGS_MAX_PAGE + 1), Number.MAX_SAFE_INTEGER, '1e100'])(
+    'rejects an out-of-range page %j',
+    value => {
+      expect(parsers.modelLogsPage(value)).toBeUndefined();
+      expect(modelLogsViewFromSearch({ modelLogsPage: value }).page).toBe(1);
+      expect(modelLogsViewToSearch({ ...defaultModelLogsView(), page: Number(value) }).modelLogsPage).toBeUndefined();
+    }
+  );
 
   describe('dates', () => {
     it('accepts a calendar date', () => {
