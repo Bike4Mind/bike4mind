@@ -22,6 +22,8 @@ describe('getTurnstileToken', () => {
   afterEach(() => {
     delete window.turnstile;
     vi.useRealTimers();
+    document.body.replaceChildren();
+    document.documentElement.removeAttribute('data-joy-color-scheme');
   });
 
   it('resolves with the token and cleans up the overlay and widget', async () => {
@@ -56,9 +58,29 @@ describe('getTurnstileToken', () => {
     expect(overlay.style.background).not.toBe('');
     expect(card.style.borderRadius).toBe('12px');
     expect(card.querySelector('p')!.style.display).toBe('block');
+    expect(card.getAttribute('role')).toBe('dialog');
+    expect(card.getAttribute('aria-labelledby')).toBe(card.querySelector('p')!.id);
 
     opts!.callback('tok-1');
     await expect(pending).resolves.toBe('tok-1');
+    expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
+  it('rejects and cleans up when the user cancels an interactive challenge', async () => {
+    let opts: RenderOptions | undefined;
+    render.mockImplementation((_el: HTMLElement, o: RenderOptions) => {
+      opts = o;
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.waitFor(() => expect(opts).toBeDefined());
+    const cancel = document.querySelector<HTMLButtonElement>('[data-testid="turnstile-challenge-cancel"]')!;
+    expect(cancel.style.display).toBe('none');
+    opts!['before-interactive-callback']();
+    expect(cancel.style.display).toBe('block');
+    cancel.click();
+    await expect(pending).rejects.toThrow('turnstile-cancelled');
+    expect(remove).toHaveBeenCalledWith('widget-1');
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
   });
 

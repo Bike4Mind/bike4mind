@@ -70,12 +70,19 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
   const card = document.createElement('div');
   card.setAttribute('data-testid', 'turnstile-challenge-card');
   const message = document.createElement('p');
-  message.textContent = 'Quick security check - confirm you are human to get your sign-in code.';
+  message.id = 'turnstile-challenge-message';
+  message.textContent = 'Quick security check - confirm you are human to continue.';
   message.style.cssText = 'display:none;margin:0 0 16px;font:14px/1.4 system-ui,sans-serif';
   const container = document.createElement('div');
   container.setAttribute('data-testid', 'turnstile-challenge-widget');
   container.style.pointerEvents = 'auto';
-  card.append(message, container);
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  cancel.setAttribute('data-testid', 'turnstile-challenge-cancel');
+  cancel.style.cssText =
+    'display:none;margin:16px auto 0;padding:6px 16px;border:0;border-radius:8px;background:transparent;color:inherit;font:14px system-ui,sans-serif;cursor:pointer;text-decoration:underline';
+  card.append(message, container, cancel);
   overlay.appendChild(card);
   document.body.appendChild(overlay);
 
@@ -86,6 +93,10 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
     overlay.style.pointerEvents = 'auto';
     card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-width:calc(100vw - 32px);text-align:center`;
     message.style.display = 'block';
+    cancel.style.display = 'block';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.setAttribute('aria-labelledby', message.id);
   };
 
   let widgetId: string | undefined;
@@ -97,6 +108,8 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
         clearTimeout(timer);
         fn();
       };
+      // The backdrop blocks the page, so give the user a way out of a stuck challenge.
+      cancel.onclick = () => settle(() => reject(new Error('turnstile-cancelled')));
       widgetId = turnstile.render(container, {
         sitekey: siteKey,
         action,
