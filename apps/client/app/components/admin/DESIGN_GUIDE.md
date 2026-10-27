@@ -188,6 +188,7 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 | `InlineBar` | A number's share of the largest in view | Decorative only: the number itself stays in the cell. |
 | `BulkActionBar` | Acting on a selection | Floats at the bottom. Offers "Select all N matching". Most destructive action last. |
 | `ActionDialog` | Any audited write | Verb-phrase title, before/after preview or dry run, then a reason. Commit button bottom-right. |
+| `AdminDialog` | An unaudited dialog, such as naming a saved view | The modal shell `ActionDialog` is built on: title, close button, focus trap. No reason field. |
 | `ReasonPicker` | Audit reasons | Preset chips per action type plus free text (5 to 500 characters, the shared `adminActionReason` rule). Replaces `AdminReasonField`. |
 | `UndoToast` | Recovery | Bottom-center, 30 seconds, Undo plus a link to the audit entry. One at a time. |
 | `SaveBar` | Settings forms only | Sticky bottom bar: "3 unsaved changes", Discard, Save (Cmd+S). |
@@ -233,7 +234,7 @@ Shortcuts:
 
 ### Lint guard
 
-`b4m/no-raw-admin-joy` rejects raw Joy `Card`, `Modal` and `Table` imports (including aliases and component subpaths) outside the root `admin/shared/` toolkit. Namespace imports and re-exports cannot bypass it. Use `SectionCard`, `ActionDialog` and `DataTable` instead.
+`b4m/no-raw-admin-joy` rejects raw Joy `Card`, `Modal` and `Table` imports (including aliases and component subpaths) outside the root `admin/shared/` toolkit. Namespace imports and re-exports cannot bypass it. Use `SectionCard`, `ActionDialog` (or `AdminDialog` for an unaudited dialog) and `DataTable` instead.
 
 An exceptional import needs an immediately preceding comment: `// admin-toolkit-allow YYYY-MM-DD -- concrete reason the toolkit cannot serve this use case`. Keep exceptions local to one import; do not disable the rule for a file or directory.
 

@@ -243,6 +243,7 @@ import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organ
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
 import EnsureUserAdminListIndexes from './20260921236000_ensure-user-admin-list-indexes';
+import EnsureAdminSavedViewIndexes from './20260921236100_ensure-admin-saved-view-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -421,6 +422,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureUserSignupGrantOrgIndex,
   RedropShareTokenScalarIndex,
   EnsureUserAdminListIndexes,
+  EnsureAdminSavedViewIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

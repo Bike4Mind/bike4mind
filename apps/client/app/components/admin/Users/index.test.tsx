@@ -48,6 +48,7 @@ const respond = (url: string) => {
     return { total: 2, activeThisWeek: 1, views: { newThisWeek: 0, highRisk: 0, suspended: 1 } };
   }
   if (url === '/api/admin/signup-anomaly') return undefined;
+  if (url === '/api/admin/saved-views') return { views: [] };
   return { users: [row('u1', 'Ada'), row('u2', 'Grace')], totalUsers: 2, page: 1, totalPages: 1 };
 };
 

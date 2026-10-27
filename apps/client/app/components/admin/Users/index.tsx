@@ -16,7 +16,6 @@ import {
   AdminPageHeader,
   DataTable,
   EmptyState,
-  ViewTabs,
   type AdminSelection,
   type DataTableGroup,
   type DataTableSort,
@@ -36,8 +35,8 @@ import {
   useAdminUsersSummary,
 } from './List/useAdminUsersList';
 import { USERS_SORT_COLUMNS, usersColumns } from './List/usersColumns';
-import { activeUsersView, applyUsersView, USERS_BUILT_IN_VIEWS } from './List/usersListViews';
 import { UsersToolbar } from './List/UsersToolbar';
+import { UsersViewTabs } from './List/UsersViewTabs';
 import { useOpenUserProfile } from './Profile/useOpenUserProfile';
 import { CLEARED_FILTER_PARAMS, countActiveFilters } from './usersTabSearch';
 import { useUsersParams, useUsersTab, useUsersTabUrlSync } from './useUsersTabParams';
@@ -165,7 +164,6 @@ const UsersTab: React.FC = () => {
     }));
   }, [params.groupBy, params.emailDomain, groupsQuery.data, setParams]);
 
-  const activeView = activeUsersView(params);
   const hasFilters = countActiveFilters(params) > 0 || params.search.trim().length > 0;
   const clearFilters = () => {
     setSearch('');
@@ -246,20 +244,12 @@ const UsersTab: React.FC = () => {
         <RecentActivityView />
       ) : (
         <>
-          <ViewTabs
-            aria-label="Saved views"
-            data-testid="admin-users-views"
-            activeId={activeView ?? ''}
-            views={USERS_BUILT_IN_VIEWS.map(view => ({
-              id: view.id,
-              label: view.label,
-              count: summary ? view.count(summary) : undefined,
-            }))}
-            onSelect={id => {
-              const view = USERS_BUILT_IN_VIEWS.find(candidate => candidate.id === id);
-              if (!view) return;
-              setSearch('');
-              setParams({ ...applyUsersView(view), search: '' });
+          <UsersViewTabs
+            params={params}
+            summary={summary}
+            onApply={patch => {
+              setSearch(patch.search);
+              setParams(patch);
             }}
           />
           <UsersToolbar params={params} search={search} onSearchChange={setSearch} onChange={setParams} />

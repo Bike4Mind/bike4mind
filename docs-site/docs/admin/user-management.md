@@ -28,6 +28,12 @@ The tabs above the table are built-in views. Each one clears the filters and app
 
 Each tab shows its count. If you set filters by hand that match a view exactly, that view's tab is highlighted.
 
+### Saved views
+
+To keep a combination of filters, sort, page size and grouping, click **Save view** and give it a name. The view appears as its own tab after the built-in ones and is stored on the server, so it follows you to any device. Tick **Share with all admins** to show it to every admin; only you can change or delete it.
+
+Each saved tab you own has a **...** menu with **Rename**, **Share with all admins** (or **Make personal**) and **Delete**. Opening a saved view always starts at page 1. You can keep up to 50 views.
+
 ## Columns
 
 | Column | Details |
