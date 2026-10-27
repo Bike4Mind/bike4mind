@@ -72,6 +72,7 @@ describe('POST /api/admin/users/[userId]/revoke-api-keys', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => fn());
+    h.revoke.mockResolvedValue(true);
     h.findUser.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
     h.findByUserId.mockResolvedValue([
       key('a', ApiKeyStatus.ACTIVE),
@@ -118,6 +119,32 @@ describe('POST /api/admin/users/[userId]/revoke-api-keys', () => {
     );
     expect(JSON.stringify(h.audit.mock.calls)).not.toContain('SECRET');
     expect(res.json).toHaveBeenCalledWith({ revokedKeyIds: ['a', 'c'] });
+  });
+
+  it('audits and returns only the keys this call changed when a concurrent revoke takes some', async () => {
+    h.revoke.mockImplementation(async (id: string) => id !== 'a');
+    const req = request();
+    const res = response();
+    await h.handler!(req, res);
+
+    expect(h.audit).toHaveBeenCalledExactlyOnceWith(
+      req,
+      expect.objectContaining({
+        summary: 'revoked 1 API key',
+        details: { count: 1, keys: [{ keyId: 'c', keyPrefix: 'b4m_live_c' }] },
+      })
+    );
+    expect(h.endConnections).toHaveBeenCalledTimes(1);
+    expect(res.json).toHaveBeenCalledWith({ revokedKeyIds: ['c'] });
+  });
+
+  it('writes no audit row when a concurrent revoke takes every key', async () => {
+    h.revoke.mockResolvedValue(false);
+    const res = response();
+    await h.handler!(request(), res);
+
+    expect(h.audit).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ revokedKeyIds: [] });
   });
 
   it('returns an empty list without an audit write when nothing is left to revoke', async () => {

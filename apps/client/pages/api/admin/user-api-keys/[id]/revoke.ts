@@ -33,7 +33,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const adminId = req.user.id;
     const target = await ownerAuditTarget(key.userId);
     await withTransaction(async () => {
-      await userApiKeyRepository.revokeIfNotDisabled(key.id, adminId, reason);
+      // A concurrent revoke can land after the status check above.
+      const revoked = await userApiKeyRepository.revokeIfNotDisabled(key.id, adminId, reason);
+      if (!revoked) throw new ConflictError('API key is already revoked');
       await recordAdminActionFromRequest(req, {
         action: 'user.api_key.revoked',
         target,

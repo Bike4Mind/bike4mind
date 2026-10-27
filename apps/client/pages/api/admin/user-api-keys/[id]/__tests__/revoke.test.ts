@@ -75,6 +75,7 @@ describe('POST /api/admin/user-api-keys/[id]/revoke', () => {
     vi.clearAllMocks();
     h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => fn());
     h.findKey.mockResolvedValue(activeKey);
+    h.revoke.mockResolvedValue(true);
     h.findUser.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
   });
 
@@ -120,6 +121,13 @@ describe('POST /api/admin/user-api-keys/[id]/revoke', () => {
     );
     expect(JSON.stringify(h.audit.mock.calls)).not.toContain('SECRET');
     expect(res.json).toHaveBeenCalledWith({ keyId: 'key-1', status: 'disabled' });
+  });
+
+  it('409s without an audit row when a concurrent revoke wins the write', async () => {
+    h.revoke.mockResolvedValue(false);
+    await expect(h.handler!(request(), response())).rejects.toBeInstanceOf(ConflictError);
+    expect(h.audit).not.toHaveBeenCalled();
+    expect(h.endConnections).not.toHaveBeenCalled();
   });
 
   it('propagates a failed strict audit write without ending connections', async () => {

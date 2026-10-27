@@ -39,21 +39,25 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
 
     const adminId = req.user.id;
-    await withTransaction(async () => {
+    // Only the keys this call actually changed: a concurrent revoke may have taken some since the read.
+    const revoked = await withTransaction(async () => {
+      const changed: typeof revocable = [];
       for (const key of revocable) {
-        await userApiKeyRepository.revokeIfNotDisabled(key.id, adminId, reason);
+        if (await userApiKeyRepository.revokeIfNotDisabled(key.id, adminId, reason)) changed.push(key);
       }
+      if (changed.length === 0) return changed;
       await recordAdminActionFromRequest(req, {
         action: 'user.api_keys.revoked_all',
         target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
-        summary: `revoked ${revocable.length} API key${revocable.length === 1 ? '' : 's'}`,
+        summary: `revoked ${changed.length} API key${changed.length === 1 ? '' : 's'}`,
         reason,
-        details: { count: revocable.length, keys: revocable.map(auditKeyRef) },
+        details: { count: changed.length, keys: changed.map(auditKeyRef) },
       });
+      return changed;
     });
-    await Promise.all(revocable.map(key => endKeyRealtimeConnections(key.id, req.logger)));
+    await Promise.all(revoked.map(key => endKeyRealtimeConnections(key.id, req.logger)));
 
-    return respond(res, adminRevokeAllApiKeysResponseSchema, { revokedKeyIds: revocable.map(key => key.id) });
+    return respond(res, adminRevokeAllApiKeysResponseSchema, { revokedKeyIds: revoked.map(key => key.id) });
   });
 
 export const config = {

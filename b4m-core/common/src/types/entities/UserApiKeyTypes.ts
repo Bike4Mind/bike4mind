@@ -472,9 +472,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
    * Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED.
+   * Resolves true when this call revoked it.
    * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
    */
-  revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
+  revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<boolean>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
   /**
    * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.

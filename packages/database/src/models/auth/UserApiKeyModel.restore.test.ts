@@ -43,6 +43,17 @@ const seedRevoked = async (overrides: Record<string, unknown> = {}) => {
   return doc.insertedId.toString();
 };
 
+describe('UserApiKeyRepository.revokeIfNotDisabled', () => {
+  it('reports whether this call revoked the key and keeps the first stamp', async () => {
+    const id = await seedRevoked({ status: ApiKeyStatus.ACTIVE, revokedBy: null });
+    expect(await userApiKeyRepository.revokeIfNotDisabled(id, 'admin-1', 'leaked')).toBe(true);
+    expect(await userApiKeyRepository.revokeIfNotDisabled(id, 'admin-2', 'again')).toBe(false);
+
+    const raw = await UserApiKey.collection.findOne({ _id: new mongoose.Types.ObjectId(id) });
+    expect(raw?.revokedBy).toBe('admin-1');
+  });
+});
+
 describe('UserApiKeyRepository.restoreRevoked', () => {
   it('reactivates the key and clears the revoke stamps', async () => {
     const id = await seedRevoked();
