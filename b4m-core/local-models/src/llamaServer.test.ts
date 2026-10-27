@@ -1,5 +1,5 @@
 import { getEventListeners } from 'node:events';
-import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -465,10 +465,104 @@ describe('startLlamaServer', () => {
     }
   });
 
+  it('gives up with no-port when the confirmed port still is not healthy a grace period after the load', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const lines: string[] = [];
+      const pending = start({ startTimeoutMs: undefined, onLog: line => lines.push(line) }, { FAKE_LLAMA_SICK: '1' });
+      const settled = pending.catch((caught: unknown) => caught);
+      while (!lines.some(line => line.includes('listening on'))) await new Promise(done => setTimeout(done, 20));
+      await vi.advanceTimersByTimeAsync(LLAMA_SERVER_PORT_GRACE_MS + 2_000);
+      expect(await settled).toMatchObject({
+        name: 'LlamaServerStartError',
+        reason: 'no-port',
+        message: expect.stringContaining('did not answer /health'),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not start the grace period on a model string that ends like the model-loaded line', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const lines: string[] = [];
+      const controller = new AbortController();
+      const pending = start(
+        { startTimeoutMs: undefined, signal: controller.signal, onLog: line => lines.push(line) },
+        { FAKE_LLAMA_MODE: 'hang', FAKE_LLAMA_FORGE_LOADED: '1' }
+      );
+      let settled = false;
+      const outcome = pending.catch((caught: unknown) => caught).finally(() => (settled = true));
+      while (!lines.some(line => line.endsWith('model loaded'))) await new Promise(done => setTimeout(done, 20));
+      await vi.advanceTimersByTimeAsync(LLAMA_SERVER_PORT_GRACE_MS + 2_000);
+      expect(settled).toBe(false);
+      controller.abort(new Error('done waiting'));
+      expect(await outcome).toMatchObject({ message: 'done waiting' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'off Linux, keeps the first printed port that answers, passing over refused ones and never asking later ones',
+    async () => {
+      const decoy = await spoof();
+      const closed = await spoof();
+      await new Promise(done => closed.server.close(done));
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+      Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
+      try {
+        const server = await start(
+          {},
+          {
+            FAKE_LLAMA_LOG: 'b5501',
+            FAKE_LLAMA_LOAD_MS: '300',
+            FAKE_LLAMA_FORGE_PORT: String(closed.port),
+            FAKE_LLAMA_FORGE_WHOLE: '1',
+            FAKE_LLAMA_FORGE_AFTER: String(decoy.port),
+          }
+        );
+        expect([closed.port, decoy.port]).not.toContain(server.port);
+        expect(await client(server).list()).toHaveLength(1);
+        await server.stop();
+        expect(decoy.requests).toEqual([]);
+      } finally {
+        Object.defineProperty(process, 'platform', platform);
+        decoy.server.close();
+      }
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'takes the named port over another listener a launcher left in the group',
+    async () => {
+      const launcher = `"$0" -e "require('net').createServer(() => {}).listen(0, '127.0.0.1')" & exec "$0" "$@"`;
+      const server = await start(
+        { binaryPath: '/bin/sh', binaryArgs: ['-c', launcher, process.execPath, FIXTURE] },
+        { FAKE_LLAMA_LOAD_MS: '300' }
+      );
+      expect(await client(server).list()).toHaveLength(1);
+      await server.stop();
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
+    'confirms a port held by a group member that was reparented away from the launcher',
+    async () => {
+      const server = await start({
+        binaryPath: '/bin/sh',
+        binaryArgs: ['-c', '( "$0" "$@" & ); exec sleep 1000', process.execPath, FIXTURE],
+      });
+      expect(await client(server).list()).toHaveLength(1);
+      await server.stop();
+    }
+  );
+
   it('names why a port could not be confirmed as the server own', () => {
     const scan = (over: Partial<ListenerScan>): ListenerScan => ({
       tableVisible: true,
-      listening: new Set([4000]),
+      listening: new Map([[4000, 'socket:[1]']]),
       owned: new Set(),
       hidden: false,
       ...over,
@@ -486,7 +580,7 @@ describe('startLlamaServer', () => {
     expect(flashAttentionArgs({ flashAttention: 'auto' }, old)).toEqual([]);
     expect(flashAttentionArgs({ flashAttention: 'off' }, old)).toEqual([]);
     expect(flashAttentionArgs({ flashAttention: 'on' }, old)).toEqual(['-fa']);
-    expect(flashAttentionArgs({}, now)).toEqual(['-fa', 'auto']);
+    expect(flashAttentionArgs({}, now)).toEqual([]);
     expect(flashAttentionArgs({ flashAttention: 'off' }, now)).toEqual(['-fa', 'off']);
     expect(flashAttentionArgs({ flashAttention: 'on' }, now)).toEqual(['-fa', 'on']);
     // A quantized V cache needs flash attention; a quantized K cache and an f16 V cache do not.
@@ -509,7 +603,7 @@ describe('startLlamaServer', () => {
       return at === -1 ? [] : args.slice(at, args[at + 1]?.startsWith('-') ? at + 1 : at + 2);
     };
     expect(await argsFor({})).toEqual([]);
-    expect(await argsFor({ build: 11912 })).toEqual(['-fa', 'auto']);
+    expect(await argsFor({ build: 11912 })).toEqual([]);
     expect(await argsFor({ build: 5501, flashAttention: 'on' })).toEqual(['-fa']);
     expect(await argsFor({ flashAttention: 'off' })).toEqual(['-fa', 'off']);
     expect(await argsFor({ flashAttention: 'on' }, { FAKE_LLAMA_VERSION: '5501 (cdf94a18)' })).toEqual(['-fa']);
@@ -698,6 +792,47 @@ describe('LlamaServerRuntime', () => {
     const off = await runtime.start('fa.gguf', { flashAttention: 'off' });
     expect((await recorded(record)).args).not.toContain('-fa');
     await off.stop();
+  });
+
+  it('starts an unnumbered build when no flag depends on the build, and refuses it when one does', async () => {
+    const runtime = runtimeIn('models-unnumbered', {}, { FAKE_LLAMA_VERSION: '0 (unknown)' });
+    await runtime.store.add(modelPath, { name: 'u.gguf' });
+    const server = await runtime.start('u.gguf');
+    expect(server.running).toBe(true);
+    await runtime.stop('u.gguf');
+    await expect(runtime.start('u.gguf', { flashAttention: 'on' })).rejects.toBeInstanceOf(LlamaServerVersionError);
+  });
+
+  it.skipIf(process.platform === 'win32')('probes the build again when the binary path points elsewhere', async () => {
+    const dir = await mkdtemp(join(root, 'swap-'));
+    const fixture = JSON.stringify(pathToFileURL(FIXTURE).href);
+    const wrapper = async (name: string, version: string) => {
+      const path = join(dir, name);
+      await writeFile(
+        path,
+        `process.env.FAKE_LLAMA_VERSION = ${JSON.stringify(version)};\nawait import(${fixture});\n`
+      );
+      return path;
+    };
+    const old = await wrapper('old.mjs', '5501 (cdf94a18)');
+    const fresh = await wrapper('new.mjs', FAKE_VERSION);
+    const link = join(dir, 'current.mjs');
+    await symlink(old, link);
+    const record = join(dir, 'record.json');
+    const runtime = runtimeIn(
+      'models-swap',
+      { binaryArgs: [link], flashAttention: 'on' },
+      { FAKE_LLAMA_RECORD: record }
+    );
+    await runtime.store.add(modelPath, { name: 's.gguf' });
+    await runtime.start('s.gguf');
+    expect((await recorded(record)).args).not.toContain('on');
+    await runtime.stop('s.gguf');
+    await rm(link);
+    await symlink(fresh, link);
+    await runtime.start('s.gguf');
+    expect((await recorded(record)).args).toContain('on');
+    await runtime.stopAll();
   });
 
   it('starts a fresh server after a crash and stops everything on stopAll', async () => {

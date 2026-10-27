@@ -1,10 +1,12 @@
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { LocalRuntimeError, ModelIncompleteError, ModelNotFoundError } from './errors';
+import { LlamaServerVersionError, LocalRuntimeError, ModelIncompleteError, ModelNotFoundError } from './errors';
 import { GgufModelStore, type StoredGgufModel } from './ggufStore';
 import { HuggingFaceHub, isHubRepoId } from './huggingface';
 import {
+  LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD,
   findLlamaServer,
+  flashAttentionArgs,
   startLlamaServer,
   type LlamaServerBinary,
   type LlamaServerExit,
@@ -124,8 +126,14 @@ export class LlamaServerRuntime implements LocalRuntime {
 
   /** The binary's version and build, probed once until the binary file changes; start needs the build for its flags. */
   async #binary(): Promise<LlamaServerBinary> {
-    const key = await stat(this.binaryPath).then(
-      info => `${info.mtimeMs}:${info.size}`,
+    // Keyed on what actually runs: a symlink swapped to another build, or a changed script in binaryArgs.
+    const identify = (path: string) =>
+      realpath(path).then(real => stat(real).then(info => `${real}:${info.mtimeMs}:${info.size}`));
+    const key = await identify(this.binaryPath).then(
+      async binary => {
+        const args = this.#options.binaryArgs ?? [];
+        return JSON.stringify([binary, ...(await Promise.all(args.map(arg => identify(arg).catch(() => arg))))]);
+      },
       () => null
     );
     if (key !== null && this.#found?.key === key) return this.#found.binary;
@@ -288,21 +296,33 @@ export class LlamaServerRuntime implements LocalRuntime {
     if (stored.projector) throw new LocalRuntimeError(`${model} is a vision projector, not a model`, this.id);
     if (!stored.complete) throw new ModelIncompleteError(this.id, model, stored.missingShards);
     entry.sizeBytes = stored.sizeBytes;
-    const { build } = await this.#binary();
-    entry.controller.signal.throwIfAborted();
     const defaults = this.#options;
+    const tuning = {
+      flashAttention: options.flashAttention ?? defaults.flashAttention,
+      extraArgs: options.extraArgs ?? defaults.extraArgs,
+    };
+    const build = await this.#binary().then(
+      found => found.build,
+      (error: unknown) => {
+        // A build that prints no number (built without git) still runs when no flag depends on the build.
+        const unnumbered = error instanceof LlamaServerVersionError && !error.found;
+        if (unnumbered && flashAttentionArgs(tuning, LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD).length === 0)
+          return undefined;
+        throw error;
+      }
+    );
+    entry.controller.signal.throwIfAborted();
     const onLog = defaults.onLog;
     const server = await startLlamaServer({
       binaryPath: this.binaryPath,
       binaryArgs: defaults.binaryArgs,
       build,
-      flashAttention: options.flashAttention ?? defaults.flashAttention,
+      ...tuning,
       modelPath: stored.path,
       alias: model,
       contextSize: options.contextSize ?? defaults.contextSize,
       threads: options.threads ?? defaults.threads,
       gpuLayers: options.gpuLayers ?? defaults.gpuLayers,
-      extraArgs: options.extraArgs ?? defaults.extraArgs,
       startTimeoutMs: defaults.startTimeoutMs,
       stopTimeoutMs: defaults.stopTimeoutMs,
       fetch: defaults.fetch,

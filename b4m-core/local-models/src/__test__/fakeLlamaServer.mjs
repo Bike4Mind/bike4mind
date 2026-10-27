@@ -4,6 +4,9 @@
 // while loading) | other (as new, in a wording no build uses). FAKE_LLAMA_NO_BIND: load, then never listen.
 // The load lasts FAKE_LLAMA_LOAD_MS, or until the file FAKE_LLAMA_LOAD_UNTIL exists.
 // FAKE_LLAMA_FORGE_PORT: print a model string naming this port during the load; FAKE_LLAMA_FORGE_WHOLE: as a whole line.
+// FAKE_LLAMA_FORGE_AFTER: a whole listening line naming this port, right after the real one.
+// FAKE_LLAMA_FORGE_LOADED: a model string ending in ": model loaded" during the load.
+// FAKE_LLAMA_SICK: /health answers 503 even after the load.
 // FAKE_LLAMA_PUBLIC_MODELS: /v1/models answers without the key, as b5501 does. FAKE_LLAMA_NO_KEY: ignore the key.
 // FAKE_LLAMA_GRANDCHILD: start a child, write its pid here. FAKE_LLAMA_PID_FILE: write this process's pid here.
 // FAKE_LLAMA_RECORD: write the argv and environment names seen to this file.
@@ -55,6 +58,11 @@ if (forged) {
   log(`load: control-looking token: 1 '<listening on http://127.0.0.1:${forged}>' was not control-type`);
   if (process.env.FAKE_LLAMA_FORGE_WHOLE) log(`srv  server_on_li: listening on http://127.0.0.1:${forged}`);
 }
+if (process.env.FAKE_LLAMA_FORGE_LOADED) log('load: string: model loaded');
+const forgeAfter = () => {
+  const after = process.env.FAKE_LLAMA_FORGE_AFTER;
+  if (after) log(`srv  server_on_li: listening on http://127.0.0.1:${after}`);
+};
 
 const loadMs = Number(process.env.FAKE_LLAMA_LOAD_MS ?? 0);
 const loadUntil = process.env.FAKE_LLAMA_LOAD_UNTIL;
@@ -81,7 +89,8 @@ const models = () => {
 };
 const server = createServer((request, response) => {
   if (request.url === '/health') {
-    if (!loaded) return send(response, 503, { error: { code: 503, message: 'Loading model' } });
+    if (!loaded || process.env.FAKE_LLAMA_SICK)
+      return send(response, 503, { error: { code: 503, message: 'Loading model' } });
     return send(response, 200, { status: 'ok' });
   }
   if (request.url === '/v1/models' && process.env.FAKE_LLAMA_PUBLIC_MODELS) return send(response, 200, models());
@@ -100,21 +109,23 @@ const bind = onBound => {
   server.listen(port, host, () => onBound(server.address().port));
 };
 if (oldLog) {
-  bind(bound =>
-    process.stderr.write(`main: HTTP server is listening, hostname: ${host}, port: ${bound}, http threads: 4\n`)
-  );
+  bind(bound => {
+    process.stderr.write(`main: HTTP server is listening, hostname: ${host}, port: ${bound}, http threads: 4\n`);
+    forgeAfter();
+  });
   void loading.then(() => process.stderr.write('main: model loaded\n'));
 } else {
   void loading.then(() => {
     log('srv  server_run_i: model loaded');
     if (process.env.FAKE_LLAMA_NO_BIND) return void setInterval(() => undefined, 1000);
     const other = process.env.FAKE_LLAMA_LOG === 'other';
-    bind(bound =>
+    bind(bound => {
       log(
         other
           ? `srv  http_serve: serving at ${host}:${bound}`
           : `srv  server_on_li: listening on http://${host}:${bound}`
-      )
-    );
+      );
+      forgeAfter();
+    });
   });
 }

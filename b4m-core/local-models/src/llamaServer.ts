@@ -54,13 +54,15 @@ const TUNING_FLAGS = new Set(LLAMA_SERVER_TUNING_FLAGS);
 const LISTENING_RE =
   /^(?:\d+\.\d+\.\d+\.\d+ [A-Z] )?(?:main: HTTP server is listening, hostname: 127\.0\.0\.1, port: (\d+), http threads: \d+|(?:srv +server_on_li: listening on|main: server is listening on) http:\/\/127\.0\.0\.1:(\d+)(?: - starting the main loop)?)$/;
 // b5501 prints `main: model loaded`, current builds `srv  server_run_i: model loaded`; both come after the load.
-const MODEL_LOADED_RE = /: model loaded$/;
+const MODEL_LOADED_RE = /^(?:\d+\.\d+\.\d+\.\d+ [A-Z] )?(?:main|srv +server_run_i): model loaded$/;
 /**
  * How long after its model loaded a server may go without a port this module can confirm (ms). Loads can be silent
  * for any length of time, but both known builds name their port right after this line.
  */
 export const LLAMA_SERVER_PORT_GRACE_MS = 30_000;
 const SOCKET_SCAN_MS = 1_000;
+// Known builds print their line right after the load; only then may an unrecognized build's lone listener be taken.
+const UNNAMED_PORT_SETTLE_MS = 2_000;
 const MAX_GROUP_PROCESSES = 256;
 /** First release whose `-fa` takes `on`, `off` or `auto`; older builds take a bare `-fa` switch. */
 export const LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD = 6325;
@@ -202,6 +204,8 @@ export function flashAttentionArgs(tuning: LlamaServerTuning, build: number): st
     );
   }
   const mode = quantizedV ? 'on' : requested;
+  // `auto` is the default from b6325 and means off before it, so it never needs the flag or the build.
+  if (mode === 'auto') return [];
   if (build >= LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD) return ['-fa', mode];
   return mode === 'on' ? ['-fa'] : [];
 }
@@ -417,6 +421,20 @@ class ManagedLlamaServer implements LlamaServerProcess {
     );
   }
 
+  /** Whether anything answers HTTP on `port`; `refused` only when the connection itself is refused. */
+  async answers(port: number): Promise<'yes' | 'refused' | 'unknown'> {
+    try {
+      const response = await this.fetchImpl(`http://${LOOPBACK}:${port}/health`, {
+        signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
+      });
+      await response.body?.cancel().catch(() => undefined);
+      return 'yes';
+    } catch (error) {
+      const cause = error instanceof Error ? (error.cause as { code?: unknown } | undefined) : undefined;
+      return cause?.code === 'ECONNREFUSED' ? 'refused' : 'unknown';
+    }
+  }
+
   get running(): boolean {
     return this.exit === null;
   }
@@ -556,8 +574,8 @@ function untilAborted(signal: AbortSignal | undefined): { promise: Promise<void>
 export interface ListenerScan {
   /** False when `/proc/net/tcp` could not be read or listed nothing. */
   tableVisible: boolean;
-  /** Ports with a LISTEN socket on 127.0.0.1. */
-  listening: ReadonlySet<number>;
+  /** Ports with a LISTEN socket on 127.0.0.1, each with its `socket:[inode]`. */
+  listening: ReadonlyMap<number, string>;
   /** Of those, the ports whose socket a process in the group holds. */
   owned: ReadonlySet<number>;
   /** True when some process of the group hid its file descriptors (a setuid or setcap binary). */
@@ -570,7 +588,10 @@ const pgrpOf = async (pid: number) => {
   return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2]);
 };
 
-/** The group's processes among the leader and its descendants; all of `/proc` without `task/<tid>/children`. */
+/**
+ * The group's processes among the leader and its descendants; all of `/proc` without `task/<tid>/children`. A
+ * member reparented away from the leader is missed here; `socketGroup` catches it.
+ */
 async function groupProcesses(pgid: number): Promise<number[]> {
   if ((await readFile(`/proc/${pgid}/task/${pgid}/children`, 'utf8').catch(() => null)) === null) {
     const all = (await readdir('/proc').catch(() => [])).filter(name => /^\d+$/.test(name)).map(Number);
@@ -616,7 +637,42 @@ async function scanListeners(pgid: number): Promise<ListenerScan> {
       }
     }
   }
-  return { tableVisible: rows.length > 0, listening: new Set(sockets.values()), owned, hidden };
+  const listening = new Map([...sockets].map(([socket, port]) => [port, socket]));
+  return { tableVisible: rows.length > 0, listening, owned, hidden };
+}
+
+/** The process group of whichever process holds `socket` (`socket:[inode]`), searching all of `/proc`. */
+async function socketGroup(socket: string): Promise<number | null> {
+  for (const name of await readdir('/proc').catch(() => [])) {
+    if (!/^\d+$/.test(name)) continue;
+    for (const fd of await readdir(`/proc/${name}/fd`).catch(() => [])) {
+      if ((await readlink(`/proc/${name}/fd/${fd}`).catch(() => '')) === socket) return pgrpOf(Number(name));
+    }
+  }
+  return null;
+}
+
+/**
+ * The newest candidate held by group `pgid`, or 0. A listening candidate held outside the walked processes gets one
+ * full `/proc` search (tracked in `checked`). With `wanted`, a group holding exactly one wanted listener gets it.
+ */
+async function confirmPort(
+  pgid: number,
+  candidates: number[],
+  scan: ListenerScan,
+  checked: Set<number>,
+  wanted: ((port: number) => boolean) | null
+): Promise<number> {
+  const owned = candidates.findLast(candidate => scan.owned.has(candidate));
+  if (owned !== undefined) return owned;
+  for (const candidate of candidates.toReversed()) {
+    const socket = scan.listening.get(candidate);
+    if (socket === undefined || checked.has(candidate)) continue;
+    checked.add(candidate);
+    if ((await socketGroup(socket)) === pgid) return candidate;
+  }
+  const only = wanted ? [...scan.owned].filter(wanted) : [];
+  return only.length === 1 ? only[0] : 0;
 }
 
 /** Why `port` cannot be confirmed as the server's, from a scan in which the group does not own it. */
@@ -661,13 +717,13 @@ export async function startLlamaServer(options: StartLlamaServerOptions): Promis
     throw storageError(RUNTIME_ID, options.modelPath, error, 'read');
   });
   if (!file?.isFile()) throw new ModelNotFoundError(RUNTIME_ID, options.modelPath);
-  // Throws for `off` with a quantized V cache; `auto` is what every build does without the flag, so it needs no probe.
+  // Throws for `off` with a quantized V cache; only `on` and `off` need the build.
   let flashAttention = flashAttentionArgs(options, LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD);
-  if (options.build !== undefined) flashAttention = flashAttentionArgs(options, options.build);
-  else if (flashAttention[1] === 'auto') flashAttention = [];
-  else {
-    const found = await findLlamaServer({ path: options.binaryPath, binaryArgs: options.binaryArgs, env: options.env });
-    flashAttention = flashAttentionArgs(options, found?.build ?? MIN_LLAMA_SERVER_BUILD);
+  if (flashAttention.length > 0) {
+    const build =
+      options.build ??
+      (await findLlamaServer({ path: options.binaryPath, binaryArgs: options.binaryArgs, env: options.env }))?.build;
+    flashAttention = flashAttentionArgs(options, build ?? MIN_LLAMA_SERVER_BUILD);
     options.signal?.throwIfAborted();
   }
 
@@ -732,6 +788,8 @@ async function waitUntilReady(
   let scan: ListenerScan | null = null;
   let scannedAt = -Infinity;
   let scannedCandidates = 0;
+  const groupChecked = new Set<number>();
+  const dropped = new Set<number>();
   // Until a port is confirmed as the process's own, whatever answers there is not known to be it.
   while (server.port === 0) {
     check();
@@ -739,16 +797,16 @@ async function waitUntilReady(
     if (linux && (candidates.length > scannedCandidates || Date.now() - scannedAt >= SOCKET_SCAN_MS)) {
       scannedCandidates = candidates.length;
       scannedAt = Date.now();
-      const seen = await scanListeners(server.pid);
-      scan = seen;
-      const owned = [...seen.owned].filter(wanted);
-      // A build whose listening line is not recognized still holds exactly one listener of its own.
-      const port = candidates.findLast(candidate => seen.owned.has(candidate)) ?? (owned.length === 1 ? owned[0] : 0);
-      if (port) server.accept(port);
+      scan = await scanListeners(server.pid);
+      const settled = server.loadedAt !== null && Date.now() - server.loadedAt >= UNNAMED_PORT_SETTLE_MS;
+      server.accept(await confirmPort(server.pid, candidates, scan, groupChecked, settled ? wanted : null));
     } else if (!linux) {
-      for (const candidate of candidates.toReversed()) {
-        if (await server.healthy(candidate, options.signal)) {
-          server.accept(candidate);
+      // The real server binds before it prints its line, so only a refused port can be passed over.
+      for (const candidate of candidates.filter(port => !dropped.has(port))) {
+        const answer = await server.answers(candidate);
+        if (answer === 'refused') dropped.add(candidate);
+        else {
+          if (answer === 'yes') server.accept(candidate);
           break;
         }
       }
@@ -770,6 +828,12 @@ async function waitUntilReady(
   while (true) {
     check();
     if (await server.healthy(server.port, options.signal)) break;
+    if (server.loadedAt !== null && Date.now() - server.loadedAt > LLAMA_SERVER_PORT_GRACE_MS) {
+      throw server.startError(
+        'no-port',
+        `llama-server loaded its model but port ${server.port} did not answer /health within ${LLAMA_SERVER_PORT_GRACE_MS}ms`
+      );
+    }
     await pause();
   }
   const status = await server.statusWithoutKey('/props');
