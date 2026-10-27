@@ -102,6 +102,28 @@ const resolvePreviewWith = (value: BulkAbusePreview) =>
   );
 
 describe('BulkAbuseResponseModal', () => {
+  it('previews only the requested profile action without implicit credit clawback', () => {
+    const actions = { ban: false, revokeApiKeys: true, revokeSessions: false, clawbackFreeCredits: false };
+    render(
+      <TestWrapper>
+        <BulkAbuseResponseModal
+          selectedUserIds={[USER_ID]}
+          recordAction="revoke"
+          onClose={vi.fn()}
+          onExecuted={vi.fn()}
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('bulk-abuse-target-domain-radio')).toBeDisabled();
+    expect(screen.getByTestId('bulk-abuse-action-ban-checkbox')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('bulk-abuse-preview-btn'));
+    expect(previewMutate).toHaveBeenCalledWith(
+      { target: { kind: 'users', userIds: [USER_ID] }, actions },
+      expect.anything()
+    );
+    expect(executeMutate).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mutationState.previewError = null;

@@ -11,7 +11,12 @@ const mutations = vi.hoisted(() => ({ updateMutate: vi.fn(), loginAsMutate: vi.f
 // Only the Roles column is exercised here (it owns the Custom Tags control that #2441 is
 // about), so the card's other sections are stubbed to keep their data hooks out of it.
 vi.mock('../../AdminProfile', () => ({ default: () => null }));
-vi.mock('../Details/Bike4MindUserDetails', () => ({ default: () => null }));
+vi.mock('../Details/Bike4MindUserDetails', () => ({ default: () => <input data-testid="admin-user-credits-input" /> }));
+vi.mock('../BulkAbuseResponseModal', () => ({
+  default: ({ selectedUserIds, recordAction }: { selectedUserIds: string[]; recordAction: string }) => (
+    <div data-testid="profile-action-preview" data-user={selectedUserIds[0]} data-action={recordAction} />
+  ),
+}));
 vi.mock('../Details/LoginDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserDetails', () => ({ default: () => null }));
 vi.mock('../Details/UserSubscriptionStatus', () => ({ default: () => null }));
@@ -82,6 +87,19 @@ const addCustomTag = (tag: string) => {
 };
 
 describe('FullUsersView - Overview and Activity tabs', () => {
+  it('focuses credits with c and opens a current-user suspension preview with s without writing', () => {
+    render(<FullUsersView index={0} user={savedUser()} variant="page" />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('user-profile-tab-activity'));
+    fireEvent.keyDown(document.body, { key: 'c' });
+    expect(screen.getByTestId('admin-user-credits-input')).toHaveFocus();
+    fireEvent.keyDown(screen.getByTestId('admin-user-credits-input'), { key: 's' });
+    expect(screen.queryByTestId('profile-action-preview')).not.toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 's' });
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-user', 'u1');
+    expect(screen.getByTestId('profile-action-preview')).toHaveAttribute('data-action', 'suspend');
+    expect(mutations.updateMutate).not.toHaveBeenCalled();
+  });
+
   it('keeps staged Overview edits when switching to Activity and back', async () => {
     render(<FullUsersView index={0} user={savedUser()} variant="page" onUnsavedFieldsChange={vi.fn()} />, {
       wrapper: TestWrapper,

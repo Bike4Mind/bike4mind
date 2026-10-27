@@ -3,7 +3,8 @@ import { getErrorMessage } from '@client/app/utils/error';
 import type { SettingKey } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
 import { Button, Card, FormControl, FormHelperText, FormLabel, Grid, Textarea, Tooltip } from '@mui/joy';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useAdminSaveShortcut } from './shared/adminKeyboard';
 
 /** Parses the stored value, which arrives as an array or as its JSON string, into its string entries. */
 export function toStringList(stored: unknown): string[] {
@@ -38,6 +39,8 @@ const AdminStringListSettingField = ({
   storedValue: unknown;
   index: number;
 }) => {
+  const saveRef = useRef<HTMLDivElement>(null);
+  useAdminSaveShortcut(saveRef);
   const stored = toStringList(storedValue);
   const [text, setText] = useState(stored.join('\n'));
   const updateSettings = useUpdateSettings();
@@ -55,6 +58,10 @@ const AdminStringListSettingField = ({
 
   return (
     <Card
+      ref={saveRef}
+      data-admin-settings-editor
+      tabIndex={0}
+      aria-label={`${setting.name} settings editor`}
       variant="outlined"
       sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
     >
@@ -75,9 +82,12 @@ const AdminStringListSettingField = ({
           </FormControl>
         </Grid>
         <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
-          <Tooltip title="Update Setting" placement="top">
+          <Tooltip title="Save setting (Cmd/Ctrl+S outside inputs)" placement="top">
             <Button
               data-testid={`admin-setting-${setting.key}-save-btn`}
+              data-admin-save
+              aria-label={`Save ${setting.name} (Cmd/Ctrl+S)`}
+              aria-keyshortcuts="Meta+s Control+s"
               color="success"
               size="sm"
               type="button"

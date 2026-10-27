@@ -575,11 +575,18 @@ const AdminSettingsTab: React.FC = () => {
             </Stack>
             <FormControl sx={{ width: { xs: '100%', md: '40vw' } }}>
               <Input
-                placeholder="Search by name, description, or non-sensitive value"
+                placeholder="Search by name, description, or non-sensitive value (/)"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 fullWidth
-                slotProps={{ input: { 'data-testid': 'admin-settings-search-input' } }}
+                slotProps={{
+                  input: {
+                    'data-testid': 'admin-settings-search-input',
+                    'data-admin-search': true,
+                    'aria-label': 'Search settings',
+                    'aria-keyshortcuts': '/',
+                  },
+                }}
               />
             </FormControl>
             {searchTerm && (

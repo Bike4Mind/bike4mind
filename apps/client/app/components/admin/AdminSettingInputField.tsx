@@ -26,7 +26,8 @@ import {
   Stack,
   Box,
 } from '@mui/joy';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useAdminSaveShortcut } from './shared/adminKeyboard';
 import ScopedSettingOverrides from './ScopedSettingOverrides';
 import { rangeMessage } from './settingFieldHelpers';
 
@@ -37,6 +38,8 @@ interface SubSetting {
 
 /** Inline toggle row rendered inside a parent card - no card wrapper. */
 const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
+  const saveRef = useRef<HTMLDivElement>(null);
+  useAdminSaveShortcut(saveRef);
   const [value, setValue] = useState<boolean>(() => {
     if (typeof defaultValue === 'boolean') return defaultValue;
     if (typeof defaultValue === 'number') return defaultValue === 1;
@@ -53,7 +56,13 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
   const isDirty = value !== resolvedDefault;
 
   return (
-    <Box sx={{ py: 0.75 }}>
+    <Box
+      ref={saveRef}
+      data-admin-settings-editor
+      tabIndex={0}
+      aria-label={`${setting.name} settings editor`}
+      sx={{ py: 0.75 }}
+    >
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography level="title-md" sx={{ fontSize: '13px' }}>
@@ -71,6 +80,9 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
                 color="success"
                 size="sm"
                 loading={updateSettings.isPending}
+                data-admin-save
+                data-testid={`admin-setting-${setting.key}-save-btn`}
+                aria-label={`Save ${setting.name} (Cmd/Ctrl+S)`}
                 onClick={() => updateSettings.mutate({ key: setting.key, value })}
               >
                 <SaveIcon sx={{ fontSize: '16px' }} />
@@ -104,6 +116,8 @@ const AdminSettingInputField = ({
   /** Locks a boolean setting: the switch and Save are disabled and this replaces the description. */
   lockedNote?: string;
 }) => {
+  const saveRef = useRef<HTMLDivElement>(null);
+  useAdminSaveShortcut(saveRef);
   const [value, setValue] = useState<string | number | boolean | null>(() => {
     if (typeof defaultValue === 'object') return null;
     return defaultValue ?? null;
@@ -199,6 +213,10 @@ const AdminSettingInputField = ({
   return (
     <>
       <Card
+        ref={saveRef}
+        data-admin-settings-editor
+        tabIndex={0}
+        aria-label={`${setting.name} settings editor`}
         variant="outlined"
         sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
       >
@@ -289,9 +307,12 @@ const AdminSettingInputField = ({
           </Grid>
 
           <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
-            <Tooltip title="Update Setting" placement="top">
+            <Tooltip title="Save setting (Cmd/Ctrl+S outside inputs)" placement="top">
               <Button
                 data-testid={`admin-setting-${setting.key}-save-btn`}
+                data-admin-save
+                aria-label={`Save ${setting.name} (Cmd/Ctrl+S)`}
+                aria-keyshortcuts="Meta+s Control+s"
                 color="success"
                 size="sm"
                 type="button"

@@ -201,7 +201,8 @@ export function DataTable<Row>({
                   return (
                     <tr
                       key={id}
-                      tabIndex={onRowActivate ? 0 : undefined}
+                      tabIndex={onRowActivate || selectable ? 0 : undefined}
+                      aria-keyshortcuts={selectable ? 'x' : undefined}
                       aria-selected={selectable ? isSelected(id) : activeRowId === id}
                       data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                       onClick={event => {
@@ -209,6 +210,21 @@ export function DataTable<Row>({
                         onRowActivate?.(row);
                       }}
                       onKeyDown={event => {
+                        if (
+                          event.target === event.currentTarget &&
+                          selectable &&
+                          event.key === 'x' &&
+                          !event.metaKey &&
+                          !event.ctrlKey &&
+                          !event.altKey &&
+                          !event.shiftKey &&
+                          !event.repeat &&
+                          !event.nativeEvent.isComposing
+                        ) {
+                          event.preventDefault();
+                          toggleRows([id], !isSelected(id));
+                          return;
+                        }
                         if (
                           event.target !== event.currentTarget ||
                           !onRowActivate ||
