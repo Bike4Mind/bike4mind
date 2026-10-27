@@ -44,7 +44,7 @@ describe('Users tab params', () => {
   const usersSearch = {
     tab: 'users',
     page: 2,
-    limit: 20,
+    limit: 50,
     sort: 'name',
     order: 'asc',
     org: ['Acme'],

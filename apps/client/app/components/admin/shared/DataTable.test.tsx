@@ -166,4 +166,92 @@ describe('DataTable', () => {
     expect(tableRows()[0]).toHaveAttribute('data-testid', 'admin-table-row-1');
     expect(screen.getByTestId('admin-table-previous-btn')).toBeDisabled();
   });
+
+  it('selects a range with Shift-click and toggles the focused row with x', () => {
+    render(<StatefulTable />);
+    fireEvent.click(within(screen.getByTestId('admin-table-select-2')).getByRole('checkbox'));
+    fireEvent.click(within(screen.getByTestId('admin-table-select-5')).getByRole('checkbox'), { shiftKey: true });
+    for (const id of ['2', '3', '4', '5']) {
+      expect(within(screen.getByTestId(`admin-table-select-${id}`)).getByRole('checkbox')).toBeChecked();
+    }
+    expect(within(screen.getByTestId('admin-table-select-1')).getByRole('checkbox')).not.toBeChecked();
+    expect(within(screen.getByTestId('admin-table-select-6')).getByRole('checkbox')).not.toBeChecked();
+
+    fireEvent.keyDown(screen.getByTestId('admin-table-row-9'), { key: 'x' });
+    expect(within(screen.getByTestId('admin-table-select-9')).getByRole('checkbox')).toBeChecked();
+    fireEvent.keyDown(screen.getByTestId('admin-table-row-9'), { key: 'x' });
+    expect(within(screen.getByTestId('admin-table-select-9')).getByRole('checkbox')).not.toBeChecked();
+  });
+
+  it('moves focus between rows with the arrow keys', () => {
+    renderTable({ onRowActivate: vi.fn() });
+    screen.getByTestId('admin-table-row-1').focus();
+    fireEvent.keyDown(screen.getByTestId('admin-table-row-1'), { key: 'ArrowDown' });
+    expect(screen.getByTestId('admin-table-row-2')).toHaveFocus();
+    fireEvent.keyDown(screen.getByTestId('admin-table-row-2'), { key: 'ArrowUp' });
+    expect(screen.getByTestId('admin-table-row-1')).toHaveFocus();
+  });
+
+  it('delegates paging and sorting to the server when controlled', () => {
+    const onPageChange = vi.fn();
+    const onPageSizeChange = vi.fn();
+    const onSortChange = vi.fn();
+    renderTable({
+      rows: rows.slice(25, 50),
+      columns: [{ id: 'count', label: 'Count', render: row => row.count, sortable: true, numeric: true }],
+      sort: { columnId: 'count', direction: 'asc' },
+      onSortChange,
+      pagination: { page: 2, pageSize: 25, total: 1204, onPageChange, onPageSizeChange },
+    });
+    expect(tableRows()).toHaveLength(25);
+    expect(tableRows()[0]).toHaveAttribute('data-testid', 'admin-table-row-26');
+    expect(screen.getByTestId('admin-table-range')).toHaveTextContent('26 to 50 of 1,204');
+    expect(screen.getByTestId('admin-table-sort-count-btn').closest('th')).toHaveAttribute('aria-sort', 'ascending');
+
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(onPageChange).toHaveBeenLastCalledWith(3);
+    fireEvent.click(screen.getByTestId('admin-table-sort-count-btn'));
+    expect(onSortChange).toHaveBeenCalledWith({ columnId: 'count', direction: 'desc' });
+    expect(onPageChange).toHaveBeenLastCalledWith(1);
+    fireEvent.click(screen.getByTestId('admin-table-page-size'));
+    fireEvent.click(screen.getByTestId('admin-table-page-size-100'));
+    expect(onPageSizeChange).toHaveBeenCalledWith(100);
+  });
+
+  it('renders group headers with their rows first and the rest after', () => {
+    renderTable({
+      rows: rows.slice(0, 5),
+      groups: [{ id: 'bots', header: <span>bots.example</span>, rowIds: ['4', '2'] }],
+    });
+    expect(screen.getByTestId('admin-table-group-bots')).toHaveTextContent('bots.example');
+    const order = within(screen.getByTestId('admin-data-table'))
+      .getAllByRole('row')
+      .slice(1)
+      .map(row => row.getAttribute('data-testid'));
+    expect(order).toEqual([
+      'admin-table-group-bots',
+      'admin-table-row-4',
+      'admin-table-row-2',
+      'admin-table-row-1',
+      'admin-table-row-3',
+      'admin-table-row-5',
+    ]);
+  });
+
+  it('renders row actions without activating the row', () => {
+    const activate = vi.fn();
+    const action = vi.fn();
+    renderTable({
+      rows: rows.slice(0, 2),
+      onRowActivate: activate,
+      rowActions: row => (
+        <button data-testid={`row-menu-${row.id}`} onClick={action}>
+          More
+        </button>
+      ),
+    });
+    fireEvent.click(screen.getByTestId('row-menu-1'));
+    expect(action).toHaveBeenCalledOnce();
+    expect(activate).not.toHaveBeenCalled();
+  });
 });

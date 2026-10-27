@@ -1,0 +1,126 @@
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import type { ReactNode } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getThemeConfig } from '@client/app/utils/themes';
+
+vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
+
+const apiGet = vi.hoisted(() => vi.fn());
+const openProfile = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
+vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: [] }) }));
+vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations: () => ({ data: [] }) }));
+vi.mock('../AdminProfileModal', () => ({ default: () => null }));
+vi.mock('./ComplianceModal', () => ({ default: () => null }));
+vi.mock('./CreateUserModal', () => ({ default: () => null, useCreateUserModal: () => ({ setOpen: vi.fn() }) }));
+vi.mock('./BulkAbuseResponseModal', () => ({
+  default: ({ selectedUserIds }: { selectedUserIds: string[] }) => (
+    <div data-testid="bulk-abuse-modal">{selectedUserIds.join(',')}</div>
+  ),
+}));
+vi.mock('./Profile/useOpenUserProfile', () => ({ useOpenUserProfile: () => openProfile }));
+vi.mock('./Views/RecentActivityView', () => ({ default: () => <div data-testid="recent-activity" /> }));
+
+import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
+import { DEFAULT_USERS_PARAMS, useUsersTab } from './useUsersTabParams';
+import UsersTab from './index';
+import { AdminCommandPalette } from '../shared/AdminCommandPalette';
+
+const theme = extendTheme({ ...getThemeConfig() });
+
+const row = (id: string, name: string) => ({
+  id,
+  name,
+  email: `${name.toLowerCase()}@example.com`,
+  level: 'DemoUser',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  currentCredits: 100,
+  signupMethod: 'email',
+  apiKeyCount: 0,
+  spend30d: null,
+});
+
+const respond = (url: string) => {
+  if (url === '/api/admin/users/summary') {
+    return { total: 2, activeThisWeek: 1, views: { newThisWeek: 0, highRisk: 0, suspended: 1 } };
+  }
+  if (url === '/api/admin/signup-anomaly') return undefined;
+  return { users: [row('u1', 'Ada'), row('u2', 'Grace')], totalUsers: 2, page: 1, totalPages: 1 };
+};
+
+const renderTab = (withPalette = false) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>
+      <CssVarsProvider theme={theme}>{children}</CssVarsProvider>
+    </QueryClientProvider>
+  );
+  return render(
+    withPalette ? (
+      <div data-admin-surface>
+        <AdminCommandPalette />
+        <UsersTab />
+      </div>
+    ) : (
+      <UsersTab />
+    ),
+    { wrapper: Wrapper }
+  );
+};
+
+beforeEach(() => {
+  apiGet.mockReset();
+  openProfile.mockReset();
+  apiGet.mockImplementation(async (url: string) => ({ data: respond(url) }));
+  act(() => {
+    useUsersTab.setState({ params: { ...DEFAULT_USERS_PARAMS } });
+    fakeAdminRouter.reset({ tab: 'users' });
+  });
+});
+
+describe('UsersTab', () => {
+  it('renders the summary, the rows and one footer pager', async () => {
+    renderTab();
+    expect(await screen.findByTestId('admin-users-row-u1')).toBeTruthy();
+    expect(screen.getByText(/2 accounts/)).toBeTruthy();
+    expect(screen.getAllByTestId('admin-table-footer')).toHaveLength(1);
+  });
+
+  it('focuses the users search with / through the admin shortcuts', async () => {
+    renderTab(true);
+    await screen.findByTestId('admin-users-row-u1');
+    fireEvent.keyDown(document.body, { key: '/' });
+    expect(screen.getByTestId('admin-users-search-input')).toHaveFocus();
+  });
+
+  it('opens the profile page when a row is activated', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('admin-users-name-u2'));
+    expect(openProfile).toHaveBeenCalledWith('u2');
+  });
+
+  it('applies a built-in view through the URL and asks the server for it', async () => {
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+    fireEvent.click(screen.getByTestId('admin-users-views-suspended-btn'));
+    await waitFor(() => expect(fakeAdminRouter.search).toMatchObject({ status: 'suspended', page: 1 }));
+    await waitFor(() =>
+      expect(apiGet).toHaveBeenCalledWith(
+        '/api/admin/users',
+        expect.objectContaining({ params: expect.objectContaining({ status: 'suspended' }) })
+      )
+    );
+  });
+
+  it('hands the selected rows to the bulk response and drops them when the filter changes', async () => {
+    renderTab();
+    fireEvent.click(within(await screen.findByTestId('admin-table-select-u1')).getByRole('checkbox'));
+    fireEvent.click(screen.getByTestId('bulk-abuse-open-btn'));
+    expect(screen.getByTestId('bulk-abuse-modal').textContent).toBe('u1');
+
+    fireEvent.click(screen.getByTestId('admin-users-views-suspended-btn'));
+    await waitFor(() => expect(screen.queryByTestId('bulk-abuse-selected-count')).toBeNull());
+  });
+});

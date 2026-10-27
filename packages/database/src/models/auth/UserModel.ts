@@ -1308,6 +1308,13 @@ UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
+// Admin users list: the Last active and Credits sorts and the built-in view counts
+// (apps/client/server/admin/usersList/listAdminUsers.ts). The flag and band indexes are
+// partial/sparse so they stay small. Built by the ensure-user-admin-list-indexes migration.
+UserSchema.index({ lastActiveAt: -1 }, { name: 'user_lastActiveAt' });
+UserSchema.index({ currentCredits: -1 }, { name: 'user_currentCredits' });
+UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

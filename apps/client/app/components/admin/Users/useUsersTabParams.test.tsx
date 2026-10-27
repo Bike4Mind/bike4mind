@@ -9,7 +9,7 @@ import { DEFAULT_USERS_PARAMS, useUsersParams, useUsersTab, useUsersTabUrlSync }
 const STORED = {
   ...DEFAULT_USERS_PARAMS,
   page: 3,
-  sortField: 'name',
+  sortField: 'name' as const,
   sortOrder: 'asc' as const,
   tags: ['Admin'],
   search: 'someone@example.com',
@@ -30,12 +30,12 @@ beforeEach(() => {
 });
 
 describe('Users tab URL precedence', () => {
-  it('round-trips anomaly review and grouping through URL and persisted state', () => {
+  it('reads an old last-hour link as Signed up and round-trips grouping through URL and persisted state', () => {
     act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, groupBy: 'emailDomain', recentSignups: 'hour' }));
     const { result } = renderUsersTab();
-    expect(result.current[0]).toMatchObject({ groupBy: 'emailDomain', recentSignups: 'hour' });
-    expect(useUsersTab.getState().params).toMatchObject({ groupBy: 'emailDomain', recentSignups: 'hour' });
-    act(() => result.current[1]({ groupBy: undefined, recentSignups: undefined }));
+    expect(result.current[0]).toMatchObject({ groupBy: 'emailDomain', signedUp: 'hour' });
+    expect(useUsersTab.getState().params).toMatchObject({ groupBy: 'emailDomain', signedUp: 'hour' });
+    act(() => result.current[1]({ groupBy: undefined, signedUp: undefined }));
     expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1 });
     expect(result.current[0].groupBy).toBeUndefined();
   });
@@ -128,9 +128,9 @@ describe('Users tab URL precedence', () => {
 
     act(() => {
       result.current[1]({ sortOrder: 'asc', page: 1 });
-      result.current[1]({ limit: 20, page: 1 });
+      result.current[1]({ limit: 50, page: 1 });
     });
 
-    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1, limit: 20, order: 'asc' });
+    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1, limit: 50, order: 'asc' });
   });
 });
