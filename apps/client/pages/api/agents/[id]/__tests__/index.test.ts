@@ -149,13 +149,13 @@ describe('/api/agents/[id] access levels', () => {
       expect(res._getJSONData()).toMatchObject({ name: 'renamed' });
     });
 
-    it('accepts a catalog-only model and forwards the caller id and logger to the lookup', async () => {
+    it('accepts a catalog-only model and forwards the caller and logger to the lookup', async () => {
       getCallerModelList.mockResolvedValue({ models: [{ id: 'gpt-6-astra', type: 'text' }], supersededModels: [] });
       agentRepositoryMock.update.mockResolvedValue({ id: 'a1', preferredModel: 'gpt-6-astra' });
       const logger = { warn: vi.fn() };
       const { run } = invoke('PUT', 'owner', { body: { preferredModel: 'gpt-6-astra' }, logger });
       await run();
-      expect(getCallerModelList).toHaveBeenCalledWith('owner', logger);
+      expect(getCallerModelList).toHaveBeenCalledWith(expect.objectContaining({ id: 'owner' }), logger);
       expect(agentRepositoryMock.update).toHaveBeenCalledWith(
         { preferredModel: 'gpt-6-astra', id: 'a1' },
         { new: true }
