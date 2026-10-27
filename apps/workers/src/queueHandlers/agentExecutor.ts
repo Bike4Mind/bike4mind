@@ -2125,8 +2125,9 @@ async function processExecution(
     });
 
     const subagentToolConfig = buildSubagentToolConfig({
-      model: execution.model,
-      apiKeyTable: apiKeyTable as ApiKeyTable,
+      model: agentModel,
+      // An OpenAI key swaps deep_research onto GPT-4.1; a substituted run keeps its own model.
+      apiKeyTable: shadowModelInfo ? undefined : (apiKeyTable as ApiKeyTable),
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
       videoConfig: await buildAgentVideoToolConfig(

@@ -1161,6 +1161,17 @@ describe('processExecution tool deps', () => {
       expect(toLedgerModel('gpt-4')).toBe('gpt-4');
     });
 
+    it('runs deep_research on the substitute, with no OpenAI key to swap it onto GPT-4.1', async () => {
+      const { buildSubagentToolConfig } = await import('./agentExecutor.subagentToolConfig');
+      await runRestricted();
+      await runRestricted({ user: { isAdmin: true } });
+
+      const [restricted, admin] = vi.mocked(buildSubagentToolConfig).mock.calls.map(call => call[0]);
+      expect(restricted).toMatchObject({ model: 'cheap-model', apiKeyTable: undefined });
+      expect(admin).toMatchObject({ model: 'claude-sonnet-5' });
+      expect(admin.apiKeyTable).toBeDefined();
+    });
+
     it('names the requested model for the identity reminder only when substituted', async () => {
       const { ReActAgent } = await import('@bike4mind/agents');
       const contexts: Array<Record<string, unknown>> = [];
