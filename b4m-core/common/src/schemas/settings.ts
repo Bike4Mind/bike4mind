@@ -3039,7 +3039,7 @@ export const settingsMap = {
     max: 100000,
     int: true,
     description:
-      'Max requests per minute on every per-user rate-limited route (in-app chat, optimize-input and other AI helper calls included) for users with no active paid subscription. Set to 0 to block all free-tier requests on those routes.',
+      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Free-tier users. Set to 0 to also block AI helpers such as optimize-input, rapid-reply and data-lake search. Helpers keep their own fixed caps when this is positive.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 1,
@@ -3052,7 +3052,7 @@ export const settingsMap = {
     max: 100000,
     int: true,
     description:
-      'Max requests per minute on every per-user rate-limited API route for Basic-tier subscribers (e.g. Professional plan).',
+      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Basic-tier subscribers (e.g. Professional plan). AI helper routes keep their own fixed caps.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 2,
@@ -3064,7 +3064,8 @@ export const settingsMap = {
     min: 1,
     max: 100000,
     int: true,
-    description: 'Max requests per minute on every per-user rate-limited API route for Pro-tier subscribers.',
+    description:
+      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Pro-tier subscribers. AI helper routes keep their own fixed caps.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,
