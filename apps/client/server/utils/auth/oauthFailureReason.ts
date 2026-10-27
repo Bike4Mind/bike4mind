@@ -18,6 +18,8 @@ export const OAUTH_FAILURE_REASONS = [
   'state_expired',
   'state_missing',
   'registration_closed',
+  // Set by the callback itself from the provider's `?error=access_denied` (user cancelled consent).
+  'access_denied',
   'internal',
 ] as const;
 

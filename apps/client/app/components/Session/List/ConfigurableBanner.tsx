@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, IconButton, Typography } from '@mui/joy';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
-import { ANALYTICS_EVENTS } from '@server/types/analytics';
+import { ANALYTICS_EVENTS } from '@bike4mind/server-utils/types/analytics/index';
 import { IModal } from '@bike4mind/common';
 
 interface ConfigurableBannerProps {

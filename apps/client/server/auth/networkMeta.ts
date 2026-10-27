@@ -1,6 +1,8 @@
 import type { INetworkMeta } from '@bike4mind/common';
+import { ja4FingerprintSchema } from '@bike4mind/common';
 import { authEventRepository, User } from '@bike4mind/database';
 import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
+import { CLOUDFRONT_VIEWER_JA4_HEADER } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { DATACENTER_ASNS } from './datacenterAsns';
 
 export type NetworkRequest = ClientIpRequest & {
@@ -15,6 +17,10 @@ export function readNetworkMeta(req: NetworkRequest): INetworkMeta {
   const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'];
   const { asn, country } = getClientNetwork(req);
+  const ja4 =
+    process.env.ORIGIN_VERIFY_SECRET && process.env.B4M_SELF_HOST !== 'true'
+      ? ja4FingerprintSchema.safeParse(req.headers[CLOUDFRONT_VIEWER_JA4_HEADER])
+      : null;
   return {
     ip: ip === 'unknown' ? null : ip,
     userAgent: (Array.isArray(userAgent) ? userAgent[0] : userAgent) || null,
@@ -22,6 +28,7 @@ export function readNetworkMeta(req: NetworkRequest): INetworkMeta {
     asnOrg: asn === null ? null : (DATACENTER_ASNS.get(asn) ?? null),
     country,
     isDatacenter: asn === null ? null : DATACENTER_ASNS.has(asn),
+    ja4: ja4?.success ? ja4.data : null,
   };
 }
 

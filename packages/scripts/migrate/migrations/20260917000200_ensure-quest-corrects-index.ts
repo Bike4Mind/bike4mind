@@ -9,8 +9,8 @@ import { type MigrationFile } from './index';
  * index serves that match so the walk does not scan the largest collection in the database.
  *
  * Migration rather than autoIndex, for the same reason as
- * 20260909000000_ensure-quest-images-index / 20260902000000_ensure-quest-retrieval-index: prod
- * runs DocumentDB, where an index build takes a foreground collection lock. Left to autoIndex,
+ * 20260909000000_ensure-quest-images-index / 20260902000000_ensure-quest-retrieval-index: autoIndex
+ * builds are fire-and-forget (a failure is silent). Left to autoIndex,
  * this one would build on whichever Lambda's cold boot first touches quests after deploy - a
  * user's export request, not a migration window.
  *

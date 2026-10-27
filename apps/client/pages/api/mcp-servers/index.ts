@@ -10,7 +10,7 @@ import { respond } from '@server/utils/respond';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
+import { encryptEnvVariables, decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { mcpServerCreateBodySchema } from '@server/validators/mcpServerValidators';
 import { assertNoForbiddenMcpEnvKeys } from '@server/utils/mcpEnvValidation';
 import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from '@bike4mind/services/llm';

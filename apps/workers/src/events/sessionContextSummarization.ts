@@ -1,7 +1,7 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import { Quest, Session, sessionRepository } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { ChatModelName, IMessage, MessageContentObject } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';

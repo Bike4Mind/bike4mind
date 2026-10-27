@@ -135,6 +135,7 @@
       "noPermission": "You do not have permission to access this notebook.",
       "invalidRequest": "Invalid request. Please try again.",
       "tooManyRequests": "Too many requests. Please wait a moment and try again.",
+      "dailyFreeLimitReached": "You have reached today's free-tier credit limit. It resets at midnight UTC, or upgrade your plan to keep going.",
       "serverError": "Server error. Please try again later.",
       "networkError": "Failed to send message. Please check your connection.",
       "sendFailed": "Failed to send message. Please try again."

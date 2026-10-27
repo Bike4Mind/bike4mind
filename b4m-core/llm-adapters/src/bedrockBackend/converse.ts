@@ -22,6 +22,7 @@ import {
   type ICompletionResponseChunk,
 } from '../backend';
 import { DispatchModel } from '../dispatchModel';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
 import { BaseBedrockBackend } from './base';
 import { createInlineReasoningScanner, type InlineReasoningScanner } from './inlineReasoning';
 
@@ -252,11 +253,17 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     // toolConfig (and any toolUse/toolResult block without it) on models that lack it.
     const sendTools = Boolean(options.tools?.length) && record?.supportsTools === true;
 
-    const systemText = messages
+    const callerSystemText = messages
       .filter(m => m.role === 'system' && m.content)
       .map(m => textOf(m.content))
       .filter(text => text.trim() !== '')
       .join('\n');
+
+    // Appended before the demote-to-user branch below, so a system-only payload carries the
+    // line too. Only tools actually sent can replace the reminder on this request.
+    const systemText = shouldOmitIdentityReminder({ ...options, tools: sendTools ? options.tools : undefined })
+      ? callerSystemText
+      : appendIdentityReminder(callerSystemText, buildIdentityReminder(model, options.modelDisplayName));
 
     const converseMessages = this.toConverseMessages(messages, {
       includeTools: sendTools,
@@ -264,9 +271,10 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     });
 
     // Converse requires at least one message, so a system-only payload (some title/summary
-    // tasks) becomes the sole user turn.
+    // tasks) becomes the sole user turn. Keyed on the caller's text: the reminder alone is not
+    // a payload worth sending, and a blank caller prompt still has to be rejected.
     let systemDemotedToUser = false;
-    if (converseMessages.length === 0 && systemText) {
+    if (converseMessages.length === 0 && callerSystemText) {
       converseMessages.push({ role: 'user', content: [{ text: systemText }] });
       systemDemotedToUser = true;
     }

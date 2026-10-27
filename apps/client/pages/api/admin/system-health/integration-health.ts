@@ -3,7 +3,7 @@ import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   integrationHealthCheckRepository,
   integrationCircuitOverrideRepository,
@@ -12,7 +12,11 @@ import {
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
 import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-utils/services/integrationHealthService';
 import { getStatus, clearCache } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { flushBreakerMetrics, getAllBreakerStates, resetBreaker } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import {
+  flushBreakerMetrics,
+  getAllBreakerStates,
+  resetBreaker,
+} from '@bike4mind/server-utils/services/mcpCircuitBreakers';
 
 const ensureAdmin = (isAdmin?: boolean | null) => {
   if (!isAdmin) {

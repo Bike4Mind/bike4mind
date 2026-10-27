@@ -819,6 +819,34 @@ export interface BackgroundProcessInfo {
  */
 export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessInfo } | { ok: false; message: string };
 
+export function localModelId(runtimeId: string, model: string): string {
+  return `local:${encodeURIComponent(runtimeId)}:${model}`;
+}
+
+/** `local:<encoded runtime>:<model>`; runtime ids can contain colons so they are URL-encoded, the model stays raw. */
+export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
+  const match = /^local:([^:]+):(.+)$/s.exec(id);
+  if (!match) return null;
+  try {
+    return { runtimeId: decodeURIComponent(match[1]), model: match[2] };
+  } catch {
+    return null;
+  }
+}
+
+/** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
+export function isLocalModel(id: string): boolean {
+  return id.startsWith('local:');
+}
+
+export function isLocalBackend(model: { backend?: string }): boolean {
+  return model.backend === 'ollama' || model.backend?.startsWith('local-') === true;
+}
+
+export function localBackend(runtimeId: string): string {
+  return `local-${runtimeId}`;
+}
+
 /**
  * One model this deployment offers, as the picker renders it.
  *
@@ -826,8 +854,6 @@ export type ChatMoveToBackgroundResult = { ok: true; process: BackgroundProcessI
  * provider keys - so this is genuinely per-deployment and per-account, and the desktop client
  * never ships a list of its own.
  */
-export const LOCAL_MODEL_PREFIX = 'local:ollama:';
-
 export interface ChatModelOption {
   id: string;
   name: string;
@@ -1230,6 +1256,8 @@ export type ChatStreamEvent =
    * summary failed, so the turn went out with the conversation as it was.
    */
   | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string }
+  /** A local model's prompt overflowed its context, so the oldest `dropped` messages were left out. */
+  | { type: 'context-trimmed'; sessionId: string; dropped: number }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`

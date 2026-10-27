@@ -63,7 +63,9 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
 
 /** The settings in the tier rate-limit group, read from the group tags so a new tier is picked up. */
 export const RATE_LIMIT_SETTING_KEYS = (Object.keys(settingsMap) as SettingKey[]).filter(
-  key => (settingsMap[key] as { group?: string }).group === API_SERVICE_GROUPS.RATE_LIMITING.id
+  key =>
+    (settingsMap[key] as { group?: string }).group === API_SERVICE_GROUPS.RATE_LIMITING.id &&
+    key.startsWith('apiRateLimit')
 );
 
 // Admin Settings search term that narrows the list to the rate-limit group; it matches on setting

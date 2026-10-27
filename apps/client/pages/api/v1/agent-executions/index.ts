@@ -22,7 +22,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, startAgentExecutionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { startAgentExecution } from '@server/utils/startAgentExecution';

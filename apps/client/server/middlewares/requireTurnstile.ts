@@ -1,4 +1,6 @@
-import { RequestHandler } from 'express';
+import { Request, RequestHandler } from 'express';
+import { Resource } from 'sst';
+import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { verifyTurnstile } from '@bike4mind/server-utils/utils/turnstile';
 import { getTurnstilePolicy, turnstileAllowedHostnames } from '@server/utils/auth/turnstile';
@@ -21,6 +23,7 @@ export const requireTurnstile = (action: string): RequestHandler => {
     });
     if (!policy) return;
     if (!policy.active) return next();
+    if (isE2ETestRequest(req)) return next();
 
     const ip = getClientIp(req);
     const result = await verifyTurnstile({
@@ -50,3 +53,16 @@ export const requireTurnstile = (action: string): RequestHandler => {
     });
   };
 };
+
+/**
+ * Playwright cannot solve a real challenge, so e2e skips it behind the same three guards as
+ * /api/test/otc-code: a non-production stage, the shared E2E secret header and a -e2e@test.com
+ * email. Real users on the stage are still challenged. Must stay in sync with that endpoint.
+ */
+function isE2ETestRequest(req: Request): boolean {
+  if (!isE2EEnabled()) return false;
+  const expected = Resource.E2E_CLEANUP_SECRET?.value || process.env.E2E_CLEANUP_SECRET;
+  if (!expected || expected === 'not-configured' || req.headers?.['x-e2e-cleanup-secret'] !== expected) return false;
+  const email = typeof req.body?.email === 'string' ? req.body.email.toLowerCase().trim() : '';
+  return /-e2e@test\.com$/i.test(email);
+}

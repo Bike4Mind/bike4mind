@@ -22,13 +22,13 @@ vi.mock('@server/utils/apiKeyTrust', () => ({
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
-vi.mock('@server/middlewares/rateLimit', async () =>
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
   (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/userRateTier', async () =>
   (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
-vi.mock('@server/utils/orgAccess', async orig =>
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>
   (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -240,7 +240,9 @@ describe('POST /api/v1/video-generations', () => {
       validateWithScopes([ApiKeyScope.AI_GENERATE]);
       asUser('user-1', HOME_ORG);
       // The real resolver, so membership is decided by the shareable gate rather than the harness default.
-      const actual = await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+      const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/orgAccess')>(
+        '@bike4mind/server-utils/utils/orgAccess'
+      );
       h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
       h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
         id === MEMBER_ORG || id === HOME_ORG ? { id } : null
@@ -347,7 +349,9 @@ describe('POST /api/v1/video-generations', () => {
     describe('without an org-billed key', () => {
       beforeEach(async () => {
         asUser('user-1', HOME_ORG);
-        const actual = await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+        const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/orgAccess')>(
+          '@bike4mind/server-utils/utils/orgAccess'
+        );
         h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
         h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
           id === HOME_ORG ? { id } : null

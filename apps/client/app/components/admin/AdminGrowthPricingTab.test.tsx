@@ -180,6 +180,8 @@ describe('AdminGrowthPricingTab', () => {
       q: RATE_LIMIT_SETTINGS_SEARCH,
     });
     expect(RATE_LIMIT_SETTING_KEYS.length).toBeGreaterThan(0);
+    // Access policy shares the section, but this link opens only tier rate limits.
+    expect(RATE_LIMIT_SETTING_KEYS).not.toContain('apiKeyAccess');
     for (const key of RATE_LIMIT_SETTING_KEYS) {
       expect(key).toContain(RATE_LIMIT_SETTINGS_SEARCH);
       expect(settingsMap[key].category).toBe('SecOps');

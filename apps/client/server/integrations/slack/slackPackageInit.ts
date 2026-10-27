@@ -8,7 +8,7 @@ import { configureSlackPackage } from '@bike4mind/slack';
 import type { ISlackServerDependencies, ISlackDatabaseDependencies } from '@bike4mind/slack';
 
 // Server utilities
-import { createStateToken, verifyStateToken, validateJwtSecret } from '@server/auth/jwtStateStore';
+import { createStateToken, verifyStateToken, validateJwtSecret } from '@bike4mind/server-utils/auth/jwtStateStore';
 import {
   getOrCreateSession,
   createSession,
@@ -27,7 +27,7 @@ import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrati
 import { logEvent } from '@server/utils/analyticsLog';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
-import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
+import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 // Database models and repositories
 import {

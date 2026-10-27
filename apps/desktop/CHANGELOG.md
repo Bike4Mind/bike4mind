@@ -18,6 +18,8 @@
 
 ## Unreleased
 
+- Start new main-based worktrees from freshly fetched upstream `main` instead of local or stale `main`; if upstream cannot be fetched, the session reports the error instead of starting from a local base.
+
 - Add opt-in, account-scoped local history search and local Ollama chat without sign-in.
 
 - Show the personal credit balance against the monthly plan allowance in the footer ring, with last-turn costs in its tooltip and context usage in the separate Context panel.

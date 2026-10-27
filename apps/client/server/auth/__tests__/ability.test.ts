@@ -263,6 +263,38 @@ describe('defineAbilitiesFor - user-shared document access', () => {
   });
 });
 
+// Knowledge Files "Export All" (pages/api/files/download.ts) picks its files with
+// accessibleBy(ability, 'export').ofType(FabFile). With no export rule at all CASL answers
+// with its unsatisfiable filter, so the route always zipped an empty archive.
+describe('defineAbilitiesFor - FabFile export scoping', () => {
+  const ownDoc = () => Object.assign(new FabFile(), { userId: 'u1' });
+  const othersDoc = () => Object.assign(new FabFile(), { userId: 'someone-else' });
+
+  it("lets a user export their own files but not someone else's", () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('export', ownDoc())).toBe(true);
+    expect(ability.can('export', othersDoc())).toBe(false);
+  });
+
+  it('scopes the export query to the caller', () => {
+    const scope = accessibleBy(defineAbilitiesFor(makeUser()), 'export').ofType(FabFile);
+    expect(scope).toEqual({ $or: [{ userId: 'u1' }] });
+  });
+
+  // No `manage all` fallback is reintroduced: an admin exports the same own-only set, mirroring
+  // the Session export rule. An org-wide dump belongs in a separate, audited admin tool.
+  it("scopes an admin's export to the admin's own files too", () => {
+    const scope = accessibleBy(defineAbilitiesFor(makeUser({ isAdmin: true })), 'export').ofType(FabFile);
+    expect(scope).toEqual({ $or: [{ userId: 'u1' }] });
+  });
+
+  it('fails closed for a caller with no ability at all', () => {
+    const scope = accessibleBy(defineAbilitiesFor(undefined), 'export').ofType(FabFile);
+    expect(scope).toEqual({ $expr: { $eq: [0, 1] } });
+    expect(scope).not.toEqual({});
+  });
+});
+
 describe('defineAbilitiesFor - org manager rule', () => {
   const org = (fields: { adminUserIds: string[]; users: Array<{ userId: string; permissions: string[] }> }) =>
     Object.assign(new Organization(), { userId: 'owner', groups: [], ...fields });

@@ -15,7 +15,7 @@ import {
   type FolderAccess,
 } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 import { getValidUserDriveAccessToken, isTerminalDriveGrantError } from '@server/integrations/google/drive/common';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
 import {
   BadRequestError,
