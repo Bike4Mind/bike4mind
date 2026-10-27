@@ -466,9 +466,12 @@ describe('SmartChunker', () => {
     });
 
     it('falls back to text chunking for a file that is not JSON', async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
       const out = await chunkTexts('{"a": nope, "note": "still searchable"}');
 
       expect(out).toContain('still searchable');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('chunking it as text'));
+      warn.mockRestore();
     });
 
     it('keeps the structured path for valid JSON', async () => {
