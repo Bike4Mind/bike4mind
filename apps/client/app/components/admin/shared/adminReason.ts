@@ -23,6 +23,7 @@ export const ADMIN_REASON_PRESETS = {
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
+  bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
 } as const satisfies Record<string, readonly string[]>;
 

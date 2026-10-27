@@ -108,6 +108,27 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'abuse.bulk.revoke_sessions': { category: 'identity', severity: 'notice', write: 'strict' },
   'abuse.bulk.clawback': { category: 'credits', severity: 'notice', write: 'strict' },
   'abuse.bulk.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // Users-list bulk actions (apps/client/pages/api/admin/users/bulk/*): one strict entry per changed
+  // user, written in that user's transaction, plus a bestEffort summary per batch.
+  'user.bulk.executed': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.bulk.suspended': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.bulk.restricted': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.bulk.credits_adjusted': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
+  'user.bulk.api_keys_revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.bulk.tagged': { category: 'account', severity: 'info', write: 'strict' },
+  'user.bulk.contained': { category: 'access', severity: 'critical', write: 'strict' },
+  // An undo that reverses a deduction adds credits, so it is held to the same grant thresholds.
+  'user.bulk.undone': {
+    category: 'account',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 

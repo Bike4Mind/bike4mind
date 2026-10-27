@@ -360,6 +360,8 @@ export interface IUserApiKey {
   revokedBy?: string;
   /** Why the key was revoked, when the caller supplied a reason. */
   revokedReason?: string;
+  /** The admin users-list bulk batch that revoked the key; only that batch's undo may restore it. */
+  revokedBatchId?: string;
   /**
    * HMAC key that signs this key's generation completion callbacks, encrypted at rest and
    * `select: false`, so it is absent from every read except findCallbackSigningSecret. The

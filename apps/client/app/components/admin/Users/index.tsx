@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Box, Button, Dropdown, IconButton, Menu, MenuButton, MenuItem, Stack } from '@mui/joy';
+import { Alert, Button, Dropdown, IconButton, Menu, MenuButton, MenuItem, Stack } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import DownloadIcon from '@mui/icons-material/Download';
 import HistoryIcon from '@mui/icons-material/History';
@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
+import type { AdminUsersBulkActionType, AdminUsersBulkTarget } from '@client/app/utils/adminUsersBulk';
 import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
 import AdminProfileModal from '../AdminProfileModal';
 import {
@@ -22,12 +23,12 @@ import {
 } from '../shared';
 import { adminFocus } from '../shared/adminStyles';
 import { AnomalyBanner } from './AnomalyBanner';
-import BulkAbuseBar from './BulkAbuseBar';
-import BulkAbuseResponseModal from './BulkAbuseResponseModal';
 import ComplianceModal from './ComplianceModal';
 import CreateUserModal, { useCreateUserModal } from './CreateUserModal';
 import { exportUsersCsv } from './exportUsersCsv';
 import { DomainGroupHeader } from './List/DomainGroupHeader';
+import { UsersBulkActionDialog } from './List/UsersBulkActionDialog';
+import { UsersBulkBar } from './List/UsersBulkBar';
 import {
   toAdminUsersFilter,
   useAdminUsersDomainGroups,
@@ -91,7 +92,8 @@ const UsersTab: React.FC = () => {
   const { setOpen: setCreateUserModalOpen } = useCreateUserModal();
   const [showRecentActivity, setShowRecentActivity] = useState(false);
   const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
-  const [bulkAbuseOpen, setBulkAbuseOpen] = useState(false);
+  // The target is frozen when the dialog opens, so a list refetch cannot change what it acts on.
+  const [bulkRun, setBulkRun] = useState<{ type: AdminUsersBulkActionType; target: AdminUsersBulkTarget } | null>(null);
   const [exporting, setExporting] = useState(false);
 
   // Seeded from the persisted params so a restored search is not wiped on mount.
@@ -129,8 +131,15 @@ const UsersTab: React.FC = () => {
     setSelectionFilterKey(filterKey);
     setSelection(NO_SELECTION);
   }
-  const selectedIds = selection.mode === 'explicit' ? selection.ids : [];
   const clearSelection = useCallback(() => setSelection(NO_SELECTION), []);
+  const openBulkAction = (type: AdminUsersBulkActionType) =>
+    setBulkRun({
+      type,
+      target:
+        selection.mode === 'allMatching'
+          ? { kind: 'filter', filter: toAdminUsersFilter(params) }
+          : { kind: 'ids', userIds: [...selection.ids] },
+    });
 
   const sortColumn = Object.entries(USERS_SORT_COLUMNS).find(([, field]) => field === params.sortField)?.[0];
   const sort: DataTableSort | undefined = sortColumn
@@ -307,40 +316,26 @@ const UsersTab: React.FC = () => {
             maxHeight="none"
           />
 
-          {/* Left-aligned so the global AI Chat pill in the bottom-right corner does not cover it. */}
-          <Box
-            sx={{
-              position: 'sticky',
-              bottom: 8,
-              zIndex: 2,
-              alignSelf: 'flex-start',
-              px: 1.5,
-              py: 1,
-              bgcolor: 'admin.surface',
-              border: '1px solid',
-              borderColor: 'admin.border',
-              borderRadius: '10px',
-              boxShadow: 'md',
-            }}
-          >
-            <BulkAbuseBar
-              selectedCount={selectedIds.length}
-              onClearSelection={clearSelection}
-              onOpen={() => setBulkAbuseOpen(true)}
-            />
-          </Box>
+          <UsersBulkBar
+            selection={selection}
+            totalMatching={totalUsers}
+            onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
+            onClear={clearSelection}
+            onAction={openBulkAction}
+          />
         </>
       )}
 
       <AdminProfileModal />
       <ComplianceModal />
       <CreateUserModal />
-      {/* Mounted only while open, so each run starts from a clean form. */}
-      {bulkAbuseOpen && (
-        <BulkAbuseResponseModal
-          selectedUserIds={[...selectedIds]}
-          onClose={() => setBulkAbuseOpen(false)}
-          onExecuted={clearSelection}
+      {/* Mounted only while open, so each run starts from a clean form and idempotency key. */}
+      {bulkRun && (
+        <UsersBulkActionDialog
+          type={bulkRun.type}
+          target={bulkRun.target}
+          onClose={() => setBulkRun(null)}
+          onDone={clearSelection}
         />
       )}
     </Stack>

@@ -147,6 +147,55 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     );
   }
 
+  /**
+   * Disables every key of the user that is not already DISABLED, stamping the actor and the bulk batch,
+   * and returns the keys it flipped with their prior status so `reactivateByIds` can put them back.
+   */
+  async revokeLiveByUserId(
+    userId: string,
+    { revokedBy, revokedReason, batchId }: { revokedBy: string; revokedReason: string; batchId: string }
+  ): Promise<{ id: string; status: ApiKeyStatus }[]> {
+    const live = await this.model
+      .find({ userId, status: { $ne: ApiKeyStatus.DISABLED } })
+      .select('_id status')
+      .lean<{ _id: unknown; status: ApiKeyStatus }[]>();
+    if (live.length === 0) return [];
+    await this.model.updateMany(
+      { _id: { $in: live.map(key => key._id) }, status: { $ne: ApiKeyStatus.DISABLED } },
+      {
+        $set: {
+          status: ApiKeyStatus.DISABLED,
+          revokedAt: new Date(),
+          revokedBy,
+          revokedReason,
+          revokedBatchId: batchId,
+        },
+      }
+    );
+    return live.map(key => ({ id: String(key._id), status: key.status }));
+  }
+
+  /**
+   * Undo of `revokeLiveByUserId`: restores each key's prior status, but only for keys of this user still
+   * DISABLED by that same batch, so a key revoked again since (by anyone) stays revoked.
+   */
+  async reactivateByIds(
+    userId: string,
+    keys: { id: string; status: ApiKeyStatus }[],
+    batchId: string
+  ): Promise<number> {
+    let restored = 0;
+    for (const status of new Set(keys.map(key => key.status))) {
+      const ids = keys.filter(key => key.status === status).map(key => key.id);
+      const result = await this.model.updateMany(
+        { _id: { $in: ids }, userId, status: ApiKeyStatus.DISABLED, revokedBatchId: batchId },
+        { $set: { status }, $unset: { revokedAt: 1, revokedBy: 1, revokedReason: 1, revokedBatchId: 1 } }
+      );
+      restored += result.modifiedCount;
+    }
+    return restored;
+  }
+
   findExpiredKeys() {
     return this.model
       .find({
@@ -298,6 +347,8 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     revokedAt: { type: Date },
     revokedBy: { type: String },
     revokedReason: { type: String },
+    // Set only by an admin users-list bulk revoke, so that batch's undo restores its own keys and no others.
+    revokedBatchId: { type: String },
     // Encrypted at rest; select: false keeps it out of every read (and out of the whole-doc
     // update() writes rotate/revoke do) except findCallbackSigningSecret. See IUserApiKey.
     callbackSigningSecret: { type: String, select: false },

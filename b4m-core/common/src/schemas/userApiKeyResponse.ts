@@ -22,6 +22,7 @@ const USER_API_KEY_RESPONSE_FIELDS = {
   revokedAt: true,
   revokedBy: true,
   revokedReason: true,
+  revokedBatchId: true,
   callbackSigningSecretCreatedAt: true,
   rateLimit: true,
   usage: true,
