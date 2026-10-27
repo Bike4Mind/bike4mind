@@ -96,6 +96,31 @@ describe('collectInlineAssets', () => {
     expect(oversized).toEqual(['b.png', 'c.png']);
   });
 
+  it('budgets assets without a fallback before ones that have one, whatever the manifest order', async () => {
+    const manifest = [m('a.png'), m('b.png'), m('style.css', 'text/css')];
+    const { assets, oversized } = await collectInlineAssets({
+      manifest,
+      load: async () => Buffer.alloc(40),
+      perAssetMaxBytes: 100,
+      totalMaxBytes: 160, // two 78-byte encoded assets fit
+      hasFallback: p => p.endsWith('.png'),
+    });
+    expect([...assets.keys()]).toEqual(['style.css', 'a.png']);
+    expect(oversized).toEqual(['b.png']);
+  });
+
+  it('reports oversized paths in manifest order when the budget order differs', async () => {
+    const manifest = [m('a.png'), m('b.png'), m('big.css', 'text/css')];
+    const { oversized } = await collectInlineAssets({
+      manifest,
+      load: async p => Buffer.alloc(p === 'big.css' ? 200 : 40),
+      perAssetMaxBytes: 100,
+      totalMaxBytes: 80,
+      hasFallback: p => p.endsWith('.png'),
+    });
+    expect(oversized).toEqual(['b.png', 'big.css']);
+  });
+
   it('keeps the default budget under Lambda 6 MB for ~5 MB of raw images', async () => {
     const manifest = Array.from({ length: 14 }, (_, i) => m(`img${i}.png`));
     const { assets, oversized } = await collectInlineAssets({
