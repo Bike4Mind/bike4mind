@@ -325,7 +325,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:dataLakeTaxonomyQueueDLQ',
     '09d613eb6bffdc733600b1b2dbb9a68496671babcfb7a2b8769c84b5d65d9bbd'
   ),
-  gap('queue:infra/queues.ts:deepAgentWakeQueue', 'ff481c124ef3a42bf99535ff70a16cbb351fb973540dd96d7333f60f2b4a1cd5', [
+  gap('queue:infra/queues.ts:deepAgentWakeQueue', '7fabc060e567ba3872895852fdecd1c0a371fa8cfbfa14966a1fd89e0dd57ad1', [
     'bedrock:InvokeModel',
     'cloudwatch:PutMetricData',
   ]),

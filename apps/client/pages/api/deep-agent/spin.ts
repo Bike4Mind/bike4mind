@@ -4,12 +4,9 @@ import { randomUUID } from 'crypto';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-// Direct file imports (NOT the @server/deepAgent barrel): the barrel's subtree
-// pulls in wakeHandler -> queueHandlers/utils -> the Lambda-runtime import graph,
-// which deadlocks module init under the Next dev server. Every other deep-agent
-// route already imports by file for the same reason. The wake deps are
-// assembled inline from the clean modules instead of wakeHandler's
-// buildDefaultWakeDeps for the same reason.
+// Direct file imports, as in every other deep-agent route. The wake deps are
+// assembled inline from the clean modules because buildDefaultWakeDeps lives in
+// apps/workers/src/deepAgent/wakeHandler.ts, which apps/client cannot import.
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps } from '@bike4mind/agents';
 import '@server/deepAgent/contributedToolbelts';
 import { enrollDeepAgent } from '@bike4mind/server-utils/deepAgent/enroll';
