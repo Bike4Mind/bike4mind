@@ -1,5 +1,6 @@
 import type { Components, Theme } from '@mui/joy/styles';
 import { adminPalette, type AdminPalette } from '../admin';
+import { adminScrollArea, adminScrollbar } from './adminScrollbar';
 
 /**
  * The admin skin: Joy component overrides that only take effect under an element carrying
@@ -11,19 +12,45 @@ import { adminPalette, type AdminPalette } from '../admin';
  * where the skin works through a Joy CSS variable (the palette remap, `body-sm`), `sx` wins.
  */
 export const ADMIN_SURFACE_ATTRIBUTE = 'data-admin-surface';
+/**
+ * Marks the root of app-wide chrome that renders under the admin root (the floating AI chat, the
+ * help panel). The skin stops at it, so the widget looks exactly as it does on any other page.
+ */
+export const ADMIN_SURFACE_EXCLUDE_ATTRIBUTE = 'data-admin-surface-exclude';
 
 const surface = `[${ADMIN_SURFACE_ATTRIBUTE}]`;
+const exclude = `[${ADMIN_SURFACE_EXCLUDE_ATTRIBUTE}]`;
+const notExcluded = `:where(:not(${exclude}, ${exclude} *))`;
 const adminMounted = `body:has(${surface})`;
 // Portalled popups render under <body>, outside the admin root, so they are matched while an admin
-// surface is mounted instead.
-const portalRoots =
-  '.MuiModalDialog-root, .MuiDrawer-content, .MuiMenu-root, .MuiSelect-listbox, .MuiAutocomplete-listbox';
+// surface is mounted instead. A popup opened from excluded chrome portals there too; it is told apart
+// by its trigger: an expanded control inside the chrome owns the open menu or listbox, and a tooltip
+// shows while the pointer is over the chrome.
+const dialogRoots = '.MuiModalDialog-root, .MuiDrawer-content';
+const popupRoots = '.MuiMenu-root, .MuiSelect-listbox, .MuiAutocomplete-listbox';
+const adminDialogsMounted = adminMounted;
+const adminPopupsMounted = `${adminMounted}:not(:has(${exclude} [aria-expanded="true"]))`;
+const adminTooltipsMounted = `${adminMounted}:not(:has(${exclude}:hover))`;
+const portalScope = `${adminDialogsMounted} :is(${dialogRoots}), ${adminPopupsMounted} :is(${popupRoots})`;
+/** The portalled roots that carry the admin variables, as a list so each can take its own prefix. */
+const portalSurfaces = [
+  `${adminDialogsMounted} :is(${dialogRoots})${notExcluded}`,
+  `${adminPopupsMounted} :is(${popupRoots})${notExcluded}`,
+  `${adminTooltipsMounted} .MuiTooltip-root`,
+];
 // The leading `*` matters: stylis reads a nested key that starts with `:` as a pseudo-class of
 // the component itself and would glue the selector onto it.
-export const IN_ADMIN = `*:where(${surface}, ${adminMounted} :is(${portalRoots})) &`;
-export const IN_ADMIN_PORTAL = `*:where(${adminMounted}) &`;
+export const IN_ADMIN = `*:where(${surface}, ${portalScope}) &${notExcluded}`;
+/** A portalled dialog or drawer, and its backdrop. */
+export const IN_ADMIN_PORTAL = `*:where(${adminDialogsMounted}) &${notExcluded}`;
+/** A portalled menu or listbox. */
+export const IN_ADMIN_POPUP = `*:where(${adminPopupsMounted}) &${notExcluded}`;
+export const IN_ADMIN_TOOLTIP = `*:where(${adminTooltipsMounted}) &`;
 /** Inside a table body row: a Joy `Table` row or a `role="row"` grid row. */
-export const IN_ADMIN_ROW = `*:where(${surface} :is(tbody tr, [role="row"])) &`;
+export const IN_ADMIN_ROW = `*:where(${surface} :is(tbody tr, [role="row"])) &${notExcluded}`;
+
+/** `selector` inside the admin root but outside any excluded chrome; a pseudo-element goes last. */
+const inSurface = (selector: string, pseudoElement = '') => `${surface} ${selector}${notExcluded}${pseudoElement}`;
 
 const admin = (token: string) => `var(--joy-palette-admin-${token})`;
 const tone = (name: string, part: 'foreground' | 'background') => admin(`status-${name}-${part}`);
@@ -228,8 +255,18 @@ const rootVariables = {
 const focusable = ':focus-visible:not(input, textarea, .MuiSelect-button)';
 const helpIcons = ':is([data-testid="HelpOutlineIcon"], [data-testid="HelpIcon"], [data-testid="InfoOutlinedIcon"])';
 
+/**
+ * Every variable the skin redefines. CSS variables inherit, so excluded chrome under the admin root
+ * would read the admin values; `:root` keeps a copy of each document-level value under `--app-*`
+ * (a `var()` in a custom property resolves where it is declared, so the copy follows the color
+ * scheme) and the excluded root puts them back.
+ */
+const skinnedVariables = Object.keys({ ...rootVariables, ...channelVars(adminPalette.light) });
+const appCopy = (variable: string) => `--app-${variable.slice(2)}`;
+
 /** Global rules for the admin root itself and the popups it opens. Rendered once by `AppTheme`. */
-export const adminSkinGlobalStyles = {
+export const adminSkinGlobalStyles = (theme: Theme) => ({
+  ':root': Object.fromEntries(skinnedVariables.map(variable => [appCopy(variable), `var(${variable})`])),
   [`${surface}${surface}`]: {
     ...rootVariables,
     backgroundColor: admin('canvas'),
@@ -238,38 +275,54 @@ export const adminSkinGlobalStyles = {
     fontSize: '14px',
     WebkitFontSmoothing: 'antialiased',
   },
-  [`${adminMounted} :is(${portalRoots}, .MuiTooltip-root)`]: rootVariables,
-  [`${surface}${surface}, ${adminMounted} :is(${portalRoots}, .MuiTooltip-root)`]: channelVars(adminPalette.light),
-  [`${DARK} ${surface}${surface}, ${DARK} ${adminMounted} :is(${portalRoots}, .MuiTooltip-root)`]: channelVars(
+  [`${surface} ${exclude}`]: Object.fromEntries(
+    skinnedVariables.map(variable => [variable, `var(${appCopy(variable)})`])
+  ),
+  // The type the app's CssBaseline gives <body>, which excluded chrome would inherit on any other page.
+  // Zero specificity, so the excluded root's own colour and type (a solid pill's label) still win.
+  [`:where(${surface} ${exclude})`]: {
+    color: theme.vars.palette.text.primary,
+    fontFamily: theme.vars.fontFamily.body,
+    ...theme.typography['body-md'],
+  },
+  [portalSurfaces.join(', ')]: rootVariables,
+  [[`${surface}${surface}`, ...portalSurfaces].join(', ')]: channelVars(adminPalette.light),
+  [[`${surface}${surface}`, ...portalSurfaces].map(selector => `${DARK} ${selector}`).join(', ')]: channelVars(
     adminPalette.dark
   ),
   // The app theme strips Joy's focus outline with !important; the extra specificity of the
   // attribute selector lets the 2px accent ring win back. Fields draw their own ring instead.
-  [`${surface} ${focusable}, ${adminMounted} :is(${portalRoots}) ${focusable}`]: {
-    outline: `2px solid ${admin('accent')} !important`,
-    outlineOffset: '2px',
-  },
+  [`${inSurface(focusable)}, ${adminDialogsMounted} :is(${dialogRoots}) ${focusable}${notExcluded}, ${adminPopupsMounted} :is(${popupRoots}) ${focusable}`]:
+    {
+      outline: `2px solid ${admin('accent')} !important`,
+      outlineOffset: '2px',
+    },
+  // Overlay scrollbars on every admin scroll area; the main frame, sidebar, tables and dialog bodies
+  // also reserve the gutter (`adminScrollArea`).
+  [`${inSurface('*')}, ${adminDialogsMounted} :is(${dialogRoots})${notExcluded}, ${adminDialogsMounted} :is(${dialogRoots}) *${notExcluded}`]:
+    adminScrollbar,
   // Material icons sit outside Joy's theme. Help icons are 16 px and muted, never larger than the heading they explain.
-  [`${surface} svg${helpIcons}`]: { fontSize: '16px', color: admin('inkMuted') },
-  [`${surface} a:not([class*="Mui"])`]: { color: admin('link') },
+  [inSurface(`svg${helpIcons}`)]: { fontSize: '16px', color: admin('inkMuted') },
+  [inSurface('a:not([class*="Mui"])')]: { color: admin('link') },
   // globals.css paints radios green with !important and outlines the whole clickable overlay; inside
   // the admin the overlay stays invisible and Joy's own radio circle carries the accent.
-  [`${surface} [class*='MuiRadio-input'], ${surface} [class*='MuiRadio-input']:is(:checked, :hover, .Mui-checked)`]: {
-    border: 'none !important',
-    backgroundColor: 'transparent !important',
-  },
-  [`${surface} [class*='MuiRadio-input']:checked::after`]: { display: 'none !important' },
-  [`${surface} [class*='MuiRadio-action'].Mui-checked`]: { border: 'none !important' },
-  [`${surface} .MuiRadio-radio`]: { borderColor: `${admin('borderStrong')} !important` },
-  [`${surface} .MuiRadio-radio.Mui-checked`]: { borderColor: `${admin('accent')} !important` },
-  [`${surface} [class*='MuiRadio-icon']`]: { backgroundColor: `${admin('accent')} !important` },
+  [`${inSurface("[class*='MuiRadio-input']")}, ${inSurface("[class*='MuiRadio-input']:is(:checked, :hover, .Mui-checked)")}`]:
+    {
+      border: 'none !important',
+      backgroundColor: 'transparent !important',
+    },
+  [inSurface("[class*='MuiRadio-input']:checked", '::after')]: { display: 'none !important' },
+  [inSurface("[class*='MuiRadio-action'].Mui-checked")]: { border: 'none !important' },
+  [inSurface('.MuiRadio-radio')]: { borderColor: `${admin('borderStrong')} !important` },
+  [inSurface('.MuiRadio-radio.Mui-checked')]: { borderColor: `${admin('accent')} !important` },
+  [inSurface("[class*='MuiRadio-icon']")]: { backgroundColor: `${admin('accent')} !important` },
   // Chart axes, ticks and legends are meta text; series colors stay with each chart.
-  [`${surface} :is(.recharts-cartesian-axis-tick-value, .recharts-label, .recharts-legend-item-text)`]: {
+  [inSurface(':is(.recharts-cartesian-axis-tick-value, .recharts-label, .recharts-legend-item-text)')]: {
     fontSize: '12px',
   },
-  [`${surface} :is(.recharts-cartesian-axis-tick-value, .recharts-label) tspan`]: { fill: admin('inkMuted') },
-  [`${surface} .recharts-cartesian-grid line`]: { stroke: admin('border') },
-};
+  [inSurface(':is(.recharts-cartesian-axis-tick-value, .recharts-label) tspan')]: { fill: admin('inkMuted') },
+  [inSurface('.recharts-cartesian-grid line')]: { stroke: admin('border') },
+});
 
 const field = (prefix: string) => ({
   [IN_ADMIN]: {
@@ -293,7 +346,7 @@ const field = (prefix: string) => ({
 });
 
 const popupList = {
-  [IN_ADMIN_PORTAL]: {
+  [IN_ADMIN_POPUP]: {
     backgroundColor: admin('surface'),
     border: `1px solid ${admin('border')}`,
     borderRadius: '12px',
@@ -603,6 +656,11 @@ export const adminSkinComponents = {
       },
     },
   },
+  JoyDialogContent: {
+    styleOverrides: {
+      root: { [IN_ADMIN]: adminScrollArea },
+    },
+  },
   JoyDialogTitle: {
     styleOverrides: {
       root: { [IN_ADMIN]: { fontSize: '18px', fontWeight: 600, color: admin('ink') } },
@@ -616,7 +674,7 @@ export const adminSkinComponents = {
   JoyTooltip: {
     styleOverrides: {
       root: {
-        [IN_ADMIN_PORTAL]: {
+        [IN_ADMIN_TOOLTIP]: {
           backgroundColor: admin('ink'),
           color: admin('surface'),
           border: 'none',
@@ -626,7 +684,7 @@ export const adminSkinComponents = {
         },
       },
       arrow: {
-        [IN_ADMIN_PORTAL]: {
+        [IN_ADMIN_TOOLTIP]: {
           '&::before': { borderTopColor: admin('ink'), borderRightColor: admin('ink') },
         },
       },

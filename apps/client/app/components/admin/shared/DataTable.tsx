@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Box, Button, Checkbox, Option, Select, Skeleton, Stack, Table, Typography } from '@mui/joy';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
-import { adminFocus, adminFocusScope, adminSurface } from './adminStyles';
+import { adminFocus, adminFocusScope, adminScrollArea, adminSurface } from './adminStyles';
 import type { AdminSelection } from './BulkActionBar';
 
 export type DataColumn<Row> = {
@@ -120,6 +120,7 @@ export function DataTable<Row>({
           ...adminFocus,
           overflowX: 'auto',
           maxHeight: '65vh',
+          ...adminScrollArea,
           borderWidth: 1,
           borderStyle: 'solid',
         }}

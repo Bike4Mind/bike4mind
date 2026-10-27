@@ -474,6 +474,8 @@ const HelpPanel: React.FC = () => {
       anchor="right"
       open={open}
       onClose={close}
+      // App-wide chrome: the admin skin stops here (adminSkin.ts).
+      data-admin-surface-exclude=""
       slotProps={{
         content: {
           sx: {

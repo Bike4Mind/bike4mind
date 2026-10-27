@@ -31,6 +31,7 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
   return (
     <Box
       data-testid="docked-chat-panel"
+      data-admin-surface-exclude=""
       sx={{
         display: 'flex',
         flexDirection: 'column',

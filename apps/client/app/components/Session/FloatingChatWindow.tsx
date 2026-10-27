@@ -347,6 +347,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
         })}
         onClick={handleMinimize}
         data-testid="floating-chat-minimized"
+        data-admin-surface-exclude=""
       >
         <SmartToyIcon sx={{ fontSize: 16 }} />
         <Typography level="body-sm" fontWeight="md" sx={{ color: 'inherit' }}>
@@ -368,6 +369,8 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
       <Box
         ref={nodeRef}
         data-testid="floating-chat-window"
+        // App-wide chrome: the admin skin stops here (adminSkin.ts).
+        data-admin-surface-exclude=""
         sx={theme => ({
           position: 'fixed',
           width: localSize.width,
