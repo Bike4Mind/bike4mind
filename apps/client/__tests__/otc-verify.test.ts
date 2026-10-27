@@ -69,7 +69,16 @@ vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
   grantIndividualAdminSubscription: vi.fn(),
 }));
 
-vi.mock('@server/auth/networkMeta', () => ({ recordSignupNetwork: vi.fn(), recordLoginEvent: vi.fn() }));
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: vi.fn(),
+  recordLoginEvent: vi.fn(),
+  readNetworkMeta: vi.fn(() => ({})),
+}));
+// The per-network signup caps are covered in signupNetworkLimits.test.ts and pages/api/otc/__tests__/verify.test.ts.
+vi.mock('@server/auth/signupNetworkLimits', () => ({
+  assertSignupNetworkWithinLimits: vi.fn().mockResolvedValue(undefined),
+  createSignupRiskCollector: vi.fn(() => vi.fn()),
+}));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: {

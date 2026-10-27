@@ -6,6 +6,7 @@ import {
   canonicalizeEmail,
 } from '@bike4mind/common';
 import {
+  ADMIN_PERMISSIONS,
   AuthStrategy,
   PENDING_FREE_CREDITS_TAG,
   CollectionType,
@@ -1019,6 +1020,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     hasUsablePassword: { type: Boolean, default: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
+    adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
     planStorageLimit: { type: Number },

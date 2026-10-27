@@ -15,7 +15,7 @@ import { useShallow } from 'zustand/react/shallow';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
 import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
 import { useGetSession } from '@client/app/hooks/data/sessions';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { useAdminChatLayout } from './useAdminChatLayout';
 import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
@@ -153,14 +153,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const adminSession = useGetSession(adminSessionId);
 
   // Mount the assistant as the minimized pill so it is on hand without covering the page; restore on unmount
-  useEffect(() => {
-    if (!currentUser?.isAdmin) return;
-    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: true });
-    return () => {
-      // Reset the minimized default too, or the next floating chat opened elsewhere starts as the pill
-      setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
-    };
-  }, [currentUser?.isAdmin]);
+  useAdminChatLayout(!!currentUser?.isAdmin);
 
   return (
     <UndoToastProvider>
