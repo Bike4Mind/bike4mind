@@ -214,8 +214,28 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.SKILLS_READ,
     label: 'Skill Market: Claude Code feed',
     // Confined, so it is minted from the Skill Market's "Use in Claude Code" dialog, not the New-Key modals.
-    description: "Read the Claude Code plugin marketplace of an organization's approved Skill Market listings",
-    endpoints: ['GET /api/v1/skills/market/claude-marketplace.json', 'GET /api/v1/skills/market/:id/claude-plugin.zip'],
+    description:
+      "Read the Claude Code plugin marketplace of an organization's approved Skill Market listings, and browse and read listings",
+    endpoints: [
+      'GET /api/v1/skills/market/claude-marketplace.json',
+      'GET /api/v1/skills/market/:id/claude-plugin.zip',
+      'GET /api/v1/skills/market/listings',
+      'GET /api/v1/skills/market/listings/:id',
+    ],
+  },
+  {
+    value: ApiKeyScope.SKILLS_WRITE,
+    label: 'Skill Market: Write',
+    description:
+      'Publish your skills to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings. Unlike skills:read, it is not confined: it also reaches API routes that declare no scope',
+    endpoints: [
+      'GET|POST /api/v1/skills/market/listings',
+      'GET /api/v1/skills/market/listings/mine',
+      'GET|DELETE /api/v1/skills/market/listings/:id',
+      'POST /api/v1/skills/market/listings/:id/versions',
+      'POST /api/v1/skills/market/listings/:id/import',
+      'POST /api/v1/skills/market/versions/:vid/rescan',
+    ],
   },
   {
     value: ApiKeyScope.MARKETING_REPORTS_READ,

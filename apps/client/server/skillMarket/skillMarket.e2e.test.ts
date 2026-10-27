@@ -100,6 +100,7 @@ import { submitListingVersion, decideVersion, rescanVersion } from './submitVers
 import { recommendListings, searchListings } from './search';
 import { attachMarketStatus } from './marketStatus';
 import { serializeListing, withdrawAuthorListings } from './market';
+import { listMyListings, publishListing } from './author';
 import { MAX_SLA_REMINDERS, runSkillMarketReviewSla } from './reviewSla';
 import type { ClassifierLlm } from './classifySkill';
 import skillHandler from '@pages/api/skills/[id]/index';
@@ -1505,6 +1506,105 @@ describe('Skill Market (real mongod)', () => {
     const stored = (await SkillListingVersion.findById(version.id))!;
     expect(stored.reminderCount).toBe(MAX_SLA_REMINDERS);
     expect(stored.reviewStatus).toBe('pending');
+  });
+});
+
+describe('author helpers (real mongod)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function listingFor(skill: ISkill, createdAt?: Date) {
+    const doc = await SkillListing.create({
+      sourceSkillId: skill.id,
+      authorUserId: AUTHOR,
+      visibility: 'unlisted',
+      tags: [],
+      name: skill.name,
+      description: skill.description,
+      ...(createdAt ? { createdAt } : {}),
+    });
+    return doc.id as string;
+  }
+
+  it('listMyListings pages over tied createdAt without skipping or repeating a row', async () => {
+    const tied = new Date('2026-01-01T00:00:00Z');
+    const skills = await Promise.all([1, 2, 3, 4, 5].map(() => makeSkill(AUTHOR, 'Format text.')));
+    const ids = [
+      await listingFor(skills[0], new Date('2025-12-01T00:00:00Z')),
+      await listingFor(skills[1], tied),
+      await listingFor(skills[2], tied),
+      await listingFor(skills[3], tied),
+      await listingFor(skills[4], new Date('2026-02-01T00:00:00Z')),
+    ];
+
+    const seen: string[] = [];
+    let after: { at: Date; id: string } | undefined;
+    do {
+      const page = await listMyListings(AUTHOR, { limit: 2, after });
+      seen.push(...page.listings.map(l => String(l.listing._id)));
+      after = page.next ?? undefined;
+    } while (after);
+
+    expect([...seen].sort()).toEqual([...ids].sort());
+    expect(seen).toHaveLength(5);
+  });
+
+  it('listMyListings filters by source skill', async () => {
+    const [a, b] = await Promise.all([makeSkill(AUTHOR, 'Format text.'), makeSkill(AUTHOR, 'Format text.')]);
+    const idA = await listingFor(a);
+    await listingFor(b);
+
+    const page = await listMyListings(AUTHOR, { limit: 10, sourceSkillId: a.id });
+    expect(page.listings.map(l => String(l.listing._id))).toEqual([idA]);
+  });
+
+  it('listMyListings returns versions for every listing on the page, however many versions one has', async () => {
+    const [busy, quiet] = await Promise.all([makeSkill(AUTHOR, 'Format text.'), makeSkill(AUTHOR, 'Format text.')]);
+    const busyId = await listingFor(busy, new Date('2026-02-01T00:00:00Z'));
+    const quietId = await listingFor(quiet, new Date('2026-01-01T00:00:00Z'));
+    const row = (listingId: string, version: number) => ({
+      listingId,
+      version,
+      snapshot: { name: 'n', description: 'd', body: 'b' },
+    });
+    await SkillListingVersion.collection.insertMany([
+      ...Array.from({ length: 510 }, (_, i) => row(busyId, 100 + i)),
+      row(quietId, 1),
+      row(quietId, 2),
+    ] as never);
+
+    const page = await listMyListings(AUTHOR, { limit: 10 });
+    const byId = new Map(page.listings.map(l => [String(l.listing._id), l.versions.map(v => v.version)]));
+    expect(byId.get(busyId)).toEqual([609, 608, 607, 606, 605]);
+    expect(byId.get(quietId)).toEqual([2, 1]);
+  });
+
+  it('publishListing rethrows the scan failure and logs when the cleanup also fails', async () => {
+    const skill = await makeSkill(AUTHOR, 'Format text.');
+    submitListingVersionMock.mockRejectedValueOnce(new Error('scan exploded'));
+    vi.spyOn(SkillListing, 'updateOne').mockRejectedValueOnce(new Error('db down'));
+    const logger = { error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      publishListing(
+        { id: AUTHOR, createdAt: new Date(0) },
+        { skillId: skill.id, visibility: 'unlisted' },
+        logger as never
+      )
+    ).rejects.toThrow('scan exploded');
+    expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/publish cleanup failed/), expect.any(Error));
+  });
+
+  it('publishListing rejects an organization listing with no organization chosen', async () => {
+    const skill = await makeSkill(AUTHOR, 'Format text.');
+    await expect(
+      publishListing(
+        { id: AUTHOR, createdAt: new Date(0) },
+        { skillId: skill.id, visibility: 'organization' },
+        {} as never
+      )
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
