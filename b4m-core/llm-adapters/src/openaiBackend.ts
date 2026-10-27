@@ -160,6 +160,9 @@ function federatedOpenAIClient(): OpenAI {
  * A Responses stream closed with no terminal event and no abort (upstream cut the connection).
  * ChatCompletionProcess maps it to the interrupted reply; partial text already reached the client.
  */
+/** Silently raises a tiny budget to OpenAI's minimum on purpose; an unset (or 0) budget stays unset. */
+const floorOutputBudget = (maxTokens?: number) => (maxTokens ? Math.max(maxTokens, MIN_OUTPUT_TOKENS) : undefined);
+
 export class ResponsesStreamTruncatedError extends Error {
   constructor(model: string) {
     super(`OpenAI Responses stream for ${model} ended without a terminal response event`);
@@ -1162,7 +1165,7 @@ export class OpenAIBackend implements ICompletionBackend {
         ...(requiresFixedTemp && { temperature: 1.0 }),
         stream: true,
         stream_options: { include_usage: true },
-        ...(options.maxTokens && { max_completion_tokens: Math.max(options.maxTokens, MIN_OUTPUT_TOKENS) }),
+        ...(options.maxTokens && { max_completion_tokens: floorOutputBudget(options.maxTokens) }),
       });
 
       // Only add reasoning_effort for models that support it (o1-preview/o1-mini do not).
@@ -1219,7 +1222,7 @@ export class OpenAIBackend implements ICompletionBackend {
         presence_penalty: options.presencePenalty,
         frequency_penalty: options.frequencyPenalty,
         stream: useStreaming,
-        max_tokens: options.maxTokens === undefined ? undefined : Math.max(options.maxTokens, MIN_OUTPUT_TOKENS),
+        max_tokens: floorOutputBudget(options.maxTokens),
         ...(useStreaming && { stream_options: { include_usage: true } }),
       });
     }
@@ -2254,7 +2257,7 @@ export class OpenAIBackend implements ICompletionBackend {
             },
           }
         : {}),
-      ...(options.maxTokens ? { max_output_tokens: Math.max(options.maxTokens, MIN_OUTPUT_TOKENS) } : {}),
+      ...(options.maxTokens ? { max_output_tokens: floorOutputBudget(options.maxTokens) } : {}),
       ...(mapToolChoiceForResponses(options.tool_choice) !== undefined
         ? { tool_choice: mapToolChoiceForResponses(options.tool_choice) }
         : {}),

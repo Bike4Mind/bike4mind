@@ -99,9 +99,19 @@ describe('OpenAIBackend output-budget floor', () => {
     expect((chatCreate.mock.calls[0][0] as AnyRecord).max_tokens).toBe(MIN_OUTPUT_TOKENS);
   });
 
-  it('leaves the budget unset when the caller sent none', async () => {
+  it('passes a large budget through unchanged on the reasoning chat-completions path', async () => {
     const { backend, chatCreate } = buildBackend();
+    await run(backend, ChatModels.GPT5, { stream: true, maxTokens: 4096 });
+    expect((chatCreate.mock.calls[0][0] as AnyRecord).max_completion_tokens).toBe(4096);
+  });
+
+  it('leaves the budget unset when the caller sent none', async () => {
+    const { backend, responsesCreate, chatCreate } = buildBackend();
     await run(backend, ChatModels.GPT4o, { stream: true });
     expect((chatCreate.mock.calls[0][0] as AnyRecord).max_tokens).toBeUndefined();
+    await run(backend, ChatModels.GPT5, { tools: [sampleTool] });
+    expect('max_output_tokens' in (responsesCreate.mock.calls[0][0] as AnyRecord)).toBe(false);
+    await run(backend, ChatModels.GPT5, { stream: true });
+    expect('max_completion_tokens' in (chatCreate.mock.calls[1][0] as AnyRecord)).toBe(false);
   });
 });
