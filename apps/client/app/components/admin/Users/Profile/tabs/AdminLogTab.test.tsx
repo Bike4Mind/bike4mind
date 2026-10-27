@@ -54,7 +54,7 @@ describe('AdminLogTab', () => {
     expect(rows[0]).toHaveTextContent('Suspended account');
     expect(rows[0]).toHaveTextContent('Reason: Chargeback');
     expect(within(rows[0]).getByTestId('user-admin-log-actor')).toHaveTextContent('Alice Admin');
-    expect(within(rows[1]).getByTestId('user-admin-log-changes')).toHaveTextContent('Tags: None → vip');
+    expect(within(rows[1]).getByTestId('user-admin-log-changes')).toHaveTextContent('Tags: None \u2192 vip');
     expect(rows[2]).toHaveTextContent('Credits +2,000 (5,410 to 7,410)');
   });
 

@@ -58,7 +58,7 @@ describe('sign-in labels', () => {
 
   it('joins what is known about the device', () => {
     expect(signInDevice({ browser: 'Chrome', operatingSystem: 'macOS', deviceType: 'Desktop' })).toBe(
-      'Chrome on macOS · Desktop'
+      'Chrome on macOS \u00b7 Desktop'
     );
     expect(signInDevice({})).toBe('-');
   });

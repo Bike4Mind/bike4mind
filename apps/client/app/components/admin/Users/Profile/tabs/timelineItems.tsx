@@ -32,7 +32,7 @@ const BAD_AUTH_ACTIONS = new Set([
 const tileFor = (entry: UserTimelineEntry): TimelineTile =>
   entry.type === 'signin' && BAD_AUTH_ACTIONS.has(entry.audit.action) ? { text: 'IN', tone: 'bad' } : TILES[entry.type];
 
-/** "Reason: x, by Root" for an admin entry. */
+/** Admin entry meta: "Reason: x" then "by <actor>", joined with a middle dot. */
 export const adminMeta = (audit: AuditEntry): string =>
   [audit.reason && `Reason: ${audit.reason}`, `by ${audit.actor.name}`].filter(Boolean).join(' \u00b7 ');
 
