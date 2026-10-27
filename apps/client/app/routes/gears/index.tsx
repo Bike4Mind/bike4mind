@@ -15,7 +15,13 @@ import { useMobileHeader } from '@client/app/hooks/useMobileHeader';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { GearCard } from '@client/app/components/gears/GearCard';
-import { ClaimButton, creditText, RewardChip, rewardState } from '@client/app/components/gears/gearReward';
+import {
+  ClaimButton,
+  creditText,
+  PendingRewardNote,
+  RewardChip,
+  rewardState,
+} from '@client/app/components/gears/gearReward';
 
 /**
  * Gears - the feature tour, where each feature's one-time reward is claimed.
