@@ -93,6 +93,14 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
   if (filter.signedUp) {
     conditions.push({ createdAt: { $gte: new Date(context.now.getTime() - SIGNED_UP_WINDOW_MS[filter.signedUp]) } });
   }
+  if (filter.createdFrom || filter.createdTo) {
+    conditions.push({
+      createdAt: {
+        ...(filter.createdFrom && { $gte: new Date(filter.createdFrom) }),
+        ...(filter.createdTo && { $lt: new Date(filter.createdTo) }),
+      },
+    });
+  }
   if (filter.risk) conditions.push({ 'signupGrantAssessment.band': RISK_BAND[filter.risk] });
   return conditions.length > 0 ? { $and: conditions } : {};
 }
