@@ -142,6 +142,24 @@ describe('getTurnstileToken', () => {
     expect(render.mock.calls[1][1]).toMatchObject({ theme: 'light' });
   });
 
+  it('uses the compact widget on narrow viewports', async () => {
+    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
+      queueMicrotask(() => opts.callback('tok-1'));
+      return 'widget-1';
+    });
+    const original = window.innerWidth;
+    try {
+      window.innerWidth = 320;
+      await getTurnstileToken('site', 'otc-send');
+      window.innerWidth = 1024;
+      await getTurnstileToken('site', 'otc-send');
+    } finally {
+      window.innerWidth = original;
+    }
+    expect(render.mock.calls[0][1]).toMatchObject({ size: 'compact' });
+    expect(render.mock.calls[1][1]).toMatchObject({ size: 'normal' });
+  });
+
   it('expires the challenge and removes its widget', async () => {
     render.mockImplementation((_el: HTMLElement, options: RenderOptions) => {
       queueMicrotask(() => options['expired-callback']());

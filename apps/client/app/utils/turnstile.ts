@@ -9,6 +9,7 @@ type TurnstileApi = {
       action: string;
       appearance: 'interaction-only';
       theme: 'light' | 'dark';
+      size: 'normal' | 'compact';
       'before-interactive-callback': () => void;
       callback: (token: string) => void;
       'error-callback': () => void;
@@ -137,6 +138,8 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
         action,
         appearance: 'interaction-only',
         theme: dark ? 'dark' : 'light',
+        // The normal widget is 300px wide and overflows the card on narrow screens.
+        size: window.innerWidth < 380 ? 'compact' : 'normal',
         'before-interactive-callback': showChrome,
         callback: token => settle(() => resolve(token)),
         'error-callback': () => settle(() => reject(new Error('turnstile-error'))),
