@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { getSignupTimeseries } from './signupTimeseries';
+import { getSignupTimeseries, TIMESERIES_KEY_SCAN_LIMIT, TIMESERIES_SCAN_LIMIT } from './signupTimeseries';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -119,5 +119,41 @@ describe('getSignupTimeseries', () => {
     const plan = JSON.stringify(explain);
     expect(plan).toContain('IXSCAN');
     expect(plan).not.toContain('COLLSCAN');
+  });
+  it('leaves signups past the scan cap unclassified instead of calling them legit', async () => {
+    const extra = 2;
+    await insertUsers(
+      Array.from({ length: TIMESERIES_SCAN_LIMIT + extra }, (_, i) => ({
+        email: `person${i}@gmail.com`,
+        createdAt: new Date(NOW.getTime() - 10 * MIN - (i % 30) * 1000),
+      }))
+    );
+    const result = await getSignupTimeseries({ range: '24h' }, NOW);
+    expect(result.truncated).toBe(true);
+    expect(result.totals).toMatchObject({
+      total: TIMESERIES_SCAN_LIMIT + extra,
+      unclassified: extra,
+      likelyLegit: TIMESERIES_SCAN_LIMIT,
+      suspected: 0,
+    });
+    for (const bucket of result.buckets)
+      expect(bucket.suspected + bucket.likelyLegit + bucket.unclassified).toBe(bucket.total);
+  });
+
+  it('reports truncated API key reads', async () => {
+    const [{ insertedIds }] = [
+      await insertUsers([{ email: 'keyed@company.test', createdAt: new Date(NOW.getTime() - HOUR) }]),
+    ];
+    const userId = String(insertedIds[0]);
+    await UserApiKey.collection.insertMany(
+      Array.from({ length: TIMESERIES_KEY_SCAN_LIMIT + 1 }, (_, i) => ({
+        userId,
+        keyPrefix: `k${i}`,
+        createdAt: new Date(NOW.getTime() - 30 * MIN),
+      }))
+    );
+    const result = await getSignupTimeseries({ range: '24h' }, NOW);
+    expect(result.keysTruncated).toBe(true);
+    expect(result.truncated).toBe(false);
   });
 });
