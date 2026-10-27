@@ -60,6 +60,23 @@ describe('retryTransportErrors', () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
+  it('does not reopen when the request is aborted during the backoff sleep', async () => {
+    const err = fetchFailed();
+    const open = vi.fn().mockRejectedValue(err);
+    const controller = new AbortController();
+    const settled = retryTransportErrors(open, { logger, label: 'Test', abortSignal: controller.signal }).then(
+      value => ({ value }),
+      error => ({ error })
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+    controller.abort();
+    await vi.runAllTimersAsync();
+
+    expect(await settled).toEqual({ error: err });
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry once the request was aborted', async () => {
     const err = fetchFailed();
     const open = vi.fn().mockRejectedValue(err);
