@@ -1,5 +1,5 @@
 import type { HubTier } from '../schemas/modelHub';
-import { memoryBudgets, type HardwareProfile } from './fit';
+import type { HardwareProfile } from './fit';
 
 const GIB = 1024 ** 3;
 // Memory reads a little under the size it is sold as: a 16 GB card reports about 15.9 GiB, a 32 GB PC about 31.3 GiB.
@@ -14,7 +14,8 @@ export interface HardwareClass {
 /** A discrete machine whose GPU memory is unknown is planned, and so classed, as CPU only. */
 export function hardwareClass(hw: HardwareProfile): HardwareClass {
   if (hw.memoryKind === 'unified') return { memoryKind: 'unified', memoryBytes: hw.totalMemoryBytes };
-  if (!memoryBudgets(hw).cpuOnly && hw.gpuMemoryBytes)
+  // gpuMemoryBytes sums every GPU, which Ollama splits layers across.
+  if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes)
     return { memoryKind: 'discrete', memoryBytes: hw.gpuMemoryBytes };
   return { memoryKind: 'cpu', memoryBytes: hw.totalMemoryBytes };
 }
