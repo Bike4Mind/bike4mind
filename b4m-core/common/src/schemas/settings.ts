@@ -357,6 +357,12 @@ export const SettingKeySchema = z.enum([
   'EnableReferralToSlack',
   'EnableReferralToEmail',
   'ReferralCreditsAmount',
+  'ReferralFirstAnswerCredits',
+  'ReferralFirstPaymentCredits',
+  'ReferralSecondPaymentCredits',
+  'ReferralHoldDays',
+  'ReferralInvitesPerUser',
+  'ReferralAlertRewardsPerDay',
   'registrationLink',
   'FeedbackReceiveEmail',
   'FeedbackReceiveEmailNonProd',
@@ -3130,6 +3136,72 @@ export const settingsMap = {
     // ReferralModal renders this for every non-admin sender - no secret, just the number
     // displayed in the "invited person gets N credits" line.
     userReadable: true,
+  }),
+  ReferralFirstAnswerCredits: makeNumberSetting({
+    key: 'ReferralFirstAnswerCredits',
+    name: 'Referral Reward: First Answer',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      'Credits the inviter earns when an invited friend, with a verified email, gets their first answer. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
+  }),
+  ReferralFirstPaymentCredits: makeNumberSetting({
+    key: 'ReferralFirstPaymentCredits',
+    name: 'Referral Reward: First Payment',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      "Credits the inviter earns on the invited friend's first full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+    category: 'Referrals',
+  }),
+  ReferralSecondPaymentCredits: makeNumberSetting({
+    key: 'ReferralSecondPaymentCredits',
+    name: 'Referral Reward: Second Payment',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    max: 100_000_000,
+    description:
+      "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Not active yet: takes effect once inviter rewards ship.",
+    category: 'Referrals',
+  }),
+  ReferralHoldDays: makeNumberSetting({
+    key: 'ReferralHoldDays',
+    name: 'Referral Reward Hold (days)',
+    defaultValue: 14,
+    int: true,
+    min: 0,
+    max: 365,
+    description:
+      'Days a payment-based referral reward is held before the inviter can use it. A refund inside the hold cancels the reward. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
+  }),
+  ReferralInvitesPerUser: makeNumberSetting({
+    key: 'ReferralInvitesPerUser',
+    name: 'Referral Invites Per User',
+    defaultValue: 3,
+    int: true,
+    min: 0,
+    max: 1000,
+    description:
+      'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
+    category: 'Referrals',
+  }),
+  ReferralAlertRewardsPerDay: makeNumberSetting({
+    key: 'ReferralAlertRewardsPerDay',
+    name: 'Referral Reward Alert Threshold',
+    defaultValue: 50,
+    int: true,
+    min: 1,
+    max: 1_000_000,
+    description:
+      'Alert admins when more than this many referral rewards are created within 24 hours. Not active yet: takes effect once inviter rewards ship.',
+    category: 'Referrals',
   }),
   EnableReferralToEmail: makeBooleanSetting({
     key: 'EnableReferralToEmail',

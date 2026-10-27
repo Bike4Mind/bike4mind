@@ -1,5 +1,5 @@
-import { RegInviteEvents, requireEnv } from '@bike4mind/common';
-import { IRegistrationInvite, RegInviteStatusType } from '@bike4mind/common';
+import { RegInviteEvents, inboxAliasKey, requireEnv } from '@bike4mind/common';
+import { IRegistrationInvite, RegInviteSource, RegInviteStatusType } from '@bike4mind/common';
 import { registrationInviteRepository, User, userRepository } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { createRegInvite, generateCode } from '@server/managers/regInviteManager';
@@ -35,7 +35,7 @@ const handler = baseApi().post(
     const user = req.user;
     const { userName, emailTitle, emailBody } = newReferralData;
     // Dedup before reserveReferrals so a duplicated address is charged once.
-    const friendEmail = Array.from(new Set(newReferralData.friendEmail));
+    const friendEmail = Array.from(new Set(newReferralData.friendEmail.map(e => e.trim().toLowerCase())));
     const userId = user.id;
 
     // Minting credit-bearing invite codes requires proof the sender's own email
@@ -45,6 +45,14 @@ const handler = baseApi().post(
     const hasOAuthProvider = (user.authProviders?.length ?? 0) > 0;
     if (!user.emailVerified && !hasOAuthProvider) {
       throw new BadRequestError('Please verify your email address before sending referral invites');
+    }
+
+    // An alias of the sender's own inbox would let one person redeem their own invite for the
+    // inviter reward. Refused before reserveReferrals so nothing is charged.
+    // Emailless OAuth accounts have no inbox to alias.
+    const senderInbox = user.email ? inboxAliasKey(user.email) : null;
+    if (senderInbox && friendEmail.some(target => inboxAliasKey(target) === senderInbox)) {
+      throw new BadRequestError('You cannot invite your own email address');
     }
 
     // Pre-resolve which targets already have an account, so the loop below can skip sending
@@ -105,22 +113,34 @@ const handler = baseApi().post(
 
         let inviteCode: string;
 
-        const existingInvite = await registrationInviteRepository.findOne({ email: target });
-        if (!existingInvite) {
+        const invites = await registrationInviteRepository.find({ email: target });
+        const now = new Date();
+        const isLive = (invite: IRegistrationInvite) =>
+          invite.status === RegInviteStatusType.open && !invite.used && (!invite.expiresAt || invite.expiresAt > now);
+        const ownLive = invites.find(invite => invite.userId === userId && isLive(invite));
+        const otherLive = invites.find(invite => invite.userId !== userId && isLive(invite));
+        if (ownLive) {
+          hasUsableInvite = true;
+          inviteCode = ownLive.code;
+        } else if (otherLive) {
+          // Someone else already invited this address; reusing their code would credit them while
+          // this sender is charged. Skipped silently like an existing account, so the response
+          // does not reveal it and the reservation stays spent.
+          slackErrorMessages.push(`Email ${target} already has an invite from another sender. Skipping invite.`);
+          continue;
+        } else {
           inviteCode = generateCode();
           const newRegInvite: IRegistrationInvite = {
             userId,
             email: target,
             code: inviteCode,
             status: RegInviteStatusType.open,
+            source: RegInviteSource.referral,
           };
           const savedInvite = await createRegInvite(newRegInvite);
           hasUsableInvite = true;
           newInviteIds.push(savedInvite.id);
           user.regInvites.push(savedInvite.id);
-        } else {
-          hasUsableInvite = true;
-          inviteCode = existingInvite.code;
         }
 
         const finalBody = `
