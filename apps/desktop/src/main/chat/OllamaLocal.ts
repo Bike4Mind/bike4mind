@@ -22,11 +22,36 @@ const showSchema = z.object({
   capabilities: z.array(z.string()),
   model_info: z.record(z.string(), z.unknown()).optional(),
   parameters: z.string().optional(),
+  /** The `think` values the model's template honors (booleans or effort names); older Ollama omits it. */
+  thinking: z
+    .object({ values: z.array(z.unknown()) })
+    .optional()
+    .catch(undefined),
   ...remoteFields,
 });
 
 function usesRemoteModel(model: { remote_host?: string; remote_model?: string }): boolean {
   return !!(model.remote_host?.trim() || model.remote_model?.trim());
+}
+
+/** Unknown (no `thinking` reported) keeps sending think:false, as before Ollama listed the values. */
+function honorsThinkingOff(inspection: z.infer<typeof showSchema>): boolean {
+  return !inspection.thinking || inspection.thinking.values.includes(false);
+}
+
+/** Qwen3's documented soft switch for skipping its reasoning, read from the user turn. */
+function takesNoThinkSwitch(inspection: z.infer<typeof showSchema>): boolean {
+  const architecture = inspection.model_info?.['general.architecture'];
+  return architecture === 'qwen3' || architecture === 'qwen3moe';
+}
+
+/** On every user turn, so the prompt prefix Ollama has cached stays the same from turn to turn. */
+function withNoThinkSwitch(messages: OllamaMessage[]): OllamaMessage[] {
+  return messages.map(message =>
+    message.role === 'user'
+      ? { ...message, content: message.content ? `${message.content} /no_think` : '/no_think' }
+      : message
+  );
 }
 
 const CHAT_URL = `${OLLAMA_URL}/api/chat` as const;
@@ -76,7 +101,14 @@ export class OllamaLocal {
     if (usesRemoteModel(inspection)) throw new Error('Cloud-backed Ollama models cannot be used as local models.');
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
     const numCtx = rememberContext(request.model, inspection);
-    const messages = toMessages(request.messages);
+    const canThink = inspection.capabilities.includes('thinking');
+    // A template that always opens a thinking block (no `false` among its values, like the older
+    // Qwen3 one) ignores think:false, which then only stops Ollama splitting the reasoning out.
+    const thinksAnyway = request.thinking === false && canThink && !honorsThinkingOff(inspection);
+    const messages =
+      thinksAnyway && takesNoThinkSwitch(inspection)
+        ? withNoThinkSwitch(toMessages(request.messages))
+        : toMessages(request.messages);
     const tools = (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
     const post = (fitted: OllamaMessage[]) =>
       this.chatFetch(CHAT_URL, {
@@ -92,9 +124,7 @@ export class OllamaLocal {
           // reply stops at num_ctx instead, as done_reason 'length' (a visible max_tokens stop).
           truncate: false,
           shift: false,
-          ...(request.thinking !== undefined && inspection.capabilities.includes('thinking')
-            ? { think: request.thinking }
-            : {}),
+          ...(request.thinking !== undefined && canThink && !thinksAnyway ? { think: request.thinking } : {}),
           options: {
             num_ctx: numCtx,
             ...(request.maxTokens ? { num_predict: request.maxTokens } : {}),

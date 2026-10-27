@@ -157,10 +157,14 @@ describe('OllamaLocal', () => {
     ]);
   });
 
-  const streamWith = async (body: string, request: Partial<Parameters<OllamaLocal['stream']>[0]> = {}) => {
+  const streamWith = async (
+    body: string,
+    request: Partial<Parameters<OllamaLocal['stream']>[0]> = {},
+    show: Record<string, unknown> = {}
+  ) => {
     const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) =>
       String(input).endsWith('/api/show')
-        ? Response.json({ capabilities: ['completion', 'thinking'] })
+        ? Response.json({ capabilities: ['completion', 'thinking'], ...show })
         : new Response(body, { status: 200 })
     );
     vi.stubGlobal('fetch', fetchMock);
@@ -226,6 +230,89 @@ describe('OllamaLocal', () => {
   it('sends an explicit disabled thinking preference', async () => {
     const { sent } = await streamWith(`${JSON.stringify({ done: true })}\n`, { thinking: false });
     expect(sent.think).toBe(false);
+  });
+
+  describe('thinking off for a template that always thinks', () => {
+    const done = `${JSON.stringify({ done: true })}\n`;
+    const alwaysThinks = { thinking: { values: [true], default: true } };
+    const qwen3 = { ...alwaysThinks, model_info: { 'general.architecture': 'qwen3' } };
+    const conversation: CompletionMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'reply' },
+      { role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'AAAA' } }] },
+    ];
+
+    it('sends think:false when Ollama lists false among the values', async () => {
+      const { sent } = await streamWith(
+        done,
+        { thinking: false },
+        { thinking: { values: [false, true], default: true }, model_info: { 'general.architecture': 'qwen3' } }
+      );
+      expect(sent.think).toBe(false);
+      expect(sent.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    });
+
+    it('leaves think out and adds the Qwen3 soft switch to every user turn without touching the input', async () => {
+      const { sent } = await streamWith(done, { thinking: false, messages: conversation }, qwen3);
+      expect(sent).not.toHaveProperty('think');
+      expect(sent.messages).toEqual([
+        { role: 'user', content: 'first /no_think' },
+        { role: 'assistant', content: 'reply' },
+        { role: 'user', content: '/no_think', images: ['AAAA'] },
+      ]);
+      expect(conversation[0]).toEqual({ role: 'user', content: 'first' });
+    });
+
+    it('treats the qwen3moe architecture as Qwen3', async () => {
+      const { sent } = await streamWith(
+        done,
+        { thinking: false },
+        { ...alwaysThinks, model_info: { 'general.architecture': 'qwen3moe' } }
+      );
+      expect(sent.messages).toEqual([{ role: 'user', content: 'hi /no_think' }]);
+    });
+
+    it('leaves think out but adds no switch for another architecture', async () => {
+      const { sent } = await streamWith(
+        done,
+        { thinking: false },
+        { ...alwaysThinks, model_info: { 'general.architecture': 'llama' } }
+      );
+      expect(sent).not.toHaveProperty('think');
+      expect(sent.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    });
+
+    it('leaves think out for effort-level-only values', async () => {
+      const { sent } = await streamWith(
+        done,
+        { thinking: false },
+        { thinking: { values: ['low', 'medium', 'high'], default: 'medium' } }
+      );
+      expect(sent).not.toHaveProperty('think');
+    });
+
+    it('keeps thinking on unchanged', async () => {
+      const { sent } = await streamWith(done, { thinking: true }, qwen3);
+      expect(sent.think).toBe(true);
+      expect(sent.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    });
+
+    it('sends the reasoning Ollama splits out as thinking, not as the reply', async () => {
+      const { events } = await streamWith(
+        `${JSON.stringify({ message: { thinking: 'hmm' } })}\n${JSON.stringify({ message: { content: 'Paris' }, done: true })}\n`,
+        { thinking: false },
+        qwen3
+      );
+      expect(events.slice(0, 2)).toEqual([
+        { type: 'content', text: '<think>hmm</think>' },
+        { type: 'content', text: 'Paris' },
+      ]);
+    });
+
+    it('ignores a malformed thinking descriptor', async () => {
+      const { sent } = await streamWith(done, { thinking: false }, { thinking: 'yes' });
+      expect(sent.think).toBe(false);
+    });
   });
 
   it.each([
