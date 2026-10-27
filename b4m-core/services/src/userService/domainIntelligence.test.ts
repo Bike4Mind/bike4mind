@@ -206,10 +206,45 @@ describe('domainHoldReason', () => {
     expect(reason).toBeNull();
   });
 
+  it.each([
+    ['2027-06-01T00:00:00Z', null],
+    ['2026-06-01T01:00:00Z', 'young-domain (<30 days)'],
+  ])('checks future registration date %s while allowing small clock skew', async (eventDate, expected) => {
+    const reason = await reasonFor('a@future.test', memoryRepo(), {
+      fetchImpl: rdapFetch({ events: [{ eventAction: 'registration', eventDate }] }),
+    });
+    expect(reason).toBe(expected);
+  });
+
   it('looks up the registrable domain of a subdomain address', async () => {
     const repo = memoryRepo();
     await reasonFor('a@np.rotating.test', repo);
     expect(repo.findDomainIntel).toHaveBeenCalledWith('rotating.test');
+  });
+
+  it('looks up tenant MX while querying RDAP for the ICANN parent', async () => {
+    const repo = memoryRepo();
+    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+      String(url).includes('data.iana.org')
+        ? json({ services: [[['io'], ['https://rdap.example.test/']]] })
+        : json(registered(400))
+    );
+    const resolveMx = vi.fn(async () => [{ exchange: 'mx.tenant.github.io', priority: 1 }]);
+    expect(await reasonFor('a@tenant.github.io', repo, { fetchImpl, resolveMx })).toBeNull();
+    expect(resolveMx).toHaveBeenCalledWith('tenant.github.io', 500);
+    expect(fetchImpl).toHaveBeenCalledWith('https://rdap.example.test/domain/github.io', expect.anything());
+    expect(repo.findDomainIntel).toHaveBeenCalledWith('tenant.github.io');
+    expect(repo.saveDomainIntel).toHaveBeenCalledWith(expect.objectContaining({ mxFlags: ['self-hosted'] }));
+  });
+
+  it('holds burner MX hosted under a private suffix', async () => {
+    const repo = memoryRepo({ 'burner.github.io': ['fakefilter'] });
+    expect(
+      await reasonFor('a@front.test', repo, {
+        resolveMx: async () => [{ exchange: 'mx.burner.github.io', priority: 1 }],
+      })
+    ).toBe('burner-mx (burner.github.io)');
+    expect(repo.disposableSources).toHaveBeenCalledWith(['burner.github.io']);
   });
 
   it('holds burner MX but never commodity MX alone', async () => {

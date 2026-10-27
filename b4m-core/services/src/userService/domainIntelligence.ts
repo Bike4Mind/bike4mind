@@ -53,13 +53,14 @@ const loadRdapServers = (fetchImpl: typeof fetch): Promise<Map<string, string>> 
 
 /** Registration date from RDAP; undefined when the registry publishes none. Throws when the lookup fails. */
 async function lookupRegisteredAt(domain: string, opts: DomainLookupOptions): Promise<Date | undefined> {
+  const rdapDomain = registrableDomain(domain) ?? domain;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const servers = await loadRdapServers(fetchImpl);
-  const labels = domain.split('.');
+  const labels = rdapDomain.split('.');
   // Longest suffix first, so a multi-label entry wins over its TLD.
   const base = labels.map((_, i) => servers.get(labels.slice(i).join('.'))).find(Boolean);
   if (!base) throw new Error('No RDAP server for this TLD');
-  const response = await fetchImpl(`${base}domain/${domain}`, {
+  const response = await fetchImpl(`${base}domain/${rdapDomain}`, {
     headers: { Accept: 'application/rdap+json' },
     signal: AbortSignal.timeout(opts.timeoutMs),
   });
@@ -67,7 +68,11 @@ async function lookupRegisteredAt(domain: string, opts: DomainLookupOptions): Pr
   const body = (await response.json()) as { events?: { eventAction?: string; eventDate?: string }[] };
   const date = body.events?.find(event => event.eventAction === 'registration')?.eventDate;
   const registeredAt = date ? new Date(date) : undefined;
-  return registeredAt && !Number.isNaN(registeredAt.getTime()) ? registeredAt : undefined;
+  return registeredAt &&
+    !Number.isNaN(registeredAt.getTime()) &&
+    registeredAt.getTime() <= (opts.now ?? new Date()).getTime() + DAY_MS
+    ? registeredAt
+    : undefined;
 }
 
 const defaultResolveMx = (domain: string, timeoutMs: number) =>
@@ -93,7 +98,7 @@ async function lookupMx(domain: string, opts: DomainLookupOptions): Promise<{ ho
   for (const host of hosts) {
     if (host.endsWith('.mx.cloudflare.net')) flags.add('cloudflare-routing');
     if (host.endsWith('.google.com') || host.endsWith('.googlemail.com')) flags.add('google-workspace');
-    if (registrableDomain(host) === domain) flags.add('self-hosted');
+    if (registrableDomain(host, { allowPrivateDomains: true }) === domain) flags.add('self-hosted');
   }
   return { hosts, flags: [...flags] };
 }
@@ -190,7 +195,7 @@ export async function domainHoldReason(
   }
 ): Promise<string | null> {
   const { repository } = options;
-  const domain = registrableDomain(emailDomainOf(email));
+  const domain = registrableDomain(emailDomainOf(email), { allowPrivateDomains: true });
   try {
     const sources = (await repository.disposableSources?.(emailDomainCandidates(email))) ?? [];
     if (sources.length) return isAggregateOnly(sources) ? 'disposable-aggregate' : 'disposable-list';
@@ -205,7 +210,9 @@ export async function domainHoldReason(
     if (isYoung(intel, options.youngerThanDays, options.lookup?.now ?? new Date()))
       return `young-domain (<${options.youngerThanDays} days)`;
     // Judged at read time, not cached, so a provider listed after the lookup is still caught.
-    for (const hostDomain of new Set(intel.mxHosts.map(host => registrableDomain(host)))) {
+    for (const hostDomain of new Set(
+      intel.mxHosts.map(host => registrableDomain(host, { allowPrivateDomains: true }))
+    )) {
       if (!hostDomain || hostDomain === domain) continue;
       const rejectTier =
         isDisposableEmail(`x@${hostDomain}`) ||
