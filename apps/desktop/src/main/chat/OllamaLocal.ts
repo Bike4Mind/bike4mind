@@ -65,7 +65,7 @@ function thinkingOffMode(inspection: Inspection): ThinkingOffMode {
  */
 function opensThinkBlock(template: string | undefined): boolean {
   if (!template || /\.Think\b|enable_thinking/.test(template)) return false;
-  return /<think>(?:\s|\\n|['"+])*(?:\}\}\s*)?\{[{%]-?\s*end(?:if)?\b/.test(template);
+  return /<think>(?:\s|\\n|['"+])*(?:-?\}\}\s*)?\{[{%]-?\s*end(?:if)?\b/.test(template);
 }
 
 /**
@@ -88,7 +88,6 @@ function withNoThinkSwitch(messages: OllamaMessage[]): OllamaMessage[] {
   );
 }
 
-/** The `think` field to send, if any. */
 function thinkField(inspection: Inspection, thinking: boolean | undefined): { think?: boolean | string } {
   if (thinking === undefined || !inspection.capabilities.includes('thinking')) return {};
   if (thinking) return { think: true };

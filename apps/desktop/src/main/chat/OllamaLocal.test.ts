@@ -304,6 +304,8 @@ describe('OllamaLocal', () => {
     it.each([
       ['a Go', legacyQwen3Template],
       ['a Jinja', r1JinjaTemplate],
+      ['a trimmed Go', '{{ "<think>\\n" -}}{{ end }}'],
+      ['a trimmed Jinja', "{{- '<|im_start|>assistant\\n<think>\\n' -}}{%- endif %}"],
     ])('leaves think out for %s template that hard-codes the opener', async (_kind, template) => {
       const { sent } = await streamWith(done, { thinking: false }, { template });
       expect(sent).not.toHaveProperty('think');
@@ -312,6 +314,16 @@ describe('OllamaLocal', () => {
     it('still sends think:false for a template with a thinking-off branch', async () => {
       const { sent } = await streamWith(done, { thinking: false }, { template: libraryQwen3Template });
       expect(sent.think).toBe(false);
+    });
+
+    it('rejects a prefilled stream that ends mid-reasoning', async () => {
+      await expect(
+        streamWith(
+          `${JSON.stringify({ message: { content: 'plan</th' } })}\n`,
+          { thinking: false },
+          { capabilities: ['completion'], template: legacyQwen3Template }
+        )
+      ).rejects.toThrow('before the reply finished');
     });
 
     it('splits prefilled reasoning out of the raw reply of a model Ollama runs no parser for', async () => {
