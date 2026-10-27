@@ -274,7 +274,7 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     });
   });
 
-  it('sizes Strix Halo with a small carve-out from GTT, bounded by the TTM page limit and RAM', async () => {
+  it('sizes Strix Halo with a small carve-out from GTT, bounded by the TTM page limit', async () => {
     const ram = 125 * GiB;
     const ttm = (pages: number) => ({ 'sys/module/ttm/parameters/pages_limit': String(pages) });
     const probe = (gtt: number, files: Record<string, string> = {}) =>
@@ -290,8 +290,8 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     // amdgpu.gttsize below the TTM limit, and GTT alone when the TTM parameter cannot be read.
     expect(await probe(32 * GiB, ttm(16469033))).toMatchObject({ gpuMemoryBytes: 32 * GiB });
     expect(await probe(48 * GiB)).toMatchObject({ gpuMemoryBytes: 48 * GiB });
-    // A TTM limit past what Ollama can take from free RAM.
-    expect(await probe(120 * GiB, ttm(120 * 262144))).toMatchObject({ gpuMemoryBytes: ram * 0.75 });
+    // A TTM limit raised near all of RAM is reported as is, since llama-server fits layers to what HIP reports.
+    expect(await probe(120 * GiB, ttm(120 * 262144))).toMatchObject({ gpuMemoryBytes: 120 * GiB });
     // A higher TTM limit than GTT still stops at GTT.
     expect(await probe(40 * GiB, ttm(100 * 262144))).toMatchObject({ gpuMemoryBytes: 40 * GiB });
   });

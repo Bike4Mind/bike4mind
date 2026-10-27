@@ -51,7 +51,6 @@ type Environment = Record<string, string | undefined>;
 
 const EXEC_TIMEOUT_MS = 5_000;
 const MIB = 1024 * 1024;
-const GTT_RAM_FRACTION = 0.75;
 
 const defaultExec: ExecLike = (command, args) =>
   new Promise((resolve, reject) => {
@@ -194,11 +193,9 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
   const apu = scanned?.find(gpu => gpu.sharedMemory);
   if (!apu) return { ...base, ...discrete };
 
-  // Ollama holds an integrated GPU to the RAM free at load, so GTT is capped below all of RAM, like Apple's working set.
-  const apuBytes =
-    apu.memoryBytes !== null && apu.sharedMemory === 'gtt' && totalMemoryBytes > 0
-      ? Math.min(apu.memoryBytes, totalMemoryBytes * GTT_RAM_FRACTION)
-      : apu.memoryBytes;
+  // Uncapped, since llama-server fits layers to what HIP reports; Ollama holds an integrated GPU to free RAM only when
+  // placing and batching (server/sched.go), which the planner weighs against totalMemoryBytes.
+  const apuBytes = apu.memoryBytes;
   // The APU and a discrete GPU are separate pools under separate runtimes, so report the larger and never sum them.
   const dgpuBytes = discrete.gpuMemoryBytes;
   if (dgpuBytes !== null && (apuBytes === null || dgpuBytes > apuBytes)) return { ...base, ...discrete };
