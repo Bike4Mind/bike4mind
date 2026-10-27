@@ -72,11 +72,14 @@ describe('loadCuratedManifest', () => {
   it.each([
     ['not an object', 'nope'],
     ['the wrong schema version', { ...bundled, schemaVersion: 1 }],
-  ])('shows an empty list for input that is %s', (_label, input) => {
+    ['missing its entries', { ...bundled, entries: undefined }],
+  ])('falls back to the bundled list for input that is %s', (_label, input) => {
     const warn = vi.fn();
     const manifest = loadCuratedManifest(warn, input);
-    expect(manifest.entries).toEqual([]);
-    expect(manifest.tiers).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('MODELS: curated list unreadable, showing none'));
+    expect(manifest).toEqual(parseHubManifest(bundled).manifest);
+    expect(manifest.tiers.length).toBeGreaterThan(0);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('MODELS: curated list unreadable, showing the bundled one')
+    );
   });
 });
