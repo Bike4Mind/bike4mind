@@ -6,7 +6,7 @@
  */
 
 import type { Request } from 'express';
-import { type WafRangeInput, type WafTrafficRange } from './wafSharedHelpers';
+import { type WafRangeInput, type WafTrafficRange } from '@bike4mind/server-utils/security/wafSharedHelpers';
 
 /** Maximum allowed span for a custom date range (30 days). */
 const MAX_CUSTOM_RANGE_MS = 30 * 24 * 60 * 60 * 1000;

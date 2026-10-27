@@ -1,5 +1,6 @@
 import { IQuestMasterPlanDocument, SubQuestStatus } from '@bike4mind/common';
 import Papa from 'papaparse';
+import { CSV_FORMULA_PREFIX } from './csv';
 import * as XLSX from 'xlsx';
 import {
   Document,
@@ -141,7 +142,7 @@ export function questPlanToCSV(plan: IQuestMasterPlanDocument): string {
     }))
   );
 
-  return Papa.unparse(rows);
+  return Papa.unparse(rows, { escapeFormulae: CSV_FORMULA_PREFIX });
 }
 
 // PDF layout constants (A4, mm units)

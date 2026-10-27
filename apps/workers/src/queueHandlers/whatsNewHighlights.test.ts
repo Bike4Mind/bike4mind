@@ -52,7 +52,7 @@ vi.mock('@bike4mind/server-utils/releaseNotes/adminReleaseNotes', async importOr
   return { ...actual, loadReleaseNotesConfig: vi.fn() };
 });
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => (value ? `decrypted:${value}` : null),
 }));
 

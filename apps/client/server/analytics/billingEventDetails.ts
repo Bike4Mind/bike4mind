@@ -1,5 +1,5 @@
 import { userRepository } from '@bike4mind/database';
-import { SubscriptionOwnerType, type ISubscription } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 
 // What the billing events in signupEvents.ts carry and who they are about, kept apart from it so

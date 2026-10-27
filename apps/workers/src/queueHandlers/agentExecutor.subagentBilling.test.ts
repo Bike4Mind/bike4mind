@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn(async () => 'raw') }));
 import type { Context } from 'aws-lambda';
 
 // `processSubagentDispatch` admission and billing: a dispatched subagent (or DAG node) runs

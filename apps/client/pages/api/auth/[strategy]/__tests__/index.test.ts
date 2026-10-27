@@ -17,11 +17,11 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const blockedIpGuard = vi.hoisted(() => ({ kind: 'checkBlockedIP' }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => blockedIpGuard }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => ({ kind: 'rateLimit', options }),
 }));
 vi.mock('@server/auth/auth', () => ({ default: { authenticate: vi.fn() } }));
-vi.mock('@server/auth/oauthFlowCookie', () => ({ issueStateNonce: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({ issueStateNonce: vi.fn() }));
 vi.mock('@server/auth/passportOAuthStateStore', () => ({ OAUTH_NONCE_HASH_REQ_KEY: 'nonceHash' }));
 
 import '@pages/api/auth/[strategy]/index';

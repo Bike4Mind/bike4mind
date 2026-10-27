@@ -223,6 +223,17 @@ The endpoint returns the last code sent to the address, and specs run in paralle
 OTC test its own user (`apiCreateThrowawayUser` in `helpers/api.ts`), or a parallel test's send
 hands this one a code its pending token does not match.
 
+**Cloudflare Turnstile.** When a stage enforces Turnstile on `/api/otc/send` (admin settings
+`turnstileEnabled` + `turnstileSiteKey`, plus the `TURNSTILE_SECRET_KEY` secret), a send without a
+valid token gets 403 `challenge_failed`, and Playwright cannot solve a real challenge. The server
+skips the check only behind the same three guards as `/api/test/otc-code`: a non-production stage,
+the `x-e2e-cleanup-secret` header, and a `-e2e@test.com` email (see
+`server/middlewares/requireTurnstile.ts`). Real users on the stage are still challenged. On the
+test side, `helpers/turnstile.ts` (installed on every fixture page by `fixtures.ts`) stubs
+Cloudflare's widget script and adds the secret header to the browser's `/api/otc/send`, and
+`apiLoginViaOtc` sends the header itself. A page you create outside the fixtures needs
+`bypassTurnstile(page)` before it requests a code.
+
 **MFA** needs no extra infra: the MFA setup endpoint returns the `totpSecret`, so a test
 can enroll, then generate valid codes in-test with `otplib`/`speakeasy`.
 

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+const audit = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: audit,
+  definedKeys: (data: Record<string, unknown>) => Object.keys(data).filter(key => data[key] !== undefined),
+}));
+
 // `any` below is deliberate test-mock plumbing for the next-connect / node-mocks-http chain,
 // matching the repo's handler-test convention.
 vi.hoisted(() => {
@@ -12,6 +18,7 @@ const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
   created: undefined as any,
   saveCalls: 0,
+  save: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -27,12 +34,16 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 vi.mock('@bike4mind/database/social', () => ({
   ModalModel: class {
+    _id = '507f1f77bcf86cd799439011';
+    title: string | null = null;
+    textMessage: string | null = null;
     constructor(data: unknown) {
       mockRefs.created = data;
+      Object.assign(this, data);
     }
     save() {
       mockRefs.saveCalls += 1;
-      return Promise.resolve();
+      return mockRefs.save();
     }
   },
 }));
@@ -75,6 +86,9 @@ function mocks(requestBody: Record<string, unknown>) {
 
 describe('POST /api/modals - video', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    mockRefs.save.mockResolvedValue(undefined);
+    audit.mockResolvedValue(null);
     mockRefs.created = undefined;
     mockRefs.saveCalls = 0;
   });
@@ -86,6 +100,33 @@ describe('POST /api/modals - video', () => {
     expect(res._getStatusCode()).toBe(201);
     expect(mockRefs.created.video).toEqual(VIDEO);
     expect(mockRefs.saveCalls).toBe(1);
+    expect(audit).toHaveBeenCalledOnce();
+    expect(audit.mock.calls[0][0]).toBe(req);
+    expect(audit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.modal.created',
+      target: { kind: 'settings', id: '507f1f77bcf86cd799439011', displayName: 'Demo' },
+      details: { via: 'admin-modals' },
+    });
+    expect(mockRefs.save.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
+  });
+
+  it('records nothing when saving fails', async () => {
+    mockRefs.save.mockRejectedValueOnce(new Error('save failed'));
+    const { req, res } = mocks(body());
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('save failed');
+
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when permission is denied', async () => {
+    const { req, res } = mocks(body());
+    Object.assign(req, { ability: { can: () => false } });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('Permission denied');
+
+    expect(mockRefs.save).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it('rejects a video on a host the deployment does not allow, saving nothing', async () => {
@@ -94,6 +135,7 @@ describe('POST /api/modals - video', () => {
 
     expect(mockRefs.created).toBeUndefined();
     expect(mockRefs.saveCalls).toBe(0);
+    expect(audit).not.toHaveBeenCalled();
   });
 });
 

@@ -35,6 +35,7 @@ describe('readNetworkMeta', () => {
       asnOrg: 'Amazon AWS',
       country: 'US',
       isDatacenter: true,
+      ja4: null,
     });
   });
 
@@ -45,7 +46,32 @@ describe('readNetworkMeta', () => {
 
   it('leaves the datacenter flag unknown when no ASN reached the origin', () => {
     const meta = readNetworkMeta({ headers: {}, socket: {} });
-    expect(meta).toEqual({ ip: null, userAgent: null, asn: null, asnOrg: null, country: null, isDatacenter: null });
+    expect(meta).toEqual({
+      ip: null,
+      userAgent: null,
+      asn: null,
+      asnOrg: null,
+      country: null,
+      isDatacenter: null,
+      ja4: null,
+    });
+  });
+
+  it('captures only a bounded observation when origin verification is enabled', () => {
+    const ja4 = 't13d0101h2_111111111111_222222222222';
+    const req = reqWith({ 'cloudfront-viewer-ja4-fingerprint': ja4 });
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', 'synthetic-secret');
+    expect(readNetworkMeta(req).ja4).toBe(ja4);
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    expect(readNetworkMeta(req).ja4).toBeNull();
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', 'synthetic-secret');
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    expect(readNetworkMeta(req).ja4).toBeNull();
+  });
+
+  it.each(['', 'x'.repeat(1000), 't13d0101h2_111111111111_222222222222,spoofed'])('ignores malformed JA4 %s', value => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', 'synthetic-secret');
+    expect(readNetworkMeta(reqWith({ 'cloudfront-viewer-ja4-fingerprint': value })).ja4).toBeNull();
   });
 });
 
