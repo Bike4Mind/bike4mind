@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box,
   Card,
@@ -21,7 +21,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoIcon from '@mui/icons-material/Info';
 import { DateFilterComponent } from './Analytics/filters/DateFilterComponent';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { useModelLogs, ModelLog } from '@client/app/hooks/useModelLogs';
+import { useModelLogDetail, useModelLogs, ModelLogSummary } from '@client/app/hooks/useModelLogs';
+import { ErrorState } from './shared';
 import {
   MODEL_LOGS_MODEL_OPTIONS,
   MODEL_LOGS_PAGE_SIZE_OPTIONS,
@@ -54,13 +55,21 @@ const PaginationControls = ({
 }) => (
   <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2, mb: 2 }}>
     <Stack direction="row" spacing={2} justifyContent="center" alignItems="center">
-      <Button disabled={currentPage <= 1} onClick={() => onPageChange(currentPage - 1)}>
+      <Button
+        disabled={currentPage <= 1}
+        onClick={() => onPageChange(currentPage - 1)}
+        data-testid="model-logs-prev-page-btn"
+      >
         Previous
       </Button>
       <Typography>
         Page {currentPage} of {totalPages}
       </Typography>
-      <Button disabled={currentPage >= totalPages} onClick={() => onPageChange(currentPage + 1)}>
+      <Button
+        disabled={currentPage >= totalPages}
+        onClick={() => onPageChange(currentPage + 1)}
+        data-testid="model-logs-next-page-btn"
+      >
         Next
       </Button>
     </Stack>
@@ -73,7 +82,14 @@ const PaginationControls = ({
           onChange={e => onItemsPerPageChange(Number(e.target.value))}
         >
           {MODEL_LOGS_PAGE_SIZE_OPTIONS.map(value => (
-            <Radio key={value} value={value} label={`${value} per page`} size="sm" sx={{ mr: 2 }} />
+            <Radio
+              key={value}
+              value={value}
+              label={`${value} per page`}
+              size="sm"
+              sx={{ mr: 2 }}
+              slotProps={{ input: { 'data-testid': `model-logs-page-size-${value}-radio` } }}
+            />
           ))}
         </RadioGroup>
       </FormControl>
@@ -83,6 +99,50 @@ const PaginationControls = ({
     </Stack>
   </Stack>
 );
+
+// The full promptMeta is fetched only when expanded; the list response carries just the card fields.
+const ModelLogDetails = ({ id }: { id: string }) => {
+  const [expanded, setExpanded] = useState(false);
+  const detailQuery = useModelLogDetail(id, expanded);
+
+  return (
+    <Box>
+      <Button
+        size="sm"
+        variant="plain"
+        color="neutral"
+        onClick={() => setExpanded(value => !value)}
+        aria-expanded={expanded}
+        data-testid="model-logs-details-toggle-btn"
+      >
+        {expanded ? 'Hide details' : 'Show details'}
+      </Button>
+      {expanded &&
+        (detailQuery.isError ? (
+          <ErrorState message="Could not load log details." onRetry={() => detailQuery.refetch()} />
+        ) : detailQuery.data ? (
+          <Box
+            component="pre"
+            data-testid="model-logs-details"
+            sx={{
+              m: 0,
+              mt: 1,
+              maxHeight: 480,
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              fontFamily: 'code',
+              fontSize: 'xs',
+            }}
+          >
+            {JSON.stringify(detailQuery.data, null, 2)}
+          </Box>
+        ) : (
+          <LinearProgress sx={{ mt: 1 }} data-testid="model-logs-details-loading" />
+        ))}
+    </Box>
+  );
+};
 
 export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }) => {
   const [view, updateView] = useModelLogsView();
@@ -95,6 +155,8 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
     endDate,
     model: view.model,
     search: searchQuery || undefined,
+    page: currentPage,
+    limit: itemsPerPage,
   });
 
   // Any filter change goes back to the first page.
@@ -115,21 +177,18 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
     onRefresh?.();
   };
 
-  const logs = useMemo(() => {
-    if (!modelLogsQuery.data?.logs) return [];
-    return modelLogsQuery.data.logs.sort((a: ModelLog, b: ModelLog) => dayjs(b.timestamp).diff(dayjs(a.timestamp)));
-  }, [modelLogsQuery.data]);
+  const totalCount = modelLogsQuery.data?.total ?? 0;
+  const totalPages = Math.ceil(totalCount / itemsPerPage);
 
-  const totalPages = Math.ceil((logs?.length || 0) / itemsPerPage);
-
-  // A linked page can be past the end of the current results; clamp once they have loaded.
+  // A linked page can be past the end of the current results; clamp once they have loaded. A
+  // placeholder is the previous filter's page, so its total says nothing about this one.
   const lastPage = Math.max(totalPages, 1);
-  const isPagePastEnd = modelLogsQuery.isSuccess && currentPage > lastPage;
+  const isPagePastEnd = modelLogsQuery.isSuccess && !modelLogsQuery.isPlaceholderData && currentPage > lastPage;
   useEffect(() => {
     if (isPagePastEnd) updateView({ page: lastPage });
   }, [isPagePastEnd, lastPage, updateView]);
 
-  const currentItems = logs?.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage) || [];
+  const currentItems = modelLogsQuery.data?.logs ?? [];
 
   if (loading || modelLogsQuery.isLoading) {
     return (
@@ -181,6 +240,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
           startDecorator={<RefreshIcon />}
           onClick={handleRefresh}
           disabled={loading || modelLogsQuery.isLoading}
+          data-testid="model-logs-refresh-btn"
         >
           Refresh
         </Button>
@@ -222,6 +282,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
               <Input
                 placeholder="Search logs..."
                 value={searchQuery}
+                slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
                 onChange={e => handleSearchChange(e.target.value)}
               />
             </Grid>
@@ -233,22 +294,26 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
         View detailed logs of model responses, including performance metrics, token usage, and execution tracking.
       </Alert>
 
-      {currentItems.length === 0 ? (
-        <Card variant="outlined" sx={{ p: 2 }}>
+      {modelLogsQuery.isError ? (
+        <Card variant="outlined" sx={{ p: 2 }} data-testid="model-logs-error">
+          <ErrorState message="Could not load model logs." onRetry={() => modelLogsQuery.refetch()} />
+        </Card>
+      ) : currentItems.length === 0 ? (
+        <Card variant="outlined" sx={{ p: 2 }} data-testid="model-logs-empty">
           <Typography>No logs found for the selected filters.</Typography>
         </Card>
       ) : (
         <>
           <Stack spacing={2}>
-            {currentItems.map((log: ModelLog, index: number) => (
-              <Card key={index} variant="outlined">
+            {currentItems.map((log: ModelLogSummary) => (
+              <Card key={log.id} variant="outlined">
                 <Stack spacing={2}>
                   <Grid container spacing={2}>
                     <Grid xs={12} md={3}>
                       <Typography level="body-sm" fontWeight="bold">
                         Model
                       </Typography>
-                      <Typography>{log.model?.name}</Typography>
+                      <Typography>{log.modelName}</Typography>
                     </Grid>
                     <Grid xs={12} md={3}>
                       <Typography level="body-sm" fontWeight="bold">
@@ -260,14 +325,14 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                       <Typography level="body-sm" fontWeight="bold">
                         Response Time
                       </Typography>
-                      <Typography>{log.performance?.totalResponseTime}ms</Typography>
+                      <Typography>{log.totalResponseTime}ms</Typography>
                     </Grid>
                     <Grid xs={12} md={3}>
                       <Typography level="body-sm" fontWeight="bold">
                         Token Usage
                       </Typography>
                       <Typography>
-                        {log.tokenUsage?.inputTokens} in / {log.tokenUsage?.outputTokens} out
+                        {log.inputTokens} in / {log.outputTokens} out
                       </Typography>
                     </Grid>
                   </Grid>
@@ -280,7 +345,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                         Context
                       </Typography>
                       <Typography>
-                        Files: {log.context?.attachedFiles?.length || 0} | History: {log.context?.messageHistoryLength}
+                        Files: {log.attachedFileCount} | History: {log.messageHistoryLength}
                       </Typography>
                     </Grid>
                     <Grid xs={12} md={6}>
@@ -288,13 +353,12 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                         Execution Steps
                       </Typography>
                       <Typography>
-                        {log.executionTracking?.completedSteps?.length || 0} completed /{' '}
-                        {log.executionTracking?.failedSteps?.length || 0} failed
+                        {log.completedStepCount} completed / {log.failedStepCount} failed
                       </Typography>
                     </Grid>
                   </Grid>
 
-                  {log.artifacts && log.artifacts.length > 0 && (
+                  {log.artifacts.length > 0 && (
                     <>
                       <Divider />
                       <Typography level="body-sm" fontWeight="bold">
@@ -303,12 +367,14 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                       <Stack spacing={1}>
                         {log.artifacts.map((artifact, idx: number) => (
                           <Typography key={idx} level="body-sm">
-                            {artifact.type}: {artifact.content.substring(0, 100)}...
+                            {artifact.type}: {artifact.preview}...
                           </Typography>
                         ))}
                       </Stack>
                     </>
                   )}
+
+                  <ModelLogDetails id={log.id} />
                 </Stack>
               </Card>
             ))}
@@ -319,7 +385,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
             onPageChange={page => updateView({ page })}
             itemsPerPage={itemsPerPage}
             onItemsPerPageChange={size => updateView({ limit: size, page: 1 })}
-            totalCount={logs?.length || 0}
+            totalCount={totalCount}
           />
         </>
       )}
