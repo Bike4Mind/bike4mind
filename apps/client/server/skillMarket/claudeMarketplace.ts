@@ -201,8 +201,12 @@ export async function buildClaudeMarketplace(
   const bundles = (await SkillBundle.find({ organizationId: org.id }).sort({ _id: 1 })).map(
     d => d.toJSON() as unknown as ISkillBundle
   );
+  // The listing/bundle name checks are check-then-insert across two collections, so a race can still
+  // pair them; the listing keeps the name and the bundle drops out of the feed.
+  const listingNames = new Set(plugins.flatMap(p => (p ? [p.name] : [])));
   const bundlePlugins = await Promise.all(
     bundles.map(async bundle => {
+      if (listingNames.has(bundle.pluginName)) return null;
       const zip = await bundleZipFor(bundle);
       if (!zip) return null;
       const sha = sha256(zip);

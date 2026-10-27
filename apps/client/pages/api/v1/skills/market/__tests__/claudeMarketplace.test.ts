@@ -491,6 +491,12 @@ describe('bundles', () => {
     expect(error?.statusCode).toBe(404);
   });
 
+  it('drops a bundle whose plugin name a listing already holds', async () => {
+    mockFindBundles.mockReturnValue({ sort: async () => [doc(bundle({ pluginName: 'review-pr' }))] });
+    const { res } = await call(feedHandler, { orgId: ORG_ID });
+    expect(res._getJSONData().plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr', 'review-pr-000002']);
+  });
+
   it('only asks for visible Organization listings of the bundle org', async () => {
     await bundleZip();
     expect(mockFind).toHaveBeenCalledWith(
