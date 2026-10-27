@@ -158,6 +158,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
   async listInvocableForUser(userId: string, limit: number): Promise<ISkill[]> {
     const results = await this.skillModel
       .find({ userId, deletedAt: null, disableModelInvocation: { $ne: true } })
+      .select('-files')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
@@ -170,11 +171,13 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
    */
   async findByNamesForUser(userId: string, names: string[]): Promise<ISkill[]> {
     if (names.length === 0) return [];
-    const results = await this.skillModel.find({
-      userId,
-      name: { $in: names },
-      deletedAt: null,
-    });
+    const results = await this.skillModel
+      .find({
+        userId,
+        name: { $in: names },
+        deletedAt: null,
+      })
+      .select('-files');
     return results.map(doc => doc.toJSON());
   }
 
@@ -205,6 +208,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
         deletedAt: null,
         disableModelInvocation: { $ne: true },
       })
+      .select('-files')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());

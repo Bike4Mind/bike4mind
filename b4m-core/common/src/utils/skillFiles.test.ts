@@ -58,4 +58,20 @@ describe('checkSkillFiles', () => {
     expect(errorOf(sixChunks)).toMatch(/total 512 KB/);
     expect(errorOf(sixChunks.slice(0, 5))).toBeNull();
   });
+
+  it('rejects a path that is also a folder of another file', () => {
+    expect(errorOf([file('scripts/a', 'x'), file('scripts/a/b.sh', 'x')])).toMatch(/both a file and a folder/);
+    expect(errorOf([file('scripts/A', 'x'), file('scripts/a/b.sh', 'x')])).toMatch(/both a file and a folder/);
+    expect(errorOf([file('scripts/a', 'x'), file('scripts/ab.sh', 'x')])).toBeNull();
+  });
+
+  it('rejects non-string paths and contents', () => {
+    expect(errorOf([{ path: 1, content: 'x' } as never])).toMatch(/string path and content/);
+    expect(errorOf([{ path: 'scripts/a.sh', content: 2 } as never])).toMatch(/string path and content/);
+  });
+
+  it('rejects nested traversal and hidden folders', () => {
+    expect(errorOf([file('scripts/a/../../x', 'x')])).not.toBeNull();
+    expect(errorOf([file('scripts/.hidden/x.sh', 'x')])).not.toBeNull();
+  });
 });

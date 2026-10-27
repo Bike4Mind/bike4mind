@@ -35,6 +35,10 @@ export function skillFilePathError(path: string): string | null {
   return null;
 }
 
+/** The one path ordering every hash, snapshot and zip uses; keep them on this so the sha stays stable. */
+export const compareSkillFilePaths = (a: { path: string }, b: { path: string }): number =>
+  a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+
 export type SkillFilesCheck = { ok: true; files: ISkillFile[] } | { ok: false; error: string };
 
 /** Validates a skill's supporting files; on success returns them sorted by path (the order every hash and zip uses). */
@@ -67,10 +71,13 @@ export function checkSkillFiles(files: ISkillFile[]): SkillFilesCheck {
       error: `Supporting files must total ${SKILL_FILE_LIMITS.maxTotalBytes / 1024} KB or less`,
     };
   }
-  return {
-    ok: true,
-    files: files
-      .map(({ path, content }) => ({ path, content }))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
-  };
+  const sorted = files.map(({ path, content }) => ({ path, content })).sort(compareSkillFilePaths);
+  // A path that is also a directory prefix of another cannot be extracted from the zip.
+  const lowered = sorted.map(f => f.path.toLowerCase()).sort();
+  for (let i = 1; i < lowered.length; i++) {
+    if (lowered[i].startsWith(`${lowered[i - 1]}/`)) {
+      return { ok: false, error: `${lowered[i - 1]}: cannot be both a file and a folder` };
+    }
+  }
+  return { ok: true, files: sorted };
 }
