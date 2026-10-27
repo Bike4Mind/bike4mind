@@ -264,7 +264,7 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     const agent = await agentRepository.findById(id as string);
     assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to update this agent");
 
-    await validateAgentUpdate(agentData, req.user!.id);
+    await validateAgentUpdate(agentData, req.user!.id, undefined, req.logger);
 
     // Handle capabilities conversion if it's in the old format
     if (
