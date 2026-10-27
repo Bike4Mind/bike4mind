@@ -1,4 +1,4 @@
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, settingsMap } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   CreditTransaction,
@@ -52,7 +52,7 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
       { adminSettings: adminSettingsRepository },
       { names: ['ReferralFirstAnswerCredits', 'ReferralAlertRewardsPerDay'], skipCache: true }
     );
-    const amount = getSettingsValue('ReferralFirstAnswerCredits', settings);
+    const amount = getSettingsValue('ReferralFirstAnswerCredits', settings, 0);
     if (!(amount > 0)) return;
 
     const inviterId = String(friend.referredByUserId);
@@ -79,7 +79,9 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
     );
     if (!creditTransactionId) return;
 
-    await alertIfRewardsSpike(getSettingsValue('ReferralAlertRewardsPerDay', settings));
+    await alertIfRewardsSpike(
+      getSettingsValue('ReferralAlertRewardsPerDay', settings, settingsMap.ReferralAlertRewardsPerDay.defaultValue)
+    );
   } catch (err) {
     Logger.error('[referral] first-answer reward failed', err, { friendId });
   }
