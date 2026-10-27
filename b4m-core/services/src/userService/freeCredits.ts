@@ -73,6 +73,8 @@ export const grantFreeCredits = async (
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
   { db, reason }: FreeCreditAdapters
 ): Promise<GrantFreeCreditsResult> => {
+  const persisted = await db.users.findById(user.id);
+  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason });
   if (await protectSignupCredits(user.id, db)) {
     const alreadyGranted = await db.creditTransactions.findOne({
       transactionId: { $in: [`verify-grant:${user.id}`, legacyOtcRegisterTransactionId(user.id)] },
@@ -80,8 +82,6 @@ export const grantFreeCredits = async (
     if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
-  const persisted = await db.users.findById(user.id);
-  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason });
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
 

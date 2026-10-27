@@ -2,7 +2,13 @@
 import { signupProtectionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 
-import { adminSettingsRepository, connectDB, creditTransactionRepository, userRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  connectDB,
+  creditLotRepository,
+  creditTransactionRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { CreditHolderType, IUserDocument, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
 import { Resource } from 'sst';
@@ -30,6 +36,7 @@ type BackfillOptions = {
  *   the tag and the pending amount. Idempotent - re-runs are safe because `addCredits` is keyed
  *   on a stable `transactionId='verify-grant:${user.id}'` (matches the runtime grant
  *   path in apps/client/pages/api/email/verify.ts).
+ *   Staged accounts resume their pending signup tranche through the shared grant service.
  *
  * Usage (must run inside an SST shell so Resource.MONGODB_URI resolves):
  *   Dry run on PR preview:   npx sst shell --stage pr8958 pnpm --filter @bike4mind/scripts backfill:pending-free-credits
@@ -130,6 +137,24 @@ class BackfillPendingFreeCredits {
         continue;
       }
       try {
+        if (user.signupGrant) {
+          const release = await userService.releasePendingFreeCredits(user, {
+            db: {
+              users: userRepository,
+              adminSettings: adminSettingsRepository,
+              creditTransactions: creditTransactionRepository,
+              creditLots: creditLotRepository,
+              signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
+            },
+            reason: 'backfill: pending staged signup tranche',
+            logger: console,
+          });
+          if (!release.released) continue;
+          await userRepository.clearPendingFreeCreditGrant(user.id);
+          if (release.creditsGranted > 0) granted++;
+          tagCleared++;
+          continue;
+        }
         // An invite-resolved amount stored on the user wins over the setting;
         // mirrors the runtime grant paths (registerViaOTC / email verify).
         const userAmount = user.pendingCreditGrant ?? amount;
