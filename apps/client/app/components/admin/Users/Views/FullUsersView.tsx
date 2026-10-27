@@ -163,7 +163,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   const profileRoot = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!focusCredits || activeTab !== 'overview') return;
-    profileRoot.current?.querySelector<HTMLInputElement>('[data-testid="admin-user-credits-input"]')?.focus();
+    profileRoot.current?.querySelector<HTMLInputElement>('[data-admin-credits-input]')?.focus();
     setFocusCredits(false);
   }, [focusCredits, activeTab]);
   const profileCommands: AdminCommand[] = [

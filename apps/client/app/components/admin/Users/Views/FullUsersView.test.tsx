@@ -11,7 +11,9 @@ const mutations = vi.hoisted(() => ({ updateMutate: vi.fn(), loginAsMutate: vi.f
 // Only the Roles column is exercised here (it owns the Custom Tags control that #2441 is
 // about), so the card's other sections are stubbed to keep their data hooks out of it.
 vi.mock('../../AdminProfile', () => ({ default: () => null }));
-vi.mock('../Details/Bike4MindUserDetails', () => ({ default: () => <input data-testid="admin-user-credits-input" /> }));
+vi.mock('../Details/Bike4MindUserDetails', () => ({
+  default: () => <input data-testid="admin-user-credits-input" data-admin-credits-input />,
+}));
 vi.mock('../BulkAbuseResponseModal', () => ({
   default: ({ selectedUserIds, recordAction }: { selectedUserIds: string[]; recordAction: string }) => (
     <div data-testid="profile-action-preview" data-user={selectedUserIds[0]} data-action={recordAction} />
