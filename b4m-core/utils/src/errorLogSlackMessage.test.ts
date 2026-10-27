@@ -139,3 +139,11 @@ describe('splitErrorDetail', () => {
     expect(splitErrorDetail('Weird {not json\nline two')).toEqual({ headline: 'Weird {not json' });
   });
 });
+
+describe('fallback text', () => {
+  it('escapes the headline so a log line cannot smuggle a mention', () => {
+    expect(render({ message: '<!here> broke & died' }).text).toBe(
+      'ERROR on production: &lt;!here&gt; broke &amp; died'
+    );
+  });
+});

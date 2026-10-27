@@ -531,7 +531,7 @@ export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
   body.push({ type: 'context', elements: [{ type: 'mrkdwn', text: params.context.join(SEPARATOR) }] });
 
   return {
-    text: `${mention ? `${mention} ` : ''}${headerText}: ${params.summary}`,
+    text: `${mention ? `${mention} ` : ''}${headerText}: ${escapeMrkdwn(params.summary)}`,
     blocks,
     attachments: [{ color, blocks: body }],
   };

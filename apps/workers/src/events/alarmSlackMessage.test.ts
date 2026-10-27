@@ -436,3 +436,10 @@ describe('postAlarmToSlack', () => {
     );
   });
 });
+
+describe('fallback text', () => {
+  it('escapes alarm-supplied text so a reason cannot smuggle a mention', () => {
+    const message = formatAlarmSlackMessage({ ...sample, NewStateReason: '<!channel> & <odd>' }, 'production');
+    expect(message?.text).toContain('&lt;!channel&gt; &amp; &lt;odd&gt;');
+  });
+});

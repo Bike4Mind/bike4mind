@@ -133,7 +133,7 @@ export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWe
   });
 
   return {
-    text: `${severity.toUpperCase()} on ${input.stage}: ${title}`,
+    text: escape(`${severity.toUpperCase()} on ${input.stage}: ${title}`),
     attachments: [{ color: style.color, blocks }],
   };
 }
