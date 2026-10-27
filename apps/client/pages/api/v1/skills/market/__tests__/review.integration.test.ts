@@ -2,7 +2,7 @@
 /**
  * The /api/v1 Skill Market review routes through the REAL baseApi chain (apiKeyAuth, which withholds
  * isAdmin under a key, and the scope gate). The queue loader and decideVersion are mocked: their
- * behaviour is covered by server/skillMarket/reviewQueue.test.ts and skillMarket.e2e.test.ts. The
+ * behaviour is covered by server/skillMarket/reviewQueue.e2e.test.ts and skillMarket.e2e.test.ts. The
  * mocked decideVersion keeps the real canReviewListing gate, so the Public-listing 403 is the real rule.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -77,6 +77,7 @@ import {
   BadRequestError,
   ConflictError,
   ForbiddenError,
+  NotFoundError,
   ReviewQueueResponseSchema,
   ReviewSkillVersionResponseSchema,
   type ISkillListing,
@@ -322,6 +323,11 @@ describe('/api/v1/skills/market/review-queue', () => {
     expect(h.queue.mock.calls[1][2]).toEqual({ filter: 'pending', limit: 1, after: { at, id: VERSION_ID } });
   });
 
+  it.each(['0', '101'])('rejects limit=%s (422)', async limit => {
+    expect((await getQueue({ limit }))._getStatusCode()).toBe(422);
+    expect(h.queue).not.toHaveBeenCalled();
+  });
+
   it("rejects a malformed cursor or another endpoint's cursor (422)", async () => {
     expect((await getQueue({ cursor: 'nope' }))._getStatusCode()).toBe(422);
     const foreign = encodeTimeIdCursor('v1.skills.market.listings.mine', { at: CREATED, id: VERSION_ID });
@@ -372,6 +378,7 @@ describe('/api/v1/skills/market/versions/{vid}/review', () => {
 
   it.each([
     [400, new BadRequestError('Acknowledge the high-risk findings before approving')],
+    [404, new NotFoundError('Version not found')],
     [409, new ConflictError('This version was superseded or already decided')],
   ])('passes a %i from the shared logic through', async (status, error) => {
     h.decide.mockRejectedValue(error);
