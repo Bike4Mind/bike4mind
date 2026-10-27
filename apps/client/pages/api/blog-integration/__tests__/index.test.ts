@@ -36,7 +36,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 const update = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: vi.fn(), update } }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v: string) => `enc:${v}`,
   decryptToken: (v: string) => `dec:${v}`,
 }));

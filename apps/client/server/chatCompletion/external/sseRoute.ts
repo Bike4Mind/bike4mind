@@ -54,6 +54,7 @@ import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -310,6 +311,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       timing?.phase('completionStarted');
       await executeCompletion({
         getEntitlements: getUserEntitlements,
+        getThinkingVisibility: resolveThinkingVisibility,
         creditHolds: createCompletionCreditHolds(logger),
         userId,
         model: body.model,

@@ -1,11 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LOCAL_MODEL_PREFIX, OllamaLocal } from './OllamaLocal';
+import { OllamaLocal } from './OllamaLocal';
 
 describe('OllamaLocal', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it.each(['gpt-4', 'local:lmstudio:x', 'local:', 'local:ollama', 'local:ollama:', 'local::x'])(
+    'rejects unsupported or malformed model id %s before network I/O',
+    async model => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(new OllamaLocal().stream({ model, messages: [] }, () => undefined)).rejects.toThrow(
+        'Invalid local model id.'
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
 
   it('discovers localhost models with namespaced ids and reported capabilities', async () => {
     vi.stubGlobal(
@@ -25,7 +38,7 @@ describe('OllamaLocal', () => {
     const models = await new OllamaLocal().models();
     expect(models).toEqual([
       expect.objectContaining({
-        id: `${LOCAL_MODEL_PREFIX}qwen3:8b`,
+        id: 'local:ollama:qwen3:8b',
         supportsTools: true,
         thinkingToggle: true,
         contextWindow: 4096,
@@ -60,7 +73,7 @@ describe('OllamaLocal', () => {
     vi.stubGlobal('fetch', fetchMock);
     const local = new OllamaLocal();
     expect((await local.models())[0].contextWindow).toBe(expected);
-    await local.stream({ model: `${LOCAL_MODEL_PREFIX}llama`, messages: [] }, () => undefined);
+    await local.stream({ model: 'local:ollama:llama', messages: [] }, () => undefined);
     const sent = JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body)) as { options: { num_ctx: number } };
     expect(sent.options.num_ctx).toBe(expected);
   });
@@ -89,7 +102,7 @@ describe('OllamaLocal', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
     await new OllamaLocal().stream(
-      { model: `${LOCAL_MODEL_PREFIX}llama3.2`, messages: [{ role: 'user', content: 'hi' }], thinking },
+      { model: 'local:ollama:llama3.2', messages: [{ role: 'user', content: 'hi' }], thinking },
       () => undefined
     );
     const sent = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as Record<string, unknown>;
@@ -110,7 +123,7 @@ describe('OllamaLocal', () => {
     );
     const events: unknown[] = [];
     await new OllamaLocal().stream(
-      { model: `${LOCAL_MODEL_PREFIX}llama`, messages: [{ role: 'user', content: 'hi' }] },
+      { model: 'local:ollama:llama', messages: [{ role: 'user', content: 'hi' }] },
       event => events.push(event)
     );
     expect(events).toEqual([
@@ -128,7 +141,7 @@ describe('OllamaLocal', () => {
     vi.stubGlobal('fetch', fetchMock);
     const events: unknown[] = [];
     await new OllamaLocal().stream(
-      { model: `${LOCAL_MODEL_PREFIX}llama`, messages: [{ role: 'user', content: 'hi' }], ...request },
+      { model: 'local:ollama:llama', messages: [{ role: 'user', content: 'hi' }], ...request },
       event => events.push(event)
     );
     return {
@@ -209,7 +222,7 @@ describe('OllamaLocal', () => {
         return Response.json({ capabilities: name === 'embed' ? ['embedding'] : ['completion'] });
       })
     );
-    expect((await new OllamaLocal().models()).map(model => model.id)).toEqual([`${LOCAL_MODEL_PREFIX}chat`]);
+    expect((await new OllamaLocal().models()).map(model => model.id)).toEqual(['local:ollama:chat']);
   });
 
   it('translates thinking and tool-call frames', async () => {
@@ -243,11 +256,7 @@ describe('OllamaLocal', () => {
     vi.stubGlobal('fetch', fetchMock);
     const controller = new AbortController();
     await expect(
-      new OllamaLocal().stream(
-        { model: `${LOCAL_MODEL_PREFIX}llama`, messages: [] },
-        () => undefined,
-        controller.signal
-      )
+      new OllamaLocal().stream({ model: 'local:ollama:llama', messages: [] }, () => undefined, controller.signal)
     ).rejects.toThrow('malformed stream');
     expect(fetchMock.mock.calls[1][1]?.signal).toBe(controller.signal);
     expect(cancel).toHaveBeenCalledOnce();
@@ -288,7 +297,7 @@ describe('OllamaLocal', () => {
       vi.fn(async () => new Response('', { status: 500 }))
     );
     const local = new OllamaLocal();
-    await expect(local.stream({ model: `${LOCAL_MODEL_PREFIX}llama`, messages: [] }, () => undefined)).rejects.toThrow(
+    await expect(local.stream({ model: 'local:ollama:llama', messages: [] }, () => undefined)).rejects.toThrow(
       'HTTP 500'
     );
     await expect(local.stream({ model: 'gpt-4', messages: [] }, () => undefined)).rejects.toThrow('Invalid local');
@@ -311,10 +320,7 @@ describe('Ollama local-only inference', () => {
       const local = new OllamaLocal();
       expect(await local.models()).toEqual([]);
       await expect(
-        local.stream(
-          { model: `${LOCAL_MODEL_PREFIX}alias`, messages: [{ role: 'user', content: 'private' }] },
-          () => {}
-        )
+        local.stream({ model: 'local:ollama:alias', messages: [{ role: 'user', content: 'private' }] }, () => {})
       ).rejects.toThrow('Cloud-backed');
       expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/chat'))).toBe(false);
     }
@@ -332,7 +338,7 @@ describe('Ollama local-only inference', () => {
         : Response.json({ capabilities: ['completion'], remote_host: '', remote_model: '' })
     );
     vi.stubGlobal('fetch', fetchMock);
-    expect((await new OllamaLocal().models()).map(model => model.id)).toEqual([`${LOCAL_MODEL_PREFIX}local`]);
+    expect((await new OllamaLocal().models()).map(model => model.id)).toEqual(['local:ollama:local']);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

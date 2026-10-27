@@ -36,7 +36,7 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
 /**
  * Resolves a saved notebook id (agent/keyword routing, slack default, web last notebook) to one the
  * user can still write to: it must exist, not be deleted, and pass the same write check as
- * canAccessSession(..., 'write') in apps/client/server/utils/sessionAccess.ts (owner, update share by
+ * canAccessSession(..., 'write') in packages/server-utils/src/utils/sessionAccess.ts (owner, update share by
  * user or group, isGlobalWrite). Admin rights are deliberately not honored, so a DM never lands in
  * another user's notebook. Returns null for a missing, malformed or denied id so the caller falls
  * through; lookup errors propagate rather than silently creating a new notebook.

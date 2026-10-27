@@ -411,6 +411,23 @@ describe('SandboxOrchestrator', () => {
     });
   });
 
+  describe('container sockets', () => {
+    it.each([
+      [undefined, false],
+      [false, false],
+      [true, true],
+    ])('passes allowContainerSockets=%s through as %s', (configured, expected) => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const config = enabledConfig();
+      if (configured === undefined) delete (config as Partial<SandboxConfig>).allowContainerSockets;
+      else config.allowContainerSockets = configured;
+      new SandboxOrchestrator(config, mockRuntime).shouldSandbox('ls', '/tmp');
+
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ allowContainerSockets: expected }));
+    });
+  });
+
   describe('B1: no /sandbox command sequence grants egress without a running proxy', () => {
     it('network on -> disable -> mode permissions leaves the runtime networkEnabled: false', async () => {
       const proxy = createStatefulProxyManager();

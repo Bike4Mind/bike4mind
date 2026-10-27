@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
+import { collectDagChildArtifactBlocks } from '@bike4mind/server-utils/utils/agentDagArtifacts';
 import {
   MAX_AGENT_ARTIFACTS_PER_RUN,
   buildAgentArtifactPayloads,

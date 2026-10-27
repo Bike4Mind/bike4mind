@@ -73,7 +73,7 @@ vi.mock('@server/utils/adminAudit', () => ({
 }));
 vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
-vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
+vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));
 
 import '@pages/api/organizations/[id]/index';
 

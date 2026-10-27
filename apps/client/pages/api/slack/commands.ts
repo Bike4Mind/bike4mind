@@ -12,7 +12,7 @@ import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import {
   SlackAuditLogger,
   handleB4mCommand,

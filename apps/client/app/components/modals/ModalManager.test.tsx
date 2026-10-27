@@ -4,6 +4,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ModalManager from './ModalManager';
 import { releaseNoteToModal } from './releaseNoteSlides';
+import { markGearsDiscoveryShown, resetWhatsNewShownForTests } from './whatsNewSession';
 import {
   markFirstSignupSession,
   FIRST_SIGNUP_SESSION_KEY,
@@ -57,6 +58,7 @@ afterEach(() => {
 describe('ModalManager whats-new auto-trigger', () => {
   beforeEach(() => {
     localStorage.clear();
+    resetWhatsNewShownForTests();
     mocks.triggerModalByTag.mockReset();
     mocks.createdAt = new Date('2020-01-01');
     mocks.modals.slidesPending = false;
@@ -89,6 +91,12 @@ describe('ModalManager whats-new auto-trigger', () => {
     expect(mocks.triggerModalByTag).toHaveBeenCalledTimes(1);
   });
 
+  it('does not auto-trigger once the gears discovery modal has opened in this page load', () => {
+    markGearsDiscoveryShown();
+    render(<ModalManager />);
+    expect(mocks.triggerModalByTag).not.toHaveBeenCalled();
+  });
+
   it('does not auto-trigger during a first signup session', () => {
     markFirstSignupSession('user-1');
     render(<ModalManager />);
@@ -119,6 +127,7 @@ describe('ModalManager new-account suppression', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-20T04:00:00Z'));
+    resetWhatsNewShownForTests();
     mocks.modals.data = [announcement(), announcement(true)];
     mocks.modals.isPending = false;
     mocks.modals.slidesPending = false;

@@ -17,7 +17,7 @@ vi.mock('@server/integrations/slack/slackWebhookVerification', () => ({
 vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ success: vi.fn(), failure: vi.fn() }) },
 }));
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-test' }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-test' }));
 vi.mock('@server/utils/pendingActionExecutor', () => ({
   executePendingAction: vi.fn(),
   cancelPendingActionOnQuest: vi.fn(),

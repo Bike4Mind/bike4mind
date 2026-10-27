@@ -312,6 +312,129 @@ describe('lifecycle', () => {
     expect(terminals.list('s2')).toHaveLength(1);
   });
 
+  it('waits for real terminal exit and holds new terminals closed throughout cleanup', async () => {
+    vi.useFakeTimers();
+    const terminals = manager();
+    const { info, pty } = await open(terminals);
+    let completed = false;
+    const cleanup = terminals.acquireSessionCleanup('s1').then(release => {
+      completed = true;
+      return release;
+    });
+    expect(pty.signals).toEqual(['SIGHUP']);
+    expect(await terminals.create('s1', 80, 24)).toMatchObject({ ok: false });
+    expect(await terminals.restart(info.id)).toBeNull();
+    terminals.close(info.id);
+    terminals.killSession('s1');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(completed).toBe(false);
+    expect(terminals.runningCount()).toBe(1);
+    pty.exit(0, 1);
+    const release = await cleanup;
+    expect(terminals.list('s1')).toEqual([]);
+    expect(await terminals.create('s1', 80, 24)).toMatchObject({ ok: false });
+    release();
+    expect(await terminals.create('s1', 80, 24)).toMatchObject({ ok: true });
+  });
+
+  it('escalates a stubborn shell and still waits for its exit before cleanup', async () => {
+    vi.useFakeTimers();
+    const terminals = manager();
+    const { pty } = await open(terminals);
+    let completed = false;
+    const cleanup = terminals.acquireSessionCleanup('s1').then(release => {
+      completed = true;
+      return release;
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(pty.signals).toEqual(['SIGHUP', 'SIGKILL']);
+    expect(completed).toBe(false);
+    pty.exit(0, 9);
+    const release = await cleanup;
+    expect(completed).toBe(true);
+    release();
+  });
+
+  it('refuses cleanup and keeps tracking a shell that never reports exit', async () => {
+    vi.useFakeTimers();
+    const terminals = manager();
+    const { pty } = await open(terminals);
+    const cleanup = terminals.acquireSessionCleanup('s1');
+    const refusal = expect(cleanup).rejects.toThrow('worktree was kept');
+    await vi.advanceTimersByTimeAsync(4_000);
+    await refusal;
+    expect(pty.signals).toEqual(['SIGHUP', 'SIGKILL']);
+    expect(terminals.runningCount()).toBe(1);
+    expect(terminals.list('s1')).toHaveLength(1);
+    expect(await terminals.create('s1', 80, 24)).toMatchObject({ ok: true });
+  });
+
+  it('refuses cleanup while a terminal is still starting', async () => {
+    let resume: ((path: string) => void) | undefined;
+    const terminals = manager({
+      userPath: () =>
+        new Promise(resolve => {
+          resume = resolve;
+        }),
+    });
+    const creating = terminals.create('s1', 80, 24);
+    await expect(terminals.acquireSessionCleanup('s1')).rejects.toThrow('still starting');
+    await vi.waitFor(() => expect(ptys).toHaveLength(0));
+    await vi.waitFor(() => expect(resume).toBeTypeOf('function'));
+    if (!resume) throw new Error('The terminal did not reach its path lookup');
+    resume('/usr/bin');
+    expect(await creating).toMatchObject({ ok: true });
+  });
+
+  it.each(['close', 'restart'])('waits for the old shell after a %s before cleanup', async action => {
+    vi.useFakeTimers();
+    const terminals = manager();
+    const { info, pty } = await open(terminals);
+    if (action === 'close') terminals.close(info.id);
+    else await terminals.restart(info.id);
+    expect(terminals.runningCount()).toBe(action === 'close' ? 1 : 2);
+    let completed = false;
+    const cleanup = terminals.acquireSessionCleanup('s1').then(release => {
+      completed = true;
+      return release;
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(pty.signals).toContain('SIGKILL');
+    expect(completed).toBe(false);
+    for (const shell of ptys) shell.exit(0, 9);
+    const release = await cleanup;
+    expect(terminals.runningCount()).toBe(0);
+    release();
+  });
+
+  it('cancels a pending restart and still waits for its retired shell', async () => {
+    vi.useFakeTimers();
+    let resume: ((path: string) => void) | undefined;
+    const userPath = vi
+      .fn()
+      .mockResolvedValueOnce('/usr/bin')
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>(resolve => {
+            resume = resolve;
+          })
+      );
+    const terminals = manager({ userPath });
+    const { info, pty } = await open(terminals);
+    const restart = terminals.restart(info.id);
+    await vi.waitFor(() => expect(resume).toBeTypeOf('function'));
+    const cleanup = terminals.acquireSessionCleanup('s1');
+    if (!resume) throw new Error('The terminal did not reach its path lookup');
+    resume('/usr/bin');
+    await restart;
+    expect(ptys).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(pty.signals).toContain('SIGKILL');
+    pty.exit(0, 9);
+    const release = await cleanup;
+    release();
+  });
+
   it('hangs up at quit, and kills by pid only what is still running after the grace', async () => {
     vi.useFakeTimers();
     const terminals = manager();

@@ -1,7 +1,7 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
-import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
-import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
+import { REQUIRED_SCOPES } from './security';
+import { API_KEY_RATE_LIMIT_DEFAULTS, PUBLIC_DOC_API_KEY_SCOPES } from '../types/entities/UserApiKeyTypes';
 import { API_KEY_RATE_LIMIT_HEADERS, API_KEY_RATE_LIMIT_HEADER_NAMES } from '../apiKeyRateLimitHeaders';
 
 // Importing these modules is what registers their schemas/paths against the
@@ -37,7 +37,8 @@ function servers() {
   ];
 }
 
-function infoDescription(): string {
+/** `scopes` is the Scopes list; a deployment spec widens it to what its own operations require. */
+export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_SCOPES): string {
   return [
     'Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions ' +
       'that validate requests at runtime, so this spec cannot drift from the implementation - with ' +
@@ -62,8 +63,8 @@ function infoDescription(): string {
       '`Authorization: Bearer` header.',
     '',
     '## Scopes',
-    'API keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:',
-    ...ALL_API_KEY_SCOPES.map(s => `- \`${s}\``),
+    'API keys carry `resource:action` scopes. The documented scopes are:',
+    ...scopes.map(s => `- \`${s}\``),
     '',
     'Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: ' +
       "a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no " +

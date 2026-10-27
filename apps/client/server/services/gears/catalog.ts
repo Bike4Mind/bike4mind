@@ -230,11 +230,12 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await User.exists({ _id: userId, 'mfa.totpEnabled': true })),
   },
   {
-    // The partial index on slackMetadata exists for exactly this query shape.
+    // Filters on slackMetadata.channelId (required on the subdocument) rather than slackMetadata
+    // itself so the query implies the partial userId_1_slackNotebook index's filter.
     key: 'slack',
     credits: 1000,
     kind: 'skill',
-    check: async ({ userId }) => !!(await Session.exists({ userId, slackMetadata: { $exists: true, $ne: null } })),
+    check: async ({ userId }) => !!(await Session.exists({ userId, 'slackMetadata.channelId': { $exists: true } })),
   },
   {
     // Each imported history is its own reward (OpenAI and Claude count separately).

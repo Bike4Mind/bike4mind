@@ -7,7 +7,10 @@ import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4
 import axios from 'axios';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';

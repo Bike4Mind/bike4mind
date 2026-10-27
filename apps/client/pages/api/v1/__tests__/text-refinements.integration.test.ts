@@ -9,19 +9,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyScope } from '@bike4mind/common';
 import { fire, resetHarness, validateWithScopes } from '@server/generations/__test__/routeHarness';
 
-const { mockGetOperationsModel, mockRefineText, mockFindByKey, mockCreateOrUpdate, cacheStore } = vi.hoisted(() => ({
-  mockGetOperationsModel: vi.fn(),
-  mockRefineText: vi.fn(),
-  mockFindByKey: vi.fn(),
-  mockCreateOrUpdate: vi.fn(),
-  cacheStore: new Map<string, unknown>(),
-}));
+const { mockGetOperationsModel, mockRefineText, mockFindByKey, mockCreateOrUpdate, cacheStore, mockMeter } = vi.hoisted(
+  () => ({
+    mockMeter: vi.fn(),
+    mockGetOperationsModel: vi.fn(),
+    mockRefineText: vi.fn(),
+    mockFindByKey: vi.fn(),
+    mockCreateOrUpdate: vi.fn(),
+    cacheStore: new Map<string, unknown>(),
+  })
+);
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
   applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
 }));
-vi.mock('@client/services/operationsModelService', async orig => ({
-  ...(await orig<typeof import('@client/services/operationsModelService')>()),
+vi.mock('@bike4mind/server-utils/services/operationsModelService', async orig => ({
+  ...(await orig<typeof import('@bike4mind/server-utils/services/operationsModelService')>()),
   OperationsModelService: { getOperationsModel: (...a: unknown[]) => mockGetOperationsModel(...a) },
 }));
 vi.mock('@bike4mind/services/llm/refineText', async orig => ({
@@ -31,13 +34,13 @@ vi.mock('@bike4mind/services/llm/refineText', async orig => ({
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
-vi.mock('@server/middlewares/rateLimit', async () =>
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
   (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/userRateTier', async () =>
   (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
-vi.mock('@server/utils/orgAccess', async orig =>
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>
   (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -52,12 +55,18 @@ vi.mock('@bike4mind/database', async orig => ({
     createOrUpdate: (...a: unknown[]) => mockCreateOrUpdate(...a),
   },
 }));
+// The meter the route bills through; the reserve/settle internals are covered by meterPlatformCompletion.test.ts.
+vi.mock('@server/billing/meterPlatformCompletion', async orig => ({
+  ...(await orig<typeof import('@server/billing/meterPlatformCompletion')>()),
+  createRequestCompletionMeter: () => mockMeter,
+}));
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import handler from '../text-refinements';
-import { OperationsModelUnavailableError } from '@client/services/operationsModelService';
+import { OperationsModelUnavailableError } from '@bike4mind/server-utils/services/operationsModelService';
 import { Logger } from '@bike4mind/observability';
 import { CacheKeys } from '@server/utils/cacheKeys';
+import { insufficientCreditsError } from '@bike4mind/common';
 
 const post = (body: Record<string, unknown>) => fire({ method: 'POST', url: '/api/v1/text-refinements', body });
 
@@ -252,5 +261,50 @@ describe('POST /api/v1/text-refinements', () => {
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toEqual({ error: 'The model returned no refined text' });
     expect(mockRefineText).not.toHaveBeenCalled();
+  });
+  describe('credit metering', () => {
+    const complete = vi.fn();
+
+    beforeEach(() => {
+      complete.mockReset().mockImplementation(async (_model, _messages, _opts, callback) => {
+        await callback(['A refined dog'], { inputTokens: 20, outputTokens: 6 });
+      });
+      mockGetOperationsModel.mockResolvedValue({
+        modelId: 'ops-model',
+        modelInfo: { id: 'ops-model', backend: 'openai', max_tokens: 4096 },
+        llm: { complete },
+      });
+      // Run the LLM through the adapters the helper hands refineText, so the metered backend is exercised.
+      mockRefineText.mockImplementation(async (_params, { llm }) => {
+        let out = '';
+        await llm.complete([{ role: 'user', content: 'x' }], async (chunk: string) => {
+          out += chunk ?? '';
+        });
+        return out;
+      });
+    });
+
+    it('charges an API-key caller for a cache miss', async () => {
+      const settle = vi.fn().mockResolvedValue(1);
+      mockMeter.mockResolvedValue({ settle, refund: vi.fn() });
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = post({ text: 'a dog on a beach' });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockMeter).toHaveBeenCalledTimes(1);
+      expect(settle).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 20, outputTokens: 6 }));
+    });
+
+    it('422s insufficient_credits when the caller cannot afford it, without calling the provider', async () => {
+      mockMeter.mockRejectedValue(insufficientCreditsError('Insufficient credits for text refinement'));
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = post({ text: 'a dog on a beach' });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'insufficient_credits' });
+      expect(complete).not.toHaveBeenCalled();
+    });
   });
 });

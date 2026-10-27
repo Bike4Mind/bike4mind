@@ -22,5 +22,8 @@ describe('getEntitlingPlanByPriceId', () => {
   it('confers nothing for an empty or unknown price id', () => {
     expect(getEntitlingPlanByPriceId('')).toBeUndefined();
     expect(getEntitlingPlanByPriceId('price_unknown')).toBeUndefined();
+    expect(getEntitlingPlanByPriceId('__proto__')).toBeUndefined();
+    expect(getEntitlingPlanByPriceId('constructor')).toBeUndefined();
+    expect(getEntitlingPlanByPriceId('toString')).toBeUndefined();
   });
 });

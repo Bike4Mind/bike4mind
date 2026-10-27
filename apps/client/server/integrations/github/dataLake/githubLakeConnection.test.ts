@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import type { Response } from 'express';
-import { createStateToken } from '@server/auth/jwtStateStore';
-import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
+import { NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { Logger } from '@bike4mind/observability';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { GRANT_EXPIRED_MESSAGE } from './githubLakeAuthGrant';
@@ -72,7 +72,7 @@ vi.mock('./githubLakeAuthGrant', async importOriginal => {
     consumeGitHubLakeAuthGrant: h.consumeGitHubLakeAuthGrant,
   };
 });
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();

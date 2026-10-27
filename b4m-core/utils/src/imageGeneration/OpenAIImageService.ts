@@ -17,6 +17,10 @@ import {
 } from '@bike4mind/common';
 import { invokeImageProcessor, downloadImageAsBuffer } from './imageProcessorUtils';
 import { sniffImageFormat } from './sniffImageFormat';
+import { ImageModerationBlockedError } from './imageGenerationErrors';
+
+// Re-exported for existing importers that pull it from this module.
+export { ImageModerationBlockedError };
 
 // gpt-image's edit endpoint takes png/webp/jpg sources up to this size.
 // @see https://platform.openai.com/docs/api-reference/images/createEdit
@@ -103,20 +107,6 @@ const truncatePromptForLog = (prompt: string): string => (prompt.length > 100 ? 
  * `content_policy_violation`.
  */
 const CONTENT_POLICY_ERROR_CODES = ['moderation_blocked', 'content_policy_violation'];
-
-/**
- * The provider refused the prompt on content-policy grounds. An expected, user-caused outcome:
- * callers log it below error level so it does not page the on-call alert channel.
- */
-export class ImageModerationBlockedError extends Error {
-  constructor(
-    message: string,
-    readonly requestId: string
-  ) {
-    super(message);
-    this.name = 'ImageModerationBlockedError';
-  }
-}
 
 export function buildModerationBlockedError(
   error: InstanceType<typeof OpenAI.APIError>

@@ -9,6 +9,7 @@ import type {
   ChatApprovalAnswer,
   ChatDiff,
   ChatMoveToBackgroundResult,
+  ChatToolApproval,
   ChatToolCall,
   ChatToolNotice,
   ChatToolStatus,
@@ -635,18 +636,20 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
 }
 
 /**
- * Who let the group's calls run, or stopped them, one muted line per distinct answer. A group of
- * seven commands "Approve for me" ran reads as one line, not seven of the same.
+ * Why the group's calls did not run, one muted line per distinct reason. A group of seven
+ * commands a reply stop closed reads as one line, not seven of the same.
  */
 function ApprovalAttribution({ calls }: { calls: readonly ChatToolCall[] }) {
-  const decisions = calls.flatMap(call =>
-    call.approval && call.status !== 'awaiting-approval' ? [call.approval] : []
-  );
-  const lines = [...new Map(decisions.map(approval => [describeApproval(approval), approval])).entries()];
-  if (lines.length === 0) return null;
+  const lines = new Map<string, ChatToolApproval>();
+  for (const call of calls) {
+    if (!call.approval || call.status === 'awaiting-approval') continue;
+    const text = describeApproval(call.approval);
+    if (text !== null) lines.set(text, call.approval);
+  }
+  if (lines.size === 0) return null;
   return (
     <>
-      {lines.map(([text, approval]) => (
+      {[...lines].map(([text, approval]) => (
         <Typography
           key={text}
           level="body-xs"

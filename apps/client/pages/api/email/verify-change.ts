@@ -3,7 +3,7 @@ import { userRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
 import { commitWithSessionEnd } from '@server/auth/endUserSessions';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@server/utils/analyticsLog';
 import { AuthEvents, ConflictError } from '@bike4mind/common';
