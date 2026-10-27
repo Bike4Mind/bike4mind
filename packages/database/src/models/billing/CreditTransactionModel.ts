@@ -119,6 +119,8 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
 CreditTransactionSchema.index({ userId: 1, createdAt: -1 });
 CreditTransactionSchema.index({ stripePaymentIntentId: 1 }, { unique: true, sparse: true });
 CreditTransactionSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
+// Carries the _id tiebreak so findLedgerPage's keyset sort walks the index instead of sorting in memory.
+CreditTransactionSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1, _id: -1 });
 CreditTransactionSchema.index({ ownerType: 1, createdAt: -1, type: 1 });
 CreditTransactionSchema.index({ stripeDisputeId: 1 }, { unique: true, sparse: true });
 CreditTransactionSchema.index({ stripeRefundId: 1 }, { unique: true, sparse: true });
