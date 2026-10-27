@@ -5,7 +5,7 @@ import {
   IUserDocument,
   IUserRepository,
 } from '@bike4mind/common';
-import { IRegInviteDocument, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
+import { IRegInviteDocument, RegInviteSource, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
@@ -275,6 +275,18 @@ export const registerUser = async (
     }
   }
 
+  // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
+  // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
+  // minted before `source` existed are deliberately not attributed.
+  const referredByUserId =
+    invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral && invite.userId ? invite.userId : null;
+
+  const invitesPerUserSetting = await db.adminSettings.findBySettingName('ReferralInvitesPerUser');
+  const invitesPerUserParsed = settingsMap.ReferralInvitesPerUser.schema.safeParse(invitesPerUserSetting?.settingValue);
+  const numReferralsAvailable = invitesPerUserParsed.success
+    ? invitesPerUserParsed.data
+    : settingsMap.ReferralInvitesPerUser.schema.parse(undefined);
+
   const buildUser: Omit<IUserDocument, 'id'> = {
     username,
     email,
@@ -338,7 +350,8 @@ export const registerUser = async (
     pendingEmailExpires: null,
     pendingEmailUsed: null,
     regInvites: [],
-    numReferralsAvailable: 3,
+    referredByUserId,
+    numReferralsAvailable,
     stripeCustomerId: null,
     organizationId: null,
     googleDrive: null,

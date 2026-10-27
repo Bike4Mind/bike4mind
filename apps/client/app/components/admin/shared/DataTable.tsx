@@ -112,6 +112,8 @@ export function DataTable<Row>({
       <Box
         role="region"
         aria-label={label}
+        // Tells the admin skin this table already has its own frame (adminSkin.ts, JoyTable).
+        data-admin-table-frame
         tabIndex={0}
         sx={{
           ...adminSurface,
@@ -131,7 +133,6 @@ export function DataTable<Row>({
           data-testid={testId}
           sx={{
             minWidth: '40rem',
-            '--TableCell-headBackground': 'var(--joy-palette-admin-surface)',
             '--TableCell-selectedBackground': 'var(--joy-palette-admin-canvas)',
             '& th, & td': { borderColor: 'admin.border', color: 'admin.ink' },
             '& th': { color: 'admin.inkMuted' },

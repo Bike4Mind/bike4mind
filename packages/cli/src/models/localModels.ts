@@ -153,6 +153,7 @@ export const REF_ISSUES: Record<OllamaRefIssue, string> = {
   split: 'split into shards, which Ollama cannot pull',
   incomplete: 'some shards are missing',
   'no-quant-label': 'the file name has no quant label',
+  'unsupported-quant': 'Ollama cannot pull this quant from Hugging Face',
   'unsupported-name': 'Ollama does not accept this repo or file name',
   'pinned-revision': 'not on the main branch',
   ambiguous: 'an earlier file answers the same tag; pull asks the registry',
@@ -163,6 +164,7 @@ const UNPULLABLE: ReadonlySet<OllamaRefIssue> = new Set([
   'split',
   'incomplete',
   'no-quant-label',
+  'unsupported-quant',
   'unsupported-name',
   'pinned-revision',
 ]);

@@ -96,6 +96,35 @@ describe('proxy CSP header', () => {
     expect(values).toContain('https://tile.openstreetmap.org');
   });
 
+  // Social post thumbnails load straight from each network's image CDN. connect-src as well, for
+  // the same service-worker re-fetch as the map tiles above. video.cdn.bsky.app is where
+  // video.bsky.app redirects every poster frame, and CSP checks each redirect hop.
+  const socialImageHosts = [
+    'https://cdn.bsky.app',
+    'https://video.bsky.app',
+    'https://video.cdn.bsky.app',
+    'https://*.fbcdn.net',
+    'https://i.ytimg.com',
+  ];
+
+  it.each(['img-src', 'connect-src'])('%s allows the social CDN hosts that serve post thumbnails', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toEqual(expect.arrayContaining(socialImageHosts));
+  });
+
+  // These CDNs serve whatever their users upload, so they may load images and be fetched, never
+  // run as script, frame or media.
+  it('keeps the social CDN hosts out of every other directive', () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy') ?? '';
+    for (const directive of csp.split(';')) {
+      const [name, ...sources] = directive.trim().split(/\s+/);
+      if (name === 'img-src' || name === 'connect-src') continue;
+      for (const host of socialImageHosts) expect(sources, name).not.toContain(host);
+    }
+  });
+
   it('connect-src allows the GitHub API the desktop download page reads its latest release from', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/desktop'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';

@@ -10,6 +10,7 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  net,
   safeStorage,
   shell,
   type WebContents,
@@ -417,7 +418,7 @@ export function registerChat(
     writeClipboard: text => clipboard.writeText(text),
     logger,
   });
-  const local = new OllamaLocal();
+  const local = new OllamaLocal((url, init) => net.fetch(url, init));
   const models = new ModelCatalog(
     {
       logger,
@@ -517,6 +518,8 @@ export function registerChat(
     output: (sessionId, processId, stream, text) =>
       broadcast({ type: 'background-output', sessionId, processId, stream, text }),
     status: (sessionId, process) => broadcast({ type: 'background-status', sessionId, process }),
+    // Only ever fires once a process has run, long after `service` below exists.
+    exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
   });
 
   // safeStorage for the same reason as the auth vault: an env variable holding an API key and a

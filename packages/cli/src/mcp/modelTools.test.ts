@@ -408,6 +408,22 @@ describe('model tools', () => {
     });
   });
 
+  it('refuses a build with an unsupported quant tag without asking', async () => {
+    const unsupported: HubGgufBuild = {
+      ...build('Q4_K_L', 500_000_000),
+      ollamaRef: null,
+      ollamaRefIssue: 'unsupported-quant',
+    };
+    const hub = fakeHub(detail({ builds: [unsupported] }));
+    const { call, runtime, prompts } = await setup({ hub, elicit: accept });
+    const result = await call('models_pull', { ref: `${REPO}:Q4_K_L` });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('Ollama cannot pull this quant from Hugging Face');
+    expect(prompts).toEqual([]);
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
   it('refuses refs naming another host', async () => {
     const { call, runtime } = await setup({ elicit: accept });
     const result = await call('models_pull', { ref: `example.com/${REPO}` });
