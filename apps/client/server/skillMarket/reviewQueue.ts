@@ -1,17 +1,27 @@
 import { SkillListing, SkillListingVersion } from '@bike4mind/database';
-import type { ISkillListing } from '@bike4mind/common';
+import { ForbiddenError, type ISkillListing } from '@bike4mind/common';
 import type { TimeIdKeyset } from '@server/utils/cursorPagination';
 import { canReviewListing, type MarketActor } from './market';
 
+/** 403 unless the actor is a super-admin or administers at least one organization. */
+export function requireReviewer(actor: MarketActor, adminOrgIds: string[]) {
+  if (!actor.isAdmin && adminOrgIds.length === 0) throw new ForbiddenError('Reviewers only');
+}
+
 /**
  * The listings a reviewer may see. Org admins are scoped BEFORE any queue limit, so other orgs' (or
- * Public) backlog can't crowd theirs out. `scopedListingIds` is null for a super-admin (no scope).
+ * Public) backlog can't crowd theirs out. `scopedListingIds` is null for a super-admin (no scope);
+ * `pendingOnly` narrows it to listings holding a version, the only ones a pending row can survive on.
  */
-export async function reviewScope(actor: MarketActor, adminOrgIds: string[]) {
+export async function reviewScope(actor: MarketActor, adminOrgIds: string[], { pendingOnly = false } = {}) {
   const scope = actor.isAdmin ? {} : { visibility: 'organization', organizationId: { $in: adminOrgIds } };
   const scopedListingIds = actor.isAdmin
     ? null
-    : (await SkillListing.find(scope).select('_id').lean()).map(l => String(l._id));
+    : (
+        await SkillListing.find(pendingOnly ? { ...scope, pendingVersionId: { $ne: null } } : scope)
+          .select('_id')
+          .lean()
+      ).map(l => String(l._id));
   return { scope, scopedListingIds };
 }
 
@@ -27,7 +37,7 @@ export async function loadVersionQueue(
   adminOrgIds: string[],
   { filter, limit, after }: { filter: 'pending' | 'audit'; limit: number; after?: TimeIdKeyset }
 ) {
-  const { scope, scopedListingIds } = await reviewScope(actor, adminOrgIds);
+  const { scope, scopedListingIds } = await reviewScope(actor, adminOrgIds, { pendingOnly: filter !== 'audit' });
   const versionFilter =
     filter === 'audit'
       ? { auditSample: true, auditedAt: null, reviewStatus: { $in: ['auto_approved', 'approved'] } }

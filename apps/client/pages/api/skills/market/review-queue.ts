@@ -5,7 +5,7 @@ import { Skill, SkillListing, SkillListingReport } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ForbiddenError } from '@bike4mind/common';
 import { serializeListing, type MarketActor } from '@server/skillMarket/market';
-import { loadVersionQueue, reviewScope } from '@server/skillMarket/reviewQueue';
+import { loadVersionQueue, requireReviewer, reviewScope } from '@server/skillMarket/reviewQueue';
 
 const QUEUE_LIMIT = 100;
 
@@ -19,7 +19,7 @@ const QUEUE_LIMIT = 100;
 const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: string }>>(async (req, res) => {
   const actor: MarketActor = { id: req.user!.id, isAdmin: req.user!.isAdmin };
   const adminOrgIds = await organizationRepository.findIdsAdministeredBy(actor.id);
-  if (!actor.isAdmin && adminOrgIds.length === 0) throw new ForbiddenError('Reviewers only');
+  requireReviewer(actor, adminOrgIds);
 
   const filter = req.query.filter ?? 'pending';
 

@@ -62,7 +62,21 @@ type VersionLike = Pick<ISkillListingVersion, 'id' | 'version' | 'snapshot' | 'c
     >
   >;
 
-/** `privileged` (the author) adds the scan and review outcome. A snapshot read without its body omits `body`. */
+type SnapshotLike = VersionLike['snapshot'];
+
+/** A snapshot read without its body omits `body`. */
+export function toPublicSnapshot(s: SnapshotLike): PublicSkillListingVersion['snapshot'] {
+  return {
+    name: s.name,
+    description: s.description,
+    ...(s.body !== undefined ? { body: s.body } : {}),
+    argument_hint: s.argumentHint ?? null,
+    allowed_tools: s.allowedTools ?? [],
+    disable_model_invocation: Boolean(s.disableModelInvocation),
+  };
+}
+
+/** `privileged` (the author) adds the scan and review outcome. */
 export function toPublicVersion(
   v: VersionLike,
   { privileged = false }: { privileged?: boolean } = {}
@@ -71,14 +85,7 @@ export function toPublicVersion(
   return {
     id: String(v.id),
     version: v.version,
-    snapshot: {
-      name: s.name,
-      description: s.description,
-      ...(s.body !== undefined ? { body: s.body } : {}),
-      argument_hint: s.argumentHint ?? null,
-      allowed_tools: s.allowedTools ?? [],
-      disable_model_invocation: Boolean(s.disableModelInvocation),
-    },
+    snapshot: toPublicSnapshot(s),
     risk_tier: v.riskTier ?? null,
     honest_summary: h
       ? {
