@@ -86,6 +86,24 @@ beforeEach(() => {
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
 });
 
+describe('ListingDetail Claude Code tools card', () => {
+  it('lists the Claude Code tools the skill declares', () => {
+    const version = {
+      ...makeData().version!,
+      snapshot: { ...snapshot, claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] },
+    };
+    renderListing(makeData({ version }));
+    const card = screen.getByTestId('market-claude-code-tools');
+    expect(card).toHaveTextContent('Bash(git:*)');
+    expect(card).toHaveTextContent('Read');
+  });
+
+  it('omits the card when the skill declares none', () => {
+    renderListing(makeData());
+    expect(screen.queryByTestId('market-claude-code-tools')).not.toBeInTheDocument();
+  });
+});
+
 describe('ListingDetail "Use in Claude Code"', () => {
   it('exports the reviewed version without the unlisted share token', async () => {
     renderListing(makeData());
