@@ -63,11 +63,11 @@ Five tones with one meaning each, used everywhere. They differ in lightness as w
 
 Status chips are 22 px pills (12 / 500) with an optional 6 px dot in the same color. A count of zero, an empty value or "not set" is **neutral**, not bad: red means something is wrong, not that a number is small.
 
+Shared terms: **Suspended** (not "banned"), **Restricted** (not "moderated"), **Revoked**, **Deleted**.
+
 ### Data visualization
 
 Charts use `accent` for the primary series and `inkMuted` at 40% for comparisons; categorical charts take the status tones only when the categories are statuses. Inline bars (spend, risk, storage) are 6 px tall with a 3 px radius on a `selection` fill track. Gridlines use `border`; axis labels use `inkMuted` 12 px.
-
-Shared terms: **Suspended** (not "banned"), **Restricted** (not "moderated"), **Revoked**, **Deleted**.
 
 ### Type (Inter, IDs in JetBrains Mono)
 
