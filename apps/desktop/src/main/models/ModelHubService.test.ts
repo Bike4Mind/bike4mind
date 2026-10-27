@@ -3,6 +3,7 @@ import {
   HubRateLimitError,
   HuggingFaceHub,
   LocalRuntimeError,
+  ModelNotFoundError,
   RuntimeConnectionError,
   type HubGgufBuild,
   type HubModelDetail,
@@ -13,7 +14,7 @@ import {
 } from '@bike4mind/local-models';
 import { pullKey, type ModelPull } from '@shared/models';
 import { describe, expect, it, vi } from 'vitest';
-import { ModelHubService, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
+import { ModelHubService, type HubTokenPort, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const SHA = 'a'.repeat(64);
@@ -65,7 +66,24 @@ interface Deferred {
 
 type Health = { ok: boolean; version: string | null; error: string | null };
 
-function harness(options: { detail?: HubModelDetail; verified?: string | null; healthy?: boolean } = {}) {
+function memoryTokens(initial: string | null = null, persisted = true) {
+  let token = initial;
+  return {
+    persisted: vi.fn(() => persisted),
+    get: vi.fn(async () => token),
+    set: vi.fn(async (next: string) => {
+      token = next;
+    }),
+    clear: vi.fn(async () => {
+      token = null;
+    }),
+  } satisfies HubTokenPort;
+}
+
+function harness(
+  options: { detail?: HubModelDetail; verified?: string | null; healthy?: boolean; token?: string | null } = {}
+) {
+
   const pulls: Deferred[] = [];
   const runtime = {
     baseUrl: 'http://127.0.0.1:11434',
@@ -92,17 +110,21 @@ function harness(options: { detail?: HubModelDetail; verified?: string | null; h
     verifyOllamaRef: vi.fn(async (): Promise<string | null> =>
       options.verified === undefined ? `hf.co/${REPO}:Q4_K_M` : options.verified
     ),
+    checkToken: vi.fn(async () => true),
   } satisfies ModelHubPort;
   const pushed: ModelPull[][] = [];
   const installedChanged = vi.fn();
+  const tokens = memoryTokens(options.token ?? null);
+  const createHub = vi.fn((_token: string | null) => hub);
   const service = new ModelHubService({
     runtime,
-    hub,
+    createHub,
+    tokens,
     onPullsChanged: next => pushed.push(next),
     onInstalledChanged: installedChanged,
     progressIntervalMs: 0,
   });
-  return { service, runtime, hub, pulls, pushed, installedChanged };
+  return { service, runtime, hub, pulls, pushed, installedChanged, tokens, createHub };
 }
 
 const request = {
@@ -232,7 +254,8 @@ describe('ModelHubService pulls', () => {
     const { runtime } = harness();
     const service = new ModelHubService({
       runtime,
-      hub: new HuggingFaceHub({ fetch: fetchStub as unknown as typeof fetch }),
+      createHub: () => new HuggingFaceHub({ fetch: fetchStub as unknown as typeof fetch }),
+      tokens: memoryTokens(),
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
     });
@@ -499,5 +522,188 @@ describe('ModelHubService reads', () => {
     expect(await service.remove('qwen2.5:0.5b')).toEqual({ ok: true });
     expect(runtime.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
     expect(installedChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ModelHubService Hugging Face token', () => {
+  const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
+  const hidden = build({ files: [{ ...build().files[0], sha256: null }] });
+
+  it('checks a token with Hugging Face before keeping it, and keeps a rejected one nowhere', async () => {
+    const { service, hub, tokens, createHub } = harness();
+    hub.checkToken.mockResolvedValueOnce(false);
+
+    const refused = await service.setToken(`  ${TOKEN}x  `);
+    expect(refused).toMatchObject({
+      ok: false,
+      error: { kind: 'token-rejected', message: expect.stringContaining('did not accept this token') },
+    });
+    expect(createHub).toHaveBeenLastCalledWith(`${TOKEN}x`);
+    expect(tokens.set).not.toHaveBeenCalled();
+    expect(await service.tokenStatus()).toEqual({ set: false, persisted: true });
+
+    expect(await service.setToken(TOKEN)).toEqual({ ok: true, status: { set: true, persisted: true } });
+    expect(tokens.set).toHaveBeenCalledWith(TOKEN);
+    expect(await service.tokenStatus()).toEqual({ set: true, persisted: true });
+  });
+
+  it.each(['short', 'hf_has a space inside', `hf_${String.fromCharCode(0xe9)}accented0000000`])(
+    'refuses text that cannot be a token without asking Hugging Face: %s',
+    async raw => {
+      const { service, hub, tokens } = harness();
+      expect(await service.setToken(raw)).toMatchObject({ ok: false, error: { kind: 'token-rejected' } });
+      expect(hub.checkToken).not.toHaveBeenCalled();
+      expect(tokens.set).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reports an outage while checking instead of calling the token invalid', async () => {
+    const { service, hub, tokens } = harness();
+    hub.checkToken.mockRejectedValueOnce(
+      new RuntimeConnectionError('offline', 'huggingface', { cause: new Error('x') })
+    );
+    expect(await service.setToken(TOKEN)).toMatchObject({ ok: false, error: { kind: 'hub-unreachable' } });
+    expect(tokens.set).not.toHaveBeenCalled();
+  });
+
+  it('sends the saved token from the first request, and stops on remove', async () => {
+    const { service, createHub, tokens } = harness({ token: TOKEN });
+    await service.search({ query: 'qwen' });
+    expect(createHub).toHaveBeenCalledWith(TOKEN);
+
+    expect(await service.clearToken()).toEqual({ set: false, persisted: true });
+    expect(tokens.clear).toHaveBeenCalledTimes(1);
+    expect(createHub).toHaveBeenLastCalledWith(null);
+  });
+
+  it('says a refusal with a token is about the token', async () => {
+    const withToken = harness({ token: TOKEN });
+    withToken.hub.getModel.mockRejectedValueOnce(
+      new HubAccessError('denied', 'huggingface', 403, REPO, 'unauthorized')
+    );
+    expect(await withToken.service.detail(REPO)).toMatchObject({
+      ok: false,
+      error: { kind: 'token-rejected', message: expect.stringContaining('invalid or lacks access') },
+    });
+    withToken.hub.getModel.mockRejectedValueOnce(new HubAccessError('denied', 'huggingface', 401, REPO, 'gated'));
+    expect(await withToken.service.detail(REPO)).toMatchObject({ ok: false, error: { kind: 'token-rejected' } });
+    withToken.hub.getModel.mockRejectedValueOnce(new ModelNotFoundError('huggingface', REPO, { cause: 'HTTP 401' }));
+    expect(await withToken.service.detail(REPO)).toMatchObject({
+      ok: false,
+      error: { kind: 'not-found', message: expect.stringContaining('token is invalid or lacks access') },
+    });
+
+    const anonymous = harness();
+    anonymous.hub.getModel.mockRejectedValueOnce(new HubAccessError('denied', 'huggingface', 401, REPO, 'gated'));
+    expect(await anonymous.service.detail(REPO)).toMatchObject({ ok: false, error: { kind: 'gated' } });
+  });
+
+  it('tells gated access apart by what the token can read', async () => {
+    const gated = { gated: 'manual' as const, ollamaNeedsSshKey: true, licenses: ['gemma'] };
+
+    const anonymous = harness({ detail: detail({ ...gated, builds: [hidden], canDownload: false }) });
+    const noToken = await anonymous.service.detail(REPO);
+    expect(noToken).toMatchObject({ ok: true, model: { hubAccess: 'no-token' } });
+    expect(noToken.ok && noToken.model.builds[0].blockedReason).toMatch(/add a Hugging Face token/);
+
+    const denied = harness({ token: TOKEN, detail: detail({ ...gated, builds: [hidden], canDownload: false }) });
+    const refused = await denied.service.detail(REPO);
+    expect(refused).toMatchObject({ ok: true, model: { hubAccess: 'denied' } });
+    expect(refused.ok && refused.model.builds[0].blockedReason).toMatch(/token cannot read this file/);
+
+    const granted = harness({ token: TOKEN, detail: detail({ ...gated, canDownload: true }) });
+    const open = await granted.service.detail(REPO);
+    expect(open).toMatchObject({ ok: true, model: { hubAccess: 'granted', needsAccess: true } });
+    expect(open.ok && open.model.builds[0].blockedReason).toBeNull();
+
+    const result = granted.service.pull({ ...request, acceptLicense: true, confirmAccess: true });
+    await vi.waitFor(() => expect(granted.pulls).toHaveLength(1));
+    granted.pulls[0].resolve();
+    await expect(result).resolves.toMatchObject({ ok: true });
+  });
+
+  it("explains a pull Ollama's own key could not sign", async () => {
+    const { service, pulls } = harness({
+      token: TOKEN,
+      detail: detail({ gated: 'auto', ollamaNeedsSshKey: true, canDownload: true }),
+    });
+    const result = service.pull({ ...request, confirmAccess: true });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].reject(
+      new LocalRuntimeError(
+        `ollama could not pull hf.co/${REPO}:Q4_K_M: pull model manifest: 401: {"error":"Invalid username or password."}`,
+        'ollama'
+      )
+    );
+    await expect(result).resolves.toMatchObject({
+      ok: false,
+      error: { kind: 'gated', message: expect.stringContaining('not your token') },
+    });
+    expect(service.pulls()[0].error?.message).toContain('huggingface.co/settings/keys');
+  });
+
+  it('sends the token only to huggingface.co: never to Ollama, and never back in a result', async () => {
+    const repo = 'google/gemma-3-1b-it-qat-q4_0-gguf';
+    const sha = 'd'.repeat(40);
+    const oid = 'e'.repeat(64);
+    const file = 'gemma-3-1b-it-q4_0.gguf';
+    const sent: { url: string; authorization: string | null }[] = [];
+    const fetchStub = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      sent.push({ url, authorization: new Headers(init?.headers).get('authorization') });
+      const path = new URL(url).pathname;
+      if (path === '/api/whoami-v2') return Response.json({ type: 'user', name: 'someone' });
+      if (path === '/api/models') return Response.json([{ id: repo, gated: 'manual', private: false, tags: ['gguf'] }]);
+      if (path === `/api/models/${repo}/revision/main`)
+        return Response.json({ id: repo, sha, gated: 'manual', private: false, tags: ['gguf'], cardData: {} });
+      if (path === `/api/models/${repo}/tree/${sha}`)
+        return Response.json([{ type: 'file', path: file, size: 1e9, lfs: { oid, size: 1e9 } }]);
+      if (path === `/${repo}/resolve/${sha}/${file}`)
+        return new Response(null, { status: 302, headers: { location: 'https://cdn-lfs.hf.co/blob' } });
+      if (path.startsWith(`/v2/${repo}/manifests/`))
+        return Response.json({
+          layers: [{ mediaType: 'application/vnd.ollama.image.model', digest: `sha256:${oid}` }],
+        });
+      return new Response('{"error":"not found"}', { status: 404 });
+    });
+    const { runtime, pulls } = harness();
+    const pushed: ModelPull[][] = [];
+    const service = new ModelHubService({
+      runtime,
+      createHub: token =>
+        new HuggingFaceHub({ fetch: fetchStub as unknown as typeof fetch, ...(token ? { token } : {}) }),
+      tokens: memoryTokens(),
+      onPullsChanged: next => pushed.push(next),
+      onInstalledChanged: () => {},
+    });
+
+    const results: unknown[] = [await service.setToken(TOKEN), await service.tokenStatus()];
+    results.push(await service.search({ query: 'gemma' }));
+    const shown = await service.detail(repo);
+    results.push(shown);
+    if (!shown.ok) throw new Error(shown.error.message);
+    expect(shown.model).toMatchObject({ hubAccess: 'granted' });
+    const build0 = shown.model.builds[0];
+    const pull = service.pull({
+      repo,
+      buildId: build0.id,
+      revision: shown.model.revision,
+      sizeBytes: build0.sizeBytes,
+      acceptLicense: true,
+      confirmAccess: true,
+    });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].resolve();
+    results.push(await pull, pushed);
+
+    expect(sent.length).toBeGreaterThan(4);
+    for (const request of sent) {
+      expect(new URL(request.url).origin).toBe('https://huggingface.co');
+      expect(request.authorization).toBe(`Bearer ${TOKEN}`);
+    }
+    expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${repo}:Q4_0`, expect.anything());
+    expect(JSON.stringify(runtime.pull.mock.calls)).not.toContain(TOKEN);
+    expect(JSON.stringify(runtime.health.mock.calls)).not.toContain(TOKEN);
+    expect(JSON.stringify(results)).not.toContain(TOKEN);
   });
 });

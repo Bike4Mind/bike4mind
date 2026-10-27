@@ -1,12 +1,15 @@
 /** The Models screen's IPC types and the pure rules main and the renderer share. */
 
 export const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
+export const HUGGING_FACE_TOKENS_URL = 'https://huggingface.co/settings/tokens';
+export const HUGGING_FACE_SSH_KEYS_URL = 'https://huggingface.co/settings/keys';
 
 export type ModelHubErrorKind =
   | 'runtime-unavailable'
   | 'hub-unreachable'
   | 'rate-limited'
   | 'gated'
+  | 'token-rejected'
   | 'not-found'
   | 'unverified'
   | 'license-required'
@@ -104,7 +107,23 @@ export interface HubModelView extends HubModelCard {
   projectorBytes: number | null;
   /** Gated or private: Ollama needs its SSH key on the user's Hugging Face account. */
   needsAccess: boolean;
+  /**
+   * For a gated or private repo, what the saved Hugging Face token can read: `no-token` without one, `granted` when
+   * its files are readable, `denied` when the Hub refused it, `unknown` when there was no file to try.
+   */
+  hubAccess: HubAccess;
 }
+
+export type HubAccess = 'no-token' | 'granted' | 'denied' | 'unknown';
+
+/** Only whether a token is saved ever reaches the renderer, never the token. */
+export interface HfTokenStatus {
+  set: boolean;
+  /** False with no OS keychain: the token lasts until the app quits. */
+  persisted: boolean;
+}
+
+export type HfTokenResult = { ok: true; status: HfTokenStatus } | { ok: false; error: ModelHubError };
 
 export type HubDetailResult = { ok: true; model: HubModelView } | { ok: false; error: ModelHubError };
 

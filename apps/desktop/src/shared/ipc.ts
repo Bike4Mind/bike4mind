@@ -94,6 +94,8 @@ import type {
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type {
+  HfTokenResult,
+  HfTokenStatus,
   HubDetailResult,
   HubSearchRequest,
   HubSearchResult,
@@ -311,6 +313,9 @@ export const IPC_CHANNELS = {
   modelsCancelPull: 'models:cancel-pull',
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
+  modelsGetHfToken: 'models:get-hf-token',
+  modelsSetHfToken: 'models:set-hf-token',
+  modelsClearHfToken: 'models:clear-hf-token',
   /** main -> renderer push of every pull in flight or failed. */
   modelsPullsChanged: 'models:pulls-changed',
   /** main -> renderer push: a pull finished or a model was removed. */
@@ -570,6 +575,11 @@ export interface DesktopApi {
     cancelPull(key: string): Promise<void>;
     dismissPull(key: string): Promise<void>;
     remove(name: string): Promise<ModelRemoveResult>;
+    /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
+    getHfToken(): Promise<HfTokenStatus>;
+    /** Saves the token once Hugging Face accepts it. */
+    setHfToken(token: string): Promise<HfTokenResult>;
+    clearHfToken(): Promise<HfTokenStatus>;
     onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
     onInstalledChanged(listener: () => void): () => void;
   };

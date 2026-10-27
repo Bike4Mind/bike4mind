@@ -1,0 +1,75 @@
+import { describe, expect, it, vi } from 'vitest';
+import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
+
+const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
+
+function cipher(available = true) {
+  return {
+    isEncryptionAvailable: vi.fn(() => available),
+    encryptString: vi.fn((plain: string) => Buffer.from(`enc:${Buffer.from(plain).toString('hex')}`)),
+    decryptString: vi.fn((encrypted: Buffer) => {
+      const text = encrypted.toString();
+      if (!text.startsWith('enc:')) throw new Error('bad blob');
+      return Buffer.from(text.slice(4), 'hex').toString();
+    }),
+  };
+}
+
+function disk(initial: string | null = null) {
+  const file = { contents: initial, read: vi.fn(async () => file.contents), write: vi.fn() };
+  file.write.mockImplementation(async (next: string) => {
+    file.contents = next;
+  });
+  return file;
+}
+
+const logger = () => ({ debug: vi.fn(), warn: vi.fn() });
+
+describe('HuggingFaceTokenStore', () => {
+  it('keeps the token encrypted on disk and reads it back in a new run', async () => {
+    const file = disk();
+    await new HuggingFaceTokenStore(cipher(), file, logger()).set(TOKEN);
+    expect(file.contents).not.toContain(TOKEN);
+    expect(JSON.parse(file.contents ?? '{}')).toMatchObject({ version: 1, token: expect.any(String) });
+
+    const next = new HuggingFaceTokenStore(cipher(), file, logger());
+    expect(await next.get()).toBe(TOKEN);
+    expect(next.persisted()).toBe(true);
+  });
+
+  it('without a keychain keeps the token for this run only and writes none of it', async () => {
+    const file = disk();
+    const store = new HuggingFaceTokenStore(cipher(false), file, logger());
+    await store.set(TOKEN);
+    expect(await store.get()).toBe(TOKEN);
+    expect(store.persisted()).toBe(false);
+    expect(file.contents).toBe('{"version":1}');
+
+    expect(await new HuggingFaceTokenStore(cipher(false), file, logger()).get()).toBeNull();
+  });
+
+  it('removes the token from memory and disk', async () => {
+    const file = disk();
+    const store = new HuggingFaceTokenStore(cipher(), file, logger());
+    await store.set(TOKEN);
+    await store.clear();
+    expect(await store.get()).toBeNull();
+    expect(file.contents).toBe('{"version":1}');
+    expect(await new HuggingFaceTokenStore(cipher(), file, logger()).get()).toBeNull();
+  });
+
+  it('drops a blob it cannot decrypt without logging the blob', async () => {
+    const file = disk(JSON.stringify({ version: 1, token: Buffer.from(TOKEN).toString('base64') }));
+    const log = logger();
+    expect(await new HuggingFaceTokenStore(cipher(), file, log).get()).toBeNull();
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify([log.warn.mock.calls, log.debug.mock.calls])).not.toContain(TOKEN);
+  });
+
+  it('reads an unreadable or garbled file as no token', async () => {
+    const missing = disk();
+    missing.read.mockRejectedValueOnce(new Error('EACCES'));
+    expect(await new HuggingFaceTokenStore(cipher(), missing, logger()).get()).toBeNull();
+    expect(await new HuggingFaceTokenStore(cipher(), disk('{not json'), logger()).get()).toBeNull();
+  });
+});
