@@ -5,6 +5,7 @@ import {
   API_ERROR_CODES,
   API_KEY_USER_CAP_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
   TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
@@ -66,10 +67,12 @@ describe('API_ERROR_CODES', () => {
     // API_KEY_TRUST_REQUIRED_ERROR_CODE likewise; proven by userApiKeyService/__tests__/trust.test.ts.
     // TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE and CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE likewise; proven by
     // apps/client/server/utils/untrustedCompletionQuota.test.ts.
+    // MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // DAILY_FREE_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/billing/freeTierDailyCapGate.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
+      MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
       API_KEY_USER_CAP_ERROR_CODE,
       AGENT_LIMIT_REACHED_ERROR_CODE,
       BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,

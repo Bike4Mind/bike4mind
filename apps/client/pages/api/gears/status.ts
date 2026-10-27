@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
-import { evaluateGears, type GearKey, type GearKind } from '@server/services/gears/catalog';
+import { evaluateGears, type GearKey, type GearKind, type GearPendingReason } from '@server/services/gears/catalog';
 
 /**
  * GET /api/gears/status - each gear's unlock and reward state for the Gears page.
@@ -35,6 +35,8 @@ export interface GearStatus {
   /** Unlocked, but the payout's stricter condition isn't met yet (e.g.
    *  Published: waiting for a non-owner view). */
   rewardPending?: boolean;
+  /** Why rewardPending is true - drives the UI copy so each reason shows the right message. */
+  pendingReason?: GearPendingReason;
 }
 
 const handler = baseApi().get(
@@ -43,7 +45,8 @@ const handler = baseApi().get(
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
     const { evaluations, overrides } = await evaluateGears(String(userId));
-    const gears: GearStatus[] = evaluations.map(({ def, unlocked, credits, rewardEligible, alreadyRewarded }) => {
+    const gears: GearStatus[] = evaluations.map(evaluation => {
+      const { def, unlocked, credits, rewardEligible, alreadyRewarded, pendingReason } = evaluation;
       const o = overrides.get(def.key);
       const base = GEAR_PRESENTATION[def.key];
       const gear: GearStatus = {
@@ -57,7 +60,10 @@ const handler = baseApi().get(
         cta: o?.cta ?? base.cta,
         ctaAction: o?.ctaAction ?? base.ctaAction,
       };
-      if (unlocked && !rewardEligible && !alreadyRewarded) gear.rewardPending = true;
+      if (unlocked && !rewardEligible && !alreadyRewarded) {
+        gear.rewardPending = true;
+        if (pendingReason) gear.pendingReason = pendingReason;
+      }
       if (rewardEligible && credits > 0 && !alreadyRewarded) gear.claimable = true;
       if (alreadyRewarded) gear.claimed = true;
       return gear;
