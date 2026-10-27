@@ -16,12 +16,10 @@ const NO_GRANT: SignupDomainGrantResult = {
  * earns when it promotes emailVerified come straight from server/auth/emailVerifiedGrants.ts.
  */
 export async function applyOAuthSignupDomainGrant(userId: string, email: string): Promise<SignupDomainGrantResult> {
-  let grant: SignupDomainGrantResult;
   try {
-    grant = await applySignupDomainGrant({ userId, email, trigger: 'oauth-signup', logger: Logger.globalInstance });
+    return await applySignupDomainGrant({ userId, email, trigger: 'oauth-signup', logger: Logger.globalInstance });
   } catch (error) {
     Logger.globalInstance.error(`OAuth signup domain grant failed for user ${userId}`, error);
-    grant = { ...NO_GRANT, tagsApplied: [] };
+    return { ...NO_GRANT, tagsApplied: [] };
   }
-  return grant;
 }
