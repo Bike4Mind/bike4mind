@@ -19,6 +19,11 @@ vi.mock('./LocalContextSettings', () => ({
   localContextSummary: () => 'Auto',
   useLocalContextSetting: () => [null, () => undefined, null],
 }));
+vi.mock('./ModelServersSettings', () => ({
+  ModelServersSettings: () => null,
+  modelServersSummary: () => 'Only this computer',
+  useModelServers: () => [null, () => undefined, null],
+}));
 vi.mock('./useAppUpdate', async () => {
   const { initialUpdateState } = await import('@shared/update');
   return { useAppUpdate: () => ({ state: initialUpdateState('', false), blockedBy: null }) };
