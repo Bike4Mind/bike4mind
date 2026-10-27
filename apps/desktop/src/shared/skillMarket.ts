@@ -1,4 +1,5 @@
 import type {
+  ISkillFile,
   ISkillHonestSummary,
   ISkillSnapshot,
   SkillListingStatus,
@@ -148,6 +149,8 @@ export interface SkillUploadFields {
   body: string;
   argumentHint?: string;
   disableModelInvocation?: boolean;
+  /** A SKILL.md folder's scripts/ and references/ text files, sorted by path. */
+  files?: ISkillFile[];
 }
 
 export type SkillUploadPreview =
@@ -158,7 +161,7 @@ export type SkillUploadPreview =
       dropped: string[];
       /** Set when the file is a Bike4Mind export (it carries the source stamp). */
       source?: { url: string; thirdParty: boolean };
-      /** Other files beside a SKILL.md, which are not uploaded. The first few names, and the count. */
+      /** Other files beside a SKILL.md, which are not uploaded (anything outside scripts/ and references/, and symlinks). The first few names, and the count. */
       extraFiles: string[];
       extraFileCount: number;
     }

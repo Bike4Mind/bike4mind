@@ -358,6 +358,7 @@ describe('SkillMarket', () => {
         'body',
         'description',
         'disableModelInvocation',
+        'files',
         'name',
       ]);
       expect(catalog.invalidateAccount).toHaveBeenCalled();

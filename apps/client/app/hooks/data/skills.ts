@@ -72,7 +72,7 @@ export const useGetSkill = (id: string | undefined) => {
 };
 
 export type SkillFormInput = Pick<ISkill, 'name' | 'description' | 'body'> &
-  Partial<Pick<ISkill, 'argumentHint' | 'allowedTools' | 'disableModelInvocation'>>;
+  Partial<Pick<ISkill, 'argumentHint' | 'allowedTools' | 'disableModelInvocation' | 'files'>>;
 
 export const useCreateSkill = () => {
   const qc = useQueryClient();

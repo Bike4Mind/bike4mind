@@ -10,7 +10,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
     .limit(100);
   const versions = await SkillListingVersion.find({ listingId: { $in: listings.map(l => String(l._id)) } })
     .sort({ version: -1 })
-    .select('-snapshot.body')
+    .select('-snapshot.body -snapshot.files')
     .limit(500);
 
   const byListing = new Map<string, unknown[]>();

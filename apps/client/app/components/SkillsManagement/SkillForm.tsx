@@ -1,4 +1,4 @@
-import React, { FC, useRef, useState } from 'react';
+import React, { FC, useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -14,6 +14,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { parseSkillMd, type ParseSkillMdResult } from '@bike4mind/common/utils/skillMd';
+import { SKILL_FILE_DIRS, checkSkillFiles, type ISkillFile } from '@bike4mind/common';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 
 export interface SkillFormProps {
@@ -30,6 +31,40 @@ const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 /** Bounds a local file read; the server accepts 50k characters, so this is already generous. */
 const MAX_IMPORT_BYTES = 200_000;
+
+/**
+ * A picked skill folder (`webkitRelativePath` is `<folder>/...`): its top-level SKILL.md, the text
+ * files under scripts/ and references/, and the other files it skipped. Dotfiles are skipped silently.
+ */
+export async function readSkillFolder(
+  picked: File[]
+): Promise<{ ok: true; skillMd: string; files: ISkillFile[]; skipped: string[] } | { ok: false; error: string }> {
+  let skillMd: File | undefined;
+  const files: ISkillFile[] = [];
+  const skipped: string[] = [];
+  for (const file of picked) {
+    const path = file.webkitRelativePath.split('/').slice(1).join('/');
+    if (path.split('/').some(segment => segment.startsWith('.'))) continue;
+    if (path === 'SKILL.md') {
+      skillMd = file;
+    } else if ((SKILL_FILE_DIRS as readonly string[]).includes(path.split('/')[0])) {
+      if (file.size > MAX_IMPORT_BYTES) return { ok: false, error: `${path} is too large to import.` };
+      try {
+        const content = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
+        files.push({ path, content });
+      } catch {
+        return { ok: false, error: `${path}: only text files are supported.` };
+      }
+    } else {
+      skipped.push(path);
+    }
+  }
+  if (!skillMd) return { ok: false, error: 'The folder has no SKILL.md at its top level.' };
+  if (skillMd.size > MAX_IMPORT_BYTES) return { ok: false, error: 'SKILL.md is too large to import (200 KB maximum).' };
+  const checked = checkSkillFiles(files);
+  if (!checked.ok) return { ok: false, error: checked.error };
+  return { ok: true, skillMd: await skillMd.text(), files: checked.files, skipped };
+}
 
 /** Only a same-origin export gets a clickable provenance link; anything else stays plain text. */
 const isSameOrigin = (url: string): boolean => {
@@ -61,7 +96,15 @@ export const SkillForm: FC<SkillFormProps> = ({
   const [importResult, setImportResult] = useState<ParseSkillMdResult | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
+  const [files, setFiles] = useState<ISkillFile[]>(initialValue?.files ?? []);
+  const [skippedFiles, setSkippedFiles] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  // React has no typed prop for webkitdirectory (precedent: DataLakeWizard SourceSelectionStep).
+  const setFolderInputRef = useCallback((input: HTMLInputElement | null) => {
+    folderInputRef.current = input;
+    input?.setAttribute('webkitdirectory', '');
+  }, []);
   // Bumped by every import so a slow earlier file read cannot overwrite a newer one.
   const importReadId = useRef(0);
 
@@ -97,6 +140,23 @@ export const SkillForm: FC<SkillFormProps> = ({
       .catch(() => {
         if (readId === importReadId.current) setImportResult({ ok: false, error: 'The file could not be read.' });
       });
+  };
+
+  const handleFolder = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (!picked.length) return;
+    const readId = ++importReadId.current;
+    void readSkillFolder(picked).then(result => {
+      if (readId !== importReadId.current) return;
+      if (!result.ok) {
+        setImportResult({ ok: false, error: result.error });
+        return;
+      }
+      applySkillMd(result.skillMd);
+      setFiles(result.files);
+      setSkippedFiles(result.skipped);
+    });
   };
 
   const applyPasted = () => {
@@ -141,6 +201,7 @@ export const SkillForm: FC<SkillFormProps> = ({
       body,
       ...(argumentHint.trim() && { argumentHint: argumentHint.trim() }),
       disableModelInvocation,
+      files,
     });
   };
 
@@ -162,6 +223,21 @@ export const SkillForm: FC<SkillFormProps> = ({
               <Button size="sm" variant="outlined" onClick={() => fileInputRef.current?.click()} disabled={submitting}>
                 Choose file
               </Button>
+              <input
+                ref={setFolderInputRef}
+                type="file"
+                hidden
+                onChange={handleFolder}
+                data-testid="skill-form-import-folder"
+              />
+              <Button
+                size="sm"
+                variant="outlined"
+                onClick={() => folderInputRef.current?.click()}
+                disabled={submitting}
+              >
+                Choose folder
+              </Button>
               <Button
                 size="sm"
                 variant="plain"
@@ -173,8 +249,9 @@ export const SkillForm: FC<SkillFormProps> = ({
               </Button>
             </Stack>
             <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-form-import-file-limitations">
-              Only SKILL.md is imported. Supporting files next to it, such as scripts or reference documents,
-              aren&apos;t imported.
+              Choose a skill folder to also import the text files in its scripts/ and references/ folders. Scripts run
+              on the user&apos;s machine, so a skill with scripts is always reviewed by a person before it is shared in
+              the Skill Market.
             </Typography>
             {pasteOpen ? (
               <Stack spacing={1}>
@@ -289,6 +366,39 @@ export const SkillForm: FC<SkillFormProps> = ({
             {bodyError && body.length > 0 ? bodyError : `${body.length} / 50000 characters`}
           </FormHelperText>
         </FormControl>
+
+        {files.length || skippedFiles.length ? (
+          <Stack spacing={1} data-testid="skill-form-files">
+            {files.length ? (
+              <>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Typography level="title-sm">Supporting files ({files.length})</Typography>
+                  <Button
+                    size="sm"
+                    variant="plain"
+                    color="danger"
+                    onClick={() => setFiles([])}
+                    disabled={submitting}
+                    data-testid="skill-form-files-remove"
+                  >
+                    Remove files
+                  </Button>
+                </Stack>
+                <Typography level="body-sm" component="ul" sx={{ m: 0, pl: 3, fontFamily: 'code' }}>
+                  {files.map(f => (
+                    <li key={f.path}>{f.path}</li>
+                  ))}
+                </Typography>
+              </>
+            ) : null}
+            {skippedFiles.length ? (
+              <Alert color="warning" variant="soft" data-testid="skill-form-files-skipped">
+                Not imported (only SKILL.md, scripts/ and references/ are): {skippedFiles.slice(0, 10).join(', ')}
+                {skippedFiles.length > 10 ? ` and ${skippedFiles.length - 10} more` : ''}
+              </Alert>
+            ) : null}
+          </Stack>
+        ) : null}
 
         <FormControl>
           <Checkbox

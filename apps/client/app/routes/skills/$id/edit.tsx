@@ -70,6 +70,7 @@ const EditSkillPage: FC = () => {
             body: skill.body,
             argumentHint: skill.argumentHint,
             disableModelInvocation: skill.disableModelInvocation,
+            files: skill.files,
           }}
           submitLabel="Save changes"
           submitting={updateSkill.isPending}
