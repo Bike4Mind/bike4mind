@@ -28,7 +28,7 @@ const ChangeList: React.FC<{ entry: AuditEntry }> = ({ entry }) => {
     >
       {changes.map(change => (
         <li key={change.field}>
-          {fieldLabel(change.field)}: {formatAuditValue(change.before)} {'→'} {formatAuditValue(change.after)}
+          {fieldLabel(change.field)}: {formatAuditValue(change.before)} {'\u2192'} {formatAuditValue(change.after)}
         </li>
       ))}
     </Box>

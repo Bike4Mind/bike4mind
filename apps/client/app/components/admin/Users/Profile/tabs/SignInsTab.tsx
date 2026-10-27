@@ -44,7 +44,7 @@ export const signInResultLabel = (signIn: Pick<UserSignIn, 'result' | 'event'>):
 
 export const signInDevice = (signIn: Pick<UserSignIn, 'browser' | 'operatingSystem' | 'deviceType'>): string => {
   const software = [signIn.browser, signIn.operatingSystem].filter(Boolean).join(' on ');
-  return [software, signIn.deviceType].filter(Boolean).join(' · ') || '-';
+  return [software, signIn.deviceType].filter(Boolean).join(' \u00b7 ') || '-';
 };
 
 const SIGN_IN_COLUMNS: readonly DataColumn<UserSignIn>[] = [
