@@ -634,6 +634,21 @@ export class HuggingFaceHub {
   }
 
   /**
+   * Whether the Hub accepts the configured token, from `whoami-v2`; false without a token. Worth asking before
+   * keeping one: the Hub ignores a bad token on public reads, so it would otherwise only fail on a gated repo.
+   */
+  async checkToken(options: { signal?: AbortSignal } = {}): Promise<boolean> {
+    if (!this.#token) return false;
+    try {
+      await this.#getJson('/api/whoami-v2', z.object({}).passthrough(), { signal: options.signal });
+      return true;
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && error.status === 401) return false;
+      throw error;
+    }
+  }
+
+  /**
    * Repo metadata and its GGUF builds, pinned to one commit. A missing repo, and a private one the token cannot
    * read, both reject with `ModelNotFoundError`, since the Hub answers both with a bare 401; a token the Hub
    * rejects outright (403) gives `HubAccessError` with reason `unauthorized`.

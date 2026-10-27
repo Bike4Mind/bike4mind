@@ -727,6 +727,37 @@ describe('HuggingFaceHub gated repos', () => {
   });
 });
 
+describe('HuggingFaceHub.checkToken', () => {
+  it('asks whoami-v2 with the token and reads 200 as valid and 401 as invalid', async () => {
+    const good = await serve({ 'GET /api/whoami-v2': json({ type: 'user', name: 'someone' }) });
+    expect(await new HuggingFaceHub({ endpoint: good.baseUrl, token: TOKEN }).checkToken()).toBe(true);
+    expect(good.requests[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
+
+    const bad = await serve({ 'GET /api/whoami-v2': json({ error: 'Invalid username or password.' }, 401) });
+    expect(await new HuggingFaceHub({ endpoint: bad.baseUrl, token: TOKEN }).checkToken()).toBe(false);
+  });
+
+  it('answers false without a token and sends nothing', async () => {
+    const server = await serve({});
+    expect(await new HuggingFaceHub({ endpoint: server.baseUrl }).checkToken()).toBe(false);
+    expect(server.requests).toEqual([]);
+  });
+
+  it('rejects an outage or a rate limit instead of calling the token invalid, without echoing it', async () => {
+    const server = await serve({ 'GET /api/whoami-v2': json({ error: `bad ${TOKEN}` }, 500) });
+    const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).checkToken());
+    expect(error).toBeInstanceOf(RuntimeHttpError);
+    expect(inspect(error, { depth: 5 })).not.toContain(TOKEN);
+
+    const limited = await serve({
+      'GET /api/whoami-v2': withHeaders({ error: 'slow down' }, { 'retry-after': '5' }, 429),
+    });
+    expect(await caught(new HuggingFaceHub({ endpoint: limited.baseUrl, token: TOKEN }).checkToken())).toBeInstanceOf(
+      HubRateLimitError
+    );
+  });
+});
+
 describe('HuggingFaceHub errors', () => {
   const infoPath = 'GET /api/models/a/b/revision/main';
 
