@@ -1344,7 +1344,7 @@ export interface ChatQueuedMessage {
    */
   relay?: ChatRelayOrigin;
   /**
-   * Set when the app queued this on its own (auto-fix). Like a relay it never merges, never
+   * Set when the app queued this on its own (auto-fix, a background exit). Like a relay it never merges, never
    * goes back to the composer, and is not offered "send now".
    */
   automatic?: ChatAutomaticOrigin;

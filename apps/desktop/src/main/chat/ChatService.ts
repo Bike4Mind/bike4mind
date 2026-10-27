@@ -798,6 +798,10 @@ export class ChatService {
     return { ok: false, busy: false, error: result.error };
   }
 
+  private wakeIfIdle(sessionId: string): void {
+    if (this.wake?.has(sessionId) && !this.hasTurnInFlight(sessionId)) void this.wakeForBackground(sessionId);
+  }
+
   /** A background command this conversation's agent started has ended on its own. */
   backgroundExited(sessionId: string, processId: string): void {
     this.wake?.exited(sessionId, processId);
@@ -1644,6 +1648,9 @@ export class ChatService {
       // send started a reply. A refused queued message is the exception: sendTaken hands it back
       // and the chain stops there.
       if (!(options.released && !result?.ok)) this.flushQueue(sessionId);
+      // An exit that came due while this send was being accepted was skipped as busy; a send
+      // that was then refused starts no turn that would deliver it.
+      this.wakeIfIdle(sessionId);
     }
   }
 
@@ -2309,7 +2316,7 @@ export class ChatService {
     resume?: ResumedReply
   ): Promise<TurnOutcome> {
     const sessionId = session.id;
-    // A new id from each mid-turn message on: see takeArrivals and splitReply below.
+    // A new id from each mid-turn message on: see takeArrivals and the round loop below.
     let replyId = firstReplyId;
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const turnStartedAt = Date.now();
@@ -3079,7 +3086,7 @@ export class ChatService {
     if (outcome === 'completed') {
       this.flushQueue(sessionId);
       // Behind anything the user queued: their turn is started first and takes the notice itself.
-      if (this.wake?.has(sessionId) && !this.hasTurnInFlight(sessionId)) void this.wakeForBackground(sessionId);
+      this.wakeIfIdle(sessionId);
       return;
     }
     // A stopped or failed turn is not followed by an automatic one. Exits after this still wake.
@@ -3091,8 +3098,8 @@ export class ChatService {
 
   /**
    * What reached a running turn since its last request, taken for the next one: whatever the
-   * user typed ahead, and any background-exit notice. Empty, and nothing allocated beyond two
-   * map lookups, when neither is waiting.
+   * user typed ahead, and any background-exit notice. Two map lookups and nothing else when
+   * neither is waiting, which is every round of almost every turn.
    *
    * Only the user's own typed entries ride along. A relay stays a turn of its own: it is
    * another agent's words, framed and hop-counted per turn, and folding it into this one would

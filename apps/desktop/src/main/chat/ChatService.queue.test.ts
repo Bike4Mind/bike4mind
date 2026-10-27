@@ -852,6 +852,47 @@ describe('ChatService queued messages', () => {
       expect(notice?.content).toContain('This is not the user typing.');
     });
 
+    it('still wakes when the exit came due during a send that was then refused', async () => {
+      const slow = new ChatService({
+        store,
+        access: { list: async () => [] } as unknown as AccessStore,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        queue,
+        background: (woken as unknown as { deps: { background: BackgroundProcessRegistry } }).deps.background,
+        // Long enough that only the send's own settling can be what delivers it.
+        backgroundWakeDelayMs: 60_000,
+        getApiClient: () => apiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        emit,
+      });
+      const { id } = await slow.createSession();
+      exits.set('aaaa1111', {
+        info: {
+          id: 'aaaa1111',
+          sessionId: id,
+          command: 'docker build .',
+          cwd: '/work',
+          status: 'exited',
+          exitCode: 0,
+          startedAt: new Date().toISOString(),
+          bufferedChars: 0,
+          droppedChars: 0,
+        },
+        tail: 'done',
+      });
+      slow.backgroundExited(id, 'aaaa1111');
+
+      const refused = slow.send(id, '   ');
+      // What the coalesce timer does when it fires mid-send: skipped as busy.
+      await (slow as unknown as { wakeForBackground(sessionId: string): Promise<void> }).wakeForBackground(id);
+      expect(await refused).toMatchObject({ ok: false });
+
+      await waitForPost(1);
+      const session = await slow.getSession(id);
+      expect(session?.messages[0]).toMatchObject({ automatic: { kind: 'background-exit' } });
+      slow.dispose();
+    });
+
     it('does not wake for an exit the model has already seen', async () => {
       const { id } = await woken.createSession();
       exited('aaaa1111', id);
