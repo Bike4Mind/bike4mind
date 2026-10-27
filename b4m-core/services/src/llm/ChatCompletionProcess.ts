@@ -6059,7 +6059,7 @@ export class ChatCompletionProcess {
         logger.debug(`Error during fallback-enabled model invocation (final model: ${currentModel.id}):`, error);
         // Only a turn that ends refused counts: a refusal a fallback model answered may be a
         // classifier false positive, and the hit drives throttling/suspension.
-        if (isSafetyRefusalError(error)) {
+        if (error instanceof Error && isSafetyRefusalError(error)) {
           await this.recordModerationHit('provider', [], quest.id, logger);
         }
         throw error; // Re-throw the error to be handled by the outer try-catch
