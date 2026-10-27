@@ -30,6 +30,9 @@ export interface IGetUsersParams {
   pendingInviteProjectId?: string;
   publicView?: boolean;
   recentSignups?: 'hour';
+  /** ISO instants bounding the created-at filter; `createdTo` is exclusive. */
+  createdFrom?: string;
+  createdTo?: string;
   groupBy?: 'emailDomain';
 }
 

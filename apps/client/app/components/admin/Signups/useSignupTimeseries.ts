@@ -1,0 +1,34 @@
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@client/app/contexts/ApiContext';
+import type { SignupTimeseries, SignupTimeseriesRange } from '@client/app/utils/signupSignals';
+
+export const signupTimeseriesQueryKey = (range: SignupTimeseriesRange) => ['admin-signup-timeseries', range] as const;
+
+/** Signups bucketed at the viewer's local hour or midnight, split by the suspected-signup classifier. */
+export function useSignupTimeseries(range: SignupTimeseriesRange) {
+  return useQuery({
+    queryKey: signupTimeseriesQueryKey(range),
+    queryFn: async () =>
+      (
+        await api.get<SignupTimeseries>('/api/admin/signup-timeseries', {
+          // getTimezoneOffset is minutes west of UTC; the endpoint takes minutes east.
+          params: { range, tzOffset: -new Date().getTimezoneOffset() },
+        })
+      ).data,
+    staleTime: 60000,
+  });
+}
+
+/** The [start, end) window a bucket covers, as ISO instants for the Users list filter. */
+export function bucketWindow(start: string, bucket: SignupTimeseries['bucket']) {
+  const from = new Date(start);
+  const to = new Date(from.getTime() + (bucket === 'hour' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000));
+  return { createdFrom: from.toISOString(), createdTo: to.toISOString() };
+}
+
+export function formatBucketLabel(start: string, bucket: SignupTimeseries['bucket']) {
+  const date = new Date(start);
+  return bucket === 'hour'
+    ? date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric' })
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}

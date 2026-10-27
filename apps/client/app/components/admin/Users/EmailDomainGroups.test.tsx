@@ -13,7 +13,7 @@ const group = {
   firstCreatedAt: '2026-01-01T00:00:00Z',
   lastCreatedAt: '2026-01-01T00:02:00Z',
   apiKeyCount: 3,
-  likelyAutomated: true,
+  signals: ['domainCadence' as const],
 };
 
 describe('signup review UI', () => {
@@ -31,7 +31,7 @@ describe('signup review UI', () => {
     );
     fireEvent.click(screen.getByTestId('users-domain-select-example.test'));
     expect(toggle).toHaveBeenCalledWith(['a', 'b'], true);
-    expect(screen.getByTestId('users-domain-table').textContent).toContain('Likely automated');
+    expect(screen.getByTestId('users-domain-table').textContent).toContain('Machine-regular cadence');
     expect(screen.getByTestId('users-domain-table').textContent).toContain('2 min');
   });
 
