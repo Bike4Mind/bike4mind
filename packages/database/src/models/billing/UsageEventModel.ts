@@ -192,6 +192,19 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return row ? { tokens: row.tokens, oldestAt: row.oldestAt } : { tokens: 0 };
   }
 
+  async creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number> {
+    const [row] = await this.model.aggregate<{ credits: number }>([
+      { $match: { userId, createdAt: { $gte: from, $lt: to } } },
+      {
+        $group: {
+          _id: null,
+          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+        },
+      },
+    ]);
+    return row?.credits ?? 0;
+  }
+
   async marginByModelDay(since?: Date): Promise<IModelDayMargin[]> {
     const from = since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     return this.model.aggregate<IModelDayMargin>([

@@ -40,3 +40,5 @@ docs-site
 # Keep host state out of every build context and let each image regenerate it.
 apps/client/app/premium-generated
 apps/client/server/premium-generated
+infra/premium-generated
+packages/server-utils/src/premium-generated
