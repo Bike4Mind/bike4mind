@@ -220,7 +220,8 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
       <Card variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Stack spacing={2}>
           <Grid container spacing={2}>
-            <Grid xs={12} md={4}>
+            {/* Full row: two date inputs plus three range buttons overflow a narrower cell. */}
+            <Grid xs={12}>
               <DateFilterComponent
                 startDate={startDate}
                 endDate={endDate}
@@ -229,7 +230,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                 onRangeSelect={selectLastDays}
               />
             </Grid>
-            <Grid xs={12} md={4}>
+            <Grid xs={12} md={6}>
               <FormControl>
                 <Select
                   value={modelFilter}
@@ -249,7 +250,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
                 </Select>
               </FormControl>
             </Grid>
-            <Grid xs={12} md={4}>
+            <Grid xs={12} md={6}>
               <Input
                 placeholder="Search logs..."
                 slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
