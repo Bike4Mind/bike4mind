@@ -1012,6 +1012,32 @@ describe('ModelHubService curated list', () => {
     expect(libraryLayers).not.toHaveBeenCalled();
     expect(runtime.pull).not.toHaveBeenCalled();
   });
+
+  it.each<[string, (manifest: HubManifest) => void]>([
+    ['its name', manifest => (manifest.entries[0].name = 'Qwen3.5 0.8B Uncensored')],
+    ['its id', manifest => (manifest.entries[0].id = 'qwen3-5-0-8b-abliterated')],
+    ['its base model', manifest => (manifest.entries[0].lineage.base = 'huihui-ai/Qwen3.5-0.8B-abliterated')],
+  ])('never lists an entry whose %s marks it abliterated', async (_label, edit) => {
+    const manifest: HubManifest = structuredClone(CURATED);
+    const id = manifest.entries[0].id;
+    edit(manifest);
+    const { service } = harness({ curated: manifest, hardware: machine('cpu', 62) });
+    const list = await service.curated();
+    expect(list.entries.map(entry => entry.id)).not.toContain(manifest.entries[0].id);
+    expect(list.entries).toHaveLength(CURATED.entries.length - 1);
+    expect(list.picks.map(pick => pick.entryId)).not.toContain(id);
+  });
+
+  it('never lists a chat entry trained on less than a 16K context', async () => {
+    const manifest: HubManifest = structuredClone(CURATED);
+    manifest.entries[0].arch.contextMax = 8192;
+    const { service } = harness({ curated: manifest });
+    expect((await service.curated()).entries.map(entry => entry.id)).not.toContain(manifest.entries[0].id);
+    expect(await service.curatedPull(manifest.entries[0].id, manifest.entries[0].builds[0].id)).toMatchObject({
+      ok: false,
+      error: { kind: 'not-found' },
+    });
+  });
 });
 
 describe('ModelHubService curated library pulls', () => {
@@ -1248,6 +1274,17 @@ describe('ModelHubService curated Hugging Face pulls', () => {
       expect(result.ok && result.model.projectorBytes).toBe(931_146_528);
       expect(result.ok && result.build.sizeBytes + (result.model.projectorBytes ?? 0)).toBe(row?.sizeBytes);
     }
+  });
+
+  it('refuses the dialog and the pull once Hugging Face tags the repo abliterated', async () => {
+    const { service, runtime } = gsqHarness({ detail: gsqDetail({}, { tags: ['gguf', 'abliterated'] }) });
+    const expected = {
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining('abliterated') },
+    };
+    expect(await service.curatedPull(GSQ.id, IQ3.id)).toMatchObject(expected);
+    expect(await service.pull(gsqRequest)).toMatchObject(expected);
+    expect(runtime.pull).not.toHaveBeenCalled();
   });
 
   it('keys a pull of the repo under any casing as its Curated row does', async () => {

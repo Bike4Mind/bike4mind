@@ -23,7 +23,14 @@ import {
   type PullProgress,
   type RuntimeHealth,
 } from '@bike4mind/local-models';
-import { CURATED_SLOTS, curatedTier, type HubBuild, type HubEntry, type HubManifest } from '@bike4mind/common';
+import {
+  CURATED_SLOTS,
+  MIN_CHAT_CONTEXT,
+  curatedTier,
+  type HubBuild,
+  type HubEntry,
+  type HubManifest,
+} from '@bike4mind/common';
 import {
   licenseKind,
   pullKey,
@@ -116,7 +123,9 @@ const modelDigest = (build: HubBuild) => libraryOf(build)?.digest ?? build.weigh
 function listable(entry: HubEntry, manifest: HubManifest): boolean {
   if (entry.flags.abliterated || entry.lineage.variantType === 'abliterated' || entry.license.legal === 'blocked')
     return false;
-  if (entry.builds.some(build => isAbliteratedModel({ id: build.hf?.repo ?? libraryOf(build)?.ref ?? '' })))
+  if (entry.roles.includes('chat') && entry.arch.contextMax < MIN_CHAT_CONTEXT) return false;
+  const sources = entry.builds.map(build => build.hf?.repo ?? libraryOf(build)?.ref ?? '');
+  if (isAbliteratedModel({ id: entry.id, tags: [entry.name, ...sources], baseModels: [entry.lineage.base] }))
     return false;
   return permissive(entry) || manifest.policy.restrictedLicense === 'curated-labelled';
 }
@@ -139,6 +148,7 @@ const LICENSE_CHANGED =
   'The license this model or its base model declares on Hugging Face changed since Bike4Mind reviewed it, so ' +
   'Curated does not offer it.' +
   EXPLORE_HINT;
+const NOW_ABLITERATED = 'Hugging Face now marks this repo as abliterated, so Curated does not offer it.';
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 const licenseSet = (ids: readonly string[]) => [...new Set(ids.map(id => id.toLowerCase()))].sort().join(',');
@@ -655,6 +665,7 @@ export class ModelHubService {
       }
       const repo = reviewed.hf?.repo ?? '';
       const detail = await this.#deps.hub.getModel(repo);
+      if (isAbliteratedModel(detail)) return { ok: false, error: hubError('upstream-changed', NOW_ABLITERATED) };
       const file = reviewed.weights[0];
       const live = detail.builds.find(candidate => candidate.id === hubBuildId(file.path));
       const liveFile = live?.files.length === 1 ? live.files[0] : undefined;
@@ -835,6 +846,7 @@ export class ModelHubService {
         'This repo changed since you reviewed it. Click Download again to review it as it is now.'
       );
     if (curated) {
+      if (isAbliteratedModel(detail)) return refused('upstream-changed', NOW_ABLITERATED);
       const licenses = await this.#checkLicenses(curated.entry, detail, signal);
       if (licenses) return { ok: false, error: licenses, listed: false };
     }
