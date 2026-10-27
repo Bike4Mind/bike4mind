@@ -1702,6 +1702,10 @@ function initializeQuestModel() {
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });
 
+    // Model Logs pages need an _id tie-break when timestamps match. Keep the full sort in the
+    // index so even the first page does not fetch and sort every log in the selected date range.
+    ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1, _id: -1 }, { name: 'deletedAt_timestamp_id_desc' });
+
     // Index for finding messages without embeddings (for Zen Garden grooming)
     ChatHistoryItemSchema.index(
       { sessionId: 1, 'embedding.generatedAt': 1 },

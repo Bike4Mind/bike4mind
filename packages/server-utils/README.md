@@ -26,4 +26,4 @@ pnpm --filter @bike4mind/server-utils test              # unit suites
 pnpm --filter @bike4mind/server-utils test:integration  # real-Mongo *.e2e.test.ts suites
 ```
 
-A suite that boots a real mongod must be named `*.e2e.test.ts` (`src/mongoTestTimeoutBudget.test.ts` enforces it). CI runs the unit lane in the `misc` test shard and the integration lane in its own `server-utils-integration` leg.
+A suite that boots a real mongod must be named `*.e2e.test.ts` (`src/mongoTestTimeoutBudget.test.ts` enforces it). CI runs the unit lane in the `misc` test shard and the integration lane in the shared `workers-server-utils-integration` leg.
