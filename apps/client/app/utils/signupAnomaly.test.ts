@@ -35,6 +35,20 @@ describe('signup anomaly signals', () => {
     expect(groupSignupDomains([], [], config)).toEqual([]);
   });
 
+  it('takes the domain after the last @ and ignores a trailing dot', () => {
+    const groups = groupSignupDomains(
+      [
+        { id: 'a', email: 'a@b@evil.test', createdAt: '2026-01-01T00:00:00.000Z' },
+        { id: 'b', email: 'c@evil.test.', createdAt: '2026-01-01T00:01:00.000Z' },
+      ],
+      [],
+      config,
+      Date.parse('2026-01-01T00:30:00Z')
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ domain: 'evil.test', userIds: ['a', 'b'] });
+  });
+
   it('does not label old accounts on a popular domain as an hourly automation burst', () => {
     const users = Array.from({ length: 20 }, (_, i) => ({
       id: String(i),
