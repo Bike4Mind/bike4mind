@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
@@ -61,6 +62,13 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
           },
         }
       );
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.security_scan.triggered',
+        target: { kind: 'system', id: 'security-scan:cloud-prowler', displayName: 'cloud-prowler security scan' },
+        summary: 'triggered a manual cloud-prowler scan',
+        details: { scanType: 'cloud-prowler', stage, environment },
+      });
 
       logger.info('Prowler workflow dispatched', { environment, workflow: WORKFLOW_FILE, ref, githubRepo });
       return res.status(202).json({ queued: true, environment });
