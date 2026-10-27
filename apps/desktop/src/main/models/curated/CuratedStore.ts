@@ -96,6 +96,14 @@ function floors(raw: unknown): Record<string, number> {
 }
 
 /**
+ * The curated files' directory. A build that trusts the public test keys gets its own, so a list signed with them
+ * can never revoke a key for another build that shares this userData.
+ */
+export function curatedStoreRoot(userData: string, testKeys: boolean): string {
+  return join(userData, 'model-hub', testKeys ? 'curated-test-keys' : 'curated');
+}
+
+/**
  * The curated list's files under `userData/model-hub/curated/`: the sticky revoked-key set, the on/off setting,
  * and per source (`<sha256(url)[0:16]>/`) the check state and the last verified pair, behind a pointer file.
  */

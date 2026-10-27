@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CuratedStore } from './CuratedStore';
+import { CuratedStore, curatedStoreRoot } from './CuratedStore';
 
 const synced = vi.hoisted(() => [] as string[]);
 vi.mock('node:fs/promises', async importOriginal => {
@@ -89,6 +89,12 @@ describe('CuratedStore', () => {
       ]);
     }
   );
+
+  it('keeps a build that trusts the test keys out of the curated files other builds read', () => {
+    const userData = join(dir, 'userData');
+    expect(curatedStoreRoot(userData, false)).toBe(join(userData, 'model-hub', 'curated'));
+    expect(curatedStoreRoot(userData, true)).toBe(join(userData, 'model-hub', 'curated-test-keys'));
+  });
 
   it('ignores a pointer to anything but a pair directory', async () => {
     await mkdir(join(dir, SOURCE), { recursive: true });
