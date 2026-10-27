@@ -264,6 +264,11 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     const agent = await agentRepository.findById(id as string);
     assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to update this agent");
 
+    // The edit form resubmits the stored models on every save; re-checking an unchanged model against a
+    // possibly partial catalog listing would reject a rename when that provider is briefly down.
+    if (agentData.preferredModel === agent.preferredModel) delete agentData.preferredModel;
+    if (agentData.preferredImageModel === agent.preferredImageModel) delete agentData.preferredImageModel;
+
     await validateAgentUpdate(agentData, req.user!.id, undefined, req.logger);
 
     // Handle capabilities conversion if it's in the old format
