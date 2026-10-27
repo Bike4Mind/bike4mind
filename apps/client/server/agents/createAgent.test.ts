@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/utils/callerModelList', () => ({
-  getCallerModelList: async () => ({ models: [{ id: 'catalog-model' }], supersededModels: [] }),
+  getCallerModelList: async () => ({ models: [{ id: 'catalog-model', type: 'text' }], supersededModels: [] }),
 }));
 
 vi.mock('@bike4mind/database', () => ({
