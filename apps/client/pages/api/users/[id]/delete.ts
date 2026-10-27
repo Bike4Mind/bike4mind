@@ -24,7 +24,7 @@ import {
 } from '@server/utils/adminAudit';
 import { emitBillingEvent } from '@server/analytics/signupEvents';
 import { wholeDaysBetween } from '@server/analytics/billingEventDetails';
-import { pseudonymizeUserId } from '@server/analytics/pseudonymize';
+import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { resolveUserType } from '@server/analytics/resolveUserType';
 
 const deletedUserTarget = (id: string, user: Pick<IUserDocument, 'name' | 'username' | 'email'> | null) => ({

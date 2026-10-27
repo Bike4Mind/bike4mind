@@ -6,6 +6,7 @@ import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mi
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { Connection } from '@bike4mind/database/social';
 import { sendToConnection } from '@server/websocket/utils';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
@@ -14,6 +15,7 @@ import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -249,7 +251,7 @@ describe('completion analytics', () => {
     expect((await postAs({ 'user-agent': 'b4m-desktop/1.2.3' })).status).toBe(202);
     await Promise.all(tracked);
     expect(vi.mocked(executeCompletion)).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'desktop', userId: 'u1' })
+      expect.objectContaining({ source: 'desktop', userId: 'u1', getThinkingVisibility: resolveThinkingVisibility })
     );
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });

@@ -3,6 +3,7 @@ import { BadRequestError, ForbiddenError, NotFoundError, getSettingsMap, getSett
 import { deleteElevenLabsAgent, getElevenLabsAgent, updateElevenLabsAgent } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const UpdateVoiceAgentBodySchema = z.object({
@@ -129,6 +130,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     const updated = await agentRepository.findById(id);
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.voice_agent.updated',
+      target: { kind: 'settings', id, displayName: updated?.name ?? agent.name },
+      summary: `updated voice agent ${updated?.name ?? agent.name}`,
+      // Field names only: the system prompt can be long and is not worth copying into the log.
+      details: { fields: definedKeys(body) },
+    });
     return res.status(200).json({ agent: updated });
   })
   .delete(async (req, res) => {
@@ -166,11 +174,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     await agentRepository.delete(id);
 
     // If the deleted agent was the default, promote the next surviving agent.
-    if (agent.isDefaultVoiceAgent) {
-      const remaining = await agentRepository.listAllVoiceAgents();
-      if (remaining.length > 0) {
-        await agentRepository.setDefaultVoiceAgent(remaining[0].id);
+    let promotedDefaultId: string | undefined;
+    try {
+      if (agent.isDefaultVoiceAgent) {
+        const remaining = await agentRepository.listAllVoiceAgents();
+        if (remaining.length > 0) {
+          promotedDefaultId = remaining[0].id;
+          await agentRepository.setDefaultVoiceAgent(promotedDefaultId);
+        }
       }
+    } finally {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.voice_agent.deleted',
+        target: { kind: 'settings', id, displayName: agent.name },
+        summary: `deleted voice agent ${agent.name}`,
+        details: {
+          elevenLabsAgentId: agent.elevenLabsAgentId,
+          wasDefault: agent.isDefaultVoiceAgent === true,
+          ...(promotedDefaultId !== undefined ? { promotedDefaultId } : {}),
+        },
+      });
     }
 
     return res.status(200).json({ ok: true });

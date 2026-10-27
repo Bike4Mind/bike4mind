@@ -21,7 +21,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: vi.fn(() => null),
 }));
 

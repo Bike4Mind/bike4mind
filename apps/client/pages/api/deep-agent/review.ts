@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { createLlmReviewStep, runReviewWake } from '@bike4mind/server-utils/deepAgent/reviewWake';
 import { bridgeReviewToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';

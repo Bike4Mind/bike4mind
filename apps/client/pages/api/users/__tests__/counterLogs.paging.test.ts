@@ -60,7 +60,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/services', () => ({ counterService: {} }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn() },
   getEffectiveApiKeyByBackend: vi.fn(),
 }));

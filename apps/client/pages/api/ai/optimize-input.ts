@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 export interface RephraseRequest {

@@ -9,7 +9,7 @@ import {
   pickSubscriptionByPrice,
   resolveSubscriptionSource,
   SubscriptionSource,
-} from '@client/lib/subscriptions/types';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
   TEAM_PLAN_UNAVAILABLE_MESSAGE,

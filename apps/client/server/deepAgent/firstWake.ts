@@ -9,6 +9,7 @@ import { loadLinkedAgentContext } from './missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { missionWakeMeter } from './wakeMetering';
+import { resolveThinkingVisibilityForUserId } from '@server/utils/thinkingVisibility';
 
 /**
  * Run a freshly-enrolled mission's FIRST wake so it is born alive - the single
@@ -54,6 +55,7 @@ export async function runMissionFirstWake(missionId: string, opts: FirstWakeOpti
           logger: opts.logger,
         }),
         loadLinkedAgent: loadLinkedAgentContext,
+        resolveThinkingVisibility: resolveThinkingVisibilityForUserId,
       })
     : noopRunAct;
 

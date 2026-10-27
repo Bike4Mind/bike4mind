@@ -11,7 +11,7 @@ import { NotionTokenManager } from '@server/integrations/notion/notionTokenManag
 import { Config } from '@bike4mind/server-utils/utils/config';
 import crypto from 'crypto';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 const OAUTH_TIMEOUT = 30000;
 const NOTION_API_TIMEOUT = 10000;

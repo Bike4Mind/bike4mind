@@ -14,7 +14,7 @@ import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
-import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/utils/orgAccess';
+import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';

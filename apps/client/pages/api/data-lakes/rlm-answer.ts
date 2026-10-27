@@ -21,7 +21,7 @@ import {
 } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
@@ -32,6 +32,7 @@ import {
   reserveCompletionCredits,
   settleCompletion,
 } from '@server/billing/meterPlatformCompletion';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { HARD_TIMEOUT_MS, PER_CALL_REPL_TIMEOUT_MS, SUB_LLM_HTTP_TIMEOUT_MS } from '@server/tavern/rlm/timeouts';
 
 /**
@@ -314,6 +315,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       return res.status(503).json({ error: 'Code-execution sandbox unavailable' });
     }
 
+    const thinkingVisibility = req.user ? await resolveThinkingVisibility(req.user) : undefined;
     let agent: ReActAgent;
     try {
       // Wire data-lake tools into the REPL (NOT into the agent's tool array)
@@ -346,6 +348,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         systemPrompt,
         temperature: 0.4,
         maxTokens: ROOT_MAX_TOKENS,
+        ...(thinkingVisibility && { thinkingVisibility }),
       });
     } catch (e) {
       // Nothing has run yet, so a setup failure owes nothing.

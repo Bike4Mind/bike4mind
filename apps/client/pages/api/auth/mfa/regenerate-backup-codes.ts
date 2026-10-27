@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { stepUpGate } from '@server/auth/stepUp';

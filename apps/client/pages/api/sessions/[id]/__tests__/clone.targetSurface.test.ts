@@ -31,7 +31,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => {
     },
   };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     h.rateLimitOptions = options;
     return h.rateLimiter;
