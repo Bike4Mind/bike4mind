@@ -454,6 +454,14 @@ describe('HubEntrySchema cross-field rules', () => {
     ],
     [
       'hybrid-27b',
+      'a projector size without a projector layer',
+      e => {
+        e.builds[2].ollama = { kind: 'hf-pull', modelfile: {}, layers: { ...pinned(), projectorBytes: 1000 } };
+      },
+      'builds.2.ollama.layers: projectorBytes needs a projector layer',
+    ],
+    [
+      'hybrid-27b',
       'a Hugging Face build with no weights',
       e => (e.builds[2].weights = []),
       'builds.2.weights: a build needs Hugging Face weights unless it is an Ollama library build',
@@ -648,7 +656,7 @@ describe('HubEntrySchema cross-field rules', () => {
   });
 
   it('accepts a vision hf-pull build whose registry serves a pinned projector', () => {
-    const layers = { ...pinned(), template: null, installedTemplate: sha(8), projector: sha(9) };
+    const layers = { ...pinned(), template: null, installedTemplate: sha(8), projector: sha(9), projectorBytes: 9 };
     expect(
       issuesAfter('gemma-12b', e => {
         delete e.builds[0].mmproj;

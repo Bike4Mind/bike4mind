@@ -205,10 +205,15 @@ const OllamaLayersSchema = z
     license: Sha256Schema.nullable(),
     numCtx: ContextSchema.nullable(),
     projector: Sha256Schema.nullable().default(null),
+    // The served projector's size, which Hugging Face weight sizes leave out.
+    projectorBytes: ByteCountSchema.optional(),
     draft: Sha256Schema.nullable().default(null),
     installedTemplate: Sha256Schema.optional(),
   })
-  .refine(layers => layers.params !== null || layers.numCtx === null, { message: 'numCtx needs a params layer' });
+  .refine(layers => layers.params !== null || layers.numCtx === null, { message: 'numCtx needs a params layer' })
+  .refine(layers => layers.projector !== null || layers.projectorBytes === undefined, {
+    message: 'projectorBytes needs a projector layer',
+  });
 
 const OllamaSourceSchema = z.discriminatedUnion('kind', [
   // sizeBytes includes the projector and any draft layer; digest is the model layer digest.
