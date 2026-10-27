@@ -117,8 +117,8 @@ describe('MFAModal paste', () => {
 
   it('extracts a backup code from a labelled paste in verify mode', () => {
     renderModal();
-    paste('Backup code: ABCD123456');
-    expect(codeInput().value).toBe('ABCD123456');
+    paste('Backup code: ABCD234567');
+    expect(codeInput().value).toBe('ABCD234567');
   });
 
   it('leaves the input alone and shows the setup hint when no code is in the paste', () => {
@@ -142,6 +142,21 @@ describe('MFAModal paste', () => {
     expect(screen.getByTestId('mfa-modal-paste-hint').textContent).toBe(
       'Paste or enter a 6-digit code or 10-character backup code.'
     );
+  });
+
+  it('prefers an embedded 6-digit code over a 10-letter label word in verify mode', () => {
+    renderModal();
+    paste('Enrollment code: 123456');
+    expect(codeInput().value).toBe('123456');
+  });
+
+  it('clears the hint once a later paste is usable', () => {
+    renderSetup();
+    paste('not a code at all');
+    expect(screen.getByTestId('mfa-modal-paste-hint')).toBeTruthy();
+    paste('123456');
+    expect(codeInput().value).toBe('123456');
+    expect(screen.queryByTestId('mfa-modal-paste-hint')).toBeNull();
   });
 
   it('accepts a plain 6-digit or 10-character paste as before', () => {

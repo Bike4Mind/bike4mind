@@ -42,8 +42,16 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
 
 // A stub modal: surfaces the inline error and lets a test submit a code.
 vi.mock('@client/app/components/common/MFAModal', () => ({
-  default: ({ error, onVerify }: { error?: string | null; onVerify: (code: string, remember: boolean) => void }) => (
-    <div data-testid="mfa-modal-stub">
+  default: ({
+    error,
+    mode,
+    onVerify,
+  }: {
+    error?: string | null;
+    mode?: string;
+    onVerify: (code: string, remember: boolean) => void;
+  }) => (
+    <div data-testid="mfa-modal-stub" data-mode={mode}>
       <span data-testid="mfa-modal-stub-error">{error}</span>
       <button data-testid="mfa-modal-stub-verify" onClick={() => onVerify('000000', false)} />
     </div>
@@ -233,5 +241,16 @@ describe('MFAEnforcementWrapper - failed setup verification', () => {
       expect(screen.getByTestId('mfa-modal-stub-error').textContent).toBe('Invalid code (2 attempts remaining)')
     );
     expect(toastError).toHaveBeenCalledWith('Invalid code (2 attempts remaining)');
+    expect(screen.getByTestId('mfa-modal-stub').getAttribute('data-mode')).toBe('setup');
+  });
+
+  it('clears the inline error when the user retries', async () => {
+    renderWrapper();
+    fireEvent.click(await screen.findByTestId('mfa-modal-stub-verify'));
+    await waitFor(() => expect(screen.getByTestId('mfa-modal-stub-error').textContent).not.toBe(''));
+
+    post.mockImplementation(() => new Promise(() => {})); // the retry stays in flight
+    fireEvent.click(screen.getByTestId('mfa-modal-stub-verify'));
+    await waitFor(() => expect(screen.getByTestId('mfa-modal-stub-error').textContent).toBe(''));
   });
 });

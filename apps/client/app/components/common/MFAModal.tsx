@@ -1,5 +1,5 @@
 import { Modal, Typography, Box, Stack, Button, Sheet, IconButton, Input, Checkbox, Divider } from '@mui/joy';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import { toast } from 'sonner';
 import Image from 'next/image';
 import CloseIcon from '@mui/icons-material/Close';
@@ -56,6 +56,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
   const [code, setCode] = useState('');
   const [rememberDevice, setRememberDevice] = useState(false);
   const [pasteHint, setPasteHint] = useState<string | null>(null);
+  const titleId = useId();
   const isSetupMode = mode === 'setup';
   // Setup enrolls the second factor; offering to skip it in the same breath makes no
   // sense, so the opt-in is verification-only.
@@ -103,10 +104,11 @@ const MFAModal: React.FC<MFAModalProps> = ({
       setCode(pastedText);
       return;
     }
-    // Labelled pastes ("Code: 123456") or otp URLs: pull out a standalone code if there is one.
-    const embedded = rawText.match(
-      qrCodeUrl ? /(?<!\d)\d{6}(?!\d)/ : /(?<![A-Za-z0-9])(\d{6}|[A-Za-z0-9]{10})(?![A-Za-z0-9])/
-    );
+    // Labelled pastes ("Code: 123456"): pull out a standalone code if there is one. The 6-digit
+    // code wins so a 10-letter label word is not mistaken for a (base32) backup code.
+    const embedded =
+      rawText.match(/(?<![A-Za-z0-9])\d{6}(?![A-Za-z0-9])/) ??
+      (qrCodeUrl ? null : rawText.match(/(?<![A-Za-z0-9])[A-Za-z2-7]{10}(?![A-Za-z0-9])/));
     if (embedded) {
       setPasteHint(null);
       setCode(embedded[0]);
@@ -164,7 +166,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
         data-testid="mfa-modal-content"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="mfa-modal-title"
+        aria-labelledby={titleId}
         variant="outlined"
         sx={{
           width: 400,
@@ -189,7 +191,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
           </IconButton>
         )}
         <Stack spacing={2}>
-          <Typography id="mfa-modal-title" className="mfa-modal-title" level="h4">
+          <Typography id={titleId} className="mfa-modal-title" level="h4">
             {title || 'Multi-Factor Authentication'}
           </Typography>
           {description && <Typography>{description}</Typography>}
