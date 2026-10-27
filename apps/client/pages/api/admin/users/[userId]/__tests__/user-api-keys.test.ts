@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockUserFind, mockListKeys, mockGetUsage } = vi.hoisted(() => ({
+const { mockUserFind, mockListKeys, mockGetUsage, mockCountRequests, mockDescribeAccess } = vi.hoisted(() => ({
   mockUserFind: vi.fn(),
   mockListKeys: vi.fn(),
   mockGetUsage: vi.fn(),
+  mockCountRequests: vi.fn(),
+  mockDescribeAccess: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -42,6 +44,11 @@ vi.mock('@bike4mind/database', () => ({
 // identity object is enough to pin the wiring.
 vi.mock('@bike4mind/database/auth', () => ({
   userApiKeyRepository: { __marker: 'userApiKeyRepository' },
+  apiKeyUsageLogRepository: { countRequestsByKeyWindows: (...a: unknown[]) => mockCountRequests(...a) },
+}));
+
+vi.mock('@server/utils/apiKeyAccessGate', () => ({
+  describeApiKeyAccess: (...a: unknown[]) => mockDescribeAccess(...a),
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -59,6 +66,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 const ADMIN = { id: 'admin1', isAdmin: true };
+const ACCESS = { mode: 'paid', allowed: false, basis: 'no_paid_subscription' };
 
 const run = ({ user, userId = 'u1' }: { user?: unknown; userId?: string | string[] } = {}) => {
   const { req, res } = createMocks({ method: 'GET', query: { userId } });
@@ -73,6 +81,8 @@ beforeEach(() => {
   mockUserFind.mockReset();
   mockListKeys.mockReset();
   mockGetUsage.mockReset().mockResolvedValue({ minute: 0, day: 0 });
+  mockCountRequests.mockReset().mockResolvedValue({});
+  mockDescribeAccess.mockReset().mockResolvedValue(ACCESS);
 });
 
 describe('GET /api/admin/users/:userId/user-api-keys', () => {
@@ -115,7 +125,7 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
     const { res, promise } = run({ user: ADMIN });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ apiKeys: [], liveUsage: {} });
+    expect(res._getJSONData()).toEqual({ apiKeys: [], liveUsage: {}, requests: {}, access: ACCESS });
     expect(mockGetUsage).not.toHaveBeenCalled();
   });
 
@@ -127,6 +137,7 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
     mockUserFind.mockResolvedValue({ id: 'u1' });
     mockListKeys.mockResolvedValue(keys.map(hydrate));
     mockGetUsage.mockResolvedValueOnce({ minute: 60, day: 300 }).mockResolvedValueOnce({ minute: 0, day: 0 });
+    mockCountRequests.mockResolvedValue({ k1: { last24h: 4, last7d: 9 } });
 
     const { res, promise } = run({ user: ADMIN });
     await promise;
@@ -137,7 +148,11 @@ describe('GET /api/admin/users/:userId/user-api-keys', () => {
     expect(res._getJSONData()).toEqual({
       apiKeys: keys,
       liveUsage: { k1: { minute: 60, day: 300 }, k2: { minute: 0, day: 0 } },
+      requests: { k1: { last24h: 4, last7d: 9 } },
+      access: ACCESS,
     });
+    expect(mockCountRequests).toHaveBeenCalledExactlyOnceWith('u1', expect.any(Date));
+    expect(mockDescribeAccess).toHaveBeenCalledExactlyOnceWith({ id: 'u1' });
     expect(mockListKeys).toHaveBeenCalledWith(
       'u1',
       { db: { userApiKeys: { __marker: 'userApiKeyRepository' } } },

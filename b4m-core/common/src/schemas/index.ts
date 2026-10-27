@@ -23,6 +23,7 @@ export * from './chatMessage';
 export * from './mcpServer';
 export * from './identityProvider';
 export * from './userApiKeyResponse';
+export * from './adminUserCredits';
 export * from './emailVerificationResponse';
 export * from './questMasterPlan';
 export * from './dataLakeResponse';

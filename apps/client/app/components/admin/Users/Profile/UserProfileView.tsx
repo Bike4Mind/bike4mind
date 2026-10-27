@@ -27,7 +27,9 @@ import { UserProfileHeader } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
 import { OverviewTab } from './tabs/OverviewTab';
-import { AdminLogTab, ApiKeysTab, CreditsTab, SignInsTab } from './tabs/recordTabs';
+import { AdminLogTab, SignInsTab } from './tabs/recordTabs';
+import { CreditsTab } from './tabs/credits/CreditsTab';
+import { ApiKeysTab } from './tabs/keys/ApiKeysTab';
 import { USER_PROFILE_TAB_LABELS, type UserProfileTab } from './userProfileSearch';
 import { displayName, type AdminUserProfile } from './userProfileModel';
 

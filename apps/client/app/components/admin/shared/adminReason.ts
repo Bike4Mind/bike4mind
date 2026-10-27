@@ -16,6 +16,8 @@ export const ADMIN_REASON_PRESETS = {
   restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
+  apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
+  apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],

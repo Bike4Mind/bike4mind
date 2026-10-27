@@ -52,13 +52,15 @@ vi.mock('./tabs/OverviewTab', () => ({
     </div>
   ),
 }));
-vi.mock('./tabs/recordTabs', () => ({
+vi.mock('./tabs/credits/CreditsTab', () => ({
   CreditsTab: ({ onAdjust }: { onAdjust: () => void }) => (
     <div data-testid="stub-credits">
       <button data-testid="stub-credits-adjust-btn" onClick={onAdjust} />
     </div>
   ),
-  ApiKeysTab: () => <div data-testid="stub-keys" />,
+}));
+vi.mock('./tabs/keys/ApiKeysTab', () => ({ ApiKeysTab: () => <div data-testid="stub-keys" /> }));
+vi.mock('./tabs/recordTabs', () => ({
   SignInsTab: () => <div data-testid="stub-signins" />,
   AdminLogTab: () => <div data-testid="stub-admin-log" />,
 }));
