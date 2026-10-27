@@ -181,6 +181,11 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 | `SectionCard` | A group of facts | Title, optional ghost action, definition list. No form inputs inside. |
 | `DataTable` | Every admin list | Sticky header, sortable columns, row selection, horizontal scroll on mobile, skeleton, empty and error states. Page sizes 25, 50, 100. |
 | `FilterBar` / `SavedViews` | Narrowing a list | Every filter is kept in the URL. Dashed chip = unset, solid chip = set and removable. |
+| `FilterChip` | One filter in a `FilterBar` | Dashed with just the label while unset; "Label: Value" in the `selection` tint with a remove button once set. Picking a value opens a menu. |
+| `ViewTabs` | Built-in and saved views above a list | The active tab is ink-filled. Each tab may carry a count. A view is its filters, so matching filters light its tab. |
+| `SegmentedControl` | 2 to 4 mutually exclusive modes | Toggle buttons on a `hover` track, e.g. Group by None / Email domain. Not for filters with many values. |
+| `InitialsAvatar` | The person in a table row | The photo when there is one, else initials on a tone that stays stable per user. |
+| `InlineBar` | A number's share of the largest in view | Decorative only: the number itself stays in the cell. |
 | `BulkActionBar` | Acting on a selection | Floats at the bottom. Offers "Select all N matching". Most destructive action last. |
 | `ActionDialog` | Any audited write | Verb-phrase title, before/after preview or dry run, then a reason. Commit button bottom-right. |
 | `ReasonPicker` | Audit reasons | Preset chips per action type plus free text (5 to 500 characters, the shared `adminActionReason` rule). Replaces `AdminReasonField`. |

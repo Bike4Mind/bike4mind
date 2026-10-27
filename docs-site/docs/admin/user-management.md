@@ -7,54 +7,54 @@ tags: [admin, users, management]
 
 # User Management
 
-The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It provides search, filtering, multiple display modes, inline editing, and bulk export capabilities. User management state (search terms, pagination, sort preferences, filters, and display mode) is persisted across sessions via local storage.
+The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It is a single server-driven table with search, filters, built-in views, column sorting, grouping by email domain, and CSV export. The header shows the total number of accounts and how many were active this week.
+
+The view, filters, sort, grouping, page, and page size are kept in the URL, so reloading the page or sharing the link restores the same list. The search text is not put in the URL, because it often holds an email address.
 
 ## Search
 
-The search bar at the top of the Users tab allows you to find users by name, username, or email. Search is debounced to avoid excessive API calls while typing. When a search term is entered, the results automatically reset to page 1.
+The search box at the top of the Users tab finds users by name, username, email, or user ID. Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
 
-## Display Modes
+## Views
 
-The Users tab supports four distinct view modes, selectable from the **View Mode** dropdown:
+The tabs above the table are built-in views. Each one clears the filters and applies its own:
 
-| Mode | Description |
-|------|-------------|
-| **Slim** (default) | Compact table view showing Name, User ID, Email, Logins, Storage usage bar, Security (MFA status), Recent Activity, and action buttons |
-| **Full** | Expanded card view with inline editing for all user fields, organized into sections: User Details, Permissions, Subscription, B4M Settings, Admin Actions, and Activity & Profile |
-| **User Journey** | Chronological view of a user's lifecycle on the platform |
-| **Recent Activity** | Focused view of recent user activity across the platform |
+| View | Shows |
+|------|-------|
+| **All** (default) | Every user |
+| **New this week** | Users who signed up in the last 7 days |
+| **High risk** | Users whose signup risk assessment is high |
+| **Suspended** | Banned users |
 
-### Slim View Columns
+Each tab shows its count. If you set filters by hand that match a view exactly, that view's tab is highlighted.
+
+## Columns
 
 | Column | Details |
 |--------|---------|
-| Name | Truncated to 15 characters with tooltip for full name |
-| User ID | Monospaced font, displayed in a compact format |
-| Email | Full email address |
-| Logins | Login count indicator |
-| Storage | Progress bar showing used vs. allocated storage with percentage and color coding (green/yellow/red based on usage threshold) |
-| Security | MFA status badge |
-| Recent Activity | Latest activity timestamp and action name |
-| Actions | "Admin" button to open the [user profile page](#user-profile-page), plus a profile button |
+| User | Avatar, name (or username or email), and email |
+| Status | **Suspended** (banned), **Restricted** (moderated), **New** (recently created), or **Active** |
+| Plan | User level |
+| Signed up | Account creation date |
+| Last active | Most recent activity |
+| Credits | Current credit balance |
+| 30d spend | Credits spent in the last 30 days |
+| API keys | Number of live API keys |
+| Risk | Signup risk band: High, Medium, or Low |
 
-### Full View Sections
+Click a row to open the user's [profile page](#user-profile-page). The row's **...** menu has **Open profile** and **Copy user ID**; using it does not open the row.
 
-Each user card in Full view contains the following sections:
+### Selecting rows
 
-| Section | Contents |
-|---------|----------|
-| **User Details** | Editable fields for name, username, email, and other profile information |
-| **Permissions** | User level button (cycles through DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser), Super Admin checkbox, predefined user tags, and custom tag input |
-| **Subscription** | Current subscription status and details |
-| **B4M Settings** | Platform-specific settings including credits, storage limit, and referral availability |
-| **Admin Actions** | Ban, Moderate, Delete, and Compliance controls |
-| **Activity & Profile** | Login details and admin profile view |
+Use the checkboxes to select rows for the bulk abuse response. Shift-click selects a range, and `x` toggles the focused row. Changing a filter, the view, or the search clears the selection; moving between pages keeps it.
 
-Each card header also has an **Open profile** button that opens the user's profile page. It is disabled while the card has unsaved edits: update or undo them first.
+### Recent activity
+
+The **Recent activity** button shows a panel of recent user activity across the platform.
 
 ## User Profile Page
 
-Each user has a full-page profile at `/admin/users/<userId>`, opened from the **Admin** button in Slim view, the User Journey view, or **Open profile** on a Full view card. It is admin-only, like the rest of the admin panel. The **Users** button at the top returns to the Users tab.
+Each user has a full-page profile at `/admin/users/<userId>`, opened by clicking the user's row in the Users tab or **Open profile** in the row menu. It is admin-only, like the rest of the admin panel. The **Users** button at the top returns to the Users tab.
 
 The header shows the user's name, email, and avatar; badges for email verification, banned, moderated, super admin, user level, organization, and signup method; the created and last-active dates; and the quick actions **Login as User**, **Send Message**, **Grant Subscription**, and **Update** (shown once there are changes to save).
 
@@ -62,7 +62,7 @@ The page has three tabs. The selected tab is kept in the URL as `?tab=activity` 
 
 | Tab | Contents |
 |-----|----------|
-| **Overview** | The editable sections from Full view (User Details, Roles, Product Access, Subscription, B4M Settings, Activity & Profile), laid out two per row on wide screens and one per row on narrow ones |
+| **Overview** | The editable sections (User Details, Roles, Product Access, Subscription, B4M Settings, Activity & Profile), laid out two per row on wide screens and one per row on narrow ones |
 | **Activity** | The user's recent activity |
 | **Admin** | The **Danger zone**: Ban, Moderate, Delete, and Compliance (see [Admin Actions](#admin-actions-ban-moderate-delete)) |
 
@@ -72,44 +72,33 @@ Old links of the form `/admin?userId=<userId>` redirect to the user's profile pa
 
 ## Filtering
 
-### Organization Filter
+Click **Filter** to add a filter chip. Each chip shows its current value; click it to change the value, or remove it. **Clear filters** removes them all.
 
-A multi-select dropdown for filtering users by organization. Options include:
+| Filter | Values |
+|--------|--------|
+| Status | Active, Suspended, Restricted |
+| Plan | DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser |
+| Risk | High, Medium, Low (users with no risk assessment match none of these) |
+| Signed up | Last hour, day, week, or month |
+| Sign-in method | Email, Google, GitHub, Facebook, Okta, SAML |
+| Email verified | Verified, Not verified |
+| API keys | Has keys, No keys |
+| Organization | One or more organizations, or **No organization** |
+| Tags | One or more tags, including **Admin** for super admins |
 
-- **All** - Shows users from all organizations (default)
-- **Unassigned** - Shows users not assigned to any organization
-- Individual organizations listed from the system
+Filters are applied on the server, so they cover every user, not just the current page. Changing a filter returns to page 1.
 
-Multiple organizations can be selected simultaneously. Selecting "All" clears other selections.
+## Grouping by email domain
 
-### Tag Filter
-
-A multi-select dropdown for filtering users by tags. Available tags include:
-
-- **Admin** - Always present as a predefined tag
-- **Predefined User Tags** - System-defined tags imported from `@bike4mind/common`
-- **Custom Tags** - Additional tags retrieved from the API
-
-Multiple tags can be selected to narrow results.
+Set **Group by** to **Email domain** to list users under a header per email domain, with the user count for each. **Show only this domain** on a header filters the list to that domain (subdomains included).
 
 ## Sorting
 
-| Control | Options |
-|---------|---------|
-| **Sort By** | `Created At` (default), `Name` |
-| **Order** | Toggle button switching between `A -> Z` (ascending) and `Z -> A` (descending) |
-
-Changing the sort field or order resets to page 1.
+Click the **User**, **Signed up**, **Last active**, or **Credits** column header to sort by it; click again to reverse the order. The default is **Signed up**, newest first. Changing the sort returns to page 1.
 
 ## Pagination
 
-Pagination controls appear both above and below the user list. Options include:
-
-| Setting | Values |
-|---------|--------|
-| Items per page | 5, 10 (default), 20 |
-| Navigation | Previous / Next buttons with current page and total pages display |
-| Total count | Displayed as "Total Users: N" |
+The footer below the table shows the range of rows on the page (for example "1 to 25 of 1,234"), a **Rows per page** selector (25, 50, or 100; 25 is the default), and previous and next page buttons.
 
 ## Creating a User
 
@@ -155,7 +144,7 @@ Available editable fields include:
 
 ### Login as User
 
-The Full view includes a **Login as User** button that allows an admin to impersonate the selected user for debugging purposes.
+The user profile page header has a **Login as User** button that allows an admin to impersonate the selected user for debugging purposes.
 
 ### Send System Message
 
@@ -167,7 +156,7 @@ Bike4Mind uses passwordless email authentication. When a user logs in, a one-tim
 
 ## User Permissions
 
-The Permissions section in Full view provides:
+The **Roles** section on the profile page's Overview tab provides:
 
 | Control | Description |
 |---------|-------------|
@@ -178,7 +167,7 @@ The Permissions section in Full view provides:
 
 ## Admin Actions (Ban, Moderate, Delete)
 
-Destructive user operations live in the **Admin Actions** section of a Full view card, and in the **Danger zone** on the Admin tab of the user profile page:
+Destructive user operations live in the **Danger zone** on the Admin tab of the user profile page:
 
 | Action | Description |
 |--------|-------------|
@@ -191,7 +180,7 @@ Ban and moderation changes are staged like any other field. When you click **Upd
 
 ## Export
 
-The **Download** button exports all users matching the current search and filter criteria as a CSV file named `users.csv`. The CSV includes the following columns:
+The **Export CSV** button exports all users matching the current search and filter criteria as a CSV file named `users.csv`. The CSV includes the following columns:
 
 | Column | Description |
 |--------|-------------|
@@ -205,15 +194,15 @@ The **Download** button exports all users matching the current search and filter
 | Is Admin | Yes/No |
 | Is Banned | Yes/No |
 
-The export fetches all matching users (not just the current page) before generating the CSV.
+The export includes all matching users, not just the current page, up to 50,000 rows. If the export hits that cap, a warning asks you to narrow the filters to export the rest.
 
 ## Best Practices
 
-- Use **Slim** view for quick scanning and **Full** view for detailed user administration.
+- Use the list for quick scanning and the user's profile page for detailed administration.
 - When creating external users, assign the **Customer** tag to provide appropriate model access.
 - Prefer **banning** over **deleting** users to preserve audit trails. Deletion is permanent.
 - Always confirm the environment banner color before performing destructive actions like user deletion.
-- Use the **Download** feature to maintain offline records of user lists before making bulk changes.
+- Use **Export CSV** to maintain offline records of user lists before making bulk changes.
 - Use organization and tag filters together to narrow down to specific user cohorts.
 - Review user permissions regularly and grant only the minimum necessary access.
 - Notify users before making major changes to their accounts.
@@ -222,7 +211,7 @@ The export fetches all matching users (not just the current page) before generat
 
 ### Upgrading a User
 
-1. Switch to **Full** view mode to access inline editing.
+1. Open the user's profile page by clicking their row.
 2. Click the **User Level** button to cycle through levels (DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser).
 3. Alternatively, add specific permission tags for fine-grained access control.
 4. Click **Update** to save changes.
