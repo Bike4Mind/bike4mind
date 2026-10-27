@@ -66,8 +66,6 @@ function usesRemoteModel(model: { remote_host?: string; remote_model?: string })
   return !!(model.remote_host?.trim() || model.remote_model?.trim());
 }
 
-type Inspection = z.infer<typeof showSchema>;
-
 /**
  * How a request with thinking off is sent:
  * - `think-false`: the template honors it (false among Ollama's values, or no values reported
@@ -549,7 +547,7 @@ export class OllamaLocal {
       ...(capabilities?.includes('thinking')
         ? {
             thinkingToggle: true,
-            ...(thinkingOffMode(inspection) === 'always-thinks' ? { thinkingAlwaysOn: true } : {}),
+            ...(thinkingOffMode(known) === 'always-thinks' ? { thinkingAlwaysOn: true } : {}),
           }
         : {}),
     };
