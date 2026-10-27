@@ -41036,7 +41036,7 @@
             }
           },
           "422": {
-            "description": "A query value is out of range, or `cursor` is malformed.",
+            "description": "A query value is out of range, or `cursor` is malformed or was issued for a different `limit`.",
             "content": {
               "application/json": {
                 "schema": {

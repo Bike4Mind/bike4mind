@@ -548,6 +548,24 @@ describe('publishToMarket', () => {
     expect(a.post).toHaveBeenCalledWith('/api/v1/skills/market/listings', { skill_id: 's1', visibility: 'unlisted' });
   });
 
+  it('reports an unchanged re-publish as up to date', async () => {
+    const a = api([listing('approved')]);
+    a.post.mockRejectedValue({
+      response: { status: 400, data: { error: 'This exact content is already live or waiting for review' } },
+    });
+    const lines: string[] = [];
+    await publishToMarket('s1', { visibility: 'public' }, a as never, l => lines.push(l));
+    expect(lines).toEqual(['Listing "my-skill" is already up to date']);
+  });
+
+  it('still fails on any other 400 from the versions endpoint', async () => {
+    const a = api([listing('approved')]);
+    a.post.mockRejectedValue({ response: { status: 400, data: { error: 'Skill has no content' } } });
+    await expect(publishToMarket('s1', { visibility: 'public' }, a as never, () => {})).rejects.toThrow(
+      'Publishing to the Skill Market failed: Skill has no content'
+    );
+  });
+
   it("surfaces the server's refusal", async () => {
     const a = api([]);
     a.post.mockRejectedValue({ response: { status: 403, data: { error: 'The API key lacks skills:write' } } });

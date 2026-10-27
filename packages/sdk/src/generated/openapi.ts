@@ -17465,7 +17465,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description A query value is out of range, or `cursor` is malformed. */
+      /** @description A query value is out of range, or `cursor` is malformed or was issued for a different `limit`. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

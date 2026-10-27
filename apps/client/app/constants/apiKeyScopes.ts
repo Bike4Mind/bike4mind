@@ -227,7 +227,7 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.SKILLS_WRITE,
     label: 'Skill Market: Write',
     description:
-      'Publish your skills to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings',
+      'Publish your skills to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings. Unlike skills:read, it is not confined: it also reaches API routes that declare no scope',
     endpoints: [
       'GET|POST /api/v1/skills/market/listings',
       'GET /api/v1/skills/market/listings/mine',

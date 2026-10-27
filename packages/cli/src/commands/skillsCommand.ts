@@ -265,10 +265,20 @@ export async function publishToMarket(
     const live = data.find(l => l.status !== 'withdrawn' && l.status !== 'delisted');
     const tags = opts.tags ? { tags: opts.tags } : {};
     if (live) {
-      const { version } = await api.post<SkillMarketSubmitResponse>(
-        `/api/v1/skills/market/listings/${live.id}/versions`,
-        tags
-      );
+      let version: SkillMarketSubmitResponse['version'];
+      try {
+        ({ version } = await api.post<SkillMarketSubmitResponse>(
+          `/api/v1/skills/market/listings/${live.id}/versions`,
+          tags
+        ));
+      } catch (error) {
+        const status = (error as { response?: { status?: number } }).response?.status;
+        if (status === 400 && serverMessage(error).includes('already live or waiting for review')) {
+          log(`Listing "${live.name}" is already up to date`);
+          return;
+        }
+        throw error;
+      }
       log(`Submitted version ${version.version} of listing "${live.name}": ${describeVersion(version)}`);
       return;
     }
