@@ -608,11 +608,11 @@ describe('HuggingFaceHub Ollama refs', () => {
       return elapsed;
     };
     await plan(500);
-    // 4x the files costs about 4x linear and 16x quadratic; best of three damps CI noise.
+    // 8x the files costs about 8x linear and 64x quadratic; best of three damps CI noise.
     const small = Math.min(await plan(1000), await plan(1000), await plan(1000));
-    const large = Math.min(await plan(4000), await plan(4000));
-    expect(large / small).toBeLessThan(10);
-  }, 120_000);
+    const large = Math.min(await plan(8000), await plan(8000));
+    expect(large / small).toBeLessThan(32);
+  }, 180_000);
 
   it('answers null for a 404 manifest', async () => {
     const repo = 'someone/model-GGUF';
