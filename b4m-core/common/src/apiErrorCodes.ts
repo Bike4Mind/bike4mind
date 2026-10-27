@@ -6,6 +6,7 @@ export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mi
 export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
 export const TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE = 'token_rate_limit_exceeded';
 export const CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE = 'concurrency_limit_exceeded';
+export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -34,6 +35,8 @@ export const API_ERROR_CODES = [
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */
   'spend_cap_exceeded',
+  /** A free-tier user spent their daily credit allowance; remediation is waiting for UTC midnight or upgrading. */
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   /** WE have no usable key for the provider. Do not confuse with the next one. */
   'provider_not_configured',
   /** The provider REFUSED the key we sent. */

@@ -1,4 +1,5 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
 import {
   CliCompletionRequestAction,
@@ -163,6 +164,15 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   try {
+    // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
+    await checkFreeTierDailySpendCap({
+      userId,
+      userRepository,
+      billingOrganizationId: apiKeyInfo?.organizationId,
+      usageEventRepository,
+      logger,
+    });
+
     // Execute completion - same function as SSE handler
     // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
     await executeCompletion({

@@ -17,6 +17,7 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
 const {
+  mockCheckFreeTierDailySpendCap,
   mockValidate,
   mockUserFindById,
   mockUserUpdate,
@@ -29,6 +30,7 @@ const {
   mockOrgFindAccessibleById,
   mockOrgFindById,
 } = vi.hoisted(() => ({
+  mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
   mockUserUpdate: vi.fn(),
@@ -50,6 +52,10 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Remaining-Day': '999',
   'X-RateLimit-Reset-Day': '0',
 };
+
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
+}));
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
   applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
@@ -224,6 +230,27 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       session: { id: 'sess-1', name: 'Test Session' },
     });
     mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+  });
+
+  it('returns the daily cap response before creating a session or dispatching a quest', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: 'daily_free_limit_reached',
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = fire({ body: { sessionId: undefined, sessionName: 'New notebook' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'daily_free_limit_reached' });
+    expect(res.getHeader('Retry-After')).toBe('3600');
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ user: req.user, req, billingOrganizationId: null })
+    );
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 
   it('rejects a key lacking ai:chat (403) before dispatching any billed completion', async () => {
@@ -491,6 +518,10 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(mockInvoke.mock.calls[0][0].body.organizationId).toBe(KEY_ORG);
       expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
+      expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+        expect.objectContaining({ user: req.user, req, billingOrganizationId: KEY_ORG })
+      );
+      expect(mockCheckFreeTierDailySpendCap.mock.calls[0][0].req).toBe(req);
     });
 
     it("accepts the key's own org in the body", async () => {

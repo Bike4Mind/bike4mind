@@ -14,6 +14,10 @@ import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
+}));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@server/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
@@ -34,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: {},
   organizationRepository: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue(null) },
@@ -397,4 +401,25 @@ it('answers a retryable server error when the live JWT access check is unavailab
   expect(response.headers.get('retry-after')).toBe('5');
   expect(await response.json()).toEqual({ error: 'Authentication temporarily unavailable' });
   expect(executeCompletion).not.toHaveBeenCalled();
+});
+
+describe('daily cap billing target', () => {
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      organizationId,
+    } as never);
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', billingOrganizationId: organizationId })
+    );
+    expect(executeCompletion).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: organizationId }));
+  });
 });

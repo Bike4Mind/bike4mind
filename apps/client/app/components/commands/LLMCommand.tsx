@@ -19,7 +19,7 @@ import { toast } from 'sonner';
 import { QueryClient } from '@tanstack/react-query';
 import perfLogger from '../../utils/performanceLogger';
 import { CommandArgExtra } from '@client/app/utils/commands';
-import { classifyQueryComplexity } from '@bike4mind/common';
+import { classifyQueryComplexity, DAILY_FREE_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
 import { createOptimisticSessionId } from '@client/app/utils/llm';
 import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { blankRapidReplies, terminalQuests } from '@client/app/hooks/chatCompletionState';
@@ -393,6 +393,8 @@ export async function handleLLMCommand(
         toast.error(i18n.t('session.errors.noPermission'));
       } else if (status === 400) {
         toast.error(i18n.t('session.errors.invalidRequest'));
+      } else if (status === 429 && error.response?.data?.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE) {
+        toast.error(i18n.t('session.errors.dailyFreeLimitReached'));
       } else if (status === 429) {
         toast.error(i18n.t('session.errors.tooManyRequests'));
       } else if (status && status >= 500) {

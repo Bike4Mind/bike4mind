@@ -30,6 +30,7 @@ import {
   projectRepository,
   questRepository,
   sessionRepository,
+  usageEventRepository,
   User,
   Session,
 } from '@bike4mind/database';
@@ -57,6 +58,7 @@ import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -172,6 +174,15 @@ async function handleChat(req: ChatRequest, res: Response) {
   // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
   // is what lets an org member whose org pool is empty still spend their own credits.
   const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
+
+  // Refuse capped turns before creating a notebook or quest.
+  await checkFreeTierDailySpendCap({
+    user: req.user,
+    req,
+    billingOrganizationId: organizationId,
+    usageEventRepository,
+    logger: req.logger,
+  });
 
   // Resolve the notebook only AFTER the org check: an API-key/newConversation caller gets a
   // freshly created notebook, and a request that resolveActiveOrg rejects (403/404) must not have

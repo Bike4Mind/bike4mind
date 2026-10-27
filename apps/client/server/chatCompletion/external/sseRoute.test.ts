@@ -12,6 +12,8 @@ import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 // these tests parse frames against). Only the seams below are mocked.
 const mockLoggerError = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@server/billing/freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap }));
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
 vi.mock('@server/utils/apiKeyAccessGate', async () => {
@@ -74,7 +76,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: { record: vi.fn() },
   organizationRepository: {},
   cacheRepository: {},
@@ -131,6 +133,7 @@ import {
   BadRequestError,
   CompletionStreamEventSchema,
   createCompletionContract,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   ForbiddenError,
   HTTPError,
   InsufficientCreditsErrorSchema,
@@ -307,6 +310,20 @@ describe('JWT rate limiting', () => {
     const body = await expectJsonError(res, 429);
     expect(res.headers.get('retry-after')).toBe('900');
     expect(String(body.error)).toMatch(/^Rate limit exceeded/);
+  });
+
+  it('answers a free-tier daily cap refusal with 429, Retry-After and its errorCode, not a 422', async () => {
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free usage limit reached.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const res = await post();
+    const body = await expectJsonError(res, 429);
+    expect(res.headers.get('retry-after')).toBe('3600');
+    expect(body.errorCode).toBe(DAILY_FREE_LIMIT_REACHED_ERROR_CODE);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });
 
@@ -1194,5 +1211,26 @@ describe('POST /api/ai/v1/completions - untrusted owner quotas', () => {
     expect(body.errorCode).toBe('token_rate_limit_exceeded');
     expect(res.headers.get('retry-after')).toBe('12');
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('daily cap billing target', () => {
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT], organizationId },
+    });
+
+    const response = await post();
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', billingOrganizationId: organizationId })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { userRepository } from '@bike4mind/database';
+import { usageEventRepository, userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
   LLMApiRequestBody,
@@ -13,6 +13,7 @@ import { getOrCreateSession } from '@server/managers/sessionManager';
 import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
+import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -88,6 +89,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // API key always bills its own org, as on the v1 media routes; naming another is a 403.
     const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
 
+    // Refuse a capped free-tier turn here, as a 429, rather than letting the quest worker settle it.
+    await checkFreeTierDailySpendCap({
+      user: req.user,
+      req,
+      billingOrganizationId: effectiveOrgId,
+      usageEventRepository,
+      logger: req.logger,
+    });
     // The turn is queued and finishes elsewhere, so only the token quota applies here.
     await admitRequestCompletion(req, { holdSlot: false });
 

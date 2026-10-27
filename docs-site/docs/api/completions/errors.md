@@ -37,6 +37,18 @@ Branch on the HTTP status and `errorCode` (JSON), or on the event's `code` (stre
 
 Top up before retrying; the same request fails again until the balance or cap changes.
 
+## Daily free-tier limit
+
+HTTP 429 with `errorCode: "daily_free_limit_reached"` means your personal spending has reached
+the free-tier daily allowance. Wait the `Retry-After` number of seconds before sending another
+request; the allowance resets at midnight UTC. A positive credit balance does not override this
+limit, and an immediate retry or a balance top-up alone does not reset it.
+
+If you expected organization billing, check that the request or API key selects the intended
+organization. Organization-billed turns are exempt from this personal limit. The limits are
+deployment settings, so contact your deployment administrator if the allowance differs from the
+[defaults](./reference.md#free-tier-daily-allowance).
+
 ## Stream error codes
 
 | `code` | Meaning | Retry? |
