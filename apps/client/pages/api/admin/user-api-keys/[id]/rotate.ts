@@ -1,4 +1,11 @@
-import { adminRotateApiKeyResponseSchema, ApiKeyStatus, ConflictError, ForbiddenError } from '@bike4mind/common';
+import {
+  adminRotateApiKeyResponseSchema,
+  ApiKeyScope,
+  ApiKeyStatus,
+  ConflictError,
+  ForbiddenError,
+  type IUserApiKeyDocument,
+} from '@bike4mind/common';
 import { organizationRepository, realtimeConnectionRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
@@ -17,6 +24,20 @@ import { respond } from '@server/utils/respond';
  * (an admin action), so a gated owner can hold a rotated key that is still refused at use. The
  * secret never reaches the audit row or the logs.
  */
+
+// Must stay in sync with the admin mint route (users/[userId]/generate-api-key.ts): these scopes only
+// come through their own dedicated flows, so an admin must not obtain a working secret for one here.
+const ROTATION_REFUSED_SCOPES: ReadonlySet<string> = new Set([ApiKeyScope.ADMIN, ApiKeyScope.CC_BRIDGE]);
+
+function assertRotatable(key: IUserApiKeyDocument): void {
+  if (key.status !== ApiKeyStatus.ACTIVE) throw new ConflictError('Only an active API key can be rotated');
+  if (key.expiresAt && key.expiresAt.getTime() <= Date.now()) {
+    throw new ConflictError('API key has expired and cannot be rotated');
+  }
+  if (key.scopes?.some(scope => ROTATION_REFUSED_SCOPES.has(scope))) {
+    throw new ForbiddenError('Keys with the admin or bridge scope cannot be rotated by an admin');
+  }
+}
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .post(async (req, res) => {
@@ -25,14 +46,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const reason = parseAdminActionReason(req.body?.reason);
 
     const key = await loadApiKeyOrThrow(keyId);
-    if (key.status !== ApiKeyStatus.ACTIVE) throw new ConflictError('Only an active API key can be rotated');
-    if (key.expiresAt && key.expiresAt.getTime() <= Date.now()) {
-      throw new ConflictError('API key has expired and cannot be rotated');
-    }
+    assertRotatable(key);
 
     const target = await ownerAuditTarget(key.userId);
     const previous = auditKeyRef(key);
     const rotated = await withTransaction(async () => {
+      // Re-read under the transaction so a revoke that committed since the check above is refused.
+      assertRotatable(await loadApiKeyOrThrow(keyId));
       const result = await userApiKeyService.rotateUserApiKey(
         key.userId,
         { keyId: key.id },

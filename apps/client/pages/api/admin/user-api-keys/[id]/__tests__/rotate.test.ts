@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyStatus, BadRequestError, ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyStatus,
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
@@ -101,6 +108,21 @@ describe('POST /api/admin/user-api-keys/[id]/rotate', () => {
   ])('409s for a %s key', async (_name, overrides) => {
     h.findKey.mockResolvedValue(activeKey(overrides));
     await expect(h.handler!(request(), response())).rejects.toBeInstanceOf(ConflictError);
+    expect(h.rotate).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it.each([ApiKeyScope.ADMIN, ApiKeyScope.CC_BRIDGE])('refuses a key holding the %s scope', async scope => {
+    h.findKey.mockResolvedValue(activeKey({ scopes: [ApiKeyScope.AI_CHAT, scope] }));
+    await expect(h.handler!(request(), response())).rejects.toBeInstanceOf(ForbiddenError);
+    expect(h.withTransaction).not.toHaveBeenCalled();
+    expect(h.rotate).not.toHaveBeenCalled();
+  });
+
+  it('re-checks the key inside the transaction and refuses one revoked since the first read', async () => {
+    h.findKey.mockResolvedValueOnce(activeKey()).mockResolvedValueOnce(activeKey({ status: ApiKeyStatus.DISABLED }));
+    await expect(h.handler!(request(), response())).rejects.toBeInstanceOf(ConflictError);
+    expect(h.findKey).toHaveBeenCalledTimes(2);
     expect(h.rotate).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
   });

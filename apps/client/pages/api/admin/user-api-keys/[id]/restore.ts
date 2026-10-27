@@ -1,6 +1,7 @@
 import { ADMIN_API_KEY_RESTORE_WINDOW_MINUTES, ApiKeyStatus, ConflictError, ForbiddenError } from '@bike4mind/common';
-import { withTransaction } from '@bike4mind/database';
+import { userRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -12,7 +13,8 @@ import { auditKeyRef, loadApiKeyOrThrow, ownerAuditTarget, readApiKeyIdParam } f
  * Backs the Undo of an admin revoke. Allowed only for the admin who revoked the key, within
  * ADMIN_API_KEY_RESTORE_WINDOW_MINUTES, and while the key has not expired. The same conditions ride
  * the write itself, so two concurrent restores cannot both succeed. The subscription gate is not
- * re-run: restoring returns the user to where they were.
+ * re-run: restoring returns the user to where they were. A blocked owner is refused, because a block
+ * deactivates keys and lifting it must not bring any back (see userService/adminUpdate.ts).
  */
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
@@ -37,6 +39,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
     if (key.expiresAt && key.expiresAt.getTime() <= now) {
       throw new ConflictError('API key has expired and cannot be restored');
+    }
+
+    const owner = await userRepository.findById(key.userId);
+    if (owner && userService.accountBlockReasons(owner).length > 0) {
+      throw new ConflictError('The key owner is blocked, so this key cannot be restored');
     }
 
     const target = await ownerAuditTarget(key.userId);

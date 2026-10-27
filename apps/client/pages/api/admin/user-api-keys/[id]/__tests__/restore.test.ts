@@ -40,7 +40,16 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/auth', () => ({
   userApiKeyRepository: { findById: h.findKey, restoreRevoked: h.restore },
 }));
-vi.mock('@bike4mind/services', () => ({ authSessionService: { endRealtimeConnections: vi.fn() } }));
+vi.mock('@bike4mind/services', () => ({
+  authSessionService: { endRealtimeConnections: vi.fn() },
+  // A stand-in for the real predicate: one flag per block reason is all these cases need.
+  userService: {
+    accountBlockReasons: (user: { isBanned?: boolean; disputePending?: boolean }) => [
+      ...(user.isBanned ? ['banned'] : []),
+      ...(user.disputePending ? ['disputePending'] : []),
+    ],
+  },
+}));
 vi.mock('@server/utils/adminAudit', async () => {
   const { BadRequestError: BadRequest } = await import('@bike4mind/common');
   return {
@@ -109,6 +118,16 @@ describe('POST /api/admin/user-api-keys/[id]/restore', () => {
     ['the key has expired', { expiresAt: minutesAgo(1) }],
   ])('409s when %s', async (_name, overrides) => {
     h.findKey.mockResolvedValue(revokedKey(overrides));
+    await expect(h.handler!(request(), response())).rejects.toBeInstanceOf(ConflictError);
+    expect(h.restore).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['banned', { isBanned: true }],
+    ['under a payment dispute', { disputePending: true }],
+  ])('409s when the owner is %s, so lifting the block later cannot revive the key', async (_name, block) => {
+    h.findUser.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com', ...block });
     await expect(h.handler!(request(), response())).rejects.toBeInstanceOf(ConflictError);
     expect(h.restore).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
