@@ -36,9 +36,11 @@ import {
 } from '@bike4mind/database';
 import {
   B4MLLMTools,
+  BadGatewayError,
   chatContract,
   filterKnownTools,
   GatewayTimeoutError,
+  OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
   questReplyText,
   toToolPayloads,
@@ -381,6 +383,22 @@ async function handleChat(
       // A deadline we enforce on purpose, not a server fault: errorHandler logs it at warn.
       timeoutError.expected = true;
       throw timeoutError;
+    }
+
+    // A reasoning model spent its whole output budget: process() settled the quest as an error
+    // without rethrowing. Who chose the budget decides the status - the caller (422) or us (502).
+    if (processService.terminalError) {
+      const details = { quest_id: quest.id, sessionId };
+      const budgetError =
+        internalRequest.params.max_tokens !== undefined
+          ? new UnprocessableEntityError(
+              'The model used its whole max_tokens budget reasoning before it could answer. Raise max_tokens, or omit it to use the model default.',
+              { errorCode: OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE, ...details }
+            )
+          : new BadGatewayError('The model used its whole output budget reasoning before it could answer.', details);
+      // An expected, classified failure rather than a server fault: errorHandler logs it at warn.
+      budgetError.expected = true;
+      throw budgetError;
     }
 
     // Use the in-memory quest directly - process() mutates it in place with

@@ -161,6 +161,7 @@ re-deciding per endpoint:
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| A reasoning model spent the caller's own `max_tokens` thinking and produced no answer (a server-chosen budget is a plain `502`) | `422` | `output_budget_exhausted` |
 | Free-tier daily credit allowance used up (`Retry-After` is the next UTC midnight) | `429` | `daily_free_limit_reached` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
@@ -290,7 +291,8 @@ are published wire shapes, so what had to be shared was the vocabulary, not the 
 
 `/api/ai/v1/completions` classifies its frame with `COMPLETION_SSE_ERROR_CODES`: the billing
 codes plus `provider_rejected` (the provider refused our credentials), `content_blocked` (the
-model's safety classifier declined the request) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
+model's safety classifier declined the request), `output_budget_exhausted` (a reasoning model spent the
+caller's whole `max_tokens` thinking; unchanged retries fail the same way) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
 reaches the client.
 
 The pairing a caller needs is worth stating in the contract `description`: `/api/chat`,

@@ -51,8 +51,8 @@ export function createGitHubStrategy(
   // extend another class - so it wrongly demands the passReqToCallback:true
   // signature and rejects this valid StrategyOptions call. Classic tsc resolves
   // the overloads correctly. Cast around the RC's faulty overload resolution;
-  // runtime is unchanged (passReqToCallback defaults to false, so verify receives
-  // (accessToken, refreshToken, profile, done)). See typecheck-report.md.
+  // runtime is unchanged: passport-oauth2 still picks the verify signature from the
+  // options' passReqToCallback and the verify's arity. See typecheck-report.md.
   const strategy = new (
     GitHubStrategy as unknown as new (
       options: Record<string, unknown>,

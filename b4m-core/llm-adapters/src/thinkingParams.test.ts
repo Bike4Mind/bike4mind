@@ -418,6 +418,16 @@ describe('resolveOutputMaxTokens', () => {
       expect(resolve(2048, kimiThinking)).toBe(2048);
     });
 
+    it.each([
+      ChatModels.KIMI_K2_5,
+      ChatModels.KIMI_K2_6,
+      ChatModels.KIMI_K2_7_CODE,
+      ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+    ])('defaults direct %s to the reasoning floor, not the 4096 fallback', id => {
+      const model: ModelInfo = { ...kimiThinking, id, name: id, max_tokens: 131_072 };
+      expect(resolve(undefined, model)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
     it('leaves a non-listed model on the fallback', () => {
       expect(resolve(undefined, legacyModel)).toBe(4096);
     });

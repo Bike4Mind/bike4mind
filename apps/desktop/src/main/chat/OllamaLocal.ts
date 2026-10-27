@@ -23,6 +23,7 @@ import {
   type OllamaMessage,
 } from './localContext';
 import type { CompletionStreamEvent } from './streamEvents';
+import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 
 export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -32,6 +33,7 @@ const TURN_INSPECT_TIMEOUT_MS = 10_000;
 const INSPECT_RETRY_MS = 5_000;
 const INSPECT_RETRY_MAX_MS = 300_000;
 const MAX_TRIM_RETRIES = 3;
+const REASONING_ALLOWANCE_TOKENS = 2048;
 const EMPTY_REPLY_RETRIES = 1;
 const remoteFields = { remote_host: z.string().optional(), remote_model: z.string().optional() };
 const tagsSchema = z.object({
@@ -43,6 +45,12 @@ const showSchema = z.object({
   capabilities: z.array(z.string()),
   model_info: z.record(z.string(), z.unknown()).nullable().optional(),
   parameters: z.string().optional(),
+  template: z.string().optional().catch(undefined),
+  /** The `think` values the model honors (booleans or effort names); absent when Ollama does not know. */
+  thinking: z
+    .object({ values: z.array(z.unknown()) })
+    .optional()
+    .catch(undefined),
   ...remoteFields,
 });
 
@@ -56,6 +64,87 @@ async function ollamaError(response: Response): Promise<Error> {
 
 function usesRemoteModel(model: { remote_host?: string; remote_model?: string }): boolean {
   return !!(model.remote_host?.trim() || model.remote_model?.trim());
+}
+
+/**
+ * How a request with thinking off is sent:
+ * - `think-false`: the template honors it (false among Ollama's values, or no values reported
+ *   and no hard-coded opener).
+ * - `no-think-switch`: Qwen3's documented soft switch on the user turn, `think` left out.
+ * - `lowest-effort`: an effort-only model (gpt-oss) gets its lowest level.
+ * - `always-thinks`: Off cannot take effect; `think` is left out so Ollama still splits the
+ *   reasoning from the reply (think:false would turn that parser off and leak it).
+ */
+type ThinkingOffMode = 'think-false' | 'no-think-switch' | 'lowest-effort' | 'always-thinks';
+
+function thinkingOffMode(inspection: Inspection): ThinkingOffMode {
+  const values = inspection.thinking?.values;
+  if (!values) return opensThinkBlock(inspection.template) ? 'always-thinks' : 'think-false';
+  if (values.includes(false)) return 'think-false';
+  if (isLegacyQwen3Hybrid(inspection, values)) return 'no-think-switch';
+  return values.some(value => typeof value === 'string') ? 'lowest-effort' : 'always-thinks';
+}
+
+/**
+ * Whether the generation prompt ends in a literal `<think>` with no branch that turns it off,
+ * Go (`.Think`) or Jinja (`enable_thinking`). Ollama reports no `thinking` values for most such
+ * templates, only for the few it recognizes by digest.
+ */
+function opensThinkBlock(template: string | undefined): boolean {
+  if (!template || /\.Think\b|enable_thinking/.test(template)) return false;
+  return /<think>(?:\s|\\n|['"+])*(?:-?\}\}\s*)?\{[{%]-?\s*end(?:if)?\b/.test(template);
+}
+
+/**
+ * The hybrid Qwen3 release under Ollama's older Qwen3 template (values exactly [true]); it obeys
+ * `/no_think`. Thinking-2507, R1-Qwen3 and Coder share the architecture but not this template.
+ */
+function isLegacyQwen3Hybrid(inspection: Inspection, values: unknown[]): boolean {
+  const architecture = inspection.model_info?.['general.architecture'];
+  return (architecture === 'qwen3' || architecture === 'qwen3moe') && values.length === 1 && values[0] === true;
+}
+
+/** On the last user prompt only, so switching thinking mid-conversation changes just the tail. */
+function withNoThinkSwitch(messages: OllamaMessage[]): OllamaMessage[] {
+  const prompts = messages.flatMap((message, index) =>
+    message.role === 'user' && !message.continuesTurn ? [index] : []
+  );
+  const last = prompts.at(-1) ?? messages.findLastIndex(message => message.role === 'user');
+  return messages.map((message, index) =>
+    index === last ? { ...message, content: message.content ? `${message.content} /no_think` : '/no_think' } : message
+  );
+}
+
+function thinkField(inspection: Inspection, thinking: boolean | undefined): { think?: boolean | string } {
+  if (thinking === undefined || !inspection.capabilities.includes('thinking')) return {};
+  if (thinking) return { think: true };
+  switch (thinkingOffMode(inspection)) {
+    case 'think-false':
+      return { think: false };
+    case 'lowest-effort':
+      return { think: inspection.thinking?.values.find(value => typeof value === 'string') as string };
+    default:
+      return {};
+  }
+}
+
+/**
+ * For a template that prefills `<think>` but that Ollama runs no reasoning parser for (no
+ * thinking capability), splits the raw reply so the reasoning never reaches the answer.
+ */
+function splitPrefilledReasoning(onEvent: (event: CompletionStreamEvent) => void): typeof onEvent {
+  const filter = createThinkFilter({ startInReasoning: true });
+  const forward = ({ text, reasoning }: ThinkSplit) => {
+    // A literal opener in the reasoning would otherwise nest and hide the reply downstream.
+    if (reasoning) onEvent({ type: 'content', text: `<think>${reasoning.replaceAll('<think>', '')}</think>` });
+    if (text) onEvent({ type: 'content', text });
+  };
+  // emitFrame sends reply text on events of its own, apart from usage and the stop reason.
+  return event => {
+    if (event.type === 'content' && event.text) return forward(filter.push(event.text));
+    if (event.type === 'content' && event.stopReason !== undefined) forward(filter.flush());
+    onEvent(event);
+  };
 }
 
 const CHAT_URL = `${OLLAMA_URL}/api/chat` as const;
@@ -168,7 +257,19 @@ export class OllamaLocal {
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
     knownInspections.set(model, inspection);
     let numCtx = await this.resolveContext(request.model, inspection);
-    const messages = toMessages(request.messages);
+    const canThink = inspection.capabilities.includes('thinking');
+    const prefilled = !canThink && opensThinkBlock(inspection.template);
+    const offMode = canThink ? thinkingOffMode(inspection) : undefined;
+    // A short budget (titles, suggestions) is meant for the answer; reasoning the model does
+    // anyway would otherwise use it all up and leave the answer empty.
+    const reasonsAnyway =
+      prefilled || (request.thinking === false && (offMode === 'always-thinks' || offMode === 'lowest-effort'));
+    const maxTokens =
+      request.maxTokens && reasonsAnyway ? request.maxTokens + REASONING_ALLOWANCE_TOKENS : request.maxTokens;
+    const messages =
+      request.thinking === false && offMode === 'no-think-switch'
+        ? withNoThinkSwitch(toMessages(request.messages))
+        : toMessages(request.messages);
     // Ollama refuses tools for a model without the capability; the list may not have known it yet.
     const tools = inspection.capabilities.includes('tools')
       ? (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }))
@@ -189,12 +290,10 @@ export class OllamaLocal {
           // reply stops at num_ctx instead, as done_reason 'length' (a visible max_tokens stop).
           truncate: false,
           shift: false,
-          ...(request.thinking !== undefined && inspection.capabilities.includes('thinking')
-            ? { think: request.thinking }
-            : {}),
+          ...thinkField(inspection, request.thinking),
           options: {
             num_ctx: numCtx,
-            ...(request.maxTokens ? { num_predict: request.maxTokens } : {}),
+            ...(maxTokens ? { num_predict: maxTokens } : {}),
           },
           ...(tools.length > 0 ? { tools } : {}),
         }),
@@ -237,7 +336,7 @@ export class OllamaLocal {
     for (let retry = 0; measured !== undefined; retry++) {
       numCtx = contextByModel.get(request.model) ?? numCtx;
       // Rescaled from each refusal: the dropped turns need not be as token-dense as the kept ones.
-      const fit = fitToContext(sent, tools, numCtx, request.maxTokens, (1.1 * measured) / estimateTokens(sent, tools));
+      const fit = fitToContext(sent, tools, numCtx, maxTokens, (1.1 * measured) / estimateTokens(sent, tools));
       if (fit.dropped === 0)
         throw new ContextOverflowError(
           `This turn and Desktop's instructions take ${measured} tokens, more than the ${numCtx} this model is run with.${hint}`,
@@ -272,7 +371,9 @@ export class OllamaLocal {
     // Small models sometimes end their turn before saying anything; that is asked again once, then reported.
     let body = response.body;
     for (let attempt = 0; ; attempt++) {
-      if (await readReply(body, report)) return;
+      // A fresh splitter per attempt: its state must not carry over from an abandoned reply.
+      const sink = prefilled ? splitPrefilledReasoning(report) : report;
+      if (await readReply(body, sink)) return;
       if (attempt === EMPTY_REPLY_RETRIES)
         throw new Error(
           `${model} ended its reply without writing anything. Send the message again or pick a larger model.`
@@ -443,7 +544,12 @@ export class OllamaLocal {
         ? { supportsTools: capabilities.includes('tools'), supportsVision: capabilities.includes('vision') }
         : {}),
       contextWindow,
-      ...(capabilities?.includes('thinking') ? { thinkingToggle: true } : {}),
+      ...(capabilities?.includes('thinking')
+        ? {
+            thinkingToggle: true,
+            ...(thinkingOffMode(known) === 'always-thinks' ? { thinkingAlwaysOn: true } : {}),
+          }
+        : {}),
     };
   }
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Permission, ProjectEvents } from '@bike4mind/common';
+import { Permission, ProjectEvents, projectResponseSchema } from '@bike4mind/common';
 import { fabFileRepository, Project, projectRepository, sessionRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -13,6 +13,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { HTTPError } from '@bike4mind/common';
 import { InternalServerError, UnprocessableEntityError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
+import { respond } from '@server/utils/respond';
 
 const createProjectBodySchema = z.object({
   name: z.string().min(1),
@@ -104,7 +105,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         );
       }
 
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     } catch (error) {
       // A typed error from the service already carries the right status - createProject raises
       // BadRequestError when a supplied file or session does not resolve through the caller's
