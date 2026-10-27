@@ -41,14 +41,14 @@ done < "$ALLOWLIST"
 
 entry_matches() {
   case "$1" in
-    're:'*) [[ "$2" =~ ^${1#re:}$ ]] ;;
+    're:'*) [[ "$2" =~ ^(${1#re:})$ ]] ;;
     *) [ "$1" = "$2" ] ;;
   esac
 }
 
 allowed() {
   local p
-  for p in "${patterns[@]}"; do
+  for p in ${patterns[@]+"${patterns[@]}"}; do
     entry_matches "$p" "$1" && return 0
   done
   return 1
@@ -62,7 +62,7 @@ while IFS= read -r path; do
 done <<< "$matches"
 
 stale=""
-for p in "${patterns[@]}"; do
+for p in ${patterns[@]+"${patterns[@]}"}; do
   hit=0
   while IFS= read -r path; do
     entry_matches "$p" "$path" && { hit=1; break; }
