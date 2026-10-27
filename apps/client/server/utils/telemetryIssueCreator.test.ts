@@ -340,10 +340,7 @@ describe('createTelemetryIssue', () => {
       logger: createMockLogger(),
     });
 
-    expect(vi.mocked(Quest.updateOne)).toHaveBeenCalledWith(
-      { _id: '507f1f77bcf86cd799439011' },
-      expect.anything()
-    );
+    expect(vi.mocked(Quest.updateOne)).toHaveBeenCalledWith({ _id: '507f1f77bcf86cd799439011' }, expect.anything());
   });
 
   it('creates issue with rule-based analysis when no LLM configured (manual path)', async () => {
