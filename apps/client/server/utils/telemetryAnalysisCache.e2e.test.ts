@@ -55,10 +55,4 @@ describe('cacheTelemetryAnalysisOnQuest', () => {
     await seedQuest();
     await expect(cacheTelemetryAnalysisOnQuest('not-an-id', cached)).resolves.toBeNull();
   });
-
-  it('pins why the old filter never wrote: a requestId filter matches no quest', async () => {
-    const quest = await seedQuest();
-    const result = await Quest.updateOne({ requestId: String(quest._id) } as never, { $set: { prompt: 'x' } });
-    expect(result.matchedCount).toBe(0);
-  });
 });

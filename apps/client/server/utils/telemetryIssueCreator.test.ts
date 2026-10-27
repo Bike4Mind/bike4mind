@@ -343,6 +343,27 @@ describe('createTelemetryIssue', () => {
     expect(vi.mocked(Quest.updateOne)).toHaveBeenCalledWith({ _id: '507f1f77bcf86cd799439011' }, expect.anything());
   });
 
+  it('skips the quest cache write when questId is not an ObjectId', async () => {
+    vi.mocked(Quest.updateOne).mockClear();
+
+    await createTelemetryIssue({
+      telemetry: createTestTelemetry(),
+      repository: 'owner/repo',
+      sourcePrefix: 'auto',
+      skipDedup: true,
+      precomputedDedup: { isRegression: false },
+      precomputedAnalysis: {
+        analysis: { summary: 'test', findings: ['f1'], recommendations: ['r1'], estimatedImpact: 'low' },
+        source: 'auto-llm',
+        baselines: null,
+      },
+      questId: 'not-an-id',
+      logger: createMockLogger(),
+    });
+
+    expect(vi.mocked(Quest.updateOne)).not.toHaveBeenCalled();
+  });
+
   it('creates issue with rule-based analysis when no LLM configured (manual path)', async () => {
     const result = await createTelemetryIssue({
       telemetry: createTestTelemetry(),
