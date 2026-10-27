@@ -14,7 +14,6 @@ import { protectSignupCredits } from './signupProtection';
 
 type GrantAdapters = FreeCreditAdapters & {
   audit?: (input: { userId: string; credits: number; creditTransactionId?: string }) => Promise<void>;
-  collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
 };
 
 /** `unlockedOrgId` releases the full remainder and records the org that vouched for the account. */

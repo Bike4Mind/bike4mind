@@ -137,6 +137,9 @@ export enum ApiKeyScope {
    * up in plaintext in `~/.claude/settings.json`, so it reaches only those read-only routes, each of
    * which serves just what the key's owner can already see. Minted from the Skill Market's "Use in
    * Claude Code" dialog.
+   * Not bound to an org: membership is re-checked on every request (`memberOrgIdsFor` in
+   * apps/client/server/skillMarket/market.ts), so a member who leaves or is removed loses that org's
+   * feed and zips while the key stays valid for their other orgs.
    */
   SKILLS_READ = 'skills:read',
   /**

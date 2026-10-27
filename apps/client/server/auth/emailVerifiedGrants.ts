@@ -5,11 +5,13 @@ import {
   creditTransactionRepository,
   userRepository,
 } from '@bike4mind/database';
+import type { INetworkMeta } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { applySignupDomainGrant, type SignupDomainGrantResult } from '@server/entitlements/signupDomainGrant';
 import type { SeatCeilingRaiseTrigger } from '@server/organizations/notifySeatCeilingRaised';
+import { createSignupRiskCollector } from './signupNetworkLimits';
 
 /**
  * The grants an EXISTING account earns the moment its email is proven. Every path that flips
@@ -59,12 +61,14 @@ export async function isEligibleForFreeCredits(email: string, logger: Logger): P
 
 /**
  * Release a PENDING_FREE_CREDITS_TAG grant and persist the tag removal. No-op for an untagged user.
- * On failure the tag stays for the backfillPendingFreeCredits script.
+ * On failure the tag stays for the backfillPendingFreeCredits script. `signupNetwork` is the
+ * request's network when the account is being created now; otherwise its recorded signupMeta is used.
  */
 export async function releaseVerifiedPendingFreeCredits(
   user: PendingFreeCreditUser,
   reason: string,
-  logger: Logger
+  logger: Logger,
+  signupNetwork?: INetworkMeta
 ): Promise<PendingFreeCreditReleaseResult> {
   let release: Awaited<ReturnType<typeof userService.releasePendingFreeCredits>>;
   try {
@@ -80,6 +84,7 @@ export async function releaseVerifiedPendingFreeCredits(
         },
         reason,
         logger,
+        collectRiskSignals: createSignupRiskCollector(signupNetwork),
       }
     );
   } catch (error) {

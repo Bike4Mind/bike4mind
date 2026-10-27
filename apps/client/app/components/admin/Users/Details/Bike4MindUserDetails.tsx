@@ -74,9 +74,16 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
         {user.signupGrantAssessment && (
           <Typography level="body-sm" data-testid="admin-user-grant-assessment">
             Signup assessment: {user.signupGrantAssessment.band}; {user.signupGrantAssessment.status}; policy:{' '}
-            {user.signupGrantAssessment.policyVersion ?? 'none'}
+            {user.signupGrantAssessment.policyVersion ?? 'none'}; score: {user.signupGrantAssessment.score ?? 'n/a'}
           </Typography>
         )}
+        {user.signupGrantAssessment &&
+          (user.signupGrantAssessment.reasons.length > 0 || user.signupGrantAssessment.missing.length > 0) && (
+            <Typography level="body-sm" data-testid="admin-user-grant-assessment-reasons">
+              Matched: {user.signupGrantAssessment.reasons.join(', ') || 'none'}; missing:{' '}
+              {user.signupGrantAssessment.missing.join(', ') || 'none'}
+            </Typography>
+          )}
         {user.signupGrant?.stage === 'signup' && (
           <Stack spacing={1}>
             <Textarea
@@ -165,9 +172,20 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
           </Stack>
         </Tooltip>
 
-        <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px', width: '100%' }}>
+        <Stack
+          direction="row"
+          spacing={2}
+          useFlexGap
+          flexWrap="wrap"
+          sx={{ alignItems: 'center', padding: '0px 16px 0px 8px', width: '100%' }}
+        >
           <CreditIcon />
-          <Typography data-testid="user-card-credits-balance" level="body-md" sx={{ flex: 1 }}>
+          {/* flex: 1 alone collapses to 0px under the global min-width: 0 and runs the balance under the button. */}
+          <Typography
+            data-testid="user-card-credits-balance"
+            level="body-md"
+            sx={{ flexGrow: 1, flexShrink: 0, whiteSpace: 'nowrap' }}
+          >
             {formatCredits(user.currentCredits ?? 0)}
           </Typography>
           <Button
@@ -176,6 +194,7 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
             variant="outlined"
             color="neutral"
             onClick={() => setAdjustCreditsOpen(true)}
+            sx={{ whiteSpace: 'nowrap' }}
           >
             Adjust credits
           </Button>
