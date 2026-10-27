@@ -466,6 +466,20 @@ describe('LlamaServerRuntime', () => {
     expect(await runtime.loaded()).toEqual([]);
   });
 
+  it('starts a fresh server when start is called while a stop is in progress', async () => {
+    const runtime = runtimeIn('models-restart', { stopTimeoutMs: 300 }, { FAKE_LLAMA_MODE: 'ignore-term' });
+    await runtime.store.add(modelPath, { name: 'r.gguf' });
+    const old = await runtime.start('r.gguf');
+    const stopping = runtime.stop('r.gguf');
+    const fresh = await runtime.start('r.gguf');
+    await stopping;
+    expect(fresh).not.toBe(old);
+    expect(old.running).toBe(false);
+    expect(fresh.running).toBe(true);
+    expect(await runtime.running()).toEqual([fresh]);
+    await runtime.stopAll();
+  });
+
   it('starts a fresh server after a crash and stops everything on stopAll', async () => {
     const runtime = runtimeIn('models-crash');
     await runtime.store.add(modelPath, { name: 'a.gguf' });

@@ -55,6 +55,8 @@ interface StartingEntry {
   /** Callers still waiting for the start. */
   waiting: number;
   exitListeners: ((exit: LlamaServerExit) => void)[];
+  /** Set by `stop()`; a `start()` meanwhile waits for it and starts a fresh server. */
+  stopping: Promise<void> | null;
 }
 
 interface ServerEntry extends StartingEntry {
@@ -187,15 +189,20 @@ export class LlamaServerRuntime implements LocalRuntime {
    */
   start(model: string, options: StartModelOptions = {}): Promise<LlamaServerProcess> {
     let entry = this.#servers.get(model);
-    if (!entry || (!entry.server && entry.controller.signal.aborted)) {
+    if (!entry || entry.stopping || (!entry.server && entry.controller.signal.aborted)) {
+      const stopping = entry?.stopping;
       const starting: StartingEntry = {
         controller: new AbortController(),
         server: null,
         sizeBytes: null,
         waiting: 0,
         exitListeners: [],
+        stopping: null,
       };
-      const created: ServerEntry = Object.assign(starting, { pending: this.#start(model, options, starting) });
+      const pending = stopping
+        ? stopping.then(() => this.#start(model, options, starting))
+        : this.#start(model, options, starting);
+      const created: ServerEntry = Object.assign(starting, { pending });
       this.#servers.set(model, created);
       const forget = () => {
         if (this.#servers.get(model) === created) this.#servers.delete(model);
@@ -250,10 +257,13 @@ export class LlamaServerRuntime implements LocalRuntime {
   async stop(model: string): Promise<void> {
     const entry = this.#servers.get(model);
     if (!entry) return;
-    if (!entry.server)
-      entry.controller.abort(new LocalRuntimeError(`${model} was stopped before it was ready`, this.id));
-    const server = await entry.pending.catch(() => null);
-    await server?.stop();
+    entry.stopping ??= (async () => {
+      if (!entry.server)
+        entry.controller.abort(new LocalRuntimeError(`${model} was stopped before it was ready`, this.id));
+      const server = await entry.pending.catch(() => null);
+      await server?.stop();
+    })();
+    await entry.stopping;
   }
 
   /**
