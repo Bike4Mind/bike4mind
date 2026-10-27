@@ -85,12 +85,15 @@ export async function deliverAnomalies(
     const id = `alert:${day}:${anomaly.direction}:${metricHash}`;
     const token = randomUUID();
     if (!(await store.claim(id, token, new Date()))) continue;
+    let posted = false;
     try {
-      if (!(await post(anomaly.message))) throw new Error('Slack rejected business metric alert');
-      await store.complete(id, token, new Date());
+      posted = await post(anomaly.message);
+      if (!posted) throw new Error('Slack rejected business metric alert');
+      // The alert is already in Slack: keep the lease so a retry cannot post it twice.
+      await store.complete(id, token, new Date()).catch(() => store.complete(id, token, new Date()));
       delivered++;
     } catch (error) {
-      await store.release(id, token);
+      if (!posted) await store.release(id, token);
       throw error;
     }
   }

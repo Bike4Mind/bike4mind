@@ -39,6 +39,31 @@ describe('business metric comparisons', () => {
     expect(compareMetric(metric(11, 1), {})).toMatchObject({ delta: 10 });
   });
 
+  it.each([
+    ['spendUsd', 10, 5],
+    ['credits', 1000, 100],
+    ['payingSubscribers', 10, 2],
+    ['revenueMinor', 10_000, 1000],
+    ['requests:user', 100, 10],
+  ])('pins the default absolute guard for %s at %d + %d', (name, previous, minimumDelta) => {
+    const named = (current: number): Metric => ({ ...metric(current, previous), name });
+    expect(compareMetric(named(previous + minimumDelta), {})).toMatchObject({ delta: minimumDelta });
+    expect(compareMetric(named(previous - minimumDelta), {})).toMatchObject({ delta: -minimumDelta });
+    expect(compareMetric(named(previous + minimumDelta - 0.01), {})).toBeNull();
+    expect(compareMetric(named(previous - minimumDelta + 0.01), {})).toBeNull();
+  });
+
+  it('keeps the oldest comparison day and drops the first day beyond it', () => {
+    const intraday = comparisonWindow(new Date('2026-10-26T12:05:00Z'));
+    expect(periodIndex(new Date('2026-10-19T11:59:59Z'), intraday)).toBe(7);
+    expect(periodIndex(new Date('2026-10-19T12:00:00Z'), intraday)).toBeNull();
+    expect(periodIndex(new Date('2026-10-19T00:00:00Z'), intraday)).toBe(7);
+    expect(periodIndex(new Date('2026-10-18T23:59:59Z'), intraday)).toBeNull();
+    const daily = comparisonWindow(new Date('2026-10-26T00:05:00Z'));
+    expect(periodIndex(new Date('2026-10-18T00:00:00Z'), daily)).toBe(7);
+    expect(periodIndex(new Date('2026-10-17T23:59:59Z'), daily)).toBeNull();
+  });
+
   it('handles zero and unavailable baselines without NaN or false subscriber alerts', () => {
     expect(compareMetric(metric(0, 0), {})).toBeNull();
     expect(compareMetric(metric(10, 0), {})).toMatchObject({ percent: null });

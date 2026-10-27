@@ -194,6 +194,17 @@ describe('business metric persisted behavior', () => {
     expect(await deliveryStore.claim('pending-delivery', 'retry-worker', new Date())).toBe(true);
   });
 
+  it('reclaims an expired lease and rejects a live one', async () => {
+    const now = new Date();
+    await deliveryStore.claim('lease-check', 'first', now);
+    await expect(deliveryStore.claim('lease-check', 'second', new Date(now.getTime() + 14 * 60_000))).rejects.toThrow(
+      'leased'
+    );
+    expect(await deliveryStore.claim('lease-check', 'second', new Date(now.getTime() + 16 * 60_000))).toBe(true);
+    const state = await BusinessMetricState.findById('lease-check').lean();
+    expect(state?.leaseToken).toBe('second');
+  });
+
   it("counts a new app message when its execution started outside yesterday's elapsed slice", async () => {
     const user = new Types.ObjectId();
     const execution = new Types.ObjectId();
@@ -344,6 +355,31 @@ describe('business metric persisted behavior', () => {
     const second = await collectBusinessMetrics(window);
     expect(second.metrics.find(metric => metric.name === 'revenueMinor:usd')).toBeUndefined();
     expect(second.subscribers).toBe(0);
+  });
+
+  it('counts only active, unexpired, non-granted subscriptions', async () => {
+    const future = new Date(Date.now() + 86_400_000);
+    const past = new Date(Date.now() - 86_400_000);
+    const owner = async () => {
+      const id = new Types.ObjectId();
+      await User.collection.insertOne({ _id: id, email: `${id}@example.org`, createdAt: new Date('2025-01-01') });
+      return { ownerType: 'User', ownerId: String(id) };
+    };
+    await Subscription.collection.insertMany([
+      { ...(await owner()), source: 'stripe', status: 'active', periodEndsAt: future },
+      { ...(await owner()), source: 'admin_grant', status: 'active', periodEndsAt: future },
+      { ...(await owner()), source: 'stripe', status: 'trialing', periodEndsAt: future },
+      { ...(await owner()), source: 'stripe', status: 'active', periodEndsAt: past },
+    ]);
+    const result = await collectBusinessMetrics(comparisonWindow(new Date('2026-10-26T12:05:00Z')));
+    expect(result.subscribers).toBe(1);
+  });
+
+  it('does not write a subscriber sample for a window more than an hour old', async () => {
+    const stale = comparisonWindow(new Date(Date.now() - 3 * 3_600_000));
+    const metric = await subscriberMetric(stale, 7);
+    expect(metric.values[0]).toBeNull();
+    expect(await BusinessMetricState.findById(`subscribers:${stale.end.toISOString()}`).lean()).toBeNull();
   });
 
   it('keeps missing subscriber history unknown and preserves the first sample on retry', async () => {

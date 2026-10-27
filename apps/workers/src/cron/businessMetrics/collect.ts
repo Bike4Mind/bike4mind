@@ -176,10 +176,11 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
     .read('secondaryPreferred')
     .lean<Usage[]>()
     .cursor({ batchSize: BATCH_SIZE });
-  for await (const batch of batches(usage)) {
-    await eligibility.loadUsers(batch.map(row => row.userId));
-    await eligibility.loadOwners(batch);
-    for (const row of batch) {
+  for await (const allRows of batches(usage)) {
+    const rows = allRows.filter(row => periodIndex(row.createdAt, window) !== null);
+    await eligibility.loadUsers(rows.map(row => row.userId));
+    await eligibility.loadOwners(rows);
+    for (const row of rows) {
       if (!users.has(row.userId) || !allowedOwner(row.ownerType, row.ownerId) || !allowedKey(row.apiKeyId)) continue;
       const index = periodIndex(row.createdAt, window);
       if (index === null) continue;
@@ -196,9 +197,10 @@ export async function collectBusinessMetrics(window: ComparisonWindow) {
     .read('secondaryPreferred')
     .lean<Array<{ userId: string; keyId: string; source?: string; timestamp: Date }>>()
     .cursor({ batchSize: BATCH_SIZE });
-  for await (const batch of batches(requests)) {
-    await eligibility.loadUsers(batch.map(row => row.userId));
-    for (const row of batch) {
+  for await (const allRows of batches(requests)) {
+    const rows = allRows.filter(row => periodIndex(row.timestamp, window) !== null);
+    await eligibility.loadUsers(rows.map(row => row.userId));
+    for (const row of rows) {
       if (!users.has(row.userId) || !allowedKey(row.keyId)) continue;
       const index = periodIndex(row.timestamp, window);
       if (index !== null) metrics.add(`requests:${sourceCut(row.source)}`, index, 1, [`user:${row.userId}`]);

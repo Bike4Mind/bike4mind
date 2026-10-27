@@ -82,6 +82,29 @@ describe('anomaly Slack delivery', () => {
     expect(store.complete).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the lease and retries complete once after an accepted post', async () => {
+    const post = vi.fn().mockResolvedValue(true);
+    vi.mocked(store.complete).mockRejectedValueOnce(new Error('transient')).mockResolvedValueOnce(undefined);
+    expect(await deliverAnomalies(window, [anomaly()], post, store)).toBe(1);
+    expect(store.complete).toHaveBeenCalledTimes(2);
+    expect(store.release).not.toHaveBeenCalled();
+  });
+
+  it('rethrows without releasing when complete keeps failing after an accepted post', async () => {
+    const post = vi.fn().mockResolvedValue(true);
+    vi.mocked(store.complete).mockRejectedValue(new Error('db down'));
+    await expect(deliverAnomalies(window, [anomaly()], post, store)).rejects.toThrow('db down');
+    expect(store.complete).toHaveBeenCalledTimes(2);
+    expect(store.release).not.toHaveBeenCalled();
+  });
+
+  it('releases the lease when the post itself throws', async () => {
+    const post = vi.fn().mockRejectedValue(new Error('network'));
+    await expect(deliverAnomalies(window, [anomaly()], post, store)).rejects.toThrow('network');
+    expect(store.complete).not.toHaveBeenCalled();
+    expect(store.release).toHaveBeenCalledTimes(1);
+  });
+
   it("does not post or release another invocation's active lease", async () => {
     vi.mocked(store.claim).mockRejectedValue(new Error('leased'));
     const post = vi.fn();

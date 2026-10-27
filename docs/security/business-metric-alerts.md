@@ -35,7 +35,7 @@ Set revenue guards per currency before enabling production.
 
 | Metric                                       | Definition                                                                                                                                                                                                |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `verifiedSignups`                            | Currently verified external accounts bucketed by account creation time; email changes do not count as new signups.                                                                                        |
+| `verifiedSignups`                            | An external account counts as a signup in a period only if it verified (`emailVerifiedAt`, falling back to `createdAt`) before that period's cutoff; email changes do not count as new signups.           |
 | `activeUsers`                                | Distinct external users with a successful app/CLI/desktop usage event, original Quest message, or agent execution. Public API activity is separate.                                                       |
 | `payingSubscribers`                          | Distinct external user or organization owners with an active Stripe-managed subscription and an unexpired period. Admin grants and trials are excluded.                                                   |
 | `spendUsd`, `spendUsd:<provider>`            | Frozen estimated provider costs from UsageEvent, including failed calls with recorded cost. These are estimates, not provider invoices.                                                                   |
@@ -55,6 +55,8 @@ is applied when unset), and orphaned users. Organization owners must
 also be external. System usage and API keys tagged with a `productId` are excluded, including
 internal ingestion activity. Ordinary first-party CLI/desktop traffic remains in its named cut.
 Stripe customers must map to an eligible account in this stage's database.
+Usage billed to Agent owners is excluded from the spend, credits and completions metrics;
+only usage owned by an eligible user or organization is counted.
 
 Subscription rows contain only current state, so the worker persists one observed count per UTC
 hour instead of inventing history. Yesterday's comparison becomes available after 24 hours;
@@ -64,9 +66,8 @@ listing arbitrary currently subscribed owners. Samples are observed at the sched
 than an hour late does not create a historical subscription sample. Other metrics are rebuilt
 from their source records; delayed writes and later email verification can revise their history.
 
-The included database migration creates the state collection's `expiresAt` TTL index, a
-`User.createdAt` index for signup windows, and `stripeCustomerId` indexes on User and Organization
-for payment-customer lookups through the normal migration deployment process. State samples and
+The included database migration creates the state collection's `expiresAt` TTL index and
+`stripeCustomerId` indexes on User and Organization for payment-customer lookups through the normal migration deployment process. State samples and
 delivery receipts are retained for ten days.
 
 ## Verification and response
