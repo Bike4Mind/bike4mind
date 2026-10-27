@@ -8,7 +8,7 @@ import {
   AtlassianTokenManager,
   AtlassianReconnectRequiredError,
 } from '@server/integrations/jira/atlassianTokenManager';
-import { decryptEnvVariables } from '@server/security/tokenEncryption';
+import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 export type EnvVariable = { key: string; value: string };
 

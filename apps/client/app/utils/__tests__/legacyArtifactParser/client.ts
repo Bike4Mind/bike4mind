@@ -15,7 +15,7 @@ import {
   promoteToolCallJsonArtifact,
   sanitizeHTMLTitle,
 } from './core';
-import { tryParseChartJSON } from '@client/app/utils/chartJsonParser';
+import { tryParseChartJSON } from '@bike4mind/server-utils/app/utils/chartJsonParser';
 import { hasSingleLineImportFrom } from '@client/app/utils/importStatements';
 import {
   ResultReplacer,

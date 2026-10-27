@@ -49,7 +49,7 @@ vi.mock('@server/middlewares/optionalJwtAuth', () => ({
   optionalJwtAuth: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 // Rate limiter: pass-through so share-branch requests proceed. rateLimit itself is unit-tested.
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 

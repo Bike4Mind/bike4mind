@@ -129,7 +129,8 @@ jobs:
           echo "This PR touches sst / infra ($reason); a preview deploy is required."
 
           # The deployer adds `preview-deployed` on a successful preview deploy.
-          if gh api "repos/$REPO/issues/$PR/labels" -q '.[].name' | grep -qx 'preview-deployed'; then
+          preview_labels=$(gh api "repos/$REPO/issues/$PR/labels" -q '.[].name')
+          if grep -qx 'preview-deployed' <<< "$preview_labels"; then
             echo "Found 'preview-deployed' label -> a preview has been deployed. Gate satisfied."
             exit 0
           fi

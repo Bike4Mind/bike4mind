@@ -1,4 +1,4 @@
-import type { ChatModelOption } from '@shared/chat';
+import { isLocalBackend, type ChatModelOption } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import {
   pickSuggestionModel,
@@ -51,6 +51,13 @@ describe('pickSuggestionModel', () => {
     expect(suggestionModelChoices([local])).toEqual([local]);
     expect(pickSuggestionModel([local], local.id)).toBe(local);
     expect(pickSuggestionModel([local])).toBeNull();
+  });
+
+  it('treats any local-* backend as device-local', () => {
+    const local = option('local:lmstudio:some-model', 'local-lmstudio');
+    expect(suggestionModelChoices([local])).toEqual([local]);
+    expect(isLocalBackend(local)).toBe(true);
+    expect(isLocalBackend(option('claude-sonnet'))).toBe(false);
   });
 
   it('refuses a pin on a big hosted model the picker never offered', () => {

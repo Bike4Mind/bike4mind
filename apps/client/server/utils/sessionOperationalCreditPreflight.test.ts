@@ -26,7 +26,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 // service resolves system API keys and builds the whole model catalog.
 const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
 vi.mock('@server/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
 }));
 

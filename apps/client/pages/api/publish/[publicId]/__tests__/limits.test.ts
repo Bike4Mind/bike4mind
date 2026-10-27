@@ -62,7 +62,7 @@ vi.mock('@server/services/publish', async () => {
     consumePublishAction: m.consume,
   };
 });
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: () => m.getModel(),
   },

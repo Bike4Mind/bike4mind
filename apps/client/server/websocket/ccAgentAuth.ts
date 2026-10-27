@@ -55,7 +55,7 @@ export async function resolveBridgeWsAuth(params: {
     // rather than null, which callers report as a bad credential.
     if (isAuthInfraFailure(apiKeyErr)) throw apiKeyErr;
     try {
-      const user = await verifyJwtToken(accessToken);
+      const user = await verifyJwtToken(accessToken, { requireApiAccess: true });
       await checkRateLimit(user.id, undefined, { bucket: 'ws' });
       userId = user.id;
       // A bridge action authenticated by a JWT is unusual in steady state -
@@ -63,6 +63,7 @@ export async function resolveBridgeWsAuth(params: {
       // through is visible in routine audits.
       logger.warn(`[${handlerName}] bridge action authenticated via JWT fallback`, { userId });
     } catch (jwtErr) {
+      if (isAuthInfraFailure(jwtErr)) throw jwtErr;
       logger.warn(`[${handlerName}] auth failed`, {
         apiKeyError: apiKeyErr instanceof Error ? apiKeyErr.message : String(apiKeyErr),
         jwtError: jwtErr instanceof Error ? jwtErr.message : String(jwtErr),

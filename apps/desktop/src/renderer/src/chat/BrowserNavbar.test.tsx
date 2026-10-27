@@ -25,6 +25,8 @@ const render = (cookies: CookieImportState) =>
       onNavigate={() => undefined}
       onGo={() => undefined}
       onCookieState={() => undefined}
+      historyEnabled={null}
+      onHistory={() => undefined}
     />
   );
 

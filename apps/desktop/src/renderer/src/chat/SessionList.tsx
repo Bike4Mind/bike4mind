@@ -43,6 +43,7 @@ import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
+import { keepMenuOpen } from './keepMenuOpen';
 import {
   ArrowLeftIcon,
   ArtifactIcon,
@@ -158,11 +159,6 @@ interface RowProps {
   sectionId: string | undefined;
   actions: RowActions;
 }
-
-/** Joy closes a Dropdown on any MenuItem click unless the click says otherwise. */
-const keepMenuOpen = (event: SyntheticEvent) => {
-  (event as SyntheticEvent & { defaultMuiPrevented?: boolean }).defaultMuiPrevented = true;
-};
 
 /** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
 function MoveToItems({

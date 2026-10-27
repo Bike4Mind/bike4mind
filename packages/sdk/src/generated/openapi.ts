@@ -2654,6 +2654,7 @@ export interface components {
             | 'math_evaluate'
             | 'mermaid_chart'
             | 'current_datetime'
+            | 'current_model_details'
             | 'deep_research'
             | 'prompt_enhancement'
             | 'recharts'
@@ -5626,7 +5627,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Per-user rate limit exceeded. */
+      /** @description Per-user rate limit exceeded. A free-tier daily credit cap hit is distinguished by `errorCode: daily_free_limit_reached` and a `Retry-After` header until the next UTC midnight. */
       429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
