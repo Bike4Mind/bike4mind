@@ -41,8 +41,23 @@ function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL'
   return process.env[name] ?? loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
 }
 
+/**
+ * Writes `curated-build.json` beside the main bundle with the curated values this build baked in, so
+ * packages/scripts `curated:check-build` can fail a release that trusts the test keys or bakes a non-https URL.
+ */
+function curatedBuildInfo(info: { devKeys: boolean; manifestUrl: string }): Plugin {
+  return {
+    name: 'curated-build-info',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'curated-build.json', source: `${JSON.stringify(info)}\n` });
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const nodeEnv = mode === 'development' ? 'development' : 'production';
+  const curatedUrl = baked(mode, 'B4M_CURATED_MANIFEST_URL');
+  const curatedDevKeys = process.env.B4M_CURATED_DEV_KEYS === '1';
 
   return {
     main: {
@@ -55,14 +70,13 @@ export default defineConfig(({ mode }) => {
       // The release feed is baked in the same way and for the same reasons, plus one more:
       // this repo is public, and a feed url is a host or a bucket behind one. Empty for a fork,
       // which then builds an app with updates switched off rather than one pointed at ours.
-      // The signed curated models list is baked the same way; empty means the bundled list only.
-      // The curated test key is trusted only by a build made with B4M_CURATED_DEV_KEYS=1 in the shell (never
-      // `.env`), and then only unpackaged; packages/scripts `curated:check-build` fails a build that has it.
+      // The signed curated models list is baked the same way; empty means the bundled list only. The test keys
+      // need B4M_CURATED_DEV_KEYS=1 in the shell (never `.env`); see curatedBuildInfo for the release gate.
       define: {
         'process.env.B4M_DEFAULT_API_URL': JSON.stringify(baked(mode, 'B4M_DEFAULT_API_URL')),
         'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
-        'process.env.B4M_CURATED_MANIFEST_URL': JSON.stringify(baked(mode, 'B4M_CURATED_MANIFEST_URL')),
-        __B4M_CURATED_DEV_KEYS__: JSON.stringify(process.env.B4M_CURATED_DEV_KEYS === '1'),
+        'process.env.B4M_CURATED_MANIFEST_URL': JSON.stringify(curatedUrl),
+        __B4M_CURATED_DEV_KEYS__: JSON.stringify(curatedDevKeys),
       },
       // `@bike4mind/utils` is bundled rather than left external, and only main does this.
       // Main uses one subpath of it, `/artifactParser` - 20 kB that imports nothing but
@@ -75,6 +89,7 @@ export default defineConfig(({ mode }) => {
       plugins: [
         externalizeDepsPlugin({ exclude: ['@bike4mind/utils', '@bike4mind/observability'] }),
         copyTreeSitterWasm(),
+        curatedBuildInfo({ devKeys: curatedDevKeys, manifestUrl: curatedUrl }),
       ],
     },
     preload: {

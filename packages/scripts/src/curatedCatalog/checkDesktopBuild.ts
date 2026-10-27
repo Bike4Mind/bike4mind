@@ -1,13 +1,16 @@
 /**
- * Release gate for a built Desktop app: the public test key must not be in it, and the baked list URL must be
- * empty or https.
+ * Release gate for a built Desktop app (`apps/desktop/out`): the public test keys must not be in it, and the list
+ * URL it baked in must be empty or https. The desktop release workflow runs it between the build and packaging.
  *
- *   B4M_CURATED_MANIFEST_URL=... pnpm --filter @bike4mind/scripts curated:check-build apps/desktop/out
+ *   pnpm --filter @bike4mind/scripts curated:check-build apps/desktop/out
  */
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { cliPath, isEntry } from './cli';
-import { CURATED_DEV_SEED_TEXT, curatedDevKey } from './devKey';
+import { CURATED_DEV_SEED_TEXTS, curatedDevKey } from './devKey';
+
+// Written by the curatedBuildInfo plugin in apps/desktop/electron.vite.config.ts.
+export const BUILD_INFO_PATH = path.join('main', 'curated-build.json');
 
 export interface BuildFinding {
   file: string;
@@ -22,10 +25,15 @@ async function* files(dir: string): AsyncGenerator<string> {
   }
 }
 
-/** Every file under `dir` that holds the test seed, its key id or its public key, by path relative to `dir`. */
+/** Every file under `dir` that holds a test seed, key id or public key, by path relative to `dir`. */
 export async function findDevKey(dir: string): Promise<BuildFinding[]> {
-  const dev = curatedDevKey();
-  const markers = { 'test key seed': CURATED_DEV_SEED_TEXT, 'test key id': dev.keyId, 'test public key': dev.spki };
+  const markers: Record<string, string> = {};
+  for (const role of ['signing', 'recovery'] as const) {
+    const dev = curatedDevKey(role);
+    markers[`${role} test key seed`] = CURATED_DEV_SEED_TEXTS[role];
+    markers[`${role} test key id`] = dev.keyId;
+    markers[`${role} test public key`] = dev.spki;
+  }
   const findings: BuildFinding[] = [];
   for await (const file of files(dir)) {
     const bytes = await readFile(file);
@@ -41,16 +49,34 @@ export function manifestUrlProblem(raw: string | undefined): string | null {
   return URL.canParse(raw) && new URL(raw).protocol === 'https:' ? null : 'B4M_CURATED_MANIFEST_URL must be https';
 }
 
+/** The problems `curated-build.json` reports; a build without one cannot be checked, so that is one too. */
+export async function buildInfoProblems(dir: string): Promise<string[]> {
+  let info: { devKeys?: unknown; manifestUrl?: unknown };
+  try {
+    info = JSON.parse(await readFile(path.join(dir, BUILD_INFO_PATH), 'utf8'));
+  } catch {
+    return [`${BUILD_INFO_PATH} is missing or unreadable; is this an apps/desktop/out build?`];
+  }
+  if (typeof info !== 'object' || info === null || typeof info.manifestUrl !== 'string')
+    return [`${BUILD_INFO_PATH} is malformed`];
+  const problems: string[] = [];
+  if (info.devKeys !== false) problems.push('the build was made with B4M_CURATED_DEV_KEYS=1');
+  const urlProblem = manifestUrlProblem(info.manifestUrl.trim());
+  if (urlProblem) problems.push(`${urlProblem} (baked: ${info.manifestUrl})`);
+  return problems;
+}
+
 export async function main(argv: string[], env: NodeJS.ProcessEnv, log = console.log): Promise<number> {
   if (argv.length !== 1) {
     log('usage: curated:check-build <built app dir>');
     return 2;
   }
-  const findings = await findDevKey(cliPath(argv[0], env));
+  const dir = cliPath(argv[0], env);
+  const findings = await findDevKey(dir);
   for (const finding of findings) log(`${finding.file}: contains the curated ${finding.marker}`);
-  const urlProblem = manifestUrlProblem(env.B4M_CURATED_MANIFEST_URL?.trim());
-  if (urlProblem) log(urlProblem);
-  if (findings.length > 0 || urlProblem) return 1;
+  const problems = await buildInfoProblems(dir);
+  for (const problem of problems) log(problem);
+  if (findings.length > 0 || problems.length > 0) return 1;
   log('no curated test key in the build, and the list URL is acceptable');
   return 0;
 }
