@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Card from '@mui/joy/Card';
@@ -22,6 +22,15 @@ export function Home() {
     setLocalChatActive(next);
     setLocalChatState(next);
   };
+  // An account can arrive without the local "Sign in" button; a later sign-out must still show the
+  // sign-in card, not the local session left behind it.
+  const signedIn = state?.status === 'signed-in';
+  useEffect(() => {
+    if (signedIn) {
+      setLocalChatActive(false);
+      setLocalChatState(false);
+    }
+  }, [signedIn]);
   const chatScope = useRef('device-local');
   if (state && state.status !== 'initializing' && !state.reauthRequired) {
     chatScope.current = `${state.environment.url}:${state.user?.id ?? 'device-local'}`;

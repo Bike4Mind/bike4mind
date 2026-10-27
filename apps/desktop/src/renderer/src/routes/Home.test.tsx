@@ -188,10 +188,22 @@ it('returns to local chat after Home unmounts for Settings and mounts again', as
   act(() => root?.unmount());
   host?.remove();
 
+  const signedOut: AuthState = { ...base, status: 'signed-out', user: undefined };
+  (window as unknown as { b4m: { auth: { getState: () => Promise<AuthState> } } }).b4m.auth.getState = async () =>
+    signedOut;
   await mount();
-  act(() => push({ ...base, status: 'signed-out', user: undefined }));
   expect(byTestId('composer-input')).not.toBeNull();
   expect(byTestId('auth-local-chat-btn')).toBeNull();
+});
+
+it('shows the sign-in card after signing out of an account that arrived during local chat', async () => {
+  await mount();
+  act(() => push({ ...base, status: 'signed-out', user: undefined }));
+  act(() => byTestId('auth-local-chat-btn')?.click());
+  act(() => push(base));
+  act(() => push({ ...base, status: 'signed-out', user: undefined }));
+  expect(byTestId('auth-local-chat-btn')).not.toBeNull();
+  expect(byTestId('composer-input')).toBeNull();
 });
 
 it('replaces the local conversation view when an authenticated account becomes active', async () => {
