@@ -7,6 +7,7 @@ import {
   getTextModelCost,
   getTurnsCost,
   type ModelInfo,
+  type ThinkingVisibility,
   type UsagePriceStamp,
 } from '@bike4mind/common';
 import { ServerSubagentOrchestrator, spentResultOf } from '../../agents/ServerSubagentOrchestrator';
@@ -107,6 +108,8 @@ export interface DelegateToAgentToolDeps {
   onTelemetry?: (telemetry: SubagentTelemetryData) => void;
   /** Extended thinking configuration to propagate to subagents */
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
+  thinkingVisibility?: ThinkingVisibility;
   /** Per-request agent store with user-specific configs baked in */
   agentStore: ServerAgentStore;
   /** API key table for resolving fresh backends when agent model differs from parent */
@@ -339,6 +342,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         availableModels: deps.availableModels,
         onProgress: deps.onStatusUpdate,
         thinking: deps.thinking,
+        thinkingVisibility: deps.thinkingVisibility,
         resolveBackend: deps.apiKeyTable
           ? (modelId: string) => {
               const modelInfo = deps.availableModels?.find(m => m.id === modelId);

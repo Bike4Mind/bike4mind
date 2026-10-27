@@ -44,6 +44,7 @@ export interface INetworkMeta {
   country: string | null;
   /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
   isDatacenter: boolean | null;
+  ja4?: string | null;
 }
 
 export interface ISignupMeta extends INetworkMeta {
@@ -97,6 +98,11 @@ export interface IMFAConfig {
   backupCodes: string[];
   setupAt: Date;
   lastUsedAt?: Date;
+  /**
+   * Plaintext backup codes (comma-joined) for a setup not yet verified, so a repeat setup call
+   * can re-serve the codes the user already saved. Encrypted at rest; cleared on enable.
+   */
+  pendingBackupCodes?: string;
   // Server-side attempt tracking (can't be bypassed by refresh/cancel)
   failedAttempts?: number;
   lastFailedAttempt?: Date;

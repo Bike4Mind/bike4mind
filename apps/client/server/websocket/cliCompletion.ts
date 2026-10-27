@@ -32,6 +32,7 @@ import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
 import { ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { getUserEntitlements } from '@server/entitlements';
+import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
@@ -166,6 +167,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
     await executeCompletion({
       getEntitlements: getUserEntitlements,
+      getThinkingVisibility: resolveThinkingVisibility,
       creditHolds: createCompletionCreditHolds(logger),
       userId,
       model,

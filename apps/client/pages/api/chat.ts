@@ -14,7 +14,7 @@ import {
 } from '@bike4mind/utils';
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import {

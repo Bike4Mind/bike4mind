@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => fn(),

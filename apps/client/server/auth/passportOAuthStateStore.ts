@@ -1,8 +1,8 @@
 import { Request } from 'express';
 import { clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import OAuth2Strategy from 'passport-oauth2';
-import { createStateToken, verifyStateToken } from './jwtStateStore';
-import { readStateNonceHash } from './oauthFlowCookie';
+import { createStateToken, verifyStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
+import { readStateNonceHash } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { STATE_REASON_TO_CODE } from '@server/utils/auth/oauthFailureReason';
 
 /**

@@ -6,6 +6,7 @@ import {
   getTextModelCost,
   getTurnsCost,
   type ModelInfo,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -301,6 +302,8 @@ export interface ServerOrchestratorDeps {
   onProgress?: (status: string) => Promise<void>;
   /** Extended thinking configuration to propagate to subagents */
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller; each subagent withholds what it may not see. */
+  thinkingVisibility?: ThinkingVisibility;
   /**
    * Artifact-emission guidance appended to every spawned subagent's system
    * prompt (optional). Set by the Agent Executor when the admin `EnableArtifacts`
@@ -683,6 +686,7 @@ export class ServerSubagentOrchestrator {
       }
     }
 
+    const effectiveModelInfo = this.deps.availableModels?.find(m => m.id === effectiveModel);
     const agent = new ReActAgent({
       userId: this.deps.userId,
       logger: this.deps.logger,
@@ -692,6 +696,9 @@ export class ServerSubagentOrchestrator {
       maxIterations,
       systemPrompt,
       thinking: this.deps.thinking,
+      thinkingVisibility: this.deps.thinkingVisibility,
+      modelBackend: effectiveModelInfo?.backend,
+      modelAdapterFamily: effectiveModelInfo?.adapterFamily,
       // Appended AFTER `systemPrompt` in getSystemPrompt(); only present when the
       // host opted into artifacts, so subagents emit <artifact> tags to bubble up.
       ...(this.deps.artifactEmissionPrompt && { artifactEmissionPrompt: this.deps.artifactEmissionPrompt }),

@@ -2,7 +2,7 @@ import { CreditHolderType, OAUTH_DEVICE_CLIENT_IDS, hasDeveloperUserTag } from '
 import { adminSettingsRepository, authSessionRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import {
   getActiveSubscriptionsForUser,

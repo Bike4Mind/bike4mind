@@ -32,7 +32,7 @@ vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn(async () => ({ clientId: 'c', clientSecret: 's', redirectUri: 'r' })),
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET } }));
-vi.mock('@server/auth/oauthFlowCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   readStateNonceHash: (...a: unknown[]) => mockReadStateNonceHash(...a),
   clearStateNonce: (...a: unknown[]) => mockClearStateNonce(...a),
 }));
@@ -45,7 +45,7 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
     }),
   },
 }));
-vi.mock('@server/security/tokenEncryption', () => ({ encryptToken: (t: string) => t }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ encryptToken: (t: string) => t }));
 
 import handler from '../callback';
 

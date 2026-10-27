@@ -14,7 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockFindPublishedBetween = vi.fn();
 vi.mock('@bike4mind/database', () => ({

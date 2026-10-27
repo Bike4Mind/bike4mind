@@ -19,7 +19,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: vi.fn() }));
 vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 3600 }));
 
