@@ -52,6 +52,7 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.BOB_READ,
   ApiKeyScope.BOB_RUN,
   ApiKeyScope.SKILLS_WRITE,
+  ApiKeyScope.SKILLS_REVIEW,
 ]);
 
 describe('CONFINED_API_KEY_SCOPES', () => {
@@ -151,6 +152,7 @@ describe('public API reference scope classification', () => {
     ApiKeyScope.BOB_RUN,
     ApiKeyScope.SKILLS_READ,
     ApiKeyScope.SKILLS_WRITE,
+    ApiKeyScope.SKILLS_REVIEW,
   ]);
 
   it('classifies every ApiKeyScope as public or undocumented, so a new scope fails here until decided', () => {

@@ -149,6 +149,13 @@ export enum ApiKeyScope {
    */
   SKILLS_WRITE = 'skills:write',
   /**
+   * Review held Skill Market versions (`/api/v1/skills/market/review-queue`,
+   * `/api/v1/skills/market/versions/{vid}/review`): list the pending queue, approve or reject. Org
+   * admins only, since isAdmin is withheld under a key: it reaches the Organization listings of the
+   * orgs the key's owner administers, never Public or unlisted ones. Not confined.
+   */
+  SKILLS_REVIEW = 'skills:review',
+  /**
    * Release-note automation: find a release note and set its video, and upload the What's New
    * media for it. Admin-provisioned and confined so the job needs no `admin:*`
    * key: it reaches only the routes that name it, and those still require a platform-admin owner.

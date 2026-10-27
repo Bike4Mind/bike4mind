@@ -89,4 +89,8 @@ export {
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
 } from './contracts/skillMarketWrite.contract';
+export {
+  listSkillMarketReviewQueueContract,
+  reviewSkillMarketVersionContract,
+} from './contracts/skillMarketReview.contract';
 export { CONTRACTS } from './contracts';

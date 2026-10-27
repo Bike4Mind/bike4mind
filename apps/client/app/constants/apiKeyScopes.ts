@@ -238,6 +238,13 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     ],
   },
   {
+    value: ApiKeyScope.SKILLS_REVIEW,
+    label: 'Skill Market: Review',
+    description:
+      "Review your organizations' held Skill Market versions: list the review queue and approve or reject (org admins only)",
+    endpoints: ['GET /api/v1/skills/market/review-queue', 'POST /api/v1/skills/market/versions/:vid/review'],
+  },
+  {
     value: ApiKeyScope.MARKETING_REPORTS_READ,
     label: 'Marketing Reports: Read',
     description: 'Read published marketing reports',
