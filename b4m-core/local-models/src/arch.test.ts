@@ -373,6 +373,13 @@ describe('archFromModelInfo', () => {
       'deepseek2.attention.head_count_kv': 128,
     };
     expect(archFromModelInfo(legacy)?.full).toEqual(dense(60, 128, 576, 512));
+    // DSA adds an indexer key cache and an F32 score per layer that MLA pricing misses.
+    for (const dsa of ['deepseek32', 'glm-dsa']) {
+      const info = Object.fromEntries(
+        Object.entries(deepseek).map(([key, value]) => [key.replace(/^deepseek2\b/, dsa), value])
+      );
+      expect(archFromModelInfo({ ...info, 'general.architecture': dsa })).toBeNull();
+    }
     expect(archFromModelInfo(legacy)?.mla).toBeUndefined();
   });
 
