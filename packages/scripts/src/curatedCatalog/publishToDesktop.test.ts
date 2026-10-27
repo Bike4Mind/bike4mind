@@ -12,8 +12,9 @@ import { catalogBytes, sigBytes, testSigner, type TestSigner } from './testCatal
 
 const ORIGIN = 'https://catalog.example.com/';
 const signing = testSigner('signing');
+const replacement = testSigner('signing');
 const recovery = testSigner('recovery');
-const keyring = [signing.key, recovery.key];
+const keyring = [signing.key, replacement.key, recovery.key];
 
 class MemoryStore implements PublishStore {
   objects = new Map<string, { bytes: Uint8Array; etag: string }>();
@@ -106,5 +107,40 @@ describe('curated:publish to Desktop', () => {
     );
     await client.checkNow();
     expect(client.view()).toMatchObject({ sequence: 5 });
+  });
+
+  it('recovers from a leaked key that wrote live+1 with a future date and revoked the replacement key', async () => {
+    expect(await publish(list(3, [signing]))).toBe(EXIT.ok);
+    const client = desktop();
+    const missedIt = desktop('b');
+    for (const each of [client, missedIt]) await each.checkNow();
+
+    const leaked = list(4, [signing], catalog => {
+      catalog.updatedAt = '2099-01-01T00:00:00Z';
+      catalog.revokedKeyIds = [replacement.key.keyId];
+    });
+    for (const key of ['4.json', 'latest.json']) await store.put(`${CURATED_PREFIX}${key}`, leaked.manifest, '', null);
+    for (const key of ['4.json.sig', 'latest.json.sig'])
+      await store.put(`${CURATED_PREFIX}${key}`, leaked.sig, '', null);
+    await client.checkNow();
+    expect(client.view()).toMatchObject({ sequence: 4 });
+    expect((await new CuratedStore(path.join(dir, 'a')).readRevoked()).ids).toEqual(new Set());
+
+    const revokeLeaked: Parameters<typeof catalogBytes>[1] = catalog => {
+      catalog.revokedKeyIds = [signing.key.keyId];
+    };
+    expect(await publish(list(5, [recovery, replacement], revokeLeaked))).toBe(EXIT.ok);
+    expect(lines).toContain(`plan: sequence 4 -> 5, it revokes ${signing.key.keyId}`);
+    for (const each of [client, missedIt]) {
+      await each.checkNow();
+      expect(each.view()).toMatchObject({ origin: 'updated', sequence: 5, check: 'updated' });
+    }
+    expect((await new CuratedStore(path.join(dir, 'a')).readRevoked()).ids).toEqual(new Set([signing.key.keyId]));
+
+    expect(await publish(list(6, [recovery, replacement], revokeLeaked))).toBe(EXIT.ok);
+    await client.checkNow();
+    expect(client.view()).toMatchObject({ sequence: 6 });
+    expect(await publish(list(7, [signing]))).toBe(EXIT.failed);
+    expect(lines.at(-1)).toMatch(/signed only by keys the live list revokes/);
   });
 });

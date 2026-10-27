@@ -7,7 +7,13 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { parseCuratedSignatureFile, verifyCurated, type CuratedKey } from '@bike4mind/local-models';
-import { planPublish, readMainKeyring, verifyCandidate, type CuratedCandidate } from './catalogChecks';
+import {
+  isRecoverySigned,
+  planPublish,
+  readMainKeyring,
+  verifyCandidate,
+  type CuratedCandidate,
+} from './catalogChecks';
 import { cliPath, isEntry } from './cli';
 import {
   CURATED_PREFIX,
@@ -88,7 +94,8 @@ export async function publishCandidate(candidate: CuratedCandidate, deps: Publis
     log(live);
     return EXIT.failed;
   }
-  if (live.list) {
+  // A live list without a recovery signature may come from a leaked key, so its revocations bind nothing.
+  if (live.list && isRecoverySigned(live.list)) {
     const revoked = new Set(live.list.catalog.revokedKeyIds);
     const stillTrusted = verifyCurated(candidate.manifest, candidate.sig, deps.keyring, revoked);
     if (!stillTrusted.ok) {
@@ -117,7 +124,9 @@ export async function publishCandidate(candidate: CuratedCandidate, deps: Publis
   if (plan.kind === 'first-publish') log(`plan: first publish of sequence ${sequence}`);
   else if (plan.kind === 'already-live') log(`plan: finish the interrupted publish of sequence ${sequence}`);
   else if (plan.kind === 'recover')
-    log(`plan: sequence ${plan.liveSequence} -> ${sequence}, below live: it revokes ${plan.revokes.join(', ')}`);
+    log(
+      `plan: sequence ${plan.liveSequence} -> ${sequence}, ${sequence < plan.liveSequence ? 'below live: ' : ''}it revokes ${plan.revokes.join(', ')}`
+    );
   else log(`plan: sequence ${plan.liveSequence} -> ${sequence}`);
   log(`plan: write ${order.join(', ')}, then invalidate ${LATEST} and ${LATEST_SIG}`);
   if (deps.dryRun) return EXIT.ok;
