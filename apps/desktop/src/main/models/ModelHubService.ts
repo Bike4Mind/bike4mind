@@ -196,6 +196,14 @@ function blockedReason(detail: HubModelDetail, build: HubGgufBuild, tokenSent: b
   return null;
 }
 
+/**
+ * The name Ollama pulls a gated or private repo by. Ollama refuses to sign a pull whose auth realm (huggingface.co)
+ * is not the host it asked (hf.co redirects there), so these are pulled by their huggingface.co name instead.
+ */
+export function signedPullRef(ref: string): string {
+  return ref.replace(/^hf\.co\//, 'huggingface.co/');
+}
+
 function hubAccess(detail: HubModelDetail, tokenSent: boolean): HubAccess {
   if (!tokenSent) return 'no-token';
   if (detail.canDownload === null) return 'unknown';
@@ -219,7 +227,7 @@ function toView(endpoint: string, detail: HubModelDetail, tokenSent: boolean): H
     id: build.id,
     quant: build.quant,
     sizeBytes: build.sizeBytes,
-    ollamaRef: build.ollamaRef,
+    ollamaRef: build.ollamaRef && detail.ollamaNeedsSshKey ? signedPullRef(build.ollamaRef) : build.ollamaRef,
     blockedReason: blockedReason(detail, build, tokenSent),
   }));
   const url = licenseUrl(endpoint, detail);
@@ -416,6 +424,7 @@ export class ModelHubService {
         return this.#fail(key, entry, hubError('runtime-unavailable', 'Ollama is not running. Start it, then retry.'));
       // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
       ref = await hub.verifyOllamaRef(detail, build, { signal: controller.signal });
+      if (ref && detail.ollamaNeedsSshKey) ref = signedPullRef(ref);
     } catch (error) {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       return this.#fail(key, entry, toModelHubError(error, token));

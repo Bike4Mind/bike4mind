@@ -86,7 +86,7 @@ export interface HubBuildView {
   id: string;
   quant: string | null;
   sizeBytes: number;
-  /** The `hf.co/...` name Ollama would list it under, as planned from the file list. */
+  /** The name Ollama would list it under, as planned from the file list: `hf.co/...`, or `huggingface.co/...` when gated or private. */
   ollamaRef: string | null;
   /** Why the build cannot be pulled; null when it can be offered (the registry check still runs first). */
   blockedReason: string | null;

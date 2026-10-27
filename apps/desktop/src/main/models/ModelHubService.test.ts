@@ -622,6 +622,27 @@ describe('ModelHubService Hugging Face token', () => {
     await expect(result).resolves.toMatchObject({ ok: true });
   });
 
+  it('pulls a gated or private repo by its huggingface.co name, which Ollama can sign in to', async () => {
+    for (const repo of [{ gated: 'auto' as const }, { private: true }]) {
+      const { service, runtime, pulls } = harness({
+        token: TOKEN,
+        detail: detail({ ...repo, ollamaNeedsSshKey: true, canDownload: true }),
+      });
+      const shown = await service.detail(REPO);
+      expect(shown.ok && shown.model.builds[0].ollamaRef).toBe(`huggingface.co/${REPO}:Q4_K_M`);
+
+      const result = service.pull({ ...request, confirmAccess: true });
+      await vi.waitFor(() => expect(pulls).toHaveLength(1));
+      expect(runtime.pull).toHaveBeenCalledWith(`huggingface.co/${REPO}:Q4_K_M`, expect.anything());
+      pulls[0].resolve();
+      await expect(result).resolves.toEqual({ ok: true, ref: `huggingface.co/${REPO}:Q4_K_M` });
+    }
+
+    const open = harness();
+    const shown = await open.service.detail(REPO);
+    expect(shown.ok && shown.model.builds[0].ollamaRef).toBe(`hf.co/${REPO}:Q4_K_M`);
+  });
+
   it("explains a pull Ollama's own key could not sign", async () => {
     const { service, pulls } = harness({
       token: TOKEN,
@@ -701,7 +722,7 @@ describe('ModelHubService Hugging Face token', () => {
       expect(new URL(request.url).origin).toBe('https://huggingface.co');
       expect(request.authorization).toBe(`Bearer ${TOKEN}`);
     }
-    expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${repo}:Q4_0`, expect.anything());
+    expect(runtime.pull).toHaveBeenCalledWith(`huggingface.co/${repo}:Q4_0`, expect.anything());
     expect(JSON.stringify(runtime.pull.mock.calls)).not.toContain(TOKEN);
     expect(JSON.stringify(runtime.health.mock.calls)).not.toContain(TOKEN);
     expect(JSON.stringify(results)).not.toContain(TOKEN);
