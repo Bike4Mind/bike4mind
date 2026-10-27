@@ -12,6 +12,8 @@ describe('isAbliteratedModel', () => {
     'mradermacher/Qwen3-Next-80B-A3B-Instruct-Decensored-GGUF',
     'bartowski/huihui-ai_gemma-3-1b-it-abliterated-GGUF',
     'someone/Llama-3-8B-Uncensored-GGUF',
+    'someone/QwenUncensored-7B-GGUF',
+    'someone/LlamaHeretic-8B-GGUF',
   ])('flags %s', id => {
     expect(isAbliteratedModel({ id, tags: ['gguf'] })).toBe(true);
   });
@@ -22,6 +24,7 @@ describe('isAbliteratedModel', () => {
     ).toBe(true);
     expect(isAbliteratedModel({ id: 'someone/Plain-GGUF', tags: ['heretic'] })).toBe(true);
     expect(isAbliteratedModel({ id: 'someone/Heretical-Poems-GGUF' })).toBe(false);
+    expect(isAbliteratedModel({ id: 'someone/TheHereticalPoems-GGUF' })).toBe(false);
     expect(
       isAbliteratedModel({
         id: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
