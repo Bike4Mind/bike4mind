@@ -19,6 +19,10 @@ const { mockFindById, mockUpdate, mockDelete, mockClaimCredits, mockUpdateMany, 
     mockSubtractCredits: vi.fn(),
   }));
 
+vi.mock('@server/utils/callerModelList', () => ({
+  getCallerModelList: async () => ({ models: [{ id: 'catalog-model' }], supersededModels: [] }),
+}));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
     res.status(405).end(),
