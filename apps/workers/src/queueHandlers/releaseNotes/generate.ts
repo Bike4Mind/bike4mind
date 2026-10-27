@@ -131,7 +131,7 @@ const ACCURACY_RULES = [
 ];
 
 // isOperatorOnlyTitle in packages/scripts/src/releaseNotes/buildPayload.ts drops `admin`-scoped PRs that have no
-// author note; this rule covers the rest (other scopes, and admin-scoped PRs whose note slipped through).
+// author note; this rule covers the rest (other scopes, and admin-scoped PRs kept for their customer note).
 const OPERATOR_PANEL_RULE = [
   "Changes only to the operator admin panel, the tools the service operator's staff use to run the service",
   '(user and signup review, abuse controls, platform-wide settings, usage reports), are NOT customer-facing.',
