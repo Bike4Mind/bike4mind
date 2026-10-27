@@ -119,6 +119,7 @@ const renderLogin = (props: React.ComponentProps<typeof MultiStepLogin> = {}) =>
   );
 
 const textboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('textbox');
+const checkboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('checkbox');
 
 // useJoinWaitlist passes the email as a history-state updater, never in the query string.
 const expectWaitlistNavigation = (source: string, email: string | undefined) => {
@@ -128,7 +129,6 @@ const expectWaitlistNavigation = (source: string, email: string | undefined) => 
   const { state } = mocks.navigate.mock.calls.at(-1)[0];
   expect(state({ key: 'k' })).toEqual({ key: 'k', waitlistEmail: email });
 };
-const checkboxIn = (testId: string) => within(screen.getByTestId(testId)).getByRole('checkbox');
 
 // Drives the flow from the email step to the register-username step (email -> code ->
 // registrationRequired). Assumes mocks.verifyOTC's FIRST call resolves registrationRequired.

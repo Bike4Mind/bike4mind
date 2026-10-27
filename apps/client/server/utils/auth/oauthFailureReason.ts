@@ -1,3 +1,5 @@
+import type { LoginErrorCode } from '@client/app/utils/loginErrorMessages';
+
 /**
  * Canonical, data-free OAuth failure reasons.
  *
@@ -37,7 +39,7 @@ export function resolveOAuthFailureReason(code: unknown): OAuthFailureReason {
  * (app/utils/loginErrorMessages.ts; must stay in sync). The login page only renders known
  * codes, so free text here would degrade to its generic fallback.
  */
-export function oauthFailureLoginErrorCode(reason: OAuthFailureReason): string {
+export function oauthFailureLoginErrorCode(reason: OAuthFailureReason): LoginErrorCode {
   switch (reason) {
     case 'state_expired':
       return 'invalid_state';
