@@ -220,7 +220,7 @@ describe('grantNoCardUnlock on a real replica set', () => {
     }
   });
 
-  it('does not burn the GitHub id or a domain slot when the grant is capped', async () => {
+  it('does not spend a domain slot when the grant is capped', async () => {
     await seedSettings({ noCardUnlockMaxCredits: GITHUB, noCardUnlockWorkEmailDomainDailyCap: 1 });
     const id = await seedUser();
     const adapters = await build(77);
@@ -230,6 +230,17 @@ describe('grantNoCardUnlock on a real replica set', () => {
       refusal: 'cap_reached',
     });
     expect(await Cache.countDocuments({ key: /no-card-unlock:domain:/ })).toBe(0);
+  });
+
+  it('does not burn the GitHub id when the work-email grant already reached the maximum', async () => {
+    await seedSettings({ noCardUnlockMaxCredits: WORK });
+    const second = await seedUser();
+    expect(await grantNoCardUnlock(second, 'work_email_verified', await build())).toMatchObject({ granted: true });
+    expect(await grantNoCardUnlock(second, 'github_verified', await build(78))).toEqual({
+      granted: false,
+      refusal: 'cap_reached',
+    });
+    expect(await GithubUnlockClaim.countDocuments({ githubId: 78 })).toBe(0);
   });
 
   it('frees a GitHub id after release so another account can claim it', async () => {
@@ -272,6 +283,13 @@ describe('grantNoCardUnlock on a real replica set', () => {
     ]);
     expect(results.filter(r => r.granted)).toHaveLength(1);
     expect(await balance(id)).toBe(GITHUB);
+    // The losing request must not release the claim the winner relies on.
+    expect(await GithubUnlockClaim.countDocuments({ githubId: 1, userId: id })).toBe(1);
+    const other = await seedUser();
+    expect(await grantNoCardUnlock(other, 'github_verified', adapters)).toEqual({
+      granted: false,
+      refusal: 'github_already_claimed',
+    });
   });
 
   it('enforces the per-domain daily cap across accounts', async () => {

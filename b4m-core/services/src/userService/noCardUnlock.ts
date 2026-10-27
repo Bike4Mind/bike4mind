@@ -18,8 +18,11 @@ import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../cre
 import { accountBlockReasons } from './accountState';
 import { isDisposableEmail } from './disposableEmail';
 
+/** `reasonGranted`: this user already holds a ledger row for the reason, e.g. a concurrent request won the grant. */
+export type NoCardUnlockRelease = (opts: { reasonGranted: boolean }) => Promise<void>;
+
 export type NoCardUnlockCommit =
-  { ok: true; release: () => Promise<void> } | { ok: false; refusal: NoCardUnlockRefusal };
+  { ok: true; release: NoCardUnlockRelease } | { ok: false; refusal: NoCardUnlockRefusal };
 
 /** `commit` consumes a scarce resource (a GitHub id, a domain slot); the grant calls it only after the final decision. */
 export type NoCardUnlockCheck =
@@ -96,7 +99,13 @@ export function githubValidator(deps: GithubValidatorDeps): NoCardUnlockValidato
       commit: async () => {
         const claim = await deps.claimGithubId(githubId, user.id);
         if (!claim.claimed) return { ok: false, refusal: 'github_already_claimed' };
-        return { ok: true, release: () => deps.releaseGithubId(githubId, user.id) };
+        // The claim is per (id, user), so a concurrent winner for this user relies on the same row.
+        return {
+          ok: true,
+          release: async ({ reasonGranted }) => {
+            if (!reasonGranted) await deps.releaseGithubId(githubId, user.id);
+          },
+        };
       },
     };
   };
@@ -108,6 +117,7 @@ export interface WorkEmailValidatorDeps {
   resolveMx?: (domain: string) => Promise<unknown[]>;
   /** true = domain accepts any local part, false = it rejects unknown ones, null = could not tell. */
   catchAllProbe: (domain: string) => Promise<boolean | null>;
+  now?: () => Date;
   isDisposable?: (email: string) => boolean;
 }
 
@@ -152,9 +162,15 @@ export function workEmailValidator(deps: WorkEmailValidatorDeps): NoCardUnlockVa
     return {
       ok: true,
       commit: async () => {
-        const { success } = await deps.cache.tryIncrementWithinLimitFixedWindow(key, cap, DAY_MS);
+        const { success, expiresAt } = await deps.cache.tryIncrementWithinLimitFixedWindow(key, cap, DAY_MS);
         if (!success) return { ok: false, refusal: 'domain_cap_reached' };
-        return { ok: true, release: async () => void (await deps.cache.decrementCounter(key)) };
+        // A slot taken in a window that has since rolled over is already gone; decrementing would refund another user's.
+        return {
+          ok: true,
+          release: async () => {
+            if (expiresAt.getTime() > (deps.now?.() ?? new Date()).getTime()) await deps.cache.decrementCounter(key);
+          },
+        };
       },
     };
   };
@@ -223,7 +239,8 @@ export async function grantNoCardUnlock(
   const commit = check.commit ? await check.commit() : null;
   if (commit && !commit.ok) return refused(commit.refusal);
 
-  let result: GrantNoCardUnlockResult;
+  let result: GrantNoCardUnlockResult | null = null;
+  let failure: unknown = null;
   try {
     result = await withTransaction(async () => {
       const current = await db.users.findById(userId);
@@ -251,12 +268,19 @@ export async function grantNoCardUnlock(
       return { granted: true, credits: amount, currentCredits: creditHolder.currentCredits };
     });
   } catch (error) {
-    await commit?.release();
-    if (error instanceof DuplicateCreditTransactionError) return refused('already_granted');
-    throw error;
+    if (error instanceof DuplicateCreditTransactionError) result = refused('already_granted');
+    else failure = error;
   }
-  if (!result.granted) await commit?.release();
-  return result;
+  if (commit?.ok && !result?.granted) {
+    try {
+      const reasonGranted = Boolean(await db.creditTransactions.findOne({ transactionId }));
+      await commit.release({ reasonGranted });
+    } catch (releaseError) {
+      throw failure ?? releaseError;
+    }
+  }
+  if (failure) throw failure;
+  return result as GrantNoCardUnlockResult;
 }
 
 async function sumGranted(db: GrantNoCardUnlockAdapters['db'], userId: string): Promise<number> {

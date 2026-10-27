@@ -37,7 +37,9 @@ describe('githubValidator', () => {
     const commit = check.ok ? await check.commit?.() : undefined;
     expect(commit).toMatchObject({ ok: true });
     expect(deps.claimGithubId).toHaveBeenCalledWith(7, 'u1');
-    if (commit?.ok) await commit.release();
+    if (commit?.ok) await commit.release({ reasonGranted: true });
+    expect(deps.releaseGithubId).not.toHaveBeenCalled();
+    if (commit?.ok) await commit.release({ reasonGranted: false });
     expect(deps.releaseGithubId).toHaveBeenCalledWith(7, 'u1');
   });
 
@@ -120,17 +122,34 @@ describe('githubValidator', () => {
 
 describe('workEmailValidator', () => {
   const build = (over: Record<string, unknown> = {}, settingsOver: Record<string, unknown> = {}) => {
-    const tryIncrement = vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() }));
+    const tryIncrement = vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date(NOW.getTime() + 1000) }));
+    const decrement = vi.fn(async () => 0);
     const deps = {
       settings: settings(settingsOver),
-      cache: { tryIncrementWithinLimitFixedWindow: tryIncrement, decrementCounter: vi.fn(async () => 0) },
+      cache: { tryIncrementWithinLimitFixedWindow: tryIncrement, decrementCounter: decrement },
+      now: () => NOW,
       resolveMx: async () => [{ exchange: 'mx.acme-corp.test', priority: 10 }],
       catchAllProbe: async () => false as boolean | null,
       isDisposable: () => false,
       ...over,
     };
-    return { run: workEmailValidator(deps), tryIncrement };
+    return { run: workEmailValidator(deps), tryIncrement, decrement };
   };
+
+  it('refunds the domain slot on release only while its window is still open', async () => {
+    const open = build();
+    const check = await open.run(user);
+    const commit = check.ok ? await check.commit?.() : undefined;
+    if (commit?.ok) await commit.release({ reasonGranted: false });
+    expect(open.decrement).toHaveBeenCalledWith('no-card-unlock:domain:acme-corp.test');
+
+    const rolled = build({ now: () => new Date(NOW.getTime() + 2000) });
+    const late = await rolled.run(user);
+    const lateCommit = late.ok ? await late.commit?.() : undefined;
+    expect(lateCommit).toMatchObject({ ok: true });
+    if (lateCommit?.ok) await lateCommit.release({ reasonGranted: false });
+    expect(rolled.decrement).not.toHaveBeenCalled();
+  });
 
   it('accepts a real work domain and spends the domain counter keyed on the lowercase domain', async () => {
     const { run, tryIncrement } = build();
