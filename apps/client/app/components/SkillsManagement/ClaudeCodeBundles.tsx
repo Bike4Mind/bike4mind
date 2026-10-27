@@ -53,6 +53,11 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
       <Typography level="body-xs" textColor="text.tertiary">
         A bundle installs several approved skills at once, as one plugin.
       </Typography>
+      {remove.isError ? (
+        <Alert color="danger" variant="soft" data-testid="skill-claude-code-bundle-delete-error">
+          {getErrorMessage(remove.error)}
+        </Alert>
+      ) : null}
       {data.bundles.map(bundle =>
         editing !== 'new' && editing?.id === bundle.id ? (
           <BundleEditor
@@ -78,7 +83,12 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
               </Typography>
               {data.canEdit ? (
                 <>
-                  <IconButton size="sm" aria-label="Edit bundle" onClick={() => setEditing(bundle)}>
+                  <IconButton
+                    size="sm"
+                    aria-label="Edit bundle"
+                    onClick={() => setEditing(bundle)}
+                    data-testid="skill-claude-code-bundle-edit"
+                  >
                     <EditIcon />
                   </IconButton>
                   <IconButton
@@ -86,7 +96,15 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
                     color="danger"
                     aria-label="Delete bundle"
                     disabled={remove.isPending}
-                    onClick={() => remove.mutate(bundle.id)}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Delete "${bundle.name}"? It is removed for everyone who installed it, on their next marketplace update.`
+                        )
+                      ) {
+                        remove.mutate(bundle.id);
+                      }
+                    }}
                     data-testid="skill-claude-code-bundle-delete"
                   >
                     <DeleteIcon />
@@ -95,9 +113,15 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
               ) : null}
             </Stack>
             <Typography level="body-xs">{bundle.description}</Typography>
-            <Typography component="pre" level="body-xs" sx={{ m: 0 }} data-testid="skill-claude-code-bundle-install">
-              /plugin install {bundle.pluginName}@{marketplace}
-            </Typography>
+            {memberCount(bundle) ? (
+              <Typography component="pre" level="body-xs" sx={{ m: 0 }} data-testid="skill-claude-code-bundle-install">
+                /plugin install {bundle.pluginName}@{marketplace}
+              </Typography>
+            ) : (
+              <Typography level="body-xs" color="warning" data-testid="skill-claude-code-bundle-not-in-feed">
+                Not in the feed: no approved skills.
+              </Typography>
+            )}
           </Sheet>
         )
       )}

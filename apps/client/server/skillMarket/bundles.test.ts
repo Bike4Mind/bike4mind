@@ -113,6 +113,7 @@ describe('createBundle', () => {
     await expect(createBundle(admin, { ...body, name: '!!!' })).rejects.toMatchObject({ statusCode: 400 });
     const many = Array.from({ length: 51 }, (_, i) => `65b0000000000000000000${String(i).padStart(2, '0')}`);
     await expect(createBundle(admin, { ...body, listingIds: many })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(createBundle(admin, { ...body, listingIds: [] })).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
@@ -137,6 +138,15 @@ describe('updateBundle / deleteBundle', () => {
     await expect(deleteBundle(admin, BUNDLE)).rejects.toMatchObject({ statusCode: 403 });
     expect(h.bundleUpdate).not.toHaveBeenCalled();
     expect(h.bundleDelete).not.toHaveBeenCalled();
+  });
+
+  it('404s an unknown or malformed bundle id, and a bundle deleted during the edit', async () => {
+    await expect(updateBundle(admin, '65c0000000000000000000ff', { name: 'x' })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(updateBundle(admin, 'nope', { name: 'x' })).rejects.toMatchObject({ statusCode: 404 });
+    h.bundleUpdate.mockResolvedValueOnce(null);
+    await expect(updateBundle(admin, BUNDLE, { name: 'x' })).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it('refuses non-admins and 404s an unknown bundle', async () => {

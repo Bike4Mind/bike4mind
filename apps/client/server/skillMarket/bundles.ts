@@ -12,7 +12,7 @@ import {
   type ISkillListing,
 } from '@bike4mind/common';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { marketVisibilityFilter, memberOrgIdsFor } from './market';
+import { marketVisibilityFilter, memberOrgIdsFor, type MarketActor } from './market';
 
 /**
  * Org skill bundles (SkillBundleModel), managed by org admins and super-admins from the Team
@@ -20,15 +20,13 @@ import { marketVisibilityFilter, memberOrgIdsFor } from './market';
  * the org's approved Organization listings, each reviewed on its own, so curation needs no review.
  */
 
-export type BundleActor = { id: string; isAdmin?: boolean };
-
 /** A listing a bundle may hold, as the bundle editor's picker shows it. */
 export type BundleCandidate = { id: string; name: string; pluginName: string };
 
 const fieldsSchema = z.object({
   name: z.string().trim().min(1).max(64),
   description: z.string().trim().min(1).max(500),
-  listingIds: z.array(z.string()).max(SKILL_BUNDLE_MAX_LISTINGS),
+  listingIds: z.array(z.string()).min(1).max(SKILL_BUNDLE_MAX_LISTINGS),
 });
 
 const parse = <T extends z.ZodTypeAny>(schema: T, body: unknown): z.infer<T> => {
@@ -47,13 +45,13 @@ const orgListingFilter = (organizationId: string) => ({
   claudePluginName: { $type: 'string' },
 });
 
-async function canManage(actor: BundleActor, organizationId: string): Promise<boolean> {
+async function canManage(actor: MarketActor, organizationId: string): Promise<boolean> {
   return (
     Boolean(actor.isAdmin) || (await organizationRepository.findIdsAdministeredBy(actor.id)).includes(organizationId)
   );
 }
 
-async function assertCanManage(actor: BundleActor, organizationId: string): Promise<void> {
+async function assertCanManage(actor: MarketActor, organizationId: string): Promise<void> {
   if (!(await canManage(actor, organizationId)))
     throw new ForbiddenError('Only organization admins can manage bundles');
 }
@@ -72,7 +70,7 @@ async function validListingIds(organizationId: string, ids: string[]): Promise<s
 
 /** The org's bundles and the listings they may hold. Members only (404 otherwise, like the feed). */
 export async function listBundles(
-  actor: BundleActor,
+  actor: MarketActor,
   organizationId: string
 ): Promise<{ bundles: ISkillBundle[]; listings: BundleCandidate[]; canEdit: boolean }> {
   const canEdit = await canManage(actor, organizationId);
@@ -93,7 +91,7 @@ export async function listBundles(
   };
 }
 
-export async function createBundle(actor: BundleActor, body: unknown): Promise<ISkillBundle> {
+export async function createBundle(actor: MarketActor, body: unknown): Promise<ISkillBundle> {
   const { organizationId, ...rest } = parse(fieldsSchema.extend({ organizationId: z.string().min(1) }), body);
   await assertCanManage(actor, organizationId);
   // A super-admin passes assertCanManage for any id, so confirm the org exists.
@@ -121,7 +119,7 @@ export async function createBundle(actor: BundleActor, body: unknown): Promise<I
 }
 
 /** Edits name, description and members. The plugin name stays fixed: installs are keyed on it. */
-export async function updateBundle(actor: BundleActor, id: string, body: unknown): Promise<ISkillBundle> {
+export async function updateBundle(actor: MarketActor, id: string, body: unknown): Promise<ISkillBundle> {
   const bundle = await findBundle(id);
   await assertCanManage(actor, bundle.organizationId);
   const patch = parse(fieldsSchema.partial(), body);
@@ -131,7 +129,7 @@ export async function updateBundle(actor: BundleActor, id: string, body: unknown
   return toBundle(updated);
 }
 
-export async function deleteBundle(actor: BundleActor, id: string): Promise<void> {
+export async function deleteBundle(actor: MarketActor, id: string): Promise<void> {
   const bundle = await findBundle(id);
   await assertCanManage(actor, bundle.organizationId);
   await SkillBundle.deleteOne({ _id: id });
