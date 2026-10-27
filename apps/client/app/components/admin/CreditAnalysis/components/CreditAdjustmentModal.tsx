@@ -19,8 +19,14 @@ import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUserCreditAdjustments, userCreditAdjustmentsKey } from '../hooks/useUserCreditAdjustments';
-import { isValidAdminActionReason } from '@bike4mind/common';
-import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 
 interface CreditAdjustmentModalProps {
@@ -37,23 +43,23 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   onCreditAdjustment,
 }) => {
   const [creditAmount, setCreditAmount] = useState(100);
-  const [creditNote, setCreditNote] = useState('');
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const queryClient = useQueryClient();
 
   const { data: adjustments, isLoading: adjustmentsLoading } = useUserCreditAdjustments(selectedUser?.id, open);
 
-  const isReasonValid = isValidAdminActionReason(creditNote);
+  const isReasonValid = isAdminReasonComplete(reason);
 
   const handleClose = () => {
     setCreditAmount(100);
-    setCreditNote('');
+    setReason(EMPTY_ADMIN_REASON);
     onClose();
   };
 
   const handleCreditAdjustment = async (isAdd: boolean) => {
     if (selectedUser && creditAmount > 0 && isReasonValid) {
       const adjustment = isAdd ? creditAmount : -creditAmount;
-      await onCreditAdjustment(selectedUser.id, adjustment, creditNote.trim());
+      await onCreditAdjustment(selectedUser.id, adjustment, composeAdminReason(reason));
       queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
       handleClose();
     }
@@ -94,10 +100,10 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
             </FormControl>
 
             <Box sx={{ mb: 3 }}>
-              <AdminReasonField
-                value={creditNote}
-                onChange={setCreditNote}
-                placeholder="Reason for adjustment (e.g., 'Promotional bonus', 'Compensation for issue')"
+              <ReasonPicker
+                presets={ADMIN_REASON_PRESETS.creditAdjustment}
+                value={reason}
+                onChange={setReason}
                 data-testid="credit-adjust-reason-input"
               />
             </Box>

@@ -10,8 +10,8 @@ import {
   type ReactNode,
 } from 'react';
 import { ChevronDown, Ellipsis, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
-import { Avatar, Box, Dropdown, IconButton, Input, Menu, MenuButton, MenuItem, Tooltip } from '@mui/joy';
-import { adminFocus } from './shared/adminStyles';
+import { Avatar, Box, Chip, Dropdown, IconButton, Input, Menu, MenuButton, MenuItem, Tooltip } from '@mui/joy';
+import { adminFocus, adminScrollGutter } from './shared/adminStyles';
 import {
   AdminTab,
   SIDEBAR_SECTIONS,
@@ -46,6 +46,8 @@ export type SidebarNavProps = {
   onToggleCollapsed?: () => void;
   /** Shows a close button in the header; used by the phone drawer. */
   onClose?: () => void;
+  /** A short environment name beside the brand ("Staging"), so it stays in view when the banner is not; none on production. */
+  environmentLabel?: string | null;
 };
 
 const EXPANDED_WIDTH = 248;
@@ -155,14 +157,11 @@ const kbdSx = {
   whiteSpace: 'nowrap',
 };
 
-// Hidden until the pointer is over the list, so a long nav does not wear a permanent scrollbar.
+// The thumb shows only while the pointer or focus is in the list, so a long nav does not wear a permanent scrollbar.
 const quietScrollSx = {
   overflowY: 'auto',
   overscrollBehavior: 'contain',
-  scrollbarWidth: 'none',
-  '&&::-webkit-scrollbar': { width: 0, height: 0 },
-  '&:hover': { scrollbarWidth: 'thin' },
-  '&&:hover::-webkit-scrollbar': { width: 6 },
+  ...adminScrollGutter,
 } as const;
 
 // The size goes in an inline style too: app-wide svg rules otherwise beat lucide's width attribute.
@@ -277,6 +276,7 @@ export const SidebarNav = ({
   collapsed = false,
   onToggleCollapsed,
   onClose,
+  environmentLabel,
 }: SidebarNavProps) => {
   const { isMoreOpen, toggleMore } = useAdminSidebarMore();
   const [query, setQuery] = useState('');
@@ -560,6 +560,11 @@ export const SidebarNav = ({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: '10px', px: '10px', pt: '4px', pb: '18px' }}>
           <BrandMark />
           <Box sx={{ fontWeight: 600, fontSize: 14, lineHeight: '20px', color: 'admin.ink' }}>Admin</Box>
+          {environmentLabel && (
+            <Chip size="sm" variant="soft" color="neutral" data-testid="admin-sidebar-environment-chip">
+              {environmentLabel}
+            </Chip>
+          )}
           <Box
             component="kbd"
             title="Command palette"

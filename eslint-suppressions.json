@@ -279,11 +279,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/ai/llm.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/api-keys/create.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
