@@ -290,7 +290,8 @@ export const SidebarNav = ({
     userMigration: !!enableUserMigration,
     liveOpsTriage: showLiveOpsTriageTab,
   };
-  const visibleSections = filterSidebarSections(SIDEBAR_SECTIONS, gates, query);
+  // The rail has no filter box to show or clear a query, so it always lists every section.
+  const visibleSections = filterSidebarSections(SIDEBAR_SECTIONS, gates, collapsed ? '' : query);
   const filtering = query.trim() !== '';
   const activeSectionKey = findSectionKeyForTab(activeTab);
 

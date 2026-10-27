@@ -305,6 +305,25 @@ describe('SidebarNav', () => {
       expect(onTabSelect).toHaveBeenCalledExactlyOnceWith(AdminTab.AuditLog);
     });
 
+    it('ignores a filter query left over from before collapsing', () => {
+      const onTabSelect = vi.fn();
+      const props = {
+        activeTab: AdminTab.Dashboard,
+        showLiveOpsTriageTab: false,
+        hiddenNotifications: [],
+        onTabSelect,
+        onToggleCollapsed: vi.fn(),
+      };
+      const { rerender } = render(<SidebarNav {...props} />, { wrapper: Wrapper });
+      fireEvent.change(filterInput(), { target: { value: 'rate li' } });
+
+      rerender(<SidebarNav {...props} collapsed />);
+
+      for (const section of SIDEBAR_SECTIONS) {
+        expect(screen.getByTestId(`admin-sidebar-rail-${section.key}-btn`)).toBeInTheDocument();
+      }
+    });
+
     it('lists every item of a long section in the rail menu', () => {
       renderNav({ collapsed: true, onToggleCollapsed: vi.fn() });
 
