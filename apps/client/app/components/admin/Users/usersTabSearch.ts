@@ -55,6 +55,8 @@ export const USERS_FILTER_PARAMS = {
   hasApiKey: 'keys',
   signedUp: 'signedUp',
   risk: 'risk',
+  createdFrom: 'createdFrom',
+  createdTo: 'createdTo',
 } as const satisfies Partial<Record<keyof UsersListView, string>>;
 export type UsersFilterKey = keyof typeof USERS_FILTER_PARAMS;
 export const USERS_FILTER_KEYS = Object.keys(USERS_FILTER_PARAMS) as UsersFilterKey[];
@@ -107,11 +109,20 @@ export type UsersSearch = {
   keys?: UsersListView['hasApiKey'];
   signedUp?: UsersListView['signedUp'];
   risk?: UsersListView['risk'];
+  createdFrom?: string;
+  createdTo?: string;
 };
 
 const parseLimit = (value: unknown): number | undefined => {
   const limit = toNumber(value);
   return PAGE_LIMIT_OPTIONS.includes(limit) ? limit : undefined;
+};
+
+// Only a full ISO instant, normalized, so a link cannot smuggle a free-form date string to the API.
+export const parseInstant = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return undefined;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? undefined : new Date(time).toISOString();
 };
 
 // Mirrors AdminUsersFilterSchema.emailDomain, so a link can never carry a domain the API rejects.
@@ -157,6 +168,8 @@ export const USERS_SEARCH_PARSERS: {
   keys: oneOf(YES_NO_FILTERS),
   signedUp: oneOf(USER_SIGNED_UP_FILTERS),
   risk: oneOf(USER_RISK_FILTERS),
+  createdFrom: parseInstant,
+  createdTo: parseInstant,
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView, UsersFilterKey> {
@@ -171,6 +184,8 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView,
       USERS_SEARCH_PARSERS.signedUp(search.signedUp) ??
       USERS_SEARCH_PARSERS[LEGACY_RECENT_SIGNUPS_PARAM](search[LEGACY_RECENT_SIGNUPS_PARAM]),
     risk: USERS_SEARCH_PARSERS.risk(search.risk),
+    createdFrom: parseInstant(search.createdFrom),
+    createdTo: parseInstant(search.createdTo),
   };
 }
 
@@ -240,6 +255,8 @@ export function usersViewToSearch(params: UsersListView): Omit<UsersSearch, type
     keys: params.hasApiKey,
     signedUp: params.signedUp,
     risk: params.risk,
+    createdFrom: parseInstant(params.createdFrom),
+    createdTo: parseInstant(params.createdTo),
   };
 }
 
@@ -266,7 +283,8 @@ export const CLEARED_FILTER_PARAMS: Partial<UsersListParams> = {
 };
 
 export const countActiveFilters = (params: UsersListView): number =>
-  USERS_FILTER_KEYS.filter(key => params[key] !== undefined).length +
+  // The created-at window is one filter however many of its two ends are set.
+  USERS_FILTER_KEYS.filter(key => params[key] !== undefined && !(key === 'createdTo' && params.createdFrom)).length +
   (params.orgSearch.length > 0 && !params.orgSearch.includes('all') ? 1 : 0) +
   (params.tags.length > 0 ? 1 : 0);
 

@@ -63,6 +63,9 @@ export const AdminUsersFilterSchema = z.object({
   hasApiKey: z.enum(YES_NO_FILTERS).optional(),
   signedUp: z.enum(USER_SIGNED_UP_FILTERS).optional(),
   risk: z.enum(USER_RISK_FILTERS).optional(),
+  // A created-at window from the signup chart; the end is exclusive.
+  createdFrom: z.string().datetime().optional(),
+  createdTo: z.string().datetime().optional(),
 });
 export type AdminUsersFilter = z.infer<typeof AdminUsersFilterSchema>;
 

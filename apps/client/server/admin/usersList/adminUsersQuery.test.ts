@@ -89,6 +89,23 @@ describe('buildAdminUsersMatch', () => {
       { 'signupGrantAssessment.band': 'review' },
     ]);
   });
+
+  it('maps the signup chart window, end exclusive, alongside a signed-up window', () => {
+    expect(
+      conditionsOf(
+        buildAdminUsersMatch(
+          { signedUp: 'hour', createdFrom: '2026-10-27T10:00:00.000Z', createdTo: '2026-10-27T11:00:00.000Z' },
+          context
+        )
+      )
+    ).toEqual([
+      { createdAt: { $gte: new Date('2026-10-27T11:00:00.000Z') } },
+      { createdAt: { $gte: new Date('2026-10-27T10:00:00.000Z'), $lt: new Date('2026-10-27T11:00:00.000Z') } },
+    ]);
+    expect(conditionsOf(buildAdminUsersMatch({ createdTo: '2026-10-27T11:00:00.000Z' }, context))).toEqual([
+      { createdAt: { $lt: new Date('2026-10-27T11:00:00.000Z') } },
+    ]);
+  });
 });
 
 describe('organizationNamesOf', () => {
