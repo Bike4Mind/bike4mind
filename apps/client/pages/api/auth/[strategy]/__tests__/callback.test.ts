@@ -219,7 +219,7 @@ describe('[strategy]/callback - !user branch log level', () => {
     expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate User Not Found Info:', info);
     expect(errorSpy).not.toHaveBeenCalled();
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'access_denied' }));
-    expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });

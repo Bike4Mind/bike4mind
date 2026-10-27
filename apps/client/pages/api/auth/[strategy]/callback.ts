@@ -258,7 +258,7 @@ const handler = baseApi({ auth: false })
       } catch (callbackError) {
         // Catch any unhandled errors in the callback to prevent unhandled promise rejections
         console.error('Unhandled error in passport authenticate callback:', callbackError);
-        return res.redirect('/login?error=Authentication%20failed');
+        return res.redirect(`/login?error=${oauthFailureLoginErrorCode('internal')}`);
       }
     })(req, res, next);
   });
