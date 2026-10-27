@@ -161,6 +161,15 @@ describe('signedUrlExpiresAt', () => {
     expect(signedUrlExpiresAt(sigV4Url(3600), 3600)).toEqual(new Date(signedAt.getTime() + 3600 * 1000));
   });
 
+  it('caps a multi-day link at an hour, since its credentials may expire without saying so', () => {
+    vi.useFakeTimers({ now: signedAt });
+    const fiveDays = 5 * 24 * 3600;
+    expect(signedUrlExpiresAt(sigV4Url(fiveDays), fiveDays)).toEqual(new Date(signedAt.getTime() + 3600 * 1000));
+    expect(signedUrlExpiresAt('https://files.example.invalid/owned/file.txt', fiveDays)).toEqual(
+      new Date(signedAt.getTime() + 3600 * 1000)
+    );
+  });
+
   it.each([
     ['carries no SigV4 query (non-S3 adapter)', 'https://files.example.invalid/owned/file.txt'],
     ['is not a URL', 'not a url'],
