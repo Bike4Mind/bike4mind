@@ -271,6 +271,8 @@ export interface RegisteredChat {
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
   spareWorktrees: SpareWorktrees;
+  /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
+  localContext: LocalContextPreference;
 }
 
 /**
@@ -1235,7 +1237,7 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees };
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, localContext };
 }
 
 export { ChatService } from './ChatService';

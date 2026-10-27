@@ -14,18 +14,19 @@ import { OLLAMA_DOWNLOAD_URL, type ModelPull, type ModelRuntimeStatus } from '@s
 import { ExternalLink } from '../chat/ExternalLink';
 import { CloseIcon } from '../chat/icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
-import { ExploreTab } from './ExploreTab';
+import { CuratedTab } from './CuratedTab';
+import { ExploreTab, rememberExploreRepo } from './ExploreTab';
 import { InstalledTab, type ModelsInUse } from './InstalledTab';
 import { pullLabel, pullPercent } from './pullDisplay';
 import { useModelHub } from './useModelHub';
 
-// A Curated tab, fed by a signed manifest, goes first in this list when it lands.
-type ModelsTab = 'installed' | 'explore';
+type ModelsTab = 'curated' | 'installed' | 'explore';
+const TABS: readonly ModelsTab[] = ['curated', 'installed', 'explore'];
 
 const screenColumnSx = { ...contentColumnSx, maxWidth: 1120 };
 
 // Survives leaving the screen, so coming back mid-pull lands where the user was.
-let rememberedTab: ModelsTab = 'installed';
+let rememberedTab: ModelsTab = 'curated';
 
 function RuntimeStatusBar({ status, onRetry }: { status: ModelRuntimeStatus | null; onRetry: () => void }) {
   if (!status)
@@ -121,7 +122,7 @@ function PullRow({ pull }: { pull: ModelPull }) {
   );
 }
 
-/** Local models: what is installed, and GGUF builds from Hugging Face to download through Ollama. */
+/** Local models: a curated list, what is installed, and GGUF builds from Hugging Face to download through Ollama. */
 export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: ModelsInUse }) {
   const hub = useModelHub();
   const [tab, setTab] = useState<ModelsTab>(rememberedTab);
@@ -158,7 +159,7 @@ export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: 
 
       <Tabs
         value={tab}
-        onChange={(_event, value) => choose(value === 'explore' ? 'explore' : 'installed')}
+        onChange={(_event, value) => choose(TABS.find(candidate => candidate === value) ?? 'curated')}
         sx={{ flex: 1, minHeight: 0, bgcolor: 'transparent' }}
       >
         <Box sx={{ py: 1 }}>
@@ -172,6 +173,9 @@ export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: 
               '& .Mui-selected': { bgcolor: 'background.level1', boxShadow: 'sm' },
             }}
           >
+            <Tab value="curated" data-testid="models-curated-tab">
+              Curated
+            </Tab>
             <Tab value="installed" data-testid="models-installed-tab">
               Installed{installedCount === null ? '' : ` (${installedCount})`}
             </Tab>
@@ -190,6 +194,20 @@ export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: 
             </Stack>
           )}
         </Box>
+        <TabPanel value="curated" sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
+          <Box sx={{ ...screenColumnSx, py: 1 }}>
+            <CuratedTab
+              status={hub.status}
+              installed={hub.installed}
+              pulls={hub.pulls}
+              onRecheck={() => void hub.refresh()}
+              onOpenInExplore={repo => {
+                rememberExploreRepo(repo);
+                choose('explore');
+              }}
+            />
+          </Box>
+        </TabPanel>
         <TabPanel value="installed" sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
           <Box sx={{ ...screenColumnSx, py: 1 }}>
             <InstalledTab
