@@ -341,13 +341,14 @@ export class SmartChunker {
     this.logger.log(`Chunking file with type: ${mimeType}`);
 
     // Cleared per call; each format handler below sets it to the text it extracted. Anything that
-    // returns no chunks (audio/image/unsupported) leaves it undefined.
+    // returns no chunks (audio/image) leaves it undefined; an unsupported type throws
+    // UnsupportedFileTypeError.
     this.lastExtractedText = undefined;
     this.lastDocumentDate = undefined;
 
     // Audio and video (generated media) are intentionally not vectorizable -
     // there is nothing to chunk. Short-circuit quietly so reprocess/on-demand
-    // paths don't log it as an "Unsupported file type" error. The normal ingest
+    // paths don't throw UnsupportedFileTypeError and mark media as failed. The normal ingest
     // path already skips the chunk-queue enqueue for media-only files (objectCreated.ts).
     if (isMediaOnlyMimeType(mimeType)) {
       this.logger.log(`Skipping chunking for media-only file type: ${mimeType}`);

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Drive the raw handler: passthrough dispatchWithLogger (no connectDB / real logger)
 // and mock the data + service seams. Mirrors sreJob.test.ts.
@@ -929,8 +929,12 @@ describe('fabFileChunk handler - unsupported file format', () => {
   });
 
   it('does not dispatch vectorize work or mark the file as chunked', async () => {
-    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ $set: expect.objectContaining({ noExtractableTextAt: expect.anything() }) })
+    );
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(h.claimFileStatus).not.toHaveBeenCalled();
   });

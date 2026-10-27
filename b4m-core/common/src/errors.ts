@@ -369,7 +369,9 @@ export function isChunkClaimLostError(err: unknown): err is ChunkClaimLostError 
  */
 export class UnsupportedFileTypeError extends Error {
   constructor(public mimeType: string | undefined) {
-    super(`Unsupported file format (${mimeType ?? 'unknown'}). Save it as .docx, .xlsx, .pptx or .pdf and re-upload.`);
+    super(
+      `Unsupported file format (${mimeType ?? 'unknown'}). Convert it to a supported format such as .docx or .pdf and re-upload.`
+    );
     this.name = 'UnsupportedFileTypeError';
   }
 }
