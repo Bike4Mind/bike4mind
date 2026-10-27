@@ -246,20 +246,6 @@ describe('ModelHubService pulls', () => {
     expect(service.pulls()).toEqual([]);
   });
 
-  it('refuses when the reviewed detail was evicted and the repo changed meanwhile', async () => {
-    const { service, hub, runtime } = harness();
-    let revision = 'b'.repeat(40);
-    hub.getModel.mockImplementation(async (repo: string) => detail({ id: repo, revision }));
-    const shown = await service.detail(REPO);
-    if (!shown.ok) throw new Error(shown.error.message);
-    for (let i = 0; i < 16; i++) await service.detail(`someone/other${i}`);
-    revision = 'f'.repeat(40);
-
-    const result = await service.pull({ ...request, revision: shown.model.revision });
-    expect(result).toMatchObject({ ok: false, error: { kind: 'changed' } });
-    expect(runtime.pull).not.toHaveBeenCalled();
-  });
-
   it('explains how to clear a download Ollama cannot resume', async () => {
     const { service, pulls } = harness();
     const result = service.pull(request);

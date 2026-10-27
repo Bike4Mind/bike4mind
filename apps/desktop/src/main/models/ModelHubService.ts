@@ -64,7 +64,6 @@ export interface ModelHubServiceDeps {
   progressIntervalMs?: number;
 }
 
-const DETAIL_CACHE_SIZE = 16;
 const DEFAULT_PROGRESS_INTERVAL_MS = 250;
 const SEARCH_LIMIT = 30;
 
@@ -191,7 +190,6 @@ function phaseOf(status: string): ModelPull['phase'] {
 export class ModelHubService {
   readonly #deps: ModelHubServiceDeps;
   readonly #pulls = new Map<string, PullEntry>();
-  readonly #details = new Map<string, HubModelDetail>();
   readonly #progressIntervalMs: number;
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -240,7 +238,7 @@ export class ModelHubService {
 
   async detail(repo: string): Promise<HubDetailResult> {
     try {
-      return { ok: true, model: toView(this.#deps.hub.endpoint, await this.#loadDetail(repo, true)) };
+      return { ok: true, model: toView(this.#deps.hub.endpoint, await this.#deps.hub.getModel(repo)) };
     } catch (error) {
       return { ok: false, error: toModelHubError(error) };
     }
@@ -284,7 +282,7 @@ export class ModelHubService {
     let ref: string | null;
     try {
       // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
-      const detail = await this.#loadDetail(request.repo, true);
+      const detail = await this.#deps.hub.getModel(request.repo);
       const build = detail.builds.find(candidate => candidate.id === request.buildId);
       if (!build) return refuse(hubError('not-found', 'That build is no longer in this repo.'));
       if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)
@@ -367,21 +365,6 @@ export class ModelHubService {
     for (const entry of this.#pulls.values()) entry.controller.abort();
     if (this.#pushTimer) clearTimeout(this.#pushTimer);
     this.#pushTimer = null;
-  }
-
-  async #loadDetail(repo: string, refresh: boolean): Promise<HubModelDetail> {
-    const cached = this.#details.get(repo);
-    if (cached && !refresh) return cached;
-    const detail = await this.#deps.hub.getModel(repo);
-    this.#details.delete(repo);
-    this.#details.set(repo, detail);
-    if (detail.id !== repo) this.#details.set(detail.id, detail);
-    while (this.#details.size > DETAIL_CACHE_SIZE) {
-      const oldest = this.#details.keys().next().value;
-      if (oldest === undefined) break;
-      this.#details.delete(oldest);
-    }
-    return detail;
   }
 
   #fail(key: string, entry: PullEntry, error: ModelHubError): ModelPullResult {
