@@ -7,8 +7,13 @@
 
 import { BadRequestError, InternalServerError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { IAgent, supportedChatModels, supportedImageModels, triggerWordsSchema } from '@bike4mind/common';
-import { getCallerModelList } from '@server/utils/callerModelList';
+import {
+  IAgent,
+  IUserDocument,
+  supportedChatModels,
+  supportedImageModels,
+  triggerWordsSchema,
+} from '@bike4mind/common';
 
 /**
  * A body field failed one of these validators. A BadRequestError (400) on the SPA routes; the
@@ -159,7 +164,7 @@ export function validateTriggerWords(value: unknown): string[] | undefined {
   return result.data;
 }
 
-type CatalogLogger = Parameters<typeof getCallerModelList>[1];
+type CatalogLogger = { log: (message: string) => void };
 
 /**
  * The static enums only know models that shipped with the build; newer ones arrive through the
@@ -167,7 +172,7 @@ type CatalogLogger = Parameters<typeof getCallerModelList>[1];
  * live fan-out runs only for ids the enums miss. An id is accepted when the build knows it or, for
  * a catalog-only id, when it is selectable in chat for this user.
  */
-async function assertModelsSelectable(agentData: Partial<IAgent>, userId: string, logger: CatalogLogger) {
+async function assertModelsSelectable(agentData: Partial<IAgent>, user: IUserDocument, logger: CatalogLogger) {
   const checks = [
     { id: agentData.preferredModel, known: supportedChatModels, type: 'text' as const, message: 'Invalid model' },
     {
@@ -181,7 +186,10 @@ async function assertModelsSelectable(agentData: Partial<IAgent>, userId: string
   if (malformed) throw new AgentValidationError(`${malformed.message}: expected a string`);
   if (checks.length === 0) return;
 
-  const { models } = await getCallerModelList(userId, logger);
+  // Loaded lazily: callerModelList pulls in the entitlements and billing graph, and skillValidation
+  // and the create-from-context routes import this module only for the pure validators.
+  const { getCallerModelList } = await import('@server/utils/callerModelList');
+  const { models } = await getCallerModelList(user, logger);
   // An empty catalog means every backend listing failed; reject as unavailable, not as a bad model.
   if (models.length === 0) {
     throw new InternalServerError('Model catalog is unavailable; try again shortly');
@@ -197,13 +205,13 @@ async function assertModelsSelectable(agentData: Partial<IAgent>, userId: string
 /**
  * Validates and normalizes the fields of an agent body in place, for PUT /api/agents/[id],
  * PATCH /api/v1/agents/[id] and createAgent (both POST routes). Only fields present on `agentData` are checked. `label` renames a field
- * in an error message, so the v1 route can name its snake_case spelling. `userId` scopes the model
- * catalog lookup to the keys the caller can actually chat with; `logger` carries the request's logger
- * into that lookup.
+ * in an error message, so the v1 route can name its snake_case spelling. `user` scopes the model
+ * catalog lookup to what the caller can actually chat with (their keys and plan); `logger` carries the
+ * request's logger into that lookup.
  */
 export async function validateAgentUpdate(
   agentData: Partial<IAgent>,
-  userId: string,
+  user: IUserDocument,
   label: (field: string) => string = field => field,
   logger: CatalogLogger = new Logger()
 ) {
@@ -245,5 +253,5 @@ export async function validateAgentUpdate(
   }
 
   // Last, so a body the cheap checks reject never pays for the live catalog fan-out.
-  await assertModelsSelectable(agentData, userId, logger);
+  await assertModelsSelectable(agentData, user, logger);
 }
