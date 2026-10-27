@@ -8,7 +8,8 @@ import type { PublishStore, PutCondition } from './publishStore';
 import { catalogBytes, sigBytes, testSigner } from './testCatalog';
 
 const signing = testSigner('signing');
-const keyring = [signing.key];
+const recovery = testSigner('recovery');
+const keyring = [signing.key, recovery.key];
 const P = 'model-hub/curated-v2/';
 
 class FakeStore implements PublishStore {
@@ -133,6 +134,35 @@ describe('publishCandidate', () => {
     expect(await publishCandidate(signed(3), deps())).toBe(EXIT.ok);
     expect(lines.at(-1)).toBe('sequence 3 is already live; nothing to do');
     expect(store.puts).toEqual([]);
+  });
+
+  it('publishes a recovery list below a live list that only a leaked key signed, and a re-run finishes it', async () => {
+    const leakedBytes = catalogBytes(3, catalog => {
+      catalog.sequence = 999999;
+      catalog.changelog.unshift({ ...catalog.changelog[0], sequence: 999999, notes: 'Leaked.' });
+    });
+    const leaked = verifyCandidate(leakedBytes, sigBytes(leakedBytes, [signing], 999999), keyring);
+    if (!leaked.ok) throw new Error(leaked.error);
+    goLive(store, leaked.value);
+    const manifest = catalogBytes(4, catalog => (catalog.revokedKeyIds = [signing.key.keyId]));
+    const checked = verifyCandidate(manifest, sigBytes(manifest, [recovery], 4), keyring);
+    if (!checked.ok) throw new Error(checked.error);
+
+    const put = store.put.bind(store);
+    const interrupted = vi.spyOn(store, 'put').mockImplementation(async (key, bytes, cacheControl, condition) => {
+      if (key === `${P}latest.json`) throw new Error('network down');
+      return put(key, bytes, cacheControl, condition);
+    });
+    await expect(publishCandidate(checked.value, deps())).rejects.toThrow('network down');
+    expect(lines).toContain(`plan: sequence 999999 -> 4, below live: it revokes ${signing.key.keyId}`);
+    interrupted.mockRestore();
+
+    expect(await publishCandidate(checked.value, deps())).toBe(EXIT.ok);
+    expect(lines).toContain('plan: finish the interrupted publish of sequence 4');
+    expect(store.objects.get(`${P}latest.json`)?.bytes).toEqual(manifest);
+    expect(store.objects.get(`${P}latest.json.sig`)?.bytes).toEqual(checked.value.sig);
+    expect(await publishCandidate(signed(5), deps())).toBe(EXIT.failed);
+    expect(lines.at(-1)).toMatch(/signed only by keys the live list revokes/);
   });
 
   it('reads a live pair caught mid-publish through the sig hint, and a re-run finishes it', async () => {

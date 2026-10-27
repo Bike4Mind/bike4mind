@@ -200,6 +200,29 @@ describe('planPublish', () => {
     expect(reason(catalog => (catalog.revokedKeyIds = []))).toBe(`revokedKeyIds drops ${REVOKED}`);
   });
 
+  it('lets a recovery list go below a live list only when it revokes every key that signed that list', () => {
+    const leakedBytes = catalogBytes(3, catalog => {
+      catalog.sequence = 999999;
+      catalog.changelog.unshift({ ...catalog.changelog[0], sequence: 999999, notes: 'Leaked.' });
+    });
+    const leaked = candidate(leakedBytes, [signing]);
+    const revoking = (ids: string[], signers = [recovery]) =>
+      candidate(
+        catalogBytes(4, catalog => (catalog.revokedKeyIds = ids)),
+        signers
+      );
+    expect(planPublish(revoking([signing.key.keyId]), leaked)).toEqual({
+      kind: 'recover',
+      liveSequence: 999999,
+      revokes: [signing.key.keyId],
+    });
+    expect(planPublish(revoking([REVOKED]), leaked)).toMatchObject({ kind: 'behind-live' });
+    expect(planPublish(revoking([signing.key.keyId], [signing]), leaked)).toMatchObject({ kind: 'behind-live' });
+    expect(planPublish(revoking([signing.key.keyId]), candidate(leakedBytes, [signing, recovery]))).toMatchObject({
+      kind: 'behind-live',
+    });
+  });
+
   it('lets the oldest changelog items drop off', () => {
     expect(reason(catalog => (catalog.changelog = catalog.changelog.slice(0, 2)))).toBe('publish');
   });
