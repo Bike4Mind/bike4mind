@@ -4,8 +4,8 @@ import { Sheet } from '@mui/joy';
 import AppTheme from '@client/app/utils/themes/AppTheme';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 
-const { back, navigate } = vi.hoisted(() => ({ back: vi.fn(), navigate: vi.fn() }));
-vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ history: { back } }), useNavigate: () => navigate }));
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('@client/app/hooks/useHelpPanel', () => ({ openHelpPanel: vi.fn() }));
 
 const PROPS = ['color', 'background-color', 'font-size', 'font-family', 'border-color'] as const;
@@ -59,6 +59,5 @@ describe('AdminEnvironmentBanner', () => {
     );
     fireEvent.click(screen.getByTestId('close-admin-page-banner-btn'));
     expect(navigate).toHaveBeenCalledWith({ to: '/' });
-    expect(back).not.toHaveBeenCalled();
   });
 });
