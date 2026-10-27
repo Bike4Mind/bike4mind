@@ -40,10 +40,13 @@ export const RISK_BAND: Record<(typeof USER_RISK_FILTERS)[number], 'review' | 'r
   low: 'full',
 };
 
+// Routes pass this as qs's arrayLimit too: past qs's default of 20, a list parses as an object.
+export const ADMIN_USERS_LIST_MAX = 50;
+
 // A query string carries a one-item list as a bare string.
 const stringList = z.preprocess(
   value => (typeof value === 'string' ? [value] : value),
-  z.array(z.string().max(200)).max(50)
+  z.array(z.string().max(200)).max(ADMIN_USERS_LIST_MAX)
 );
 
 export const AdminUsersFilterSchema = z.object({

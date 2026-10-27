@@ -3,7 +3,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { AdminUsersFilterSchema } from '@client/app/utils/adminUsersFilter';
+import { ADMIN_USERS_LIST_MAX, AdminUsersFilterSchema } from '@client/app/utils/adminUsersFilter';
 import { exportAdminUsers } from '@server/admin/usersList/listAdminUsers';
 import qs from 'qs';
 
@@ -13,7 +13,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
   .get(
     asyncHandler(async (req, res) => {
       if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-      const parsed = AdminUsersFilterSchema.safeParse(qs.parse(req.query as Record<string, string>));
+      const parsed = AdminUsersFilterSchema.safeParse(
+        qs.parse(req.query as Record<string, string>, { arrayLimit: ADMIN_USERS_LIST_MAX })
+      );
       if (!parsed.success) {
         return res.status(400).json({ message: 'Invalid query parameters', error: parsed.error.issues });
       }

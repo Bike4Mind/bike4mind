@@ -89,6 +89,13 @@ describe('GET /api/admin/users', () => {
     expect(mockList).not.toHaveBeenCalled();
   });
 
+  it("accepts up to 50 tags, past qs's default array limit of 20", async () => {
+    const tags = Array.from({ length: 50 }, (_, index) => `tag${index}`);
+    const query = Object.fromEntries(tags.map((tag, index) => [`tags[${index}]`, tag]));
+    expect((await call(handler, query))._getStatusCode()).toBe(200);
+    expect(mockList.mock.calls[0][0]).toMatchObject({ tags });
+  });
+
   it('rejects an unknown page size or sort with 400', async () => {
     expect((await call(handler, { limit: '1000' }))._getStatusCode()).toBe(400);
     expect((await call(handler, { sortField: 'passwordHash' }))._getStatusCode()).toBe(400);
