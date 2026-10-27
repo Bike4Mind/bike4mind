@@ -42,7 +42,7 @@ function parseFlag(raw: unknown): boolean {
   return raw === true || (typeof raw === 'string' && raw.trim().toLowerCase() === 'true');
 }
 
-/** Unset or malformed values resolve to disabled/0 so a bad setting can never widen a grant. */
+/** Unset or malformed values resolve to disabled/0. A 0 age or repo minimum is unconfigured, which the GitHub validator refuses. */
 export function resolveNoCardUnlockSettings(adminSettings: Record<string, unknown>): NoCardUnlockSettings {
   return {
     enabled: parseFlag(adminSettings.noCardUnlockEnabled),

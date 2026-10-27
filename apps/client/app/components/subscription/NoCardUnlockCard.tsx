@@ -30,15 +30,19 @@ export function NoCardUnlockCard() {
   const unlock = useNoCardUnlock();
   const [pending, setPending] = useState<NoCardUnlockReason | null>(null);
   const [outcome, setOutcome] = useState<{ granted: number; refusal?: NoCardUnlockRefusal } | null>(null);
+  const [failed, setFailed] = useState(false);
 
   if (!getSettingBoolean('noCardUnlockEnabled', false)) return null;
+  // No catch-all probe runs in this deployment, so work-email unlocks are only offered when inconclusive results are allowed.
+  const workEmailOffered = getSettingBoolean('noCardUnlockProbeInconclusiveAllows', false);
 
   const run = (reason: NoCardUnlockReason) => {
     setPending(reason);
     setOutcome(null);
+    setFailed(false);
     unlock.mutate(reason, {
       onSuccess: result => setOutcome({ granted: result.creditsGranted, refusal: result.refusal }),
-      onError: () => setOutcome({ granted: 0, refusal: 'disabled' }),
+      onError: () => setFailed(true),
       onSettled: () => setPending(null),
     });
   };
@@ -47,7 +51,9 @@ export function NoCardUnlockCard() {
     <Box data-testid="no-card-unlock-card" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <Typography level="title-md">{t('billing.no_card_unlock_title', 'Unlock credits without a card')}</Typography>
       <Typography level="body-sm">
-        {t('billing.no_card_unlock_sub', 'Verify a GitHub account or a work email to add starter credits.')}
+        {workEmailOffered
+          ? t('billing.no_card_unlock_sub', 'Verify a GitHub account or a work email to add starter credits.')
+          : t('billing.no_card_unlock_sub_github', 'Verify a GitHub account to add starter credits.')}
       </Typography>
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         <Button
@@ -59,16 +65,23 @@ export function NoCardUnlockCard() {
         >
           {t('billing.no_card_unlock_github', 'Verify with GitHub')}
         </Button>
-        <Button
-          data-testid="no-card-unlock-work-email-btn"
-          variant="outlined"
-          loading={pending === 'work_email_verified'}
-          disabled={pending !== null}
-          onClick={() => run('work_email_verified')}
-        >
-          {t('billing.no_card_unlock_work_email', 'Verify work email')}
-        </Button>
+        {workEmailOffered && (
+          <Button
+            data-testid="no-card-unlock-work-email-btn"
+            variant="outlined"
+            loading={pending === 'work_email_verified'}
+            disabled={pending !== null}
+            onClick={() => run('work_email_verified')}
+          >
+            {t('billing.no_card_unlock_work_email', 'Verify work email')}
+          </Button>
+        )}
       </Box>
+      {failed && (
+        <Alert data-testid="no-card-unlock-error" color="danger">
+          {t('billing.no_card_unlock_error', 'Something went wrong. Please try again.')}
+        </Alert>
+      )}
       {outcome && !outcome.refusal && outcome.granted > 0 && (
         <Alert data-testid="no-card-unlock-success" color="success">
           {t('billing.no_card_unlock_success', 'Credits unlocked and added to your balance.')}

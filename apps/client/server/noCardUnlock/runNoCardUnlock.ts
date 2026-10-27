@@ -17,6 +17,25 @@ type GithubClient = userService.GithubClient;
 type NoCardUnlockValidator = userService.NoCardUnlockValidator;
 
 const GITHUB_TIMEOUT_MS = 8000;
+const GITHUB_MAX_BODY_BYTES = 1024 * 1024;
+
+async function readCappedText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > GITHUB_MAX_BODY_BYTES) {
+      await reader.cancel();
+      throw new Error('GitHub response body too large');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 async function githubGet<T>(path: string, token: string): Promise<T> {
   const response = await fetch(`https://api.github.com${path}`, {
@@ -24,7 +43,7 @@ async function githubGet<T>(path: string, token: string): Promise<T> {
     signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
   });
   if (!response.ok) throw new GithubApiError(response.status);
-  return (await response.json()) as T;
+  return JSON.parse(await readCappedText(response)) as T;
 }
 
 const githubClient: GithubClient = {
@@ -54,6 +73,7 @@ export async function runNoCardUnlock(reason: NoCardUnlockReason, userId: string
       github: githubClient,
       getAccessToken: getGithubAccessToken,
       claimGithubId: (githubId, id) => githubUnlockClaimRepository.claim(githubId, id),
+      releaseGithubId: (githubId, id) => githubUnlockClaimRepository.release(githubId, id),
     }),
     work_email_verified: workEmailValidator({
       settings,

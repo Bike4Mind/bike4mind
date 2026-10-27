@@ -32,6 +32,10 @@ function isDuplicateKey(err: unknown): boolean {
 }
 
 class GithubUnlockClaimRepository extends BaseRepository<IGithubUnlockClaimDocument> {
+  async release(githubId: number, userId: string): Promise<void> {
+    await this.model.deleteOne({ githubId, userId });
+  }
+
   /** Claim a GitHub account for a user; a repeat by the same user succeeds, another user is refused. */
   async claim(githubId: number, userId: string): Promise<GithubUnlockClaimResult> {
     // autoIndex builds lazily; the unique index must exist before the first insert or two can land.

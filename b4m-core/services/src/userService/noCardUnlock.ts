@@ -18,7 +18,12 @@ import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../cre
 import { accountBlockReasons } from './accountState';
 import { isDisposableEmail } from './disposableEmail';
 
-export type NoCardUnlockCheck = { ok: true } | { ok: false; refusal: NoCardUnlockRefusal };
+export type NoCardUnlockCommit =
+  { ok: true; release: () => Promise<void> } | { ok: false; refusal: NoCardUnlockRefusal };
+
+/** `commit` consumes a scarce resource (a GitHub id, a domain slot); the grant calls it only after the final decision. */
+export type NoCardUnlockCheck =
+  { ok: true; commit?: () => Promise<NoCardUnlockCommit> } | { ok: false; refusal: NoCardUnlockRefusal };
 
 export interface NoCardUnlockUser {
   id: string;
@@ -46,18 +51,20 @@ const REAUTHORIZE_STATUSES = new Set([401, 403, 404]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const deny = (refusal: NoCardUnlockRefusal): NoCardUnlockCheck => ({ ok: false, refusal });
-const OK: NoCardUnlockCheck = { ok: true };
 
 export interface GithubValidatorDeps {
   settings: NoCardUnlockSettings;
   github: GithubClient;
   getAccessToken: (userId: string) => Promise<string | null>;
   claimGithubId: (githubId: number, userId: string) => Promise<{ claimed: boolean }>;
+  releaseGithubId: (githubId: number, userId: string) => Promise<void>;
   now?: () => Date;
 }
 
 export function githubValidator(deps: GithubValidatorDeps): NoCardUnlockValidator {
   return async user => {
+    if (deps.settings.githubMinAgeDays <= 0 || deps.settings.githubMinRepos <= 0) return deny('disabled');
+
     const token = await deps.getAccessToken(user.id);
     if (!token) return deny('github_not_linked');
 
@@ -83,14 +90,21 @@ export function githubValidator(deps: GithubValidatorDeps): NoCardUnlockValidato
     }
     if (!Array.isArray(emails) || !emails.some(e => e.verified === true)) return deny('github_email_unverified');
 
-    const claim = await deps.claimGithubId(profile.id, user.id);
-    return claim.claimed ? OK : deny('github_already_claimed');
+    const githubId = profile.id;
+    return {
+      ok: true,
+      commit: async () => {
+        const claim = await deps.claimGithubId(githubId, user.id);
+        if (!claim.claimed) return { ok: false, refusal: 'github_already_claimed' };
+        return { ok: true, release: () => deps.releaseGithubId(githubId, user.id) };
+      },
+    };
   };
 }
 
 export interface WorkEmailValidatorDeps {
   settings: NoCardUnlockSettings;
-  cache: Pick<ICacheRepository, 'tryIncrementWithinLimitFixedWindow'>;
+  cache: Pick<ICacheRepository, 'tryIncrementWithinLimitFixedWindow' | 'decrementCounter'>;
   resolveMx?: (domain: string) => Promise<unknown[]>;
   /** true = domain accepts any local part, false = it rejects unknown ones, null = could not tell. */
   catchAllProbe: (domain: string) => Promise<boolean | null>;
@@ -134,12 +148,15 @@ export function workEmailValidator(deps: WorkEmailValidatorDeps): NoCardUnlockVa
 
     const cap = settings.workEmailDomainDailyCap;
     if (cap <= 0) return deny('domain_cap_reached');
-    const { success } = await deps.cache.tryIncrementWithinLimitFixedWindow(
-      `no-card-unlock:domain:${domain}`,
-      cap,
-      DAY_MS
-    );
-    return success ? OK : deny('domain_cap_reached');
+    const key = `no-card-unlock:domain:${registrable}`;
+    return {
+      ok: true,
+      commit: async () => {
+        const { success } = await deps.cache.tryIncrementWithinLimitFixedWindow(key, cap, DAY_MS);
+        if (!success) return { ok: false, refusal: 'domain_cap_reached' };
+        return { ok: true, release: async () => void (await deps.cache.decrementCounter(key)) };
+      },
+    };
   };
 }
 
@@ -200,16 +217,19 @@ export async function grantNoCardUnlock(
   const check = await validators[reason]({ id: user.id, email: user.email ?? '' });
   if (!check.ok) return refused(check.refusal);
 
+  const grantedBefore = await sumGranted(db, userId);
+  if (Math.min(reasonCredits, settings.maxCredits - grantedBefore) <= 0) return refused('cap_reached');
+
+  const commit = check.commit ? await check.commit() : null;
+  if (commit && !commit.ok) return refused(commit.refusal);
+
+  let result: GrantNoCardUnlockResult;
   try {
-    return await withTransaction(async () => {
+    result = await withTransaction(async () => {
       const current = await db.users.findById(userId);
       if (!current || accountBlockReasons(current).length > 0) return refused('disabled');
 
-      let granted = 0;
-      for (const other of NO_CARD_UNLOCK_REASONS) {
-        const row = await db.creditTransactions.findOne({ transactionId: noCardUnlockTransactionId(other, userId) });
-        granted += row?.credits ?? 0;
-      }
+      const granted = await sumGranted(db, userId);
       const amount = Math.min(reasonCredits, settings.maxCredits - granted);
       if (amount <= 0) return refused('cap_reached');
 
@@ -231,7 +251,19 @@ export async function grantNoCardUnlock(
       return { granted: true, credits: amount, currentCredits: creditHolder.currentCredits };
     });
   } catch (error) {
+    await commit?.release();
     if (error instanceof DuplicateCreditTransactionError) return refused('already_granted');
     throw error;
   }
+  if (!result.granted) await commit?.release();
+  return result;
+}
+
+async function sumGranted(db: GrantNoCardUnlockAdapters['db'], userId: string): Promise<number> {
+  let granted = 0;
+  for (const other of NO_CARD_UNLOCK_REASONS) {
+    const row = await db.creditTransactions.findOne({ transactionId: noCardUnlockTransactionId(other, userId) });
+    granted += row?.credits ?? 0;
+  }
+  return granted;
 }

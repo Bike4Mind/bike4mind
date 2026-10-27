@@ -22,6 +22,7 @@ const githubDeps = (client: Partial<GithubClient>, over: Record<string, unknown>
   },
   getAccessToken: async () => 'token',
   claimGithubId: vi.fn(async () => ({ claimed: true })),
+  releaseGithubId: vi.fn(async () => undefined),
   now: () => NOW,
   ...over,
 });
@@ -30,8 +31,14 @@ const user = { id: 'u1', email: 'dev@acme-corp.test' };
 describe('githubValidator', () => {
   it('accepts an old, active account with a verified email and claims its id', async () => {
     const deps = githubDeps({});
-    expect(await githubValidator(deps)(user)).toEqual({ ok: true });
+    const check = await githubValidator(deps)(user);
+    expect(check).toMatchObject({ ok: true });
+    expect(deps.claimGithubId).not.toHaveBeenCalled();
+    const commit = check.ok ? await check.commit?.() : undefined;
+    expect(commit).toMatchObject({ ok: true });
     expect(deps.claimGithubId).toHaveBeenCalledWith(7, 'u1');
+    if (commit?.ok) await commit.release();
+    expect(deps.releaseGithubId).toHaveBeenCalledWith(7, 'u1');
   });
 
   it('refuses when no token is linked', async () => {
@@ -49,7 +56,7 @@ describe('githubValidator', () => {
     const exact = githubDeps({
       getUser: async () => ({ id: 7, login: 'o', created_at: daysAgo(30), public_repos: 5 }),
     });
-    expect(await githubValidator(exact)(user)).toEqual({ ok: true });
+    expect(await githubValidator(exact)(user)).toMatchObject({ ok: true });
   });
 
   it('refuses an unparseable creation date', async () => {
@@ -93,7 +100,15 @@ describe('githubValidator', () => {
 
   it('refuses an id another user already claimed', async () => {
     const deps = githubDeps({}, { claimGithubId: async () => ({ claimed: false }) });
-    expect(await githubValidator(deps)(user)).toEqual({ ok: false, refusal: 'github_already_claimed' });
+    const check = await githubValidator(deps)(user);
+    expect(check.ok ? await check.commit?.() : null).toEqual({ ok: false, refusal: 'github_already_claimed' });
+  });
+
+  it('refuses while the age or repo minimum is unconfigured', async () => {
+    for (const over of [{ noCardUnlockGithubMinAgeDays: 0 }, { noCardUnlockGithubMinRepos: 0 }]) {
+      const deps = githubDeps({}, { settings: settings(over) });
+      expect(await githubValidator(deps)(user)).toEqual({ ok: false, refusal: 'disabled' });
+    }
   });
 
   it('does not claim the id when an earlier check refuses', async () => {
@@ -108,7 +123,7 @@ describe('workEmailValidator', () => {
     const tryIncrement = vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() }));
     const deps = {
       settings: settings(settingsOver),
-      cache: { tryIncrementWithinLimitFixedWindow: tryIncrement },
+      cache: { tryIncrementWithinLimitFixedWindow: tryIncrement, decrementCounter: vi.fn(async () => 0) },
       resolveMx: async () => [{ exchange: 'mx.acme-corp.test', priority: 10 }],
       catchAllProbe: async () => false as boolean | null,
       isDisposable: () => false,
@@ -119,7 +134,10 @@ describe('workEmailValidator', () => {
 
   it('accepts a real work domain and spends the domain counter keyed on the lowercase domain', async () => {
     const { run, tryIncrement } = build();
-    expect(await run({ id: 'u', email: 'Dev@ACME-Corp.test' })).toEqual({ ok: true });
+    const check = await run({ id: 'u', email: 'Dev@ACME-Corp.test' });
+    expect(check).toMatchObject({ ok: true });
+    expect(tryIncrement).not.toHaveBeenCalled();
+    if (check.ok) await check.commit?.();
     expect(tryIncrement).toHaveBeenCalledWith('no-card-unlock:domain:acme-corp.test', 3, 86_400_000);
   });
 
@@ -157,7 +175,9 @@ describe('workEmailValidator', () => {
         ok: false,
         refusal: 'work_email_probe_inconclusive',
       });
-      expect(await build({ catchAllProbe: probe }, { noCardUnlockProbeInconclusiveAllows: true }).run(user)).toEqual({
+      expect(
+        await build({ catchAllProbe: probe }, { noCardUnlockProbeInconclusiveAllows: true }).run(user)
+      ).toMatchObject({
         ok: true,
       });
     }
@@ -168,8 +188,12 @@ describe('workEmailValidator', () => {
     expect(await zero.run(user)).toEqual({ ok: false, refusal: 'domain_cap_reached' });
     expect(zero.tryIncrement).not.toHaveBeenCalled();
     const full = build({
-      cache: { tryIncrementWithinLimitFixedWindow: async () => ({ success: false, count: 3, expiresAt: new Date() }) },
+      cache: {
+        tryIncrementWithinLimitFixedWindow: async () => ({ success: false, count: 3, expiresAt: new Date() }),
+        decrementCounter: async () => 0,
+      },
     });
-    expect(await full.run(user)).toEqual({ ok: false, refusal: 'domain_cap_reached' });
+    const check = await full.run(user);
+    expect(check.ok ? await check.commit?.() : null).toEqual({ ok: false, refusal: 'domain_cap_reached' });
   });
 });

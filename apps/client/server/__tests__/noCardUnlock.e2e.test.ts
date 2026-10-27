@@ -106,6 +106,7 @@ const build = async (githubId = 1, ageDays = 400) => {
         github: ghProfile(githubId, ageDays),
         getAccessToken: async () => 'token',
         claimGithubId: (id, userId) => githubUnlockClaimRepository.claim(id, userId),
+        releaseGithubId: (id, userId) => githubUnlockClaimRepository.release(id, userId),
       }),
       work_email_verified: workEmailValidator({
         settings,
@@ -203,16 +204,62 @@ describe('grantNoCardUnlock on a real replica set', () => {
     expect(await balance(id)).toBe(GITHUB);
   });
 
-  it('never exceeds the maximum when both reasons race', async () => {
-    await seedSettings({ noCardUnlockMaxCredits: 12 });
-    const id = await seedUser();
+  it('never exceeds the maximum when both reasons race across many users', async () => {
+    await seedSettings({ noCardUnlockMaxCredits: 12, noCardUnlockWorkEmailDomainDailyCap: 100 });
     const adapters = await build();
-    await Promise.all([
-      grantNoCardUnlock(id, 'github_verified', adapters),
-      grantNoCardUnlock(id, 'work_email_verified', adapters),
-    ]);
-    expect(await balance(id)).toBeLessThanOrEqual(12);
-    expect(await rows(id)).toBeGreaterThanOrEqual(1);
+    for (let i = 0; i < 12; i++) {
+      const id = await seedUser();
+      const results = await Promise.all([
+        grantNoCardUnlock(id, 'github_verified', adapters),
+        grantNoCardUnlock(id, 'work_email_verified', adapters),
+      ]);
+      const credited = results.reduce((sum, r) => sum + (r.granted ? r.credits : 0), 0);
+      expect(credited).toBeLessThanOrEqual(12);
+      expect(await balance(id)).toBe(credited);
+      expect(credited).toBeGreaterThan(0);
+    }
+  });
+
+  it('does not burn the GitHub id or a domain slot when the grant is capped', async () => {
+    await seedSettings({ noCardUnlockMaxCredits: GITHUB, noCardUnlockWorkEmailDomainDailyCap: 1 });
+    const id = await seedUser();
+    const adapters = await build(77);
+    await grantNoCardUnlock(id, 'github_verified', adapters);
+    expect(await grantNoCardUnlock(id, 'work_email_verified', adapters)).toEqual({
+      granted: false,
+      refusal: 'cap_reached',
+    });
+    expect(await Cache.countDocuments({ key: /no-card-unlock:domain:/ })).toBe(0);
+  });
+
+  it('frees a GitHub id after release so another account can claim it', async () => {
+    const [a, b] = [await seedUser(), await seedUser()];
+    expect(await githubUnlockClaimRepository.claim(90, a)).toMatchObject({ claimed: true });
+    expect(await githubUnlockClaimRepository.claim(90, b)).toMatchObject({ claimed: false });
+    await githubUnlockClaimRepository.release(90, a);
+    expect(await githubUnlockClaimRepository.claim(90, b)).toMatchObject({ claimed: true });
+  });
+
+  it('keys the domain cap on the registrable domain so subdomains share it', async () => {
+    await seedSettings({ noCardUnlockWorkEmailDomainDailyCap: 1 });
+    const a = await seedUser({ email: 'a@mail.acme-corp.test' });
+    const b = await seedUser({ email: 'b@eng.acme-corp.test' });
+    const adapters = await build();
+    expect(await grantNoCardUnlock(a, 'work_email_verified', adapters)).toMatchObject({ granted: true });
+    expect(await grantNoCardUnlock(b, 'work_email_verified', adapters)).toEqual({
+      granted: false,
+      refusal: 'domain_cap_reached',
+    });
+  });
+
+  it('refuses the GitHub unlock until the age and repo minimums are configured', async () => {
+    await seedSettings({ noCardUnlockGithubMinAgeDays: '', noCardUnlockGithubMinRepos: 'abc' });
+    const id = await seedUser();
+    expect(await grantNoCardUnlock(id, 'github_verified', await build(5, 1))).toEqual({
+      granted: false,
+      refusal: 'disabled',
+    });
+    expect(await balance(id)).toBe(0);
   });
 
   it('credits once when the same reason races with itself', async () => {
