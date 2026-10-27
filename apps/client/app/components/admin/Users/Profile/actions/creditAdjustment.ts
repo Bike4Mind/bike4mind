@@ -12,7 +12,7 @@ export const CREDIT_ADJUSTMENT_MODES: readonly { mode: CreditAdjustmentMode; lab
   { mode: 'subtract', label: 'Subtract', amountLabel: 'Credits to remove' },
 ];
 
-/** Upper bound the server accepts for a balance or a delta. */
+/** Client-side cap on a balance or a delta; the update endpoint does not bound either yet. */
 export const MAX_CREDIT_AMOUNT = 1_000_000_000;
 
 export const CREDIT_AMOUNT_HINT = 'Enter a whole number of credits, 0 or more.';
@@ -38,7 +38,7 @@ export const computeCreditAdjustment = (
 };
 
 /**
- * The `POST /api/users/[id]/update` fields for an adjustment. A set goes as an absolute
+ * The `PUT /api/users/[id]/update` fields for an adjustment. A set goes as an absolute
  * `currentCredits` so the server computes the delta from its own fresh read; add and subtract go as
  * `creditDelta` so concurrent spend is never refunded.
  */
