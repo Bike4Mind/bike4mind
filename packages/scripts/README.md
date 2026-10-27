@@ -356,3 +356,7 @@ it as one actionable group. Missing facts, widespread capped keys, excluded mail
 insufficient shared key kinds can produce no candidate cohorts. Check the `common_key` rows and
 chosen options before interpreting an empty report as absence of related signups. Invalid inputs
 or database failures exit unsuccessfully and log `[signup-cohort-sweep] failed`.
+
+## Curated model list (Desktop)
+
+`curated:keygen`, `curated:sign`, `curated:publish` and `curated:check-build` manage the signed list in `catalog/model-hub/curated-v2.json` (see each script's header for usage). `curated:publish` trusts the keyring on the canonical repo's `main`, while Desktop trusts the keyring shipped in its own build, so a new key must ship in a Desktop release before lists signed only by it reach users.
