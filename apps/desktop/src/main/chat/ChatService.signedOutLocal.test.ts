@@ -40,12 +40,13 @@ async function fixture(options: { mode: Mode; local: ChatModelOption[]; remember
   } as unknown as AuthenticatedApiClient;
   const local = { current: options.local };
   const record = vi.fn(async () => {});
+  const listLocal = vi.fn(async (_force?: boolean) => local.current);
   const service = new ChatService({
     store,
     queue: new MessageQueue(() => undefined),
     models: {
       list: async () => ({ models: local.current }),
-      listLocal: async () => local.current,
+      listLocal,
       cached: () => local.current,
     } as unknown as ModelCatalog,
     modelMemory: { read: async () => options.remembered ?? null, record },
@@ -60,7 +61,7 @@ async function fixture(options: { mode: Mode; local: ChatModelOption[]; remember
   });
   services.push(service);
   const settled = (id: string) => vi.waitUntil(() => events.some(e => e.type === 'done' && e.sessionId === id));
-  return { service, store, stream, local, events, record, settled };
+  return { service, store, stream, local, events, record, settled, listLocal };
 }
 
 describe('device-local chat with no usable local model', () => {
@@ -96,6 +97,15 @@ describe('device-local chat with no usable local model', () => {
     await settled(session.id);
     expect((await store.get(session.id))?.model).toBe(QWEN.id);
     expect(stream.mock.calls.every(([request]) => request.model === QWEN.id)).toBe(true);
+  });
+
+  it('reads the cached local list on send, never forcing an Ollama re-list', async () => {
+    const { service, listLocal, settled } = await fixture({ mode: 'device-local', local: [QWEN] });
+    const session = await service.createSession();
+    expect(await service.send(session.id, 'hello')).toMatchObject({ ok: true });
+    await settled(session.id);
+    expect(listLocal).toHaveBeenCalled();
+    expect(listLocal.mock.calls.every(([force]) => !force)).toBe(true);
   });
 
   it('moves a placeholder conversation without a notice', async () => {

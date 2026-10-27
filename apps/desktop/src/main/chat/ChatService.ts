@@ -268,9 +268,9 @@ const TURN_LIMITS: TurnLimits = {
   wallClockMs: 30 * 60 * 1000,
 };
 
-/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type SettledModel = { session: ChatSession; summary?: ChatSessionSummary; notice?: string } | { error: string };
 
+/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 
 /** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
@@ -1818,7 +1818,7 @@ export class ChatService {
     if (!api && !isLocalModel(claimed.model) && !this.deviceLocal())
       return { ok: false, error: 'Sign in to send a message.' };
     const settled: SettledModel = this.deviceLocal()
-      ? await this.settleDeviceLocal(claimed, (await this.deps.models?.listLocal?.(true)) ?? [])
+      ? await this.settleDeviceLocal(claimed, (await this.deps.models?.listLocal?.()) ?? [])
       : { session: claimed };
     if ('error' in settled) return { ok: false, error: settled.error };
     const existing = settled.session;
