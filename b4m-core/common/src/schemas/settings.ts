@@ -481,6 +481,14 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'noCardUnlockEnabled',
+  'noCardUnlockGithubCredits',
+  'noCardUnlockWorkEmailCredits',
+  'noCardUnlockMaxCredits',
+  'noCardUnlockGithubMinAgeDays',
+  'noCardUnlockGithubMinRepos',
+  'noCardUnlockWorkEmailDomainDailyCap',
+  'noCardUnlockProbeInconclusiveAllows',
   'signupAnomaly',
 
   // WEATHER SERVICE SETTINGS
@@ -4008,6 +4016,82 @@ export const settingsMap = {
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
     category: 'Users',
+  }),
+  noCardUnlockEnabled: makeBooleanSetting({
+    key: 'noCardUnlockEnabled',
+    // Read by the billing UI to decide whether to render the unlock options.
+    userReadable: true,
+    name: 'No-Card Credit Unlock',
+    defaultValue: false,
+    description:
+      'Lets a verified user unlock starter credits without a card by linking a qualifying GitHub account or by verifying a work email. When OFF (default), no unlock is offered and every attempt is refused.',
+    category: 'Users',
+  }),
+  noCardUnlockGithubCredits: makeNumberSetting({
+    key: 'noCardUnlockGithubCredits',
+    name: 'No-Card Unlock: GitHub Credits',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits granted when a user links a qualifying GitHub account. 0 grants nothing. Each GitHub account can unlock once across all users.',
+    category: 'Users',
+  }),
+  noCardUnlockWorkEmailCredits: makeNumberSetting({
+    key: 'noCardUnlockWorkEmailCredits',
+    name: 'No-Card Unlock: Work Email Credits',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Credits granted when a user verifies a qualifying work email. 0 grants nothing.',
+    category: 'Users',
+  }),
+  noCardUnlockMaxCredits: makeNumberSetting({
+    key: 'noCardUnlockMaxCredits',
+    name: 'No-Card Unlock: Combined Maximum',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Most credits one user can receive from all no-card unlocks combined. 0 grants nothing.',
+    category: 'Users',
+  }),
+  noCardUnlockGithubMinAgeDays: makeNumberSetting({
+    key: 'noCardUnlockGithubMinAgeDays',
+    name: 'No-Card Unlock: GitHub Minimum Account Age (days)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'A linked GitHub account must be at least this many days old to qualify. 0 disables the GitHub unlock.',
+    category: 'Users',
+  }),
+  noCardUnlockGithubMinRepos: makeNumberSetting({
+    key: 'noCardUnlockGithubMinRepos',
+    name: 'No-Card Unlock: GitHub Minimum Public Repos',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'A linked GitHub account must have at least this many public repositories to qualify. 0 disables the GitHub unlock.',
+    category: 'Users',
+  }),
+  noCardUnlockWorkEmailDomainDailyCap: makeNumberSetting({
+    key: 'noCardUnlockWorkEmailDomainDailyCap',
+    name: 'No-Card Unlock: Work Email Domain Daily Cap',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Most work-email unlocks granted per email domain per day. 0 grants nothing.',
+    category: 'Users',
+  }),
+  noCardUnlockProbeInconclusiveAllows: makeBooleanSetting({
+    key: 'noCardUnlockProbeInconclusiveAllows',
+    name: 'No-Card Unlock: Allow When Catch-All Check Is Inconclusive',
+    defaultValue: false,
+    description:
+      'Grant the work-email unlock when the catch-all mail-domain check cannot reach a verdict. This deployment cannot run that check, so ON grants work-email unlocks after only the MX and disposable-domain checks. OFF (default) refuses them.',
+    category: 'Users',
+    userReadable: true,
   }),
   freeTierDailySpendCapCredits: makeNumberSetting({
     key: 'freeTierDailySpendCapCredits',

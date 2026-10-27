@@ -20,7 +20,11 @@ export const PUBLIC_MAILBOX_DOMAINS: ReadonlySet<string> = new Set([
 
 export async function protectSignupCredits(
   userId: string,
-  adapters: { users: IUserRepository; adminSettings: IAdminSettingsRepository; signupProtection?: SignupProtection }
+  adapters: {
+    users: IUserRepository;
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames'>;
+    signupProtection?: SignupProtection;
+  }
 ): Promise<boolean> {
   const protection = adapters.signupProtection;
   if (!protection) return false;
