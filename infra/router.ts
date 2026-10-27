@@ -153,11 +153,9 @@ export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
 const originVerifyInjection = $interpolate`
-  // Drops viewer-forged copies. CloudFront Functions run before WAF, so these deletes clear any
-  // attacker-supplied headers before WAF evaluates; WAF re-injects authoritative values afterward.
+  // Drops a viewer-forged copy. AWS docs show computed cloudfront-viewer-* headers already present here,
+  // so this may also drop the real JA4: remove it before adding JA4 to the origin request policy.
   delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
-  delete event.request.headers["x-waf-anon-ip"];
-  delete event.request.headers["x-waf-bot-signal"];
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 
