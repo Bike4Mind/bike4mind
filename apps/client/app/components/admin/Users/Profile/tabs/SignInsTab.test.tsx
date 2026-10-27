@@ -148,4 +148,22 @@ describe('SignInsTab', () => {
     fireEvent.click(within(cluster).getByTestId('user-signup-cluster-link'));
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/admin/users/$userId', params: { userId: 'other-1' } });
   });
+
+  it('says so when the sign-ins cannot be loaded', async () => {
+    mocks.get.mockImplementation((url: string) =>
+      url.endsWith('/signup-cluster') ? Promise.resolve({ data: NO_CLUSTER }) : Promise.reject(new Error('boom'))
+    );
+    renderTab();
+    expect(await screen.findByText('Sign-ins could not be loaded.')).toBeInTheDocument();
+  });
+
+  it('says the signup cluster could not be checked when its request fails', async () => {
+    mocks.get.mockImplementation((url: string) =>
+      url.endsWith('/signup-cluster')
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve({ data: { entries: [], nextCursor: null } })
+    );
+    renderTab();
+    expect(await screen.findByText('Could not be checked')).toBeInTheDocument();
+  });
 });

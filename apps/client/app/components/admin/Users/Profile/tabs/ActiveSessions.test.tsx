@@ -110,6 +110,24 @@ describe('ActiveSessions', () => {
     expect(screen.getByTestId('user-sessions-revoke-dialog-confirm-btn')).toBeInTheDocument();
   });
 
+  it('keeps the dialog open when signing out everywhere fails', async () => {
+    mocks.post.mockRejectedValue(new Error('boom'));
+    renderSessions();
+    await screen.findAllByTestId('user-sessions-row');
+
+    fireEvent.click(screen.getByTestId('user-sessions-revoke-all-btn'));
+    pickReasonAndConfirm();
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalled());
+    expect(screen.getByTestId('user-sessions-revoke-dialog-confirm-btn')).toBeInTheDocument();
+  });
+
+  it('says so when the sessions cannot be loaded', async () => {
+    mocks.get.mockRejectedValue(new Error('boom'));
+    renderSessions();
+    expect(await screen.findByText('Sessions could not be loaded.')).toBeInTheDocument();
+  });
+
   it('says so when there are no active sessions', async () => {
     mocks.get.mockResolvedValue({ data: { items: [] } });
     renderSessions();

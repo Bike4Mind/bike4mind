@@ -100,4 +100,26 @@ describe('AdminLogTab', () => {
     expect(await screen.findByText(/Load more to check older entries\./)).toBeInTheDocument();
     expect(screen.queryByText('Changes admins make to this account appear here.')).not.toBeInTheDocument();
   });
+
+  it('keeps Undo available and shows no toast when the update rejects', async () => {
+    mocks.update.mockRejectedValue(new Error('boom'));
+    respond([suspended]);
+    renderTab(buildProfile({ isBanned: true }));
+
+    fireEvent.click(await screen.findByTestId('user-admin-log-undo-btn'));
+
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ isBanned: false }));
+    await waitFor(() => expect(screen.getByTestId('user-admin-log-undo-btn')).not.toBeDisabled());
+    expect(screen.queryByText('Undone: Suspended account')).not.toBeInTheDocument();
+  });
+
+  it('shows a retryable error when the log cannot be loaded', async () => {
+    mocks.get.mockRejectedValueOnce(new Error('boom'));
+    renderTab(buildProfile());
+    expect(await screen.findByText('The admin log could not be loaded.')).toBeInTheDocument();
+
+    respond([suspended]);
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(await screen.findByTestId('user-admin-log-row')).toBeInTheDocument();
+  });
 });
