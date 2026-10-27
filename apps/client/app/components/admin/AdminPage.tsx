@@ -7,12 +7,10 @@ import ManageGearsTab from '@client/app/components/admin/ManageGearsTab';
 import EmailVerificationTab from '@client/app/components/admin/EmailVerificationTab';
 import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealthTab';
 import { useUser } from '@client/app/contexts/UserContext';
-import CloseIcon from '@mui/icons-material/Close';
 import { IconButton } from '@mui/joy';
-import { Box, Drawer, Grid, Sheet, TabPanel, Tabs, Typography, Tooltip } from '@mui/joy';
+import { Box, Drawer, Grid, Sheet, TabPanel, Tabs, Typography } from '@mui/joy';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
-import { useRouter } from '@tanstack/react-router';
 import { lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { create } from 'zustand';
@@ -25,7 +23,7 @@ import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
 import AdminReleaseNotesTab from './ReleaseNotes/AdminReleaseNotesTab';
-import { resolveEnvironmentBanner } from './environmentBanner';
+import EnvironmentBanner from './AdminEnvironmentBanner';
 import AnalyticsTab from './Analytics';
 import UsersTab from './Users';
 import dynamic from 'next/dynamic';
@@ -43,8 +41,6 @@ import DocumentationTab from './DocumentationTab';
 import KnowledgeModal from '../Knowledge/KnowledgeModal';
 import { HelpPanel } from '../help';
 import { useHelpKeyboardShortcut } from '@client/app/hooks/useHelpKeyboardShortcut';
-import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
-import HelpCenterIcon from '@mui/icons-material/HelpCenter';
 import ToolDefinitionsTab from './ToolDefinitionsTab';
 import EmailMarketingTab from './EmailMarketingTab';
 import SystemSecretsTab from './SystemSecretsTab';
@@ -109,68 +105,6 @@ export const useAdminNotifications = create<{
     }
   },
 }));
-
-const EnvironmentBanner = () => {
-  const router = useRouter();
-  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
-
-  const { bannerColor, environmentName } = resolveEnvironmentBanner(hostname, process.env.NEXT_PUBLIC_SERVER_DOMAIN);
-
-  return (
-    <Box
-      sx={{
-        backgroundColor: bannerColor,
-        color: 'white',
-        padding: '4px 8px',
-        textAlign: 'center',
-        fontWeight: 'bold',
-        position: 'sticky',
-        top: 0,
-        zIndex: 1100,
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        height: '32px',
-      }}
-    >
-      <Box flexBasis="40px" />
-      <Typography level="body-sm" sx={{ color: 'white', flexGrow: 1, textAlign: 'center' }}>
-        {environmentName}
-      </Typography>
-      <Box sx={{ display: 'flex', gap: 0.5 }}>
-        <Tooltip title="Help Center (Shift+?)" placement="bottom">
-          <IconButton
-            onClick={() => openHelpPanel()}
-            sx={{
-              color: 'white',
-              padding: '4px',
-              '&:hover': {
-                backgroundColor: 'rgba(255, 255, 255, 0.2)',
-              },
-            }}
-            size="sm"
-            data-testid="admin-help-center-btn"
-          >
-            <HelpCenterIcon fontSize="small" sx={{ color: 'white' }} />
-          </IconButton>
-        </Tooltip>
-        <IconButton
-          onClick={() => router.history.back()}
-          sx={{
-            color: 'white',
-            padding: '4px',
-            '&:hover': {
-              backgroundColor: 'rgba(255, 255, 255, 0.2)',
-            },
-          }}
-          size="sm"
-        >
-          <CloseIcon fontSize="small" sx={{ color: 'white' }} data-testid="close-admin-page-banner-btn" />
-        </IconButton>
-      </Box>
-    </Box>
-  );
-};
 
 interface AdminPageProps {
   /**
@@ -286,7 +220,13 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
         })}
       >
         <EnvironmentBanner />
-        <Grid container sx={{ flex: 1, minHeight: 0 }}>
+        <Grid
+          container
+          // Admin skin scope (utils/themes/customizations/adminSkin.ts); #5844 moves it to the admin layout.
+          // The environment banner stays outside it so it renders as it does everywhere else.
+          data-admin-surface
+          sx={{ flex: 1, minHeight: 0 }}
+        >
           <Grid
             xs={1.5}
             sx={theme => ({

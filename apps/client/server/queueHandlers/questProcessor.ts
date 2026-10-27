@@ -73,6 +73,7 @@ import {
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -280,7 +281,6 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   logger.debug('User and session queries completed', { durationMs: Date.now() - queryStartTime });
 
   if (!storedUser) throw new NotFoundError('User not found');
-  const user = params.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
   logger.updateMetadata({
     userId: params.userId,
@@ -299,6 +299,31 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
 
     throw new NotFoundError('Session not found');
   }
+
+  // Every quest-creating surface (web app, public chat API, Slack, voice proxy) lands here, so this
+  // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
+  // quest with the reason instead of throwing into the route's generic-failure reply and metric.
+  try {
+    await checkFreeTierDailySpendCap({
+      user: storedUser,
+      billingOrganizationId: params.organizationId,
+      usageEventRepository,
+      logger,
+    });
+  } catch (error) {
+    if (!isFreeTierDailyCapError(error)) throw error;
+    logger.info('Quest refused by the free-tier daily spend cap', { questId: params.questId });
+    await questRepository.settleIfUnfinished(params.questId, {
+      status: 'stopped',
+      type: 'error',
+      reply: error.message,
+      replies: [error.message],
+    });
+    return;
+  }
+
+  // Withholding mutates the document, so do it after the billing exemption check.
+  const user = params.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
   // Prepare the request body with server-side searchers augmentation
   // Note: searchers are server-side only and not part of the API schema

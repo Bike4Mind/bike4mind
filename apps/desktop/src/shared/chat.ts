@@ -1256,6 +1256,8 @@ export type ChatStreamEvent =
    * summary failed, so the turn went out with the conversation as it was.
    */
   | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string }
+  /** A local model's prompt overflowed its context, so the oldest `dropped` messages were left out. */
+  | { type: 'context-trimmed'; sessionId: string; dropped: number }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`
