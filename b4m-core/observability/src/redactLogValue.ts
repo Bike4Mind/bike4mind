@@ -111,7 +111,10 @@ function walk(value: unknown, state: WalkState, depth: number): unknown {
     if (Array.isArray(value)) return value.map(entry => walk(entry, state, depth + 1));
     if (value instanceof Error) {
       if (isProviderError(value)) return redactProviderError(value, state, depth);
-      const fields = walk({ ...value }, state, depth + 1) as Record<string, unknown>;
+      // An own enumerable `cause` (assigned after construction) is walked once, by causeField.
+      const own = { ...value } as Record<string, unknown>;
+      delete own.cause;
+      const fields = walk(own, state, depth + 1) as Record<string, unknown>;
       return {
         ...fields,
         ...causeField(value, state, depth),
