@@ -5,8 +5,9 @@ import { z } from 'zod';
 export const CURATED_SIGNATURE_DOMAIN = 'b4m-model-hub-curated-v2\n';
 export const CURATED_MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 export const CURATED_MAX_SIGNATURE_BYTES = 8 * 1024;
+/** Must equal HUB_MAX_SEQUENCE in @bike4mind/common (schemas/modelHub.ts); this package does not depend on it. */
+export const CURATED_MAX_SEQUENCE = 1_000_000;
 const MAX_SIGNATURES = 4;
-const MAX_SEQUENCE = 2 ** 31;
 
 // DER headers of an Ed25519 SubjectPublicKeyInfo and of a PKCS8 private key around a 32-byte seed.
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
@@ -42,7 +43,7 @@ export type CuratedVerifyResult =
 
 const KeyIdSchema = z.string().regex(/^[0-9a-f]{16}$/);
 const SignatureFileSchema = z.object({
-  sequence: z.number().int().min(1).max(MAX_SEQUENCE).optional(),
+  sequence: z.number().int().min(1).max(CURATED_MAX_SEQUENCE).optional(),
   signatures: z
     .array(z.object({ keyId: KeyIdSchema, sig: z.string().max(128) }))
     .min(1)

@@ -3,7 +3,13 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HUB_MAX_SEQUENCE } from '@bike4mind/common';
-import { curatedPublicKey, signCurated, type CuratedKey, type CuratedKeyRole } from '@bike4mind/local-models';
+import {
+  CURATED_MAX_SEQUENCE,
+  curatedPublicKey,
+  signCurated,
+  type CuratedKey,
+  type CuratedKeyRole,
+} from '@bike4mind/local-models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CURATED_TEXT } from './bundled';
 import { CURATED_BACKOFF_BASE_MS, CURATED_CHECK_INTERVAL_MS, CuratedSource } from './CuratedSource';
@@ -240,6 +246,7 @@ describe('CuratedSource', () => {
   });
 
   it('rejects a list above the highest sequence', async () => {
+    expect(CURATED_MAX_SEQUENCE).toBe(HUB_MAX_SEQUENCE);
     const huge = listText(HUB_MAX_SEQUENCE + 1);
     server.publish(HUB_MAX_SEQUENCE + 1, huge, sigText(huge, [signing], HUB_MAX_SEQUENCE));
     const s = source();
