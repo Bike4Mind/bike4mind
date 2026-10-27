@@ -131,11 +131,12 @@ function listable(entry: HubEntry, manifest: HubManifest): boolean {
 }
 
 // The library serves a tag whole; hf.co serves one file per tag, so only single-file builds without a separate
-// projector qualify there. Either way the template must be pinned to check what Ollama installed.
+// projector qualify there, and only with the template pinned, since hf.co builds it from the repo's main branch.
 function pullable(build: HubBuild): boolean {
   const pins = pinsOf(build);
-  if (!pins || !(pins.installedTemplate ?? pins.template)) return false;
-  return libraryOf(build) !== null || (!!build.hf && build.weights.length === 1 && !build.mmproj);
+  if (!pins) return false;
+  if (libraryOf(build)) return true;
+  return !!(pins.installedTemplate ?? pins.template) && !!build.hf && build.weights.length === 1 && !build.mmproj;
 }
 
 const OLLAMA_LAYER = 'application/vnd.ollama.image.';
@@ -178,8 +179,9 @@ function installedReviewed(inspection: ModelInspection, reviewed: HubBuild): boo
   const pins = pinsOf(reviewed);
   const contents = inspection.contents;
   if (!pins || !contents || contents.modelBlob !== modelDigest(reviewed)) return false;
+  // A library build with no template layer chats through Ollama's renderer, so /api/show has no template to compare.
   const template = pins.installedTemplate ?? pins.template;
-  if (contents.template === null || sha256(contents.template) !== template) return false;
+  if (template && (contents.template === null || sha256(contents.template) !== template)) return false;
   if (pins.license ? contents.license === null || sha256(contents.license) !== pins.license : contents.license)
     return false;
   return (configuredNumCtx(inspection.parameters) ?? null) === pins.numCtx;
