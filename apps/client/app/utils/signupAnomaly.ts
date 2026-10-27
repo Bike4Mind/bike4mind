@@ -41,7 +41,13 @@ export function groupSignupDomains(
   const recentCounts = new Map<string, number>();
   for (const user of users) {
     const at = user.email?.lastIndexOf('@') ?? -1;
-    const domain = (at >= 0 ? user.email!.slice(at + 1).replace(/\.$/, '').toLowerCase() : '') || '(unknown)';
+    const domain =
+      (at >= 0
+        ? user
+            .email!.slice(at + 1)
+            .replace(/\.$/, '')
+            .toLowerCase()
+        : '') || '(unknown)';
     const group = groups.get(domain) ?? {
       domain,
       userIds: [],
