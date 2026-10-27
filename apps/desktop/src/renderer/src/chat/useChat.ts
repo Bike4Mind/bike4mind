@@ -786,6 +786,11 @@ export function useConversation(
         return;
       }
 
+      if (event.type === 'context-notice') {
+        setNotice(event.message);
+        return;
+      }
+
       if (event.type === 'context-trimmed') {
         setNotice(
           `This conversation no longer fits the model's context, so ${event.dropped === 1 ? 'its oldest message was' : `its ${event.dropped} oldest messages were`} left out of this reply. Your next message compacts it first, or run /compact now.`
