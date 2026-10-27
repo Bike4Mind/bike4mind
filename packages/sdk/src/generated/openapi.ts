@@ -1117,7 +1117,7 @@ export interface paths {
     };
     /**
      * Get an organization's Claude Code plugin marketplace
-     * @description Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility Skill Market listings, one `archive` plugin each, pinned by `sha256`. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
+     * @description Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin per skill bundle whose `version` is a hash prefix, not a semantic version. Public and unlisted listings are not included. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
      */
     get: operations['getClaudeMarketplace'];
     put?: never;

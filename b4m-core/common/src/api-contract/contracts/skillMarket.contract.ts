@@ -16,7 +16,7 @@ const AUTH_NOTE =
 
 /**
  * The Skill Market as a Claude Code plugin marketplace: one feed per org, one archive plugin per
- * approved Organization listing. Both routes serve only what the caller can already browse.
+ * approved Organization listing, plus one per skill bundle. Both routes serve only what the caller can already browse.
  */
 export const getClaudeMarketplaceContract = defineEndpoint({
   method: 'get',
@@ -25,7 +25,8 @@ export const getClaudeMarketplaceContract = defineEndpoint({
   summary: "Get an organization's Claude Code plugin marketplace",
   description:
     "Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility " +
-    'Skill Market listings, one `archive` plugin each, pinned by `sha256`. Public and unlisted listings are ' +
+    'Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin ' +
+    'per skill bundle whose `version` is a hash prefix, not a semantic version. Public and unlisted listings are ' +
     `not included. Responses are never cacheable. ${AUTH_NOTE}`,
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
