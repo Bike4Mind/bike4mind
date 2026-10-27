@@ -217,6 +217,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const skills = useSkills(activeId);
   const localMode = isLocalMode(auth);
   const catalog = useModelCatalog(localMode);
+  const reloadCatalog = catalog.reload;
   const noLocal = localMode ? noLocalModels(catalog) : null;
   const statuses = useSessionStatuses();
   const prSummaries = usePrSummaries();
@@ -371,7 +372,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     const key = `${sessionKey}:${sessionModel}:${catalog.models[0]?.id}`;
     if (settledFor.current === key) return;
     settledFor.current = key;
-    void settleLocalModel();
+    // Forget the key on failure so the next render retries instead of leaving the picker on "Selecting model".
+    settleLocalModel().catch(() => {
+      settledFor.current = null;
+    });
   }, [localMode, listed, sessionKey, sessionModel, modelListed, catalog.models, settleLocalModel]);
 
   // A Code session with no project has no working directory, so main refuses the turn. The
@@ -498,9 +502,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       draft.clear();
       const accepted = await conversation.send(text, attached);
       // Main knows something this window did not: reread so the banner and Send gate catch up.
-      if (!accepted && localMode) void catalog.reload();
+      if (!accepted && localMode) void reloadCatalog();
     },
-    [conversation, draft, localMode, catalog]
+    [conversation, draft, localMode, reloadCatalog]
   );
 
   /**
