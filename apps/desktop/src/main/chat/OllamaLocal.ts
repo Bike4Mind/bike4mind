@@ -157,7 +157,10 @@ export class OllamaLocal {
     knownInspections.set(model, inspection);
     let numCtx = await this.resolveContext(request.model, inspection);
     const messages = toMessages(request.messages);
-    const tools = (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
+    // Ollama refuses tools for a model without the capability; the list may not have known it yet.
+    const tools = inspection.capabilities.includes('tools')
+      ? (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }))
+      : [];
     const post = (fitted: OllamaMessage[]) =>
       this.chatFetch(CHAT_URL, {
         method: 'POST',

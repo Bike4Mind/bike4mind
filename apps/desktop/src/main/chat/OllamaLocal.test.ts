@@ -250,6 +250,28 @@ describe('OllamaLocal', () => {
     expect(events).toEqual([{ type: 'content', stopReason: expected }]);
   });
 
+  it.each([
+    { capabilities: ['completion', 'tools'], sendsTools: true },
+    { capabilities: ['completion'], sendsTools: false },
+  ])('sends tools only to a model that reports the capability: $capabilities', async ({ capabilities, sendsTools }) => {
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) =>
+      String(input).endsWith('/api/show')
+        ? Response.json({ capabilities })
+        : new Response(`${JSON.stringify({ done: true })}\n`)
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await new OllamaLocal().stream(
+      {
+        model: 'local:ollama:gemma3:270m',
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [{ toolSchema: { name: 'read_file', parameters: {} } }],
+      },
+      () => undefined
+    );
+    const sent = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as Record<string, unknown>;
+    expect('tools' in sent).toBe(sendsTools);
+  });
+
   it('excludes embedding-only models and models whose capabilities could not be inspected', async () => {
     vi.stubGlobal(
       'fetch',
