@@ -59,6 +59,36 @@ describe('redactLogValue', () => {
     expect(json({ error })).not.toContain('sk-canary');
   });
 
+  it('keeps the non-enumerable cause of an error, with its code', () => {
+    const cause = Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT', address: '10.0.0.1' });
+    expect(redactLogValue({ err: new TypeError('fetch failed', { cause }) })).toMatchObject({
+      err: { message: 'fetch failed', cause: { message: 'connect ETIMEDOUT', code: 'ETIMEDOUT', address: '10.0.0.1' } },
+    });
+  });
+
+  it('keeps the cause of a provider error and redacts secrets inside it', () => {
+    const cause = new Error('proxy said Bearer sk-canary');
+    const error = Object.assign(new Error('upstream failed', { cause }), { status: 502 });
+    const redacted = redactLogValue({ error });
+    expect(redacted).toMatchObject({ error: { status: 502, cause: { message: 'proxy said Bearer [REDACTED]' } } });
+    expect(json({ error })).not.toContain('sk-canary');
+  });
+
+  it('omits cause when the error has none', () => {
+    expect(redactLogValue({ err: new Error('plain') })).not.toHaveProperty('err.cause');
+  });
+
+  it('terminates on a cyclic cause chain and on one deeper than the depth cap', () => {
+    const a = new Error('a');
+    const b = new Error('b', { cause: a });
+    a.cause = b;
+    expect(json({ err: a })).toContain('[Circular]');
+
+    let deep = new Error('leaf');
+    for (let i = 0; i < 50; i++) deep = new Error(`level-${i}`, { cause: deep });
+    expect(json({ err: deep })).toContain('[Truncated]');
+  });
+
   it('keeps a plain error message but drops its stack secrets', () => {
     const error = new Error('boom with Bearer abc123');
     expect(redactLogValue({ error })).toMatchObject({
