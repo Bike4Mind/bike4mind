@@ -242,9 +242,9 @@ export async function attachOllama(
   }
   const warnings: string[] = [];
   if (ollama.error !== undefined) {
-    warnings.push(`⚠️  Ollama at ${ollamaHost} is unreachable: ${ollama.error}`);
+    warnings.push(`\u26a0\ufe0f  Ollama at ${ollamaHost} is unreachable: ${ollama.error}`);
   } else if (ollamaModels.length === 0) {
-    warnings.push(`⚠️  No models found in Ollama at ${ollamaHost}. Pull one with: ollama pull qwen3.5`);
+    warnings.push(`\u26a0\ufe0f  No models found in Ollama at ${ollamaHost}. Pull one with: ollama pull qwen3.5`);
   }
 
   const multi = deps.createMultiBackend(llm, ollamaBackend, serverModels, ollamaModels, config.defaultModel);
@@ -294,7 +294,7 @@ export async function buildLlmBackend(
   const { llm, models } = attached;
   startupLog.push(...attached.warnings);
   if (attached.ollamaHost) {
-    startupLog.push(`🦙 Self-hosted Ollama: ${attached.ollamaModelCount} model(s) added to picker`);
+    startupLog.push(`\u{1f999} Self-hosted Ollama: ${attached.ollamaModelCount} model(s) added to picker`);
   }
 
   logger.debug(`📋 Available models: ${models.map(m => m.id).join(', ')}`);
