@@ -430,6 +430,7 @@ describe('bundles', () => {
 
   it('serves the bundle as one more plugin, pinned to the bytes the bundle route serves', async () => {
     const { res } = await call(feedHandler, { orgId: ORG_ID });
+    expect(mockFindBundles).toHaveBeenCalledWith({ organizationId: ORG_ID });
     const { plugins } = res._getJSONData();
     expect(plugins.map((p: { name: string }) => p.name)).toEqual([
       'review-pr',
