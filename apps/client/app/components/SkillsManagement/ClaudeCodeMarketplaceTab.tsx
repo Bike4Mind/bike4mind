@@ -29,6 +29,8 @@ export const findMarketplaceListing = (
     if (
       listing.sourceSkillId !== skillId ||
       listing.visibility !== 'organization' ||
+      listing.status !== 'approved' ||
+      listing.hiddenByReports ||
       !listing.currentApprovedVersionId
     ) {
       continue;

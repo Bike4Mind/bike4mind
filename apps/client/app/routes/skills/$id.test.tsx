@@ -9,6 +9,7 @@ const approvedListing = {
   id: 'l1',
   sourceSkillId: 's1',
   visibility: 'organization',
+  status: 'approved',
   organizationId: ORG.id,
   currentApprovedVersionId: 'v1',
   claudePluginName: 'hello-team-abc123',
@@ -19,8 +20,10 @@ const h = vi.hoisted(() => ({
   skill: {} as Record<string, unknown>,
   listings: [] as Array<Record<string, unknown>>,
   orgs: [] as Array<{ id: string; name: string }>,
-  enabled: [] as Array<boolean | undefined>,
-  pending: false,
+  listingsEnabled: [] as Array<boolean | undefined>,
+  meEnabled: [] as Array<boolean | undefined>,
+  listingsPending: false,
+  mePending: false,
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn(), useParams: () => ({ id: 's1' }) }));
@@ -33,10 +36,13 @@ vi.mock('@client/app/hooks/data/skills', () => ({
 // Like React Query, the mocks return cached data even while disabled, so the page's own guard is what filters it.
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
   useMyListings: (opts: { enabled?: boolean }) => {
-    h.enabled.push(opts.enabled);
-    return { data: h.listings, isPending: h.pending };
+    h.listingsEnabled.push(opts.enabled);
+    return { data: h.listings, isPending: h.listingsPending };
   },
-  useMarketMe: () => ({ data: { organizations: h.orgs }, isPending: h.pending }),
+  useMarketMe: (opts: { enabled?: boolean }) => {
+    h.meEnabled.push(opts.enabled);
+    return { data: { organizations: h.orgs }, isPending: h.mePending };
+  },
 }));
 vi.mock('@client/app/components/SkillsManagement/SkillShareDialog', () => ({ default: () => null }));
 vi.mock('@client/app/components/SkillMarket/SkillUpdatePanel', () => ({ default: () => null }));
@@ -67,8 +73,10 @@ describe('SkillDetailPage team marketplace', () => {
     h.skill = { id: 's1', userId: 'u1', name: 'hello-team', description: 'd', body: 'b' };
     h.listings = [approvedListing];
     h.orgs = [ORG];
-    h.enabled = [];
-    h.pending = false;
+    h.listingsEnabled = [];
+    h.meEnabled = [];
+    h.listingsPending = false;
+    h.mePending = false;
   });
 
   it('passes the approved org listing to the dialog for the owner', () => {
@@ -77,12 +85,17 @@ describe('SkillDetailPage team marketplace', () => {
 
   it('fetches listings only once the dialog opens', () => {
     openDialog();
-    expect(h.enabled[0]).toBe(false);
-    expect(h.enabled.at(-1)).toBe(true);
+    expect(h.listingsEnabled[0]).toBe(false);
+    expect(h.listingsEnabled.at(-1)).toBe(true);
+    expect(h.meEnabled[0]).toBe(false);
+    expect(h.meEnabled.at(-1)).toBe(true);
   });
 
-  it('holds the dialog until the listings load', () => {
-    h.pending = true;
+  it.each([
+    ['listings', () => (h.listingsPending = true)],
+    ['market me', () => (h.mePending = true)],
+  ])('holds the dialog until the %s load', (_case, arrange) => {
+    arrange();
     render(
       <CssVarsProvider theme={appTheme}>
         <SkillDetailPage />
@@ -102,6 +115,8 @@ describe('SkillDetailPage team marketplace', () => {
     ['no listing', () => (h.listings = [])],
     ['a public listing', () => (h.listings = [{ ...approvedListing, visibility: 'public' }])],
     ['an unlisted listing', () => (h.listings = [{ ...approvedListing, visibility: 'unlisted' }])],
+    ['a withdrawn listing', () => (h.listings = [{ ...approvedListing, status: 'withdrawn' }])],
+    ['a listing hidden by reports', () => (h.listings = [{ ...approvedListing, hiddenByReports: true }])],
     [
       'a pending-only listing',
       () => (h.listings = [{ ...approvedListing, currentApprovedVersionId: null, claudePluginName: undefined }]),
