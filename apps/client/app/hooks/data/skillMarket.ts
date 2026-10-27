@@ -65,11 +65,12 @@ export type SubmitResult = { listing: MarketListing; version: ISkillListingVersi
 
 const PAGE_SIZE = 24;
 
-export const useMarketMe = () =>
+export const useMarketMe = (opts?: { enabled?: boolean }) =>
   useQuery({
     queryKey: ['skill-market', 'me'],
     queryFn: async () => (await api.get<MarketMe>('/api/skills/market/me')).data,
     staleTime: 5 * 60 * 1000,
+    enabled: opts?.enabled,
   });
 
 export const useMarketListings = (filters: MarketFilters) =>
@@ -112,10 +113,11 @@ export const useListingDetail = (args: { id?: string; token?: string }) =>
     retry: false,
   });
 
-export const useMyListings = () =>
+export const useMyListings = (opts?: { enabled?: boolean }) =>
   useQuery({
     queryKey: ['skill-market', 'mine'],
     queryFn: async () => (await api.get<{ data: MyListing[] }>('/api/skills/market/mine')).data.data,
+    enabled: opts?.enabled,
   });
 
 export type ReviewQueueFilter = 'pending' | 'audit' | 'reports' | 'legacy';

@@ -60,6 +60,12 @@ describe('emailVerifiedGrants', () => {
       expect(await isEligibleForFreeCredits('x@gmail.com', logger)).toBe(true);
     });
 
+    it('passes signupProtection so the gate sees the refreshed reject-tier lists', async () => {
+      mockShouldBlock.mockResolvedValue(false);
+      await isEligibleForFreeCredits('x@gmail.com', logger);
+      expect(mockShouldBlock.mock.calls[0][1].signupProtection).toBe(signupProtection);
+    });
+
     it('withholds the grant when the gate throws', async () => {
       mockShouldBlock.mockRejectedValue(new Error('settings down'));
       expect(await isEligibleForFreeCredits('x@gmail.com', logger)).toBe(false);
