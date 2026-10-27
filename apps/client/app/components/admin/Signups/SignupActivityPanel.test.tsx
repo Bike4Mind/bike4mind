@@ -85,7 +85,25 @@ describe('SignupActivityPanel', () => {
   });
 });
 
+describe('SignupActivityPanel load failure', () => {
+  it('shows an alert and retries the request', () => {
+    const refetch = vi.fn();
+    mocks.useSignupTimeseries.mockReturnValue({ data: undefined, isLoading: false, isError: true, refetch });
+    wrap(<SignupActivityPanel onSelectWindow={vi.fn()} />);
+    expect(screen.getByTestId('users-signup-panel').textContent).toContain('Could not load signups.');
+    fireEvent.click(screen.getByTestId('users-signup-retry-btn'));
+    expect(refetch).toHaveBeenCalled();
+  });
+});
+
 describe('NewSignupsTile', () => {
+  it('shows an alert and a placeholder headline when the load fails', () => {
+    mocks.useSignupTimeseries.mockReturnValue({ data: undefined, isLoading: false, isError: true, refetch: vi.fn() });
+    wrap(<NewSignupsTile onReview={vi.fn()} />);
+    expect(screen.getByText('Signups could not be loaded. Open Users to retry.')).toBeTruthy();
+    expect(screen.getByTestId('admin-dashboard-signups-legit').textContent).toBe('-');
+  });
+
   it('headlines the likely-legit count, not the raw total', () => {
     const onReview = vi.fn();
     wrap(<NewSignupsTile onReview={onReview} />);
