@@ -148,11 +148,10 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
 
   const adminSession = useGetSession(adminSessionId);
 
-  // Set floatingChat layout on mount, restore on unmount
-  // FloatingChatWindow auto-minimizes on narrow screens, so no need to check here
+  // Mount the assistant as the minimized pill so it is on hand without covering the page; restore on unmount
   useEffect(() => {
     if (!currentUser?.isAdmin) return;
-    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: false });
+    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: true });
     return () => {
       setSessionLayout({ layout: 'hide' });
     };
@@ -316,6 +315,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             currentSessionId={adminSessionId ?? undefined}
             isLoading={!adminSessionId || adminSession.isPending}
             autoHideOnEmpty={false}
+            floatingChatCloseToPill
           />
         </Box>
       </NotebookFilepondProvider>
