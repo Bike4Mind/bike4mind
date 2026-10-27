@@ -105,7 +105,14 @@ async function gatherFacts(
     // The newest maxEventsPerUser rows via the { userId, createdAt } index, folded to one row per
     // request (a completion can settle several UsageEvent rows).
     UsageEvent.aggregate<{ at: Date; api: number; rows: number }>([
-      { $match: { userId, createdAt: { $gte: readStart }, feature: { $nin: ['operations', 'embedding'] } } },
+      {
+        $match: {
+          userId,
+          createdAt: { $gte: readStart },
+          ownerType: CreditHolderType.User,
+          feature: { $nin: ['operations', 'embedding'] },
+        },
+      },
       { $sort: { createdAt: -1 } },
       { $limit: config.maxEventsPerUser },
       {

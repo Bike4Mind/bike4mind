@@ -244,6 +244,27 @@ describe('runUsagePatternSignals', () => {
     expect(stored?.signals.find(s => s.id === 'apiOnlyUsage')).toMatchObject({ value: 0, triggered: false });
   });
 
+  it('leaves org-billed usage out of the personal profile', async () => {
+    const member = await seedUser();
+    await seedUsage(member, [new Date(now.getTime() - MINUTE)], { source: 'web' });
+    const orgTimes = Array.from({ length: 30 }, (_, i) => new Date(now.getTime() - (i + 2) * 7 * MINUTE));
+    await UsageEvent.collection.insertMany(
+      orgTimes.map((createdAt, i) => ({
+        userId: member,
+        requestId: `${member}-org-${i}`,
+        ownerType: CreditHolderType.Organization,
+        createdAt,
+        apiKeyId: 'org-key',
+        source: 'api',
+      }))
+    );
+
+    await runUsagePatternSignals({ now });
+
+    const stored = await userUsagePatternSignalsRepository.findByUserId(member);
+    expect(stored?.signals.find(s => s.id === 'apiOnlyUsage')).toMatchObject({ value: 0, triggered: false });
+  });
+
   it('rotates through candidates when there are more than the per-run cap, without spending the cap on paid users', async () => {
     const paid = await seedUser();
     await seedUsage(paid, [new Date(now.getTime() - MINUTE)], {});
