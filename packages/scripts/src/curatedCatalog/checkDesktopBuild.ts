@@ -1,11 +1,13 @@
 /**
  * Release gate for a built Desktop app (`apps/desktop/out`): the public test keys must not be in it, and the list
- * URL it baked in must be empty or https. The desktop release workflow runs it between the build and packaging.
+ * URL it baked in must be empty or the expected https URL. The desktop release workflow runs it between the build
+ * and packaging.
  *
- *   pnpm --filter @bike4mind/scripts curated:check-build apps/desktop/out
+ *   pnpm --filter @bike4mind/scripts curated:check-build apps/desktop/out [--expect-url <public list URL>]
  */
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { parseArgs } from 'node:util';
 import { cliPath, isEntry } from './cli';
 import { CURATED_DEV_SEED_TEXTS, curatedDevKey } from './devKey';
 
@@ -43,14 +45,18 @@ export async function findDevKey(dir: string): Promise<BuildFinding[]> {
   return findings;
 }
 
-/** Null when the URL a release bakes in is acceptable: unset (remote list off) or an https URL. */
-export function manifestUrlProblem(raw: string | undefined): string | null {
+/** Null when the URL a release bakes in is acceptable: unset (remote list off), or https and exactly `expected`. */
+export function manifestUrlProblem(raw: string | undefined, expected?: string): string | null {
   if (!raw) return null;
-  return URL.canParse(raw) && new URL(raw).protocol === 'https:' ? null : 'B4M_CURATED_MANIFEST_URL must be https';
+  if (!URL.canParse(raw) || new URL(raw).protocol !== 'https:') return 'B4M_CURATED_MANIFEST_URL must be https';
+  if (!expected) return 'B4M_CURATED_MANIFEST_URL is set but no --expect-url was given to compare it with';
+  if (!URL.canParse(expected) || new URL(expected).href !== new URL(raw).href)
+    return `B4M_CURATED_MANIFEST_URL is not the expected ${expected}`;
+  return null;
 }
 
 /** The problems `curated-build.json` reports; a build without one cannot be checked, so that is one too. */
-export async function buildInfoProblems(dir: string): Promise<string[]> {
+export async function buildInfoProblems(dir: string, expectedUrl?: string): Promise<string[]> {
   let info: { devKeys?: unknown; manifestUrl?: unknown };
   try {
     info = JSON.parse(await readFile(path.join(dir, BUILD_INFO_PATH), 'utf8'));
@@ -61,20 +67,26 @@ export async function buildInfoProblems(dir: string): Promise<string[]> {
     return [`${BUILD_INFO_PATH} is malformed`];
   const problems: string[] = [];
   if (info.devKeys !== false) problems.push('the build was made with B4M_CURATED_DEV_KEYS=1');
-  const urlProblem = manifestUrlProblem(info.manifestUrl.trim());
+  const urlProblem = manifestUrlProblem(info.manifestUrl.trim(), expectedUrl?.trim());
   if (urlProblem) problems.push(`${urlProblem} (baked: ${info.manifestUrl})`);
   return problems;
 }
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv, log = console.log): Promise<number> {
-  if (argv.length !== 1) {
-    log('usage: curated:check-build <built app dir>');
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { 'expect-url': { type: 'string' } } });
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || parsed.positionals.length !== 1) {
+    log('usage: curated:check-build <built app dir> [--expect-url <public list URL>]');
     return 2;
   }
-  const dir = cliPath(argv[0], env);
+  const dir = cliPath(parsed.positionals[0], env);
   const findings = await findDevKey(dir);
   for (const finding of findings) log(`${finding.file}: contains the curated ${finding.marker}`);
-  const problems = await buildInfoProblems(dir);
+  const problems = await buildInfoProblems(dir, parsed.values['expect-url']);
   for (const problem of problems) log(problem);
   if (findings.length > 0 || problems.length > 0) return 1;
   log('no curated test key in the build, and the list URL is acceptable');
