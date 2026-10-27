@@ -322,7 +322,7 @@ export class CuratedSource {
       const current = this.#chosen().sequence;
       if (hint === null || hint <= current) {
         this.#log(`latest curated list does not match its signature (${verdict.detail}); kept list ${current}`);
-        return 'up-to-date';
+        return 'failed';
       }
       this.#log(`latest curated list does not match its signature (${verdict.detail}); trying ${hint}.json`);
       const pinned = new URL(`${hint}.json`, url).href;

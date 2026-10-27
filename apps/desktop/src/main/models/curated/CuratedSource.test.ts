@@ -168,12 +168,15 @@ describe('CuratedSource', () => {
     logged(/rejected the curated list: (bad-signature|unknown-key)/);
   });
 
-  it('treats a mismatched pair with no newer hint as up to date', async () => {
+  it('counts a mismatched pair with no newer hint as a failed check, so it backs off and never sets checkedAt', async () => {
     const manifest = listText(3);
     server.publish(3, manifest.replace(NOTE, 'Tampered.'), sigText(manifest, [signing]));
     const s = source();
     await s.checkNow();
-    expect(s.view()).toMatchObject({ origin: 'bundled', check: 'up-to-date' });
+    expect(s.view()).toMatchObject({ origin: 'bundled', check: 'failed', checkedAt: null });
+    expect(server.requests).toHaveLength(2);
+    clock += CURATED_BACKOFF_BASE_MS - 1;
+    await s.checkIfDue();
     expect(server.requests).toHaveLength(2);
   });
 
