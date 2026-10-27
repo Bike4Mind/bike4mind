@@ -256,6 +256,22 @@ describe('ApiKeyScopePreflightTab', () => {
     expect(screen.getByTestId('admin-page-header')).not.toHaveTextContent('(1)');
   });
 
+  it('offers Clear search, not a re-run, when a search matches no returned keys', async () => {
+    const refetch = vi.fn();
+    mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result({ rows: [row()] }), refetch }));
+    renderTab();
+
+    const search = screen.getByTestId('admin-filter-search-input');
+    await userEvent.type(search, 'nomatch');
+    expect(screen.getByText('No returned keys match')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-table-refresh-btn')).toBeNull();
+
+    await userEvent.click(screen.getByTestId('scope-preflight-clear-search-btn'));
+    expect(search).toHaveValue('');
+    expect(screen.getByTestId('scope-preflight-results').querySelectorAll('tbody tr')).toHaveLength(1);
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
   it("shows the handler's refusal, not axios's generic status string", () => {
     // The refusals are the remedy: an unlogged prefix explains why the answer
     // would have been false, and an unknown scope explains a caught typo.

@@ -306,6 +306,21 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
                 getRowId={row => row.keyId}
                 onRetry={() => void refetch()}
                 pageResetKey={resultQuery + JSON.stringify(submitted)}
+                // The default empty action is onRetry, which would re-run the expensive scan.
+                empty={
+                  <EmptyState
+                    title="No returned keys match"
+                    action={
+                      <Button
+                        variant="outlined"
+                        data-testid="scope-preflight-clear-search-btn"
+                        onClick={() => setResultQuery('')}
+                      >
+                        Clear search
+                      </Button>
+                    }
+                  />
+                }
                 columns={[
                   {
                     id: 'outcome',
