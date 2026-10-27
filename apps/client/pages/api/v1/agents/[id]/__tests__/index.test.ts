@@ -161,12 +161,12 @@ describe('GET /api/v1/agents/{id}', () => {
 });
 
 describe('PATCH /api/v1/agents/{id}', () => {
-  it('accepts a catalog-only preferred_model and forwards the caller id and logger to the lookup', async () => {
+  it('accepts a catalog-only preferred_model and forwards the caller and logger to the lookup', async () => {
     const res = await call('PATCH', AGENT_ID, { preferred_model: 'catalog-model' });
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockUpdate).toHaveBeenCalledWith({ id: AGENT_ID, preferredModel: 'catalog-model' }, { new: true });
-    expect(mockGetCallerModelList).toHaveBeenCalledWith(USER.id, logger);
+    expect(mockGetCallerModelList).toHaveBeenCalledWith(USER, logger);
   });
 
   it.each([
