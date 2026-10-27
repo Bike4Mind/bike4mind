@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   OAUTH_FAILURE_REASONS,
   resolveOAuthFailureReason,
-  oauthFailureRedirectMessage,
+  oauthFailureLoginErrorCode,
   STATE_REASON_TO_CODE,
 } from './oauthFailureReason';
+import { getLoginErrorMessage } from '@client/app/utils/loginErrorMessages';
 
 describe('resolveOAuthFailureReason', () => {
   it('passes through every whitelisted canonical code unchanged', () => {
@@ -33,23 +34,32 @@ describe('resolveOAuthFailureReason', () => {
   });
 });
 
-describe('oauthFailureRedirectMessage', () => {
-  it('gives a retry hint for an expired state', () => {
-    expect(oauthFailureRedirectMessage('state_expired')).toMatch(/expired/i);
+describe('oauthFailureLoginErrorCode', () => {
+  it('maps an expired state to the retry code', () => {
+    expect(oauthFailureLoginErrorCode('state_expired')).toBe('invalid_state');
   });
 
-  it('tells the user an invite is needed when registration is closed', () => {
-    expect(oauthFailureRedirectMessage('registration_closed')).toMatch(/invite/i);
+  it('maps closed registration to its own code so the login page can offer the waitlist', () => {
+    expect(oauthFailureLoginErrorCode('registration_closed')).toBe('registration_closed');
   });
 
   // The reasons above are the only ones allowed to say something specific; everything
   // else must stay generic so a failure code cannot become an account oracle.
-  const SPECIFIC_MESSAGE_REASONS = ['state_expired', 'registration_closed'];
+  const SPECIFIC_CODE_REASONS = ['state_expired', 'registration_closed'];
 
-  it('gives a generic message for every other canonical reason', () => {
+  it('gives a generic code for every other canonical reason', () => {
     for (const reason of OAUTH_FAILURE_REASONS) {
-      if (SPECIFIC_MESSAGE_REASONS.includes(reason)) continue;
-      expect(oauthFailureRedirectMessage(reason)).toBe('Authentication failed');
+      if (SPECIFIC_CODE_REASONS.includes(reason)) continue;
+      expect(oauthFailureLoginErrorCode(reason)).toBe('callback_error');
+    }
+  });
+
+  // The client only renders codes it knows; anything else silently becomes a generic message.
+  it('emits only codes the login page knows', () => {
+    for (const reason of OAUTH_FAILURE_REASONS) {
+      expect(getLoginErrorMessage(oauthFailureLoginErrorCode(reason))).not.toBe(
+        getLoginErrorMessage('definitely_not_a_code')
+      );
     }
   });
 });

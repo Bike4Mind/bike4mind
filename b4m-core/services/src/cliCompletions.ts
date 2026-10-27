@@ -75,7 +75,7 @@ import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
-import { createModelAdmission, loadModelConfigurations } from './llm/modelAdmission';
+import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './llm/modelAdmission';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
 import { fallbackThinkingVisibility } from './thinkingVisibility';
@@ -561,9 +561,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
-  const [storedActor, modelConfigs] = await Promise.all([
+  const [storedActor, modelConfigs, freeTierAllowedModels] = await Promise.all([
     db.users.findById(userId),
     loadModelConfigurations(db.adminSettings),
+    loadFreeTierAllowedModels(db.adminSettings),
   ]);
   const actor = storedActor && params.scopeActor ? params.scopeActor(storedActor) : storedActor;
   await createModelAdmission({
@@ -572,6 +573,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     getEntitlements: actor && params.getEntitlements ? () => params.getEntitlements!(actor) : undefined,
     models,
     enforceCredits: Boolean(enforceCredits),
+    freeTierAllowedModels,
   }).assert(model);
   const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), model);
   const reasoningChannel = reasoningChannelOf(modelInfo ?? { id: model });

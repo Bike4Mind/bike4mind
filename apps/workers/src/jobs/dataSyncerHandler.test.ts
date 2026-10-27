@@ -308,6 +308,19 @@ describe('dataSyncerHandler', () => {
     expect(state.findFilters.find(f => f.name === 'rapidreplymappings')?.filter).toEqual({});
   });
 
+  it('does not copy the Turnstile settings into a preview', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingName: { $nin: string[] };
+    };
+    expect(adminFilter.settingName.$nin).toEqual(
+      expect.arrayContaining(['turnstileEnabled', 'turnstileFailClosed', 'turnstileSiteKey'])
+    );
+  });
+
   it('excludes ciphertext-shaped values under any name and keeps plaintext', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
 
