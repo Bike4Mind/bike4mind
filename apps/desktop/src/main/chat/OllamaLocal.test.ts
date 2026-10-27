@@ -239,8 +239,20 @@ describe('OllamaLocal', () => {
     const conversation: CompletionMessage[] = [
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'reply' },
-      { role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'AAAA' } }] },
+      { role: 'user', content: 'weather?' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'weather', input: {} }] },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 't1', content: 'sunny' },
+          { type: 'text', text: 'note on the result' },
+        ],
+      },
     ];
+    const legacyQwen3Template = '{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant\n<think>\n{{ end }}';
+    const r1JinjaTemplate = "{% if add_generation_prompt and not ns.is_tool %}{{'<Assistant><think>\\n'}}{% endif %}";
+    const libraryQwen3Template =
+      '{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant\n{{ if and $.IsThinkSet (not $.Think) -}}\n<think>\n\n</think>\n\n{{ end -}}\n{{ end }}';
 
     it('sends think:false when Ollama lists false among the values', async () => {
       const { sent } = await streamWith(
@@ -252,15 +264,85 @@ describe('OllamaLocal', () => {
       expect(sent.messages).toEqual([{ role: 'user', content: 'hi' }]);
     });
 
-    it('leaves think out and adds the Qwen3 soft switch to every user turn without touching the input', async () => {
+    it('leaves think out and puts the Qwen3 switch on the last prompt only, never on a tool result', async () => {
       const { sent } = await streamWith(done, { thinking: false, messages: conversation }, qwen3);
       expect(sent).not.toHaveProperty('think');
       expect(sent.messages).toEqual([
-        { role: 'user', content: 'first /no_think' },
+        { role: 'user', content: 'first' },
         { role: 'assistant', content: 'reply' },
-        { role: 'user', content: '/no_think', images: ['AAAA'] },
+        { role: 'user', content: 'weather? /no_think' },
+        { role: 'assistant', content: '', tool_calls: [{ function: { name: 'weather', arguments: {} } }] },
+        { role: 'tool', content: 'sunny', tool_name: 'weather' },
+        { role: 'user', content: 'note on the result' },
       ]);
-      expect(conversation[0]).toEqual({ role: 'user', content: 'first' });
+      expect(conversation[2]).toEqual({ role: 'user', content: 'weather?' });
+    });
+
+    it('sends the switch alone on an image-only prompt', async () => {
+      const { sent } = await streamWith(
+        done,
+        {
+          thinking: false,
+          messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'AAAA' } }] }],
+        },
+        qwen3
+      );
+      expect(sent.messages).toEqual([{ role: 'user', content: '/no_think', images: ['AAAA'] }]);
+    });
+
+    it('adds no switch for a qwen3 model whose template Ollama does not list as the hybrid one', async () => {
+      const { sent } = await streamWith(
+        done,
+        { thinking: false },
+        { model_info: { 'general.architecture': 'qwen3' }, template: legacyQwen3Template }
+      );
+      expect(sent).not.toHaveProperty('think');
+      expect(sent.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    });
+
+    it.each([
+      ['a Go', legacyQwen3Template],
+      ['a Jinja', r1JinjaTemplate],
+    ])('leaves think out for %s template that hard-codes the opener', async (_kind, template) => {
+      const { sent } = await streamWith(done, { thinking: false }, { template });
+      expect(sent).not.toHaveProperty('think');
+    });
+
+    it('still sends think:false for a template with a thinking-off branch', async () => {
+      const { sent } = await streamWith(done, { thinking: false }, { template: libraryQwen3Template });
+      expect(sent.think).toBe(false);
+    });
+
+    it('splits prefilled reasoning out of the raw reply of a model Ollama runs no parser for', async () => {
+      const { sent, events } = await streamWith(
+        [
+          { message: { content: 'Okay, the user asks.' } },
+          { message: { content: '\n</thi' } },
+          { message: { content: 'nk>\n\nPar' } },
+          { message: { content: 'is' }, done: true, done_reason: 'stop' },
+        ]
+          .map(frame => `${JSON.stringify(frame)}\n`)
+          .join(''),
+        { thinking: false },
+        { capabilities: ['completion'], template: legacyQwen3Template }
+      );
+      expect(sent).not.toHaveProperty('think');
+      expect(events).toEqual([
+        { type: 'content', text: '<think>Okay, the user asks.</think>' },
+        { type: 'content', text: '<think>\n</think>' },
+        { type: 'content', text: '\n\nPar' },
+        { type: 'content', text: 'is' },
+        { type: 'content', stopReason: 'stop' },
+      ]);
+    });
+
+    it('leaves the raw reply alone when the template does not prefill the opener', async () => {
+      const { events } = await streamWith(
+        `${JSON.stringify({ message: { content: 'a </think> b' }, done: true })}\n`,
+        {},
+        { capabilities: ['completion'], template: libraryQwen3Template }
+      );
+      expect(events[0]).toEqual({ type: 'content', text: 'a </think> b' });
     });
 
     it('treats the qwen3moe architecture as Qwen3', async () => {
@@ -282,13 +364,13 @@ describe('OllamaLocal', () => {
       expect(sent.messages).toEqual([{ role: 'user', content: 'hi' }]);
     });
 
-    it('leaves think out for effort-level-only values', async () => {
+    it('sends the lowest effort for effort-level-only values', async () => {
       const { sent } = await streamWith(
         done,
         { thinking: false },
         { thinking: { values: ['low', 'medium', 'high'], default: 'medium' } }
       );
-      expect(sent).not.toHaveProperty('think');
+      expect(sent.think).toBe('low');
     });
 
     it('keeps thinking on unchanged', async () => {
@@ -313,6 +395,40 @@ describe('OllamaLocal', () => {
       const { sent } = await streamWith(done, { thinking: false }, { thinking: 'yes' });
       expect(sent.think).toBe(false);
     });
+
+    const catalogWith = async (show: Record<string, unknown>) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: unknown) =>
+          String(input).endsWith('/api/tags')
+            ? Response.json({ models: [{ name: 'm' }] })
+            : Response.json({ capabilities: ['completion', 'thinking'], ...show })
+        )
+      );
+      return new OllamaLocal().models();
+    };
+
+    it.each([
+      ['the legacy hybrid Qwen3', qwen3, false],
+      ['values with false', { thinking: { values: [false, true] } }, false],
+      ['effort-only values', { thinking: { values: ['low', 'medium', 'high'] } }, false],
+      ['no values and no opener', {}, false],
+      ['values of [true] on another architecture', alwaysThinks, true],
+      ['no values and a hard-coded opener', { template: r1JinjaTemplate }, true],
+    ])('marks Off unavailable in the catalog only when it cannot take effect: %s', async (_case, show, alwaysOn) => {
+      const [model] = await catalogWith(show);
+      expect(model.thinkingToggle).toBe(true);
+      expect(model.thinkingAlwaysOn === true).toBe(alwaysOn);
+    });
+
+    it.each([{ thinking: 'yes' }, { thinking: { values: 'x' } }, { thinking: null }, { template: 7 }])(
+      'keeps a model whose show response carries a malformed field %j',
+      async show => {
+        const [model] = await catalogWith(show);
+        expect(model).toMatchObject({ id: 'local:ollama:m', thinkingToggle: true });
+        expect(model.thinkingAlwaysOn).toBeUndefined();
+      }
+    );
   });
 
   it.each([

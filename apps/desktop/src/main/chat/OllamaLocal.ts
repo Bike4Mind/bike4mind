@@ -11,6 +11,7 @@ import {
   type OllamaMessage,
 } from './localContext';
 import type { CompletionStreamEvent } from './streamEvents';
+import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 
 export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -22,7 +23,8 @@ const showSchema = z.object({
   capabilities: z.array(z.string()),
   model_info: z.record(z.string(), z.unknown()).optional(),
   parameters: z.string().optional(),
-  /** The `think` values the model's template honors (booleans or effort names); older Ollama omits it. */
+  template: z.string().optional().catch(undefined),
+  /** The `think` values the model honors (booleans or effort names); absent when Ollama does not know. */
   thinking: z
     .object({ values: z.array(z.unknown()) })
     .optional()
@@ -34,24 +36,87 @@ function usesRemoteModel(model: { remote_host?: string; remote_model?: string })
   return !!(model.remote_host?.trim() || model.remote_model?.trim());
 }
 
-/** Unknown (no `thinking` reported) keeps sending think:false, as before Ollama listed the values. */
-function honorsThinkingOff(inspection: z.infer<typeof showSchema>): boolean {
-  return !inspection.thinking || inspection.thinking.values.includes(false);
+type Inspection = z.infer<typeof showSchema>;
+
+/**
+ * How a request with thinking off is sent:
+ * - `think-false`: the template honors it (false among Ollama's values, or no values reported
+ *   and no hard-coded opener).
+ * - `no-think-switch`: Qwen3's documented soft switch on the user turn, `think` left out.
+ * - `lowest-effort`: an effort-only model (gpt-oss) gets its lowest level.
+ * - `always-thinks`: Off cannot take effect; `think` is left out so Ollama still splits the
+ *   reasoning from the reply (think:false would turn that parser off and leak it).
+ */
+type ThinkingOffMode = 'think-false' | 'no-think-switch' | 'lowest-effort' | 'always-thinks';
+
+function thinkingOffMode(inspection: Inspection): ThinkingOffMode {
+  const values = inspection.thinking?.values;
+  if (!values) return opensThinkBlock(inspection.template) ? 'always-thinks' : 'think-false';
+  if (values.includes(false)) return 'think-false';
+  if (isLegacyQwen3Hybrid(inspection, values)) return 'no-think-switch';
+  return values.some(value => typeof value === 'string') ? 'lowest-effort' : 'always-thinks';
 }
 
-/** Qwen3's documented soft switch for skipping its reasoning, read from the user turn. */
-function takesNoThinkSwitch(inspection: z.infer<typeof showSchema>): boolean {
+/**
+ * Whether the generation prompt ends in a literal `<think>` with no branch that turns it off,
+ * Go (`.Think`) or Jinja (`enable_thinking`). Ollama reports no `thinking` values for most such
+ * templates, only for the few it recognizes by digest.
+ */
+function opensThinkBlock(template: string | undefined): boolean {
+  if (!template || /\.Think\b|enable_thinking/.test(template)) return false;
+  return /<think>(?:\s|\\n|['"+])*(?:\}\}\s*)?\{[{%]-?\s*end(?:if)?\b/.test(template);
+}
+
+/**
+ * The hybrid Qwen3 release under Ollama's older Qwen3 template (values exactly [true]); it obeys
+ * `/no_think`. Thinking-2507, R1-Qwen3 and Coder share the architecture but not this template.
+ */
+function isLegacyQwen3Hybrid(inspection: Inspection, values: unknown[]): boolean {
   const architecture = inspection.model_info?.['general.architecture'];
-  return architecture === 'qwen3' || architecture === 'qwen3moe';
+  return (architecture === 'qwen3' || architecture === 'qwen3moe') && values.length === 1 && values[0] === true;
 }
 
-/** On every user turn, so the prompt prefix Ollama has cached stays the same from turn to turn. */
+/** On the last user prompt only, so switching thinking mid-conversation changes just the tail. */
 function withNoThinkSwitch(messages: OllamaMessage[]): OllamaMessage[] {
-  return messages.map(message =>
-    message.role === 'user'
-      ? { ...message, content: message.content ? `${message.content} /no_think` : '/no_think' }
-      : message
+  const prompts = messages.flatMap((message, index) =>
+    message.role === 'user' && !message.continuesTurn ? [index] : []
   );
+  const last = prompts.at(-1) ?? messages.findLastIndex(message => message.role === 'user');
+  return messages.map((message, index) =>
+    index === last ? { ...message, content: message.content ? `${message.content} /no_think` : '/no_think' } : message
+  );
+}
+
+/** The `think` field to send, if any. */
+function thinkField(inspection: Inspection, thinking: boolean | undefined): { think?: boolean | string } {
+  if (thinking === undefined || !inspection.capabilities.includes('thinking')) return {};
+  if (thinking) return { think: true };
+  switch (thinkingOffMode(inspection)) {
+    case 'think-false':
+      return { think: false };
+    case 'lowest-effort':
+      return { think: inspection.thinking?.values.find(value => typeof value === 'string') as string };
+    default:
+      return {};
+  }
+}
+
+/**
+ * For a template that prefills `<think>` but that Ollama runs no reasoning parser for (no
+ * thinking capability), splits the raw reply so the reasoning never reaches the answer.
+ */
+function splitPrefilledReasoning(onEvent: (event: CompletionStreamEvent) => void): typeof onEvent {
+  const filter = createThinkFilter({ startInReasoning: true });
+  const forward = ({ text, reasoning }: ThinkSplit) => {
+    if (reasoning) onEvent({ type: 'content', text: `<think>${reasoning}</think>` });
+    if (text) onEvent({ type: 'content', text });
+  };
+  // emitFrame sends reply text on events of its own, apart from usage and the stop reason.
+  return event => {
+    if (event.type === 'content' && event.text) return forward(filter.push(event.text));
+    if (event.type === 'content' && event.stopReason !== undefined) forward(filter.flush());
+    onEvent(event);
+  };
 }
 
 const CHAT_URL = `${OLLAMA_URL}/api/chat` as const;
@@ -102,11 +167,8 @@ export class OllamaLocal {
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
     const numCtx = rememberContext(request.model, inspection);
     const canThink = inspection.capabilities.includes('thinking');
-    // A template that always opens a thinking block (no `false` among its values, like the older
-    // Qwen3 one) ignores think:false, which then only stops Ollama splitting the reasoning out.
-    const thinksAnyway = request.thinking === false && canThink && !honorsThinkingOff(inspection);
     const messages =
-      thinksAnyway && takesNoThinkSwitch(inspection)
+      request.thinking === false && canThink && thinkingOffMode(inspection) === 'no-think-switch'
         ? withNoThinkSwitch(toMessages(request.messages))
         : toMessages(request.messages);
     const tools = (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
@@ -124,7 +186,7 @@ export class OllamaLocal {
           // reply stops at num_ctx instead, as done_reason 'length' (a visible max_tokens stop).
           truncate: false,
           shift: false,
-          ...(request.thinking !== undefined && canThink && !thinksAnyway ? { think: request.thinking } : {}),
+          ...thinkField(inspection, request.thinking),
           options: {
             num_ctx: numCtx,
             ...(request.maxTokens ? { num_predict: request.maxTokens } : {}),
@@ -173,12 +235,13 @@ export class OllamaLocal {
                 ? { ...event, usage: { ...event.usage, inputTokens: whole } }
                 : event
             );
+    const sink = !canThink && opensThinkBlock(inspection.template) ? splitPrefilledReasoning(report) : report;
     const reader = response.body.getReader();
     const decoder = new StringDecoder('utf8');
     let pending = '';
     let completed = false;
     const consume = (line: string) => {
-      if (line.trim()) completed = emitLine(line, report) || completed;
+      if (line.trim()) completed = emitLine(line, sink) || completed;
     };
     try {
       while (true) {
@@ -210,7 +273,12 @@ export class OllamaLocal {
       supportsTools: capabilities.includes('tools'),
       supportsVision: capabilities.includes('vision'),
       contextWindow: rememberContext(id, show.data),
-      ...(capabilities.includes('thinking') ? { thinkingToggle: true } : {}),
+      ...(capabilities.includes('thinking')
+        ? {
+            thinkingToggle: true,
+            ...(thinkingOffMode(show.data) === 'always-thinks' ? { thinkingAlwaysOn: true } : {}),
+          }
+        : {}),
     };
   }
 

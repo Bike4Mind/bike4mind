@@ -20,8 +20,16 @@ export interface ThinkSplit {
   reasoning: string;
 }
 
-export function createThinkFilter(): { push(text: string): ThinkSplit; flush(): ThinkSplit } {
-  let depth = 0;
+/**
+ * `startInReasoning`: the prompt already opened the block (a template that prefills `<think>`),
+ * so text up to the first `</think>` is reasoning and an opener inside that block nests nothing.
+ */
+export function createThinkFilter({ startInReasoning = false }: { startInReasoning?: boolean } = {}): {
+  push(text: string): ThinkSplit;
+  flush(): ThinkSplit;
+} {
+  let depth = startInReasoning ? 1 : 0;
+  let prefilled = startInReasoning;
   let pending = '';
 
   const drain = (final: boolean): ThinkSplit => {
@@ -43,9 +51,10 @@ export function createThinkFilter(): { push(text: string): ThinkSplit; flush(): 
       if (depth === 0) visible += pending.slice(0, next);
       else reasoning += pending.slice(0, next);
       if (next === open) {
-        depth += 1;
+        if (!prefilled) depth += 1;
         pending = pending.slice(next + OPEN.length);
       } else {
+        prefilled = false;
         if (depth > 0) depth -= 1;
         else visible += CLOSE;
         pending = pending.slice(next + CLOSE.length);
