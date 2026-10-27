@@ -199,6 +199,9 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
   // The APU and a discrete GPU are separate pools under separate runtimes, so report the larger and never sum them.
   const dgpuBytes = discrete.gpuMemoryBytes;
   if (dgpuBytes !== null && (apuBytes === null || dgpuBytes > apuBytes)) return { ...base, ...discrete };
+  // Linux ROCm moves to GTT once the carve-out is the smaller pool; what HIP on Windows reports then is unconfirmed.
+  const unconfirmed =
+    apu.memoryUnconfirmed || (platform === 'win32' && apuBytes !== null && apuBytes < totalMemoryBytes);
   return {
     ...base,
     memoryKind: 'unified',
@@ -207,7 +210,7 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
     gpuCount: 1,
     gpuVendor: 'amd',
     chip: null,
-    confidence: totalMemoryBytes > 0 && apuBytes !== null && !apu.memoryUnconfirmed ? 'high' : 'low',
+    confidence: totalMemoryBytes > 0 && apuBytes !== null && !unconfirmed ? 'high' : 'low',
   };
 }
 
