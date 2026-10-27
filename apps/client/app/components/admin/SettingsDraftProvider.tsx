@@ -17,6 +17,8 @@ import { adminTabToSlug } from './adminTabSlugs';
 import { adminSearchForTab } from './adminTabParams';
 
 type Draft = {
+  dirty: boolean;
+  baseline: unknown;
   name: string;
   value: unknown;
   save(value: unknown): Promise<unknown>;
@@ -37,7 +39,7 @@ export function SettingsDraftProvider({ children }: { children: ReactNode }) {
   const saving = useRef(false);
   const [error, setError] = useState<string>();
   const [confirming, setConfirming] = useState(false);
-  const entries = Object.entries(drafts);
+  const entries = Object.entries(drafts).filter(([, draft]) => draft.dirty);
   const blockedDraft = entries.find(([, draft]) => draft.blocked)?.[1];
   const blockedReason = blockedDraft ? `${blockedDraft.name}: ${blockedDraft.blocked}` : undefined;
   const dirty = entries.length > 0 || pending;
@@ -155,7 +157,11 @@ export function useSettingsDraft<T>(
     optionsRef.current = options;
   });
   const [local, setLocal] = useState(baseline);
-  const draft = context?.drafts[id];
+  const retainedDraft = context?.drafts[id];
+  const draft =
+    retainedDraft && (retainedDraft.dirty || JSON.stringify(retainedDraft.baseline) === JSON.stringify(baseline))
+      ? retainedDraft
+      : undefined;
   const value = context ? (draft ? (draft.value as T) : baseline) : local;
   const setValue = (update: SetStateAction<T>) => {
     const next = typeof update === 'function' ? (update as (previous: T) => T)(value) : update;
@@ -164,11 +170,14 @@ export function useSettingsDraft<T>(
       return;
     }
     const equal = options.equals?.(next, baseline) ?? JSON.stringify(next) === JSON.stringify(baseline);
+    // Keep raw formatting (including a trailing newline) without staging a redundant write.
     context.set(
       id,
-      equal
+      JSON.stringify(next) === JSON.stringify(baseline)
         ? undefined
         : {
+            dirty: !equal,
+            baseline,
             name: options.name ?? id,
             value: next,
             save: value => optionsRef.current.save(value as T),
@@ -177,5 +186,11 @@ export function useSettingsDraft<T>(
           }
     );
   };
-  return { value, setValue, staged: context !== null, pending: context?.pending ?? false, dirty: Boolean(draft) };
+  return {
+    value,
+    setValue,
+    staged: context !== null,
+    pending: context?.pending ?? false,
+    dirty: draft?.dirty ?? false,
+  };
 }
