@@ -83,7 +83,16 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
   cancel.setAttribute('data-testid', 'turnstile-challenge-cancel');
   cancel.style.cssText =
     'display:none;margin:16px auto 0;padding:6px 16px;border:0;border-radius:8px;background:transparent;color:inherit;font:14px system-ui,sans-serif;cursor:pointer;text-decoration:underline';
-  card.append(message, container, cancel);
+  // Focus sentinels also catch Tab leaving the cross-origin iframe, whose key events do not bubble.
+  const startSentinel = document.createElement('span');
+  const endSentinel = document.createElement('span');
+  for (const sentinel of [startSentinel, endSentinel]) {
+    sentinel.tabIndex = -1;
+    sentinel.setAttribute('aria-hidden', 'true');
+  }
+  startSentinel.onfocus = () => cancel.focus();
+  endSentinel.onfocus = () => (container.querySelector('iframe') ?? cancel).focus();
+  card.append(startSentinel, message, container, cancel, endSentinel);
   overlay.appendChild(card);
   document.body.appendChild(overlay);
 
@@ -99,14 +108,39 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
       }
     }
   };
+  const backgroundObserver = new MutationObserver(makeBackgroundInert);
   let onKeyDown: ((e: KeyboardEvent) => void) | undefined;
 
   // The overlay stays bare and click-through on the invisible path; the backdrop and card only
   // appear once Cloudflare decides the user must interact, so no empty modal flashes.
+  let interactive = false;
+  let finished = false;
+  const containFocus = (event: FocusEvent) => {
+    if (event.target instanceof Node && !card.contains(event.target)) cancel.focus();
+  };
+  const handleKeydown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancel.click();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    // The iframe owns its internal tab order; only wrap at the card's outer boundary.
+    const firstControl = container.querySelector('iframe') ?? cancel;
+    if (event.shiftKey && (document.activeElement === firstControl || document.activeElement === card)) {
+      event.preventDefault();
+      cancel.focus();
+    } else if (!event.shiftKey && document.activeElement === cancel) {
+      event.preventDefault();
+      firstControl.focus();
+    }
+  };
   const showChrome = () => {
+    if (interactive || finished) return;
+    interactive = true;
     overlay.style.background = 'rgba(0,0,0,0.45)';
     overlay.style.pointerEvents = 'auto';
-    card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box;max-width:calc(100vw - 32px);text-align:center`;
+    card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);overflow:auto;text-align:center`;
     message.style.display = 'block';
     cancel.style.display = 'block';
     card.setAttribute('role', 'dialog');
@@ -114,6 +148,10 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
     card.setAttribute('aria-labelledby', message.id);
     card.tabIndex = -1;
     makeBackgroundInert();
+    backgroundObserver.observe(document.body, { childList: true });
+    startSentinel.tabIndex = 0;
+    endSentinel.tabIndex = 0;
+    document.addEventListener('focusin', containFocus);
     card.focus();
   };
 
@@ -130,7 +168,7 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
       const cancelChallenge = () => settle(() => reject(new Error('turnstile-cancelled')));
       cancel.onclick = cancelChallenge;
       onKeyDown = e => {
-        if (e.key === 'Escape' && card.getAttribute('role')) cancelChallenge();
+        if (interactive) handleKeydown(e);
       };
       document.addEventListener('keydown', onKeyDown);
       widgetId = turnstile.render(container, {
@@ -147,11 +185,14 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
       });
     });
   } finally {
+    finished = true;
     clearTimeout(timer);
     if (onKeyDown) document.removeEventListener('keydown', onKeyDown);
     try {
       if (widgetId !== undefined) turnstile.remove(widgetId);
     } finally {
+      backgroundObserver.disconnect();
+      document.removeEventListener('focusin', containFocus);
       overlay.remove();
       for (const el of inertedByUs) el.removeAttribute('inert');
       if (inertedByUs.length) previouslyFocused?.focus();

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getTurnstileToken } from './turnstile';
+import userEvent from '@testing-library/user-event';
 
 type RenderOptions = {
   callback: (t: string) => void;
@@ -127,6 +128,131 @@ describe('getTurnstileToken', () => {
     await rejection;
     expect(remove).toHaveBeenCalledWith('widget-1');
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
+  it('contains keyboard focus, cancels with Escape, and restores the previous focus', async () => {
+    const user = userEvent.setup();
+    const background = document.createElement('button');
+    background.textContent = 'Sign in with Google';
+    document.body.append(background);
+    background.focus();
+    let options: RenderOptions | undefined;
+    render.mockImplementation((_element: HTMLElement, renderOptions: RenderOptions) => {
+      options = renderOptions;
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.waitFor(() => expect(options).toBeDefined());
+    expect(document.activeElement).toBe(background);
+    options!['before-interactive-callback']();
+    const card = document.querySelector<HTMLElement>('[data-testid="turnstile-challenge-card"]')!;
+    expect(card.contains(document.activeElement)).toBe(true);
+    await user.tab();
+    expect(card.contains(document.activeElement)).toBe(true);
+    await user.tab({ shift: true });
+    expect(card.contains(document.activeElement)).toBe(true);
+    background.focus();
+    expect(card.contains(document.activeElement)).toBe(true);
+    const rejection = expect(pending).rejects.toThrow('turnstile-cancelled');
+    await user.keyboard('{Escape}');
+    await rejection;
+    expect(background.hasAttribute('inert')).toBeFalsy();
+    expect(document.activeElement).toBe(background);
+    expect(remove).toHaveBeenCalledWith('widget-1');
+  });
+
+  it('blocks portals mounted while interactive and restores them on exit', async () => {
+    let options: RenderOptions | undefined;
+    render.mockImplementation((_element: HTMLElement, renderOptions: RenderOptions) => {
+      options = renderOptions;
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.waitFor(() => expect(options).toBeDefined());
+    options!['before-interactive-callback']();
+    const portal = document.createElement('aside');
+    document.body.append(portal);
+    await vi.waitFor(() => expect(portal.hasAttribute('inert')).toBe(true));
+    options!.callback('tok-1');
+    await pending;
+    expect(portal.hasAttribute('inert')).toBe(false);
+    const laterPortal = document.createElement('aside');
+    document.body.append(laterPortal);
+    await Promise.resolve();
+    expect(laterPortal.hasAttribute('inert')).toBe(false);
+  });
+
+  it('wraps focus leaving either side of the challenge iframe', async () => {
+    let options: RenderOptions | undefined;
+    render.mockImplementation((element: HTMLElement, renderOptions: RenderOptions) => {
+      element.append(document.createElement('iframe'));
+      options = renderOptions;
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.waitFor(() => expect(options).toBeDefined());
+    options!['before-interactive-callback']();
+    const card = document.querySelector<HTMLElement>('[data-testid="turnstile-challenge-card"]')!;
+    const cancel = document.querySelector<HTMLButtonElement>('[data-testid="turnstile-challenge-cancel"]')!;
+    const iframe = card.querySelector('iframe')!;
+    (card.firstElementChild as HTMLElement).focus();
+    expect(document.activeElement).toBe(cancel);
+    (card.lastElementChild as HTMLElement).focus();
+    expect(document.activeElement).toBe(iframe);
+    options!.callback('tok-1');
+    await pending;
+  });
+
+  it.each(['success', 'error', 'expiry', 'timeout'] as const)(
+    'restores background interaction and focus after interactive %s',
+    async outcome => {
+      vi.useFakeTimers();
+      const background = document.createElement('button');
+      const alreadyInert = document.createElement('div');
+      alreadyInert.setAttribute('inert', '');
+      document.body.append(background, alreadyInert);
+      background.focus();
+      let options: RenderOptions | undefined;
+      render.mockImplementation((_element: HTMLElement, renderOptions: RenderOptions) => {
+        options = renderOptions;
+        options['before-interactive-callback']();
+        return 'widget-1';
+      });
+      const pending = getTurnstileToken('site', 'otc-send');
+      const result =
+        outcome === 'success'
+          ? expect(pending).resolves.toBe('tok-1')
+          : expect(pending).rejects.toThrow(`turnstile-${outcome === 'expiry' ? 'expired' : outcome}`);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(background.hasAttribute('inert')).toBe(true);
+      options!['before-interactive-callback']();
+      if (outcome === 'success') options!.callback('tok-1');
+      if (outcome === 'error') options!['error-callback']();
+      if (outcome === 'expiry') options!['expired-callback']();
+      if (outcome === 'timeout') await vi.advanceTimersByTimeAsync(60_000);
+      await result;
+      expect(background.hasAttribute('inert')).toBeFalsy();
+      expect(alreadyInert.hasAttribute('inert')).toBe(true);
+      expect(document.activeElement).toBe(background);
+      options!['before-interactive-callback']();
+      expect(background.hasAttribute('inert')).toBeFalsy();
+      expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+    }
+  );
+
+  it.each([320, 375, 1024])('fits the widget within a %ipx viewport', async width => {
+    const originalWidth = window.innerWidth;
+    vi.stubGlobal('innerWidth', width);
+    render.mockImplementation((_element: HTMLElement, options: RenderOptions) => {
+      queueMicrotask(() => options.callback('tok-1'));
+      return 'widget-1';
+    });
+    try {
+      await getTurnstileToken('site', 'otc-send');
+      expect(render.mock.calls[0][1]).toMatchObject({ size: width < 380 ? 'compact' : 'normal' });
+    } finally {
+      vi.stubGlobal('innerWidth', originalWidth);
+    }
   });
 
   it('matches the widget theme to the app color scheme', async () => {
