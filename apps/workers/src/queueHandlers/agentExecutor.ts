@@ -1909,6 +1909,8 @@ async function processExecution(
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       llm,
       model: agentModel,
+      // Tools that run on `model` (blog_draft, jupyter_notebook) record the requested id, as on the chat path.
+      toLedgerModel: visibleModelId,
       precomputed: {
         adminSettingsEnforceCredits: false, // Agent executor handles billing per-iteration, not per-tool
         models,

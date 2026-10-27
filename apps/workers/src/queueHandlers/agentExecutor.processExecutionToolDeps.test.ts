@@ -1153,6 +1153,14 @@ describe('processExecution tool deps', () => {
       );
     });
 
+    it('records tool usage under the requested model', async () => {
+      await runRestricted();
+      const { toLedgerModel } = buildSharedToolsMock.mock.calls[0][0] as { toLedgerModel: (id: string) => string };
+
+      expect(toLedgerModel('cheap-model')).toBe('claude-sonnet-5');
+      expect(toLedgerModel('gpt-4')).toBe('gpt-4');
+    });
+
     it('names the requested model for the identity reminder only when substituted', async () => {
       const { ReActAgent } = await import('@bike4mind/agents');
       const contexts: Array<Record<string, unknown>> = [];
