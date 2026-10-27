@@ -42,7 +42,7 @@ function writeOverlay(dir: string, contributions: Record<string, unknown>) {
       b4mContributions: contributions,
     })
   );
-  // Linked the way a pnpm workspace link would; the generator itself also reads unlinked overlays.
+  // Linked the way a pnpm workspace link would; an unlinked overlay gets the absent form.
   const linkDir = join(clientRoot, 'node_modules/@bike4mind');
   mkdirSync(linkDir, { recursive: true });
   symlinkSync(overlayDir, join(linkDir, `premium-${dir}`));

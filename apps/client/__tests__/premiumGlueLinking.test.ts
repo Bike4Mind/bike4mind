@@ -9,9 +9,10 @@ import { join } from 'node:path';
  *
  * A hydrated overlay whose package is NOT linked into node_modules must get the
  * ABSENT form for all bare-specifier glue (emitting real imports would fail every
- * typecheck/build with cannot-find-module errors), while the relative-import glue (infra,
- * migrations and the shared glue in packages/server-utils) keeps the PRESENT form: it imports
- * overlay source by path and needs no link.
+ * typecheck/build with cannot-find-module errors) and for the shared glue in
+ * packages/server-utils (the server loads it at runtime, and the overlay source it names can't
+ * resolve its own imports until pnpm installs the overlay). The build-time relative-import glue
+ * (infra, migrations) keeps the PRESENT form: it imports overlay source by path and needs no link.
  *
  * Runs the real script inside a sandbox tree, since its paths derive from its own
  * location: sandbox/apps/client/scripts/ next to sandbox/packages/premium/.
@@ -64,8 +65,8 @@ function readSharedGlue(name: string) {
   return readFileSync(join(sandbox, SHARED_GLUE, `${name}.generated.ts`), 'utf8');
 }
 
-// The five shared-glue modules that import the overlay must always name its source by relative
-// path: no overlay is linked into packages/server-utils, so a bare specifier would not resolve.
+// The five shared-glue modules that import a linked overlay name its source by relative path: no
+// overlay is linked into packages/server-utils, so a bare specifier would not resolve there.
 function expectSharedGlueImportsOverlaySource() {
   const tools = readSharedGlue('premiumLlmTools');
   expect(tools).toContain(`import { llmTools as tools0 } from '${OVERLAY_SRC}/tools';`);
@@ -208,7 +209,26 @@ describe('hydrated but UNLINKED overlay', () => {
     expect(existsSync(join(clientRoot, 'server/premium-generated/fakeoverlay.ts'))).toBe(false);
   });
 
-  it('still emits the PRESENT no-import + relative-import glue (they need no link)', () => {
+  it('emits the absent form for the shared glue the server loads at runtime', () => {
+    runCodegen();
+
+    const absentForms: Record<string, string> = {
+      premiumLlmTools: 'export const premiumLlmTools: Record<string, ToolDefinition> = {};',
+      premiumSystemPrompts: 'export const premiumSystemPrompts: DefaultSystemPrompt[] = [];',
+      premiumAgentExtensions: 'export const premiumAgentExtensions: AgentExtensionContribution[] = [];',
+      premiumAdminSettings: 'export const premiumAdminSettings: SettingDefinition<string>[] = [];',
+      premiumWorkspaceSessionSettings:
+        'export const premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {};',
+    };
+    for (const [name, absent] of Object.entries(absentForms)) {
+      const glue = readSharedGlue(name);
+      expect(glue, name).toContain(absent);
+      expect(glue, name).not.toContain('premium/fakeoverlay');
+      expect(glue, name).not.toContain(PKG_NAME);
+    }
+  });
+
+  it('still emits the PRESENT no-import + build-time relative-import glue (they need no link)', () => {
     runCodegen();
 
     // Pure data lifted from package.json - it must never be demoted into the
@@ -222,8 +242,6 @@ describe('hydrated but UNLINKED overlay', () => {
     const migrations = readFileSync(join(sandbox, 'packages/scripts/migrate/migrations/premium.generated.ts'), 'utf8');
     expect(migrations).toContain('premium/fakeoverlay/src/server/migrations');
     expect(migrations).not.toContain(PKG_NAME);
-
-    expectSharedGlueImportsOverlaySource();
   });
 
   it('removes the shared glue from its former apps/client paths', () => {
@@ -287,24 +305,95 @@ describe('hydrated AND linked overlay', () => {
 });
 
 describe('a contributed export the overlay does not declare', () => {
+  const overlayPackageJson = () => join(sandbox, 'packages/premium/fakeoverlay/package.json');
   let packageJson: string;
 
   beforeAll(() => {
     linkOverlay();
-    const path = join(sandbox, 'packages/premium/fakeoverlay/package.json');
-    packageJson = readFileSync(path, 'utf8');
-    const pkg = JSON.parse(packageJson);
-    delete pkg.exports['./tools'];
-    writeFileSync(path, JSON.stringify(pkg));
+    packageJson = readFileSync(overlayPackageJson(), 'utf8');
   });
 
   afterAll(() => {
-    writeFileSync(join(sandbox, 'packages/premium/fakeoverlay/package.json'), packageJson);
+    writeFileSync(overlayPackageJson(), packageJson);
   });
 
-  it('fails codegen instead of dropping the import', () => {
+  it.each([
+    ['llmToolsExport', './tools'],
+    ['systemPromptsExport', './prompts'],
+    ['agentExtensionsExport', './agent-extensions'],
+    ['adminSettingsExport', './admin-settings'],
+    ['workspaceSessionSettingsExport', './session-settings'],
+  ])('fails codegen instead of dropping the %s import', (field, subpath) => {
+    const pkg = JSON.parse(packageJson);
+    delete pkg.exports[subpath];
+    writeFileSync(overlayPackageJson(), JSON.stringify(pkg));
+
     const result = spawnSync(process.execPath, [script], { encoding: 'utf8', env: { ...process.env, CI: '' } });
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`cannot resolve llmToolsExport "${PKG_NAME}/tools"`);
+    expect(result.stderr).toContain(`cannot resolve ${field} "${PKG_NAME}${subpath.slice(1)}"`);
+  });
+});
+
+// The shared glue resolves the overlay's declared export itself, so it must follow the exports
+// shapes Node accepts, not only an exact plain-string key.
+describe('exports shapes the shared glue resolves', () => {
+  const overlayPackageJson = () => join(sandbox, 'packages/premium/fakeoverlay/package.json');
+  let packageJson: string;
+
+  beforeAll(() => {
+    linkOverlay();
+    packageJson = readFileSync(overlayPackageJson(), 'utf8');
+  });
+
+  afterAll(() => {
+    writeFileSync(overlayPackageJson(), packageJson);
+  });
+
+  function codegenWithToolsExport(llmToolsExport: string, exportsField: unknown, extra: Record<string, unknown> = {}) {
+    const pkg = JSON.parse(packageJson);
+    pkg.b4mContributions.llmToolsExport = llmToolsExport;
+    pkg.exports = exportsField;
+    Object.assign(pkg, extra);
+    // Only the tools glue is under test; keep the other relative generators resolvable or absent.
+    for (const field of ['systemPromptsExport', 'agentExtensionsExport', 'adminSettingsExport']) {
+      delete pkg.b4mContributions[field];
+    }
+    delete pkg.b4mContributions.workspaceSessionSettingsExport;
+    delete pkg.b4mContributions.migrationsExport;
+    writeFileSync(overlayPackageJson(), JSON.stringify(pkg));
+    runCodegen();
+    return readSharedGlue('premiumLlmTools');
+  }
+
+  it('takes the import condition of a conditional entry, never types', () => {
+    const tools = codegenWithToolsExport(`${PKG_NAME}/tools`, {
+      './tools': { types: './dist/tools.d.ts', import: './src/tools-esm.ts', default: './src/tools.ts' },
+    });
+    expect(tools).toContain(`from '${OVERLAY_SRC}/tools-esm';`);
+  });
+
+  it('falls back to the default condition', () => {
+    const tools = codegenWithToolsExport(`${PKG_NAME}/tools`, {
+      './tools': { types: './dist/tools.d.ts', default: './src/tools.ts' },
+    });
+    expect(tools).toContain(`from '${OVERLAY_SRC}/tools';`);
+  });
+
+  it('expands the longest matching wildcard pattern', () => {
+    const tools = codegenWithToolsExport(`${PKG_NAME}/server/llm/tools`, {
+      './*': './src/other/*.ts',
+      './server/*': './src/server/*.ts',
+    });
+    expect(tools).toContain(`from '${OVERLAY_SRC}/server/llm/tools';`);
+  });
+
+  it('reads a string exports field as the package root', () => {
+    const tools = codegenWithToolsExport(PKG_NAME, './src/index.ts');
+    expect(tools).toContain(`from '${OVERLAY_SRC}/index';`);
+  });
+
+  it('falls back to main for the package root when there is no exports field', () => {
+    const tools = codegenWithToolsExport(PKG_NAME, undefined, { main: './src/main.ts' });
+    expect(tools).toContain(`from '${OVERLAY_SRC}/main';`);
   });
 });

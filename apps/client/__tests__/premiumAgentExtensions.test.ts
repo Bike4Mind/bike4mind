@@ -113,6 +113,10 @@ describe('premium agent extensions', () => {
         b4mContributions: { agentExtensionsExport: '@bike4mind/premium-undeclared/agent-extensions' },
       })
     );
+    // Linked, since an unlinked overlay gets the absent form and never reaches the resolver.
+    const linkDir = join(clientRoot, 'node_modules', '@bike4mind/premium-undeclared');
+    mkdirSync(linkDir, { recursive: true });
+    writeFileSync(join(linkDir, 'package.json'), JSON.stringify({ name: '@bike4mind/premium-undeclared' }));
     const result = runCodegen();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('cannot resolve agentExtensionsExport');

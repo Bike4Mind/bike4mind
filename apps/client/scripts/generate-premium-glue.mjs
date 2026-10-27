@@ -1123,18 +1123,16 @@ function resolveExportToDeclaredPath(pkg, exportFrom) {
   } catch {
     return null;
   }
-  const target = pkgJson.exports?.[subpath];
+  const target = declaredExportTarget(pkgJson, subpath);
   if (target === undefined) return null; // no exports entry for this subpath - nothing to resolve.
   if (typeof target !== 'string') {
-    // A conditional-exports object ({ import, require, ... }) or array target exists at this
-    // key but isn't a plain string path we can read - warn rather than silently returning null,
-    // matching extractConfigLiteral's posture: an unresolvable source file means any `config`
-    // export it might have is silently dropped from the generated stub, which can reintroduce
-    // the exact bodyParser hang this file exists to prevent.
+    // An exports entry exists at this key but no condition in it names a source path - warn
+    // rather than silently returning null, matching extractConfigLiteral's posture: callers that
+    // read the source drop its `config` export, and the relative-import generators throw.
     console.warn(
-      `[codegen] WARNING: ${pkg.name}'s package.json exports["${subpath}"] is not a plain string ` +
-        `path (got ${JSON.stringify(target)}) - can't resolve it to check for a "config" export. ` +
-        `If this route needs Next's bodyParser config, the generated stub will be missing it.`
+      `[codegen] WARNING: ${pkg.name}'s package.json exports["${subpath}"] has no plain-string ` +
+        `path under import/default/require (got ${JSON.stringify(target)}) - can't resolve it to a ` +
+        `declared source file.`
     );
     return null;
   }
@@ -1148,6 +1146,59 @@ function resolveExportToDeclaredPath(pkg, exportFrom) {
   if (resolved !== pkgRoot && !resolved.startsWith(pkgRoot + sep)) return null;
 
   return resolved;
+}
+
+// The path `pkgJson` declares for `subpath`, mirroring Node's exports resolution for the shapes
+// overlays use: a string `exports` (the "." entry), an exact key, a single-`*` pattern key, and a
+// conditional object or array, preferring import/default/require ("types" names a .d.ts, never
+// source). Falls back to `main` for "." when there is no `exports` field. Returns the raw entry
+// when it is present but has no usable string, and undefined when nothing is declared.
+function declaredExportTarget(pkgJson, subpath) {
+  const exportsField = pkgJson.exports;
+  if (exportsField === undefined) return subpath === '.' && typeof pkgJson.main === 'string' ? pkgJson.main : undefined;
+  if (typeof exportsField === 'string' || Array.isArray(exportsField)) {
+    return subpath === '.' ? pickExportCondition(exportsField) : undefined;
+  }
+  if (typeof exportsField !== 'object' || exportsField === null) return undefined;
+  // A conditional object at the top level ({ import, default }) stands for the "." entry alone.
+  if (!Object.keys(exportsField).some(key => key.startsWith('.'))) {
+    return subpath === '.' ? pickExportCondition(exportsField) : undefined;
+  }
+  if (Object.hasOwn(exportsField, subpath)) return pickExportCondition(exportsField[subpath]);
+  // Node picks the pattern with the longest prefix before its `*`.
+  let best;
+  for (const [key, value] of Object.entries(exportsField)) {
+    const star = key.indexOf('*');
+    if (star === -1 || key.indexOf('*', star + 1) !== -1) continue;
+    const prefix = key.slice(0, star);
+    const suffix = key.slice(star + 1);
+    if (subpath.length < prefix.length + suffix.length) continue;
+    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix)) continue;
+    if (best && best.prefix.length >= prefix.length) continue;
+    best = { prefix, value, match: subpath.slice(prefix.length, subpath.length - suffix.length) };
+  }
+  if (!best) return undefined;
+  const picked = pickExportCondition(best.value);
+  return typeof picked === 'string' ? picked.replaceAll('*', best.match) : picked;
+}
+
+function pickExportCondition(entry) {
+  if (typeof entry === 'string') return entry;
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      const picked = pickExportCondition(item);
+      if (typeof picked === 'string') return picked;
+    }
+    return entry;
+  }
+  if (typeof entry === 'object' && entry !== null) {
+    for (const condition of ['import', 'default', 'require']) {
+      if (!Object.hasOwn(entry, condition)) continue;
+      const picked = pickExportCondition(entry[condition]);
+      if (typeof picked === 'string') return picked;
+    }
+  }
+  return entry;
 }
 
 // As above, but additionally requires the source file to be present, because every
@@ -1166,7 +1217,7 @@ function relativeOverlayImport(pkg, exportFrom, field, outPath) {
   if (!sourceFile) {
     throw new Error(
       `[codegen] cannot resolve ${field} ${JSON.stringify(exportFrom)} from package "${pkg.name}" ` +
-        `to a declared path - its package.json "exports" map has no plain-string entry for that ` +
+        `to a declared path - its package.json "exports" map declares no source path for that ` +
         `subpath. A bare specifier can't be used from ${relative(REPO_ROOT, dirname(outPath))}.`
     );
   }
@@ -2050,16 +2101,19 @@ generateReplyAccessories(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generatePartnerSignupHooks(linkedPackages);
-// Relative-import glue: needs no node_modules link, so it gets the full list.
-// Any NEW generator goes in whichever group matches how it imports the overlay.
+// Relative-import glue the server and workers load at runtime: linked packages only too. The
+// relative path itself resolves without a link, but the overlay source's own imports resolve only
+// once pnpm has installed the overlay, which linking it into apps/client implies.
+generateLlmTools(linkedPackages);
+generateSystemPrompts(linkedPackages);
+generateAgentExtensions(linkedPackages);
+generateAdminSettings(linkedPackages);
+generateWorkspaceSessionSettings(linkedPackages);
+// Relative-import glue read only at build or deploy time: needs no node_modules link, so it gets
+// the full list. Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
 generateContracts(packages);
 generateInfraGlue(packages);
-generateLlmTools(packages);
-generateSystemPrompts(packages);
-generateAgentExtensions(packages);
-generateAdminSettings(packages);
-generateWorkspaceSessionSettings(packages);
 // No-import glue: pure data copied out of package.json, so it imports the overlay
 // not at all and is link-independent for an even simpler reason than the group above.
 generateLocalStorageKeyPrefixes(packages);
