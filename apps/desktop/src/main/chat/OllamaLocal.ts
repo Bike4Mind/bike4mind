@@ -204,6 +204,7 @@ export class OllamaLocal {
     // An explicit num_ctx turns off Ollama's own step-down when a load runs out of memory.
     const send = async (fitted: OllamaMessage[]) => {
       const reply = await post(fitted);
+      if (reply.ok) loadedByModel.set(request.model, numCtx);
       if (fellBack || !(await failedToLoad(reply))) return reply;
       fellBack = true;
       const tried = numCtx;
@@ -314,16 +315,18 @@ export class OllamaLocal {
     return chatContextTokens({ setting: await this.setting(), footprint, modelLimit: limit, configured });
   }
 
-  /** Auto, after a load failed: the 16K floor, once per app run; undefined when there is nothing lower to try. */
+  /** Auto, after a load failed: the last size that loaded, else the 16K floor, once per app run; undefined when there is nothing lower to try. */
   private async fallBack(modelId: string, inspection: Inspection, current: number): Promise<number | undefined> {
     const generation = sizingGeneration;
     const setting = await this.setting();
     const { limit } = contextBounds(inspection);
     const floor = Math.min(LOCAL_CONTEXT_TARGET_TOKENS, limit ?? LOCAL_CONTEXT_TARGET_TOKENS);
-    if (setting.mode === 'fixed' || current <= floor || generation !== sizingGeneration) return undefined;
+    const loaded = loadedByModel.get(modelId) ?? 0;
+    const target = loaded < current ? Math.max(floor, loaded) : floor;
+    if (setting.mode === 'fixed' || current <= target || generation !== sizingGeneration) return undefined;
     failedLoads.add(modelId);
-    contextByModel.set(modelId, floor);
-    return floor;
+    contextByModel.set(modelId, target);
+    return target;
   }
 
   /**
@@ -658,6 +661,8 @@ const contextByModel = new Map<string, number>();
 let sizingGeneration = 0;
 /** Models that failed to load above the floor this app run; Auto no longer grows them. */
 const failedLoads = new Set<string>();
+/** The num_ctx each model last answered at, which a failed larger load falls back to. */
+const loadedByModel = new Map<string, number>();
 const tagFacts = new Map<string, { sizeBytes?: number; digest?: string }>();
 /** The last /api/show answer per model, kept so a slow daemon does not drop the model or its tools. */
 const knownInspections = new Map<string, Inspection>();
@@ -684,6 +689,7 @@ export function currentLocalContext(modelId: string): number | undefined {
 function forgetLocalContext(modelId: string): void {
   contextByModel.delete(modelId);
   failedLoads.delete(modelId);
+  loadedByModel.delete(modelId);
 }
 
 /** After the Settings choice changes: every model is sized again on its next request. */
@@ -691,6 +697,7 @@ export function forgetLocalContexts(): void {
   sizingGeneration++;
   contextByModel.clear();
   failedLoads.clear();
+  loadedByModel.clear();
   tagFacts.clear();
   knownInspections.clear();
   inspectRetries.clear();

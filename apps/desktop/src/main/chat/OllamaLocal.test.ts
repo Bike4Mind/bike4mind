@@ -916,6 +916,16 @@ describe('OllamaLocal context sizing', () => {
     expect(sent()).toEqual([65536, 16384, 16384]);
   });
 
+  it('falls back to the size that last loaded, not 16K, when a larger context fails to load', async () => {
+    const outOfMemory = () => Response.json({ error: 'model requires more system memory' }, { status: 500 });
+    const sent = ollama(trainedFor(131072), done, () => overflow(70_000), outOfMemory, done);
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));
+    await local.stream(longTurn, () => undefined);
+    await local.stream(longTurn, () => undefined);
+    expect(sent()).toEqual([65536, 65536, 73728, 65536]);
+    expect((await local.models())[0].contextWindow).toBe(65536);
+  });
+
   it('leaves a Fixed size alone when it fails to load', async () => {
     const outOfMemory = () => Response.json({ error: 'model requires more system memory' }, { status: 500 });
     const sent = ollama(trainedFor(131072), outOfMemory);
