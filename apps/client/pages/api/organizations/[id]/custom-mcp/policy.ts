@@ -3,7 +3,7 @@
 // requireApprovalForAll and the rest of CustomMcpPolicySchema). Owner, current manager or platform
 // admin (verifyOrgAccess). DELETE drops the override so the org inherits the platform value.
 
-import { ApiKeyScope, CustomMcpPolicySchema } from '@bike4mind/common';
+import { CustomMcpPolicySchema } from '@bike4mind/common';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -36,9 +36,9 @@ const recordChange = (
     changes: [{ field: 'customMcpPolicy', before, after }],
   });
 
-// `admin:*` only: this is the org's kill switch for third-party tool servers, not something an
-// ordinary integration key should be able to reopen. Session callers are unaffected.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+// Session only: this is the org's kill switch for third-party tool servers, not something an
+// API key should be able to reopen.
+const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const org = await verifyOrgAccess(req.user!, orgIdOf(req));

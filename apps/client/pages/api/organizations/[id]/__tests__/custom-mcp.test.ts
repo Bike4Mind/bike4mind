@@ -74,8 +74,8 @@ beforeEach(() => {
 });
 
 describe('custom-mcp org routes', () => {
-  it('require the admin:* API-key scope', () => {
-    expect(mockRefs.baseApiOptions).toEqual([{ requiredScopes: ['admin:*'] }, { requiredScopes: ['admin:*'] }]);
+  it('accept a session only, never an API key', () => {
+    expect(mockRefs.baseApiOptions).toEqual([{ auth: 'jwtOnly' }, { auth: 'jwtOnly' }]);
   });
 
   it.each([
