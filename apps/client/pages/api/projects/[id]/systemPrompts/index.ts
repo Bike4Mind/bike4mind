@@ -4,7 +4,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { ProjectEvents, projectResponseSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { ProjectFilesRequestBody } from '../../../../../types/api';
 
@@ -47,7 +48,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES })
         )
       );
 
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   )
   .delete(
@@ -95,7 +96,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES })
         )
       );
 
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   );
 
