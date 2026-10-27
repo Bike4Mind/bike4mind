@@ -35,6 +35,7 @@ export interface PublishDeps {
 interface Live {
   list: CuratedCandidate | null;
   sigEtag: string | null;
+  jsonEtag: string | null;
   /** latest.json.sig is new but latest.json is not: a run stopped between the two writes. */
   midPublish: boolean;
 }
@@ -42,10 +43,10 @@ interface Live {
 /** Live state from the bucket; a pair caught mid-publish is read through its sig's hint, as clients do. */
 async function readLive(deps: PublishDeps): Promise<Live | string> {
   const [json, sig] = await Promise.all([deps.store.get(LATEST), deps.store.get(LATEST_SIG)]);
-  if (!json) return { list: null, sigEtag: sig?.etag ?? null, midPublish: false };
+  if (!json) return { list: null, sigEtag: sig?.etag ?? null, jsonEtag: null, midPublish: false };
   if (!sig) return `${LATEST} is live without ${LATEST_SIG}; fix the bucket by hand`;
   const direct = verifyCandidate(json.bytes, sig.bytes, deps.keyring);
-  if (direct.ok) return { list: direct.value, sigEtag: sig.etag, midPublish: false };
+  if (direct.ok) return { list: direct.value, sigEtag: sig.etag, jsonEtag: json.etag, midPublish: false };
   const hint = parseCuratedSignatureFile(sig.bytes)?.sequence;
   if (hint) {
     const [pairJson, pairSig] = await Promise.all([
@@ -55,7 +56,7 @@ async function readLive(deps: PublishDeps): Promise<Live | string> {
     const paired = pairJson && pairSig ? verifyCandidate(pairJson.bytes, pairSig.bytes, deps.keyring) : null;
     if (paired?.ok) {
       deps.log(`live is mid-publish; reading it as ${CURATED_PREFIX}${hint}.json`);
-      return { list: paired.value, sigEtag: sig.etag, midPublish: true };
+      return { list: paired.value, sigEtag: sig.etag, jsonEtag: json.etag, midPublish: true };
     }
   }
   return `the live list does not verify (${direct.error})`;
@@ -129,7 +130,11 @@ export async function publishCandidate(candidate: CuratedCandidate, deps: Publis
     return EXIT.failed;
   }
   log(`wrote ${LATEST_SIG}`);
-  await store.put(LATEST, candidate.manifest, LATEST_CACHE_CONTROL, null);
+  const jsonLock = live.jsonEtag ? { ifMatch: live.jsonEtag } : ({ ifNoneMatch: '*' } as const);
+  if ((await store.put(LATEST, candidate.manifest, LATEST_CACHE_CONTROL, jsonLock)) === 'conflict') {
+    log(`${LATEST} changed since it was read: someone else published; re-run once they finish`);
+    return EXIT.failed;
+  }
   log(`wrote ${LATEST}`);
 
   try {
