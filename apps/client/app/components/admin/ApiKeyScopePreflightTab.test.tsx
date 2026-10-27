@@ -234,6 +234,14 @@ describe('ApiKeyScopePreflightTab', () => {
     expect(screen.queryByTestId('scope-preflight-results')).toBeNull();
   });
 
+  it('does not show a cached verdict after a failed refetch', () => {
+    mockUseApiKeyScopePreflight.mockReturnValue(state({ data: result(), error: new Error('Refresh failed') }));
+    renderTab();
+    expect(screen.getByTestId('scope-preflight-error')).toHaveTextContent('Refresh failed');
+    expect(screen.queryByTestId('scope-preflight-empty')).toBeNull();
+    expect(screen.queryByTestId('scope-preflight-run-echo')).toBeNull();
+  });
+
   it("shows the handler's refusal, not axios's generic status string", () => {
     // The refusals are the remedy: an unlogged prefix explains why the answer
     // would have been false, and an unknown scope explains a caught typo.

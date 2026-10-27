@@ -59,6 +59,7 @@ describe('DataTable', () => {
       serverPagination: { page: 3, pageSize: 25, total: 40, onPageChange, onPageSizeChange: vi.fn() },
     });
     expect(screen.getByTestId('admin-empty-state')).toBeTruthy();
+    expect(screen.getByText('0-0 of 40')).toBeTruthy();
     expect(screen.getByTestId('admin-table-next-btn')).toBeDisabled();
     fireEvent.click(screen.getByTestId('admin-table-previous-btn'));
     expect(onPageChange).toHaveBeenCalledWith(2);

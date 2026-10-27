@@ -209,7 +209,7 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
         />
       ) : null}
 
-      {data && !isFetching ? (
+      {data && !isFetching && !error ? (
         <Stack spacing={2}>
           {/*
             The form stays editable while these results stay on screen, so without

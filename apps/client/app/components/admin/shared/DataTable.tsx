@@ -281,8 +281,14 @@ export function DataTable<Row>({
       <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
         <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
           {rows.length === 0 ? 0 : currentPage * effectivePageSize + 1}-
-          {Math.min(currentPage * effectivePageSize + rows.length, total, (currentPage + 1) * effectivePageSize)} of{' '}
-          {total.toLocaleString()}
+          {rows.length === 0
+            ? 0
+            : Math.min(
+                currentPage * effectivePageSize + rows.length,
+                total,
+                (currentPage + 1) * effectivePageSize
+              )}{' '}
+          of {total.toLocaleString()}
         </Typography>
         <Select
           aria-label="Rows per page"
