@@ -71,8 +71,11 @@ function semverAtLeast(version: string, minimum: string): boolean {
   return true;
 }
 
+// The newest run on the pin decides; a failure on that date outweighs a pass the same day.
 function smokePassed(build: HubBuild, runtime: HubRuntime, pins: RuntimePins): boolean {
-  return build.smoke.some(s => s.runtime === runtime && s.pass && s.runtimeVersion === pins[runtime]);
+  const runs = build.smoke.filter(s => s.runtime === runtime && s.runtimeVersion === pins[runtime]);
+  const newest = runs.reduce((date, s) => (s.date > date ? s.date : date), '');
+  return runs.length > 0 && runs.every(s => s.date !== newest || s.pass);
 }
 
 function runtimeUsable(build: HubBuild, runtime: HubRuntime, options: PickOptions): boolean {

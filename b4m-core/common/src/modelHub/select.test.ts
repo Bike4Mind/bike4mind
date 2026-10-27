@@ -355,6 +355,23 @@ describe('pickForMachine runtimes', () => {
     expect(p.alternates).toEqual([]);
   });
 
+  it('goes by the newest smoke run on the pin, so a later failure is not hidden by an earlier pass', () => {
+    const withSmoke = (runs: Array<{ date: string; pass: boolean }>) =>
+      withManifest(m => {
+        const b = m.entries.find(e => e.id === 'embed-small')!.builds[0];
+        b.smoke = runs.map(run => ({ ...b.smoke[0], ...run }));
+      });
+    const best = (manifest: HubManifestInput) => pick('mac-16', 'embeddings', { manifest }).best?.entry.id;
+    const older = { date: '2026-10-21', pass: true };
+    const newerFail = { date: '2026-10-24', pass: false };
+    expect(best(withSmoke([older, newerFail]))).toBeUndefined();
+    expect(best(withSmoke([newerFail, older]))).toBeUndefined();
+    const olderFail = { date: '2026-10-21', pass: false };
+    const newerPass = { date: '2026-10-24', pass: true };
+    expect(best(withSmoke([olderFail, newerPass]))).toBe('embed-small');
+    expect(best(withSmoke([newerPass, { ...newerPass, pass: false }]))).toBeUndefined();
+  });
+
   it('falls back to Ollama only for builds that allow it when llama-server is missing', () => {
     const p = pick('nv-24+64', 'code', { runtimes: { ollama: { version: '0.40.11' } } });
     expect(p.best).toBeNull();
