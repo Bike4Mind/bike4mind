@@ -455,6 +455,9 @@ export const SettingKeySchema = z.enum([
   'signupBurstThreshold',
   'signupBurstWindowHours',
   'signupBurstAutoHold',
+  'enableDomainIntelligence',
+  'holdSignupsFromDomainsYoungerThanDays',
+  'domainIntelligenceTimeoutMs',
   'defaultFreeCredits',
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
@@ -2108,6 +2111,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupBurstAutoHold', order: 23 },
       { key: 'signupRiskScoring', order: 24 },
       { key: 'signupAnomaly', order: 25 },
+      { key: 'enableDomainIntelligence', order: 26 },
+      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 27 },
+      { key: 'domainIntelligenceTimeoutMs', order: 28 },
     ],
   },
   KNOWLEDGE: {
@@ -4186,6 +4192,38 @@ export const settingsMap = {
         minimumCount: z.number().int().min(1).max(1000000),
       })
       .strict(),
+  }),
+  enableDomainIntelligence: makeBooleanSetting({
+    key: 'enableDomainIntelligence',
+    name: 'Hold Risky Signup Domains',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Hold the free credits of signups from domains on only the aggregate disposable list, freshly registered domains, or domains whose mail is handled by a known disposable provider. Lookups fail open. Review in Signup Domain Holds.',
+  }),
+  holdSignupsFromDomainsYoungerThanDays: makeNumberSetting({
+    key: 'holdSignupsFromDomainsYoungerThanDays',
+    name: 'Hold Signups From Domains Younger Than (days)',
+    defaultValue: 30,
+    int: true,
+    min: 0,
+    max: 365,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Registration age (from RDAP) below which a signup domain is held for review. 0 turns the age check off.',
+  }),
+  domainIntelligenceTimeoutMs: makeNumberSetting({
+    key: 'domainIntelligenceTimeoutMs',
+    name: 'Domain Lookup Timeout (ms)',
+    defaultValue: 2000,
+    int: true,
+    min: 250,
+    max: 5000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Budget for the RDAP and MX lookups on an uncached signup domain. A timeout lets the signup through.',
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',
