@@ -2196,7 +2196,7 @@
         "CloudWatchMetricsEnabled": true,
         "MetricName": "AWS-AWSManagedRulesBotControlRuleSet"
       }
-    }
+    },
     {
       "Name": "forward-anon-ip-label",
       "Priority": 31,
