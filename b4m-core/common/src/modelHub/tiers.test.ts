@@ -15,6 +15,7 @@ describe('curatedTier', () => {
     ['a 32 GB Mac', machine('unified', 32), 'unified', 16],
     ['a CPU-only box', machine('cpu', 62), 'cpu', 0],
     ['a discrete box whose GPU memory is unknown', machine('discrete', 62), 'cpu', 0],
+    ['two 8 GB cards, by their summed memory', { ...machine('discrete', 64, 15.9), gpuCount: 2 }, 'discrete', 16],
   ])('picks the largest tier %s reaches', (_label, hw, kind, minGiB) => {
     expect(curatedTier(TIERS, hw)).toMatchObject({ memoryKind: kind, minGiB });
   });
