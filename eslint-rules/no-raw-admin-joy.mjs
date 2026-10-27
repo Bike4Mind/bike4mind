@@ -25,7 +25,15 @@ export default {
       if (typeof source !== 'string' || !/^@mui\/joy(?:\/|$)/.test(source)) return;
       const subpath = source.slice('@mui/joy/'.length).split('/')[0];
       const components = restricted.has(subpath)
-        ? [subpath]
+        ? (node.specifiers ?? []).flatMap(specifier => {
+            if (specifier.importKind === 'type' || specifier.exportKind === 'type') return [];
+            if (specifier.type === 'ImportDefaultSpecifier' || specifier.type === 'ImportNamespaceSpecifier') {
+              return [subpath];
+            }
+            const imported = specifier.imported ?? specifier.local;
+            const name = imported?.name ?? imported?.value;
+            return !imported || name === 'default' || name === subpath ? [subpath] : [];
+          })
         : source === '@mui/joy'
           ? (node.specifiers ?? []).flatMap(specifier => {
               if (specifier.importKind === 'type' || specifier.exportKind === 'type') return [];
@@ -37,7 +45,10 @@ export default {
               return restricted.has(name) ? [name] : [];
             })
           : [];
-      if (node.type === 'ExportAllDeclaration' && source === '@mui/joy') components.push('*');
+      if (node.type === 'ExportAllDeclaration') {
+        if (source === '@mui/joy') components.push('*');
+        else if (restricted.has(subpath)) components.push(subpath);
+      }
       if (!components.length) return;
       const comment = context.sourceCode.getCommentsBefore(node).at(-1);
       const allowed =

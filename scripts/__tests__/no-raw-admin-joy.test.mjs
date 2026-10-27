@@ -29,6 +29,9 @@ tester.run('no-raw-admin-joy', rule, {
     valid("import type { Modal } from '@mui/joy';"),
     valid("import { type Card, type Table } from '@mui/joy';"),
     valid("import type { CardProps } from '@mui/joy/Card';"),
+    valid("import { type CardProps } from '@mui/joy/Card';"),
+    valid("export { type TableProps } from '@mui/joy/Table';"),
+    valid("import { cardClasses } from '@mui/joy/Card';"),
     valid(
       "// admin-toolkit-allow 2026-10-27 -- Read-only preview needs a custom focus container\nimport { Modal } from '@mui/joy';"
     ),
@@ -47,6 +50,13 @@ tester.run('no-raw-admin-joy', rule, {
     invalid("export { Modal as Dialog } from '@mui/joy';"),
     invalid("export { default as Grid } from '@mui/joy/Table';", ['Table']),
     invalid("export * from '@mui/joy';", ['*']),
+    invalid("export * from '@mui/joy/Card';", ['Card']),
+    invalid("import * as Dialog from '@mui/joy/Modal';"),
+    invalid(
+      "import { default as First, default as Second } from '@mui/joy/Card';",
+      ['Card'],
+      path.join(admin, 'AdminDashboardTab.tsx')
+    ),
     invalid("// admin-toolkit-allow -- A reason without a date\nimport { Modal } from '@mui/joy';"),
     invalid("// admin-toolkit-allow 2026-10-27 -- \nimport { Modal } from '@mui/joy';"),
     invalid("// admin-toolkit-allow 2026-10-27 -- Custom focus container\n\nimport { Modal } from '@mui/joy';"),
