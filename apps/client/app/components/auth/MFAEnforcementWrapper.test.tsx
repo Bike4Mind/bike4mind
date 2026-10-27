@@ -200,3 +200,35 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     await waitFor(() => expect(mfaSetupCalls()).toBeGreaterThanOrEqual(1));
   });
 });
+
+describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The mocked currentUser has no `mfa`, as after a reload rehydrates the persisted user store.
+  it('trusts the status query over a currentUser that lacks mfa', async () => {
+    get.mockResolvedValue({ data: { enabled: true } });
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mfaSetupCalls()).toBe(0);
+  });
+
+  it('refreshes status instead of toasting when setup answers 409', async () => {
+    get.mockResolvedValueOnce({ data: { enabled: false } }).mockResolvedValue({ data: { enabled: true } });
+    post.mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        response: { status: 409, data: { error: 'MFA is already enabled for this account.' } },
+      })
+    );
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    expect(mfaSetupCalls()).toBe(1);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+});
