@@ -54,11 +54,18 @@ const showSchema = z.object({
   ...remoteFields,
 });
 
+/** The model is no longer installed; ChatService then rereads the local list on the next send. */
+export class LocalModelRemovedError extends Error {
+  constructor() {
+    super('This model was removed from Ollama. Pick another model.');
+    this.name = 'LocalModelRemovedError';
+  }
+}
+
 async function ollamaError(response: Response): Promise<Error> {
   const message = await httpError(response);
   // Ollama answers "model '...' not found" once the model is deleted, e.g. from the Models screen.
-  if (response.status === 404 && /model .* not found/i.test(message))
-    return new Error('This model was removed from Ollama. Pick another model.');
+  if (response.status === 404 && /model .* not found/i.test(message)) return new LocalModelRemovedError();
   return new Error(message);
 }
 

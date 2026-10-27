@@ -132,6 +132,25 @@ describe('ModelCatalog', () => {
     expect((await catalog.list()).models.some(model => model.id.startsWith('local:'))).toBe(false);
   });
 
+  it('keeps the last local list past its expiry, without asking the device, until forgotten', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    expect(catalog.lastLocal()).toBeNull();
+    await catalog.listLocal();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+    expect(catalog.lastLocal()?.map(model => model.id)).toEqual(['local:ollama:qwen']);
+    expect(local.models).toHaveBeenCalledTimes(1);
+    catalog.forgetLocal();
+    expect(catalog.lastLocal()).toBeNull();
+  });
+
   it('discovers a newly started local runtime without expiring or refetching the hosted list', async () => {
     const local = { models: vi.fn().mockResolvedValue([]) };
     catalog = new ModelCatalog(
