@@ -137,6 +137,7 @@ function blockedReason(detail: HubModelDetail, build: HubGgufBuild): string | nu
   if (!build.complete) return 'Some of its files are missing from the repo.';
   if (build.ollamaRefIssue === 'no-quant-label') return 'Its file name has no quant label Ollama can pull by.';
   if (build.ollamaRefIssue === 'unsupported-name') return "Its repo or file name breaks Ollama's naming rules.";
+  if (build.ollamaRefIssue === 'unsupported-quant') return 'Ollama cannot pull this quant from Hugging Face yet.';
   if (!build.files[0]?.sha256)
     return detail.ollamaNeedsSshKey
       ? 'Needs access: Hugging Face hides this file until your account is granted access.'
