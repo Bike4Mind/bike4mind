@@ -233,8 +233,7 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
  * differ from all parents. Read from git trees, so unlike compare (300 files)
  * the result is never capped by the size of the branches being merged.
  */
-async function mergeOnlyBlobs({ commit, gh, repo, incomplete }) {
-  const trees = new Map();
+async function mergeOnlyBlobs({ commit, gh, repo, incomplete, trees }) {
   const entriesOf = async sha => {
     if (sha === undefined) return new Map();
     if (!trees.has(sha)) {
@@ -278,24 +277,26 @@ async function mergeOnlyBlobs({ commit, gh, repo, incomplete }) {
  * content was checked through the commits that added it, base-side content is
  * not the PR's.
  */
-async function scanMergeCommit({ commit, matcher, gh, repo, hit, incomplete }) {
+async function scanMergeCommit({ commit, matcher, gh, repo, hit, incomplete, trees }) {
   const label = `commit ${commit.sha.slice(0, 12)} `;
   const readBlob = async sha => {
     const blob = await gh.json(`/repos/${repo}/git/blobs/${sha}`);
     return Buffer.from(blob.content ?? '', blob.encoding === 'base64' ? 'base64' : 'utf8');
   };
 
-  const blobs = await mergeOnlyBlobs({ commit, gh, repo, incomplete });
+  const blobs = await mergeOnlyBlobs({ commit, gh, repo, incomplete, trees });
   for (const [index, blob] of blobs.entries()) {
     const pathHit = matches(matcher, blob.path);
     const where = `${label}${pathHit ? `merged file #${index + 1} (path withheld)` : `file ${blob.path}`}`;
     // A path any parent already had is inherited, not introduced by the merge.
     if (pathHit && blob.parentShas.length === 0) hit(`${where}: the file path`);
 
+    const matching = contentLines(await readBlob(blob.sha)).filter(({ text }) => matches(matcher, text));
+    if (matching.length === 0) continue;
     const parentContents = await Promise.all(blob.parentShas.map(readBlob));
     const inherited = new Set(parentContents.flatMap(content => contentLines(content).map(({ text }) => text)));
-    for (const { line, text } of contentLines(await readBlob(blob.sha))) {
-      if (inherited.has(text) || !matches(matcher, text)) continue;
+    for (const { line, text } of matching) {
+      if (inherited.has(text)) continue;
       hit(line === undefined ? `${where} (binary text)` : `${where} line ${line}`);
     }
   }
@@ -305,9 +306,12 @@ async function scanMergeCommit({ commit, matcher, gh, repo, hit, incomplete }) {
 // every commit's own diff, and for a merge only what it added beyond its parents.
 async function scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete }) {
   if (commits.length < 2) return;
+  // Shared across merges: tree shas are content-addressed, and repeated merges of
+  // the base branch see mostly the same unchanged subtrees.
+  const trees = new Map();
   for (const c of commits) {
     if (c.parents?.length > 1) {
-      await scanMergeCommit({ commit: c, matcher, gh, repo, hit, incomplete });
+      await scanMergeCommit({ commit: c, matcher, gh, repo, hit, incomplete, trees });
       continue;
     }
     const sha = c.sha.slice(0, 12);
