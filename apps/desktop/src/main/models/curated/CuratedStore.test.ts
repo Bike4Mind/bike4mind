@@ -1,8 +1,23 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CuratedStore } from './CuratedStore';
+
+const synced = vi.hoisted(() => [] as string[]);
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const open: typeof actual.open = async (...args) => {
+    const handle = await actual.open(...args);
+    const sync = handle.sync.bind(handle);
+    handle.sync = async () => {
+      synced.push(String(args[0]));
+      return sync();
+    };
+    return handle;
+  };
+  return { ...actual, open };
+});
 
 const SOURCE = 'abcdef0123456789';
 const KEY_A = '00000000000000aa';
@@ -45,6 +60,35 @@ describe('CuratedStore', () => {
     expect(await store.readCopy(SOURCE)).toBeNull();
     expect(await readdir(join(dir, SOURCE))).toEqual([]);
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'flushes every file it writes and every directory that gains an entry',
+    async () => {
+      synced.length = 0;
+      await store.writeCopy(SOURCE, { manifest: bytes('list 1'), signature: bytes('sig 1') });
+      const pair = JSON.parse(await readFile(join(dir, SOURCE, 'pair.json'), 'utf8')).dir as string;
+      expect(synced).toEqual(
+        expect.arrayContaining([
+          dir,
+          join(dir, SOURCE),
+          join(dir, SOURCE, pair),
+          join(dir, SOURCE, pair, 'curated-v2.json'),
+          join(dir, SOURCE, pair, 'curated-v2.json.sig'),
+          expect.stringMatching(/pair\.json\.[^/]+\.tmp$/),
+        ])
+      );
+
+      synced.length = 0;
+      await store.writeState(SOURCE, { lastSuccessAt: 1, lastAttemptAt: 1, failures: 0, floors: {} });
+      await store.addRevoked([KEY_A]);
+      expect(synced).toEqual([
+        expect.stringMatching(/state\.json\.[^/]+\.tmp$/),
+        join(dir, SOURCE),
+        expect.stringMatching(/revoked-keys\.json\.[^/]+\.tmp$/),
+        dir,
+      ]);
+    }
+  );
 
   it('ignores a pointer to anything but a pair directory', async () => {
     await mkdir(join(dir, SOURCE), { recursive: true });
