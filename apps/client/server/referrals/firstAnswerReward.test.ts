@@ -20,7 +20,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({ creditService: { addCreditsWithLedgerRow: mockAddCredits } }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: mockGetSettingsMap,
-  getSettingsValue: (key: string, settings: Record<string, string>) => Number(settings[key] ?? 0),
+  getSettingsValue: (key: string, settings: Record<string, string>, fallback = 0) => Number(settings[key] ?? fallback),
 }));
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mockSlack }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn() } }));
@@ -111,7 +111,13 @@ describe('rewardInviterForFirstAnswer', () => {
     expect(mockSlack).toHaveBeenCalledTimes(1);
     expect(mockSlack.mock.calls[0][0]).toContain('51');
     expect(mockCountDocuments).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'generic_add', reason: REFERRAL_REWARD_REASON, _id: { $lt: 'tx1' } })
+      expect.objectContaining({
+        ownerType: 'User',
+        type: 'generic_add',
+        reason: REFERRAL_REWARD_REASON,
+        createdAt: { $gte: expect.any(Date) },
+        _id: { $lt: 'tx1' },
+      })
     );
 
     mockSlack.mockClear();
@@ -120,6 +126,13 @@ describe('rewardInviterForFirstAnswer', () => {
     mockCountDocuments.mockResolvedValue(51);
     await rewardInviterForFirstAnswer('friend1');
     expect(mockSlack).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the schema default threshold when the setting is not stored', async () => {
+    mockGetSettingsMap.mockResolvedValue({ ReferralFirstAnswerCredits: '1000' });
+    mockCountDocuments.mockResolvedValue(50);
+    await rewardInviterForFirstAnswer('friend1');
+    expect(mockSlack).toHaveBeenCalledTimes(1);
   });
 
   it('never throws when a dependency fails', async () => {
