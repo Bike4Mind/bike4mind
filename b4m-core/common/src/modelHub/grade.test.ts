@@ -67,6 +67,15 @@ describe('gradeBuild', () => {
     expect(gradeBuild(hybrid, iq4, { ...PINS, evalSuite: 'b4m-local-v2' })).toBe('C');
   });
 
+  it('never takes a speed run as the corroboration an A needs', () => {
+    const official = { ...hybrid, lineage: { ...hybrid.lineage, variantType: 'official' as const } };
+    const siblingSpeed = evidence({ kind: 'speed' });
+    const baseSpeed = evidence({ kind: 'speed', independent: false, measured: { target: 'base' } });
+    expect(gradeBuild(hybrid, { ...q6, evidence: [...q6.evidence, siblingSpeed] }, PINS)).toBe('B');
+    expect(gradeBuild(official, { ...q6, evidence: [...q6.evidence, baseSpeed] }, PINS)).toBe('B');
+    expect(gradeBuild(hybrid, { ...iq4, evidence: [...iq4.evidence, siblingSpeed] }, PINS)).toBe('A');
+  });
+
   it('does not reach A on a stale own eval of the same build', () => {
     const stale = ownEval(digest, { version: OLD_PINS['llama-server'] }) as HubEvidence;
     expect(gradeBuild(hybrid, { ...q6, evidence: [...q6.evidence, stale] }, PINS)).toBe('B');

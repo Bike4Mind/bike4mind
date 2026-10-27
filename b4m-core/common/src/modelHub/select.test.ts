@@ -291,6 +291,17 @@ describe('pickForMachine policy', () => {
     expect(label(pick('mac-64', 'code', { manifest }).best)).toBe('hybrid-27b/iq4@llama-server fast:fits 262144 f16');
   });
 
+  it('does not let a speed run lift a build to the grade A a best pick needs', () => {
+    const manifest = withManifest(m => {
+      m.policy = { minGradeForBestPick: 'A' };
+      const evidence = m.entries.find(e => e.id === 'hybrid-27b')!.builds[1].evidence;
+      evidence[1] = { ...evidence[1], kind: 'speed', metric: 'decode tok/s', value: 30 };
+    });
+    const p = pick('mac-64', 'code', { manifest });
+    expect(p.best).toBeNull();
+    expect(p.alternates.find(c => c.entry.id === 'hybrid-27b')?.grade).toBe('B');
+  });
+
   it('defaults the policy block when the manifest omits it', () => {
     expect(parseHubManifest(fixtureManifest()).manifest.policy).toEqual({
       abliterated: 'curated-opt-in',
