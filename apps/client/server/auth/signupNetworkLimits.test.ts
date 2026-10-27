@@ -77,7 +77,9 @@ describe('createSignupRiskCollector', () => {
     await createSignupRiskCollector(network)(user());
 
     expect(mockRecentDistinctSignups).toHaveBeenCalledTimes(2);
-    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ ip: network.ip, asn: null }));
+    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: network.ip, asn: null, prefix: true })
+    );
     expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ ip: null, asn: network.asn }));
   });
 
@@ -105,7 +107,9 @@ describe('isSignupNetworkOverLimit', () => {
     counts({ ipSignups: 0, prefixSignups: 0 }, 0);
     await isSignupNetworkOverLimit(network, logger);
     expect(mockRecentDistinctSignups).toHaveBeenCalledTimes(1);
-    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ ip: network.ip, asn: null }));
+    expect(mockRecentDistinctSignups).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: network.ip, asn: null, prefix: false })
+    );
   });
 
   it('refuses once the ASN reached its hourly cap, and counts every account', async () => {

@@ -84,6 +84,8 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
     until: Date;
     ip: string | null;
     asn: number | null;
+    /** Skip the IPv4 /24 count (null) when the caller never reads it; defaults to counted. */
+    prefix?: boolean;
     maxRows: number;
   }): Promise<{ ipSignups: number | null; asnSignups: number | null; prefixSignups: number | null }> {
     const { since, until, maxRows } = input;
@@ -116,7 +118,10 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
       return new Set(rows.map(row => row.userId)).size;
     };
     const ipVersion = input.ip === null ? 0 : isIP(input.ip);
-    const prefix = input.ip !== null && ipVersion === 4 ? input.ip.slice(0, input.ip.lastIndexOf('.') + 1) : null;
+    const prefix =
+      input.prefix !== false && input.ip !== null && ipVersion === 4
+        ? input.ip.slice(0, input.ip.lastIndexOf('.') + 1)
+        : null;
     const [ipSignups, asnSignups, prefixSignups] = await Promise.all([
       ipVersion ? count({ ip: input.ip }) : null,
       Number.isSafeInteger(input.asn) && input.asn !== null && input.asn > 0 ? count({ asn: input.asn }) : null,

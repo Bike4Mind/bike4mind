@@ -21,16 +21,16 @@ type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
 
 type SignupCounts = { ipSignups: number | null; prefixSignups: number | null; asnSignups: number | null };
 
-// The 24h window scans only ip and /24 and the 1h window only ASN, and a caller that needs neither
-// window skips it, so no scan runs whose count is thrown away.
+// The 24h window scans only ip (plus /24 when asked) and the 1h window only ASN, and a caller skips
+// any window or /24 count it would not read, so no scan runs whose count is thrown away.
 async function countRecentSignups(input: {
   network: SignupNetwork;
   userId?: string;
   at: Date;
-  windows: { ip: boolean; asn: boolean };
+  windows: { ip: boolean; prefix: boolean; asn: boolean };
 }): Promise<SignupCounts> {
   const { network, userId, at, windows } = input;
-  const scan = (ms: number, scope: { ip: string | null; asn: number | null }) =>
+  const scan = (ms: number, scope: { ip: string | null; asn: number | null; prefix?: boolean }) =>
     authEventRepository.recentDistinctSignups({
       userId,
       since: new Date(at.getTime() - ms),
@@ -39,7 +39,7 @@ async function countRecentSignups(input: {
       maxRows: MAX_COUNTED_ROWS,
     });
   const [day, hour] = await Promise.all([
-    windows.ip ? scan(SIGNUP_NETWORK_WINDOWS.ipMs, { ip: network.ip, asn: null }) : null,
+    windows.ip ? scan(SIGNUP_NETWORK_WINDOWS.ipMs, { ip: network.ip, asn: null, prefix: windows.prefix }) : null,
     windows.asn ? scan(SIGNUP_NETWORK_WINDOWS.asnMs, { ip: null, asn: network.asn }) : null,
   ]);
   return {
@@ -74,7 +74,7 @@ export function createSignupRiskCollector(network?: SignupNetwork | null) {
       network: source,
       userId: user.id,
       at,
-      windows: { ip: true, asn: true },
+      windows: { ip: true, prefix: true, asn: true },
     });
     return { datacenter: source.isDatacenter, ...counts };
   };
@@ -102,7 +102,7 @@ export async function isSignupNetworkOverLimit(network: SignupNetwork, logger: W
     const { ipSignups, asnSignups } = await countRecentSignups({
       network,
       at: new Date(),
-      windows: { ip: ipLimit > 0, asn: asnLimit > 0 },
+      windows: { ip: ipLimit > 0, prefix: false, asn: asnLimit > 0 },
     });
     // With a usable ip/asn a null count means the scan was truncated, i.e. far over any cap.
     const overIp = ipLimit > 0 && !!network.ip && isIP(network.ip) > 0 && (ipSignups ?? Infinity) >= ipLimit;
