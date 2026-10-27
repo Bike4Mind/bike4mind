@@ -62,6 +62,13 @@ describe('checkSkillFiles', () => {
   it('rejects a path that is also a folder of another file', () => {
     expect(errorOf([file('scripts/a', 'x'), file('scripts/a/b.sh', 'x')])).toMatch(/both a file and a folder/);
     expect(errorOf([file('scripts/A', 'x'), file('scripts/a/b.sh', 'x')])).toMatch(/both a file and a folder/);
+    // '-' and '.' sort before '/', so a sibling can sit between the file and its folder.
+    expect(errorOf([file('scripts/a', 'x'), file('scripts/a-b', 'x'), file('scripts/a/b.sh', 'x')])).toMatch(
+      /both a file and a folder/
+    );
+    expect(errorOf([file('scripts/a', 'x'), file('scripts/a.b', 'x'), file('scripts/a/b.sh', 'x')])).toMatch(
+      /both a file and a folder/
+    );
     expect(errorOf([file('scripts/a', 'x'), file('scripts/ab.sh', 'x')])).toBeNull();
   });
 

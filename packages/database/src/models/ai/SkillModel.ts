@@ -252,11 +252,13 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
    */
   async findAccessibleByNamesForUser(userId: string, names: string[]): Promise<ISkill[]> {
     if (names.length === 0) return [];
-    const matches = await this.skillModel.find({
-      name: { $in: names },
-      deletedAt: null,
-      $or: this.accessibleOr(userId),
-    });
+    const matches = await this.skillModel
+      .find({
+        name: { $in: names },
+        deletedAt: null,
+        $or: this.accessibleOr(userId),
+      })
+      .select('-files');
 
     // Collapse cross-scope collisions to the most-specific grant per name.
     // Value type is inferred from `matches` (hydrated docs) so `.toJSON()` stays

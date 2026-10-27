@@ -73,10 +73,12 @@ export function checkSkillFiles(files: ISkillFile[]): SkillFilesCheck {
   }
   const sorted = files.map(({ path, content }) => ({ path, content })).sort(compareSkillFilePaths);
   // A path that is also a directory prefix of another cannot be extracted from the zip.
-  const lowered = sorted.map(f => f.path.toLowerCase()).sort();
-  for (let i = 1; i < lowered.length; i++) {
-    if (lowered[i].startsWith(`${lowered[i - 1]}/`)) {
-      return { ok: false, error: `${lowered[i - 1]}: cannot be both a file and a folder` };
+  const lowered = new Set(sorted.map(f => f.path.toLowerCase()));
+  for (const path of lowered) {
+    for (let i = path.indexOf('/'); i !== -1; i = path.indexOf('/', i + 1)) {
+      if (lowered.has(path.slice(0, i))) {
+        return { ok: false, error: `${path.slice(0, i)}: cannot be both a file and a folder` };
+      }
     }
   }
   return { ok: true, files: sorted };
