@@ -125,6 +125,29 @@ describe('findLlamaServer', () => {
     expect(oldest?.build).toBe(MIN_LLAMA_SERVER_BUILD);
   });
 
+  it.skipIf(process.platform !== 'linux')(
+    'puts the binary directory on LD_LIBRARY_PATH when libllama.so is there',
+    async () => {
+      const print = "console.log('version: 5501 (' + (process.env.LD_LIBRARY_PATH ?? '') + ')')";
+      const bundled = join(root, 'bundled');
+      const bare = join(root, 'bare');
+      await mkdir(bundled);
+      await mkdir(bare);
+      await writeExecutable(join(bundled, 'llama-server'), print);
+      await writeExecutable(join(bare, 'llama-server'), print);
+      await writeFile(join(bundled, 'libllama.so'), '');
+      const found = await findLlamaServer({
+        path: join(bundled, 'llama-server'),
+        env: { LD_LIBRARY_PATH: '/opt/lib' },
+      });
+      expect(found?.version).toBe(`5501 (${bundled}:/opt/lib)`);
+      expect((await findLlamaServer({ path: join(bundled, 'llama-server'), env: {} }))?.version).toBe(
+        `5501 (${bundled})`
+      );
+      expect((await findLlamaServer({ path: join(bare, 'llama-server'), env: {} }))?.version).toBe('5501 ()');
+    }
+  );
+
   it('throws when a configured binary cannot run', async () => {
     await expect(findLlamaServer({ path: join(root, 'missing') })).rejects.toThrow(/is missing or not executable/);
     await expect(findLlamaServer({ path: process.execPath, binaryArgs: ['-e', 'console.log(1)'] })).rejects.toThrow(

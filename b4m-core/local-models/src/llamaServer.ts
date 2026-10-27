@@ -1,7 +1,8 @@
 import { execFile, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { access, constants, stat } from 'node:fs/promises';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
 import {
@@ -135,7 +136,7 @@ async function probeBinary(
     execFile(
       path,
       [...binaryArgs, '--version'],
-      { timeout: timeoutMs, windowsHide: true, env: childEnv(env) },
+      { timeout: timeoutMs, windowsHide: true, env: childEnv(env, path) },
       (error, stdout, stderr) => done({ text: `${stdout}\n${stderr}`, error })
     );
   });
@@ -145,11 +146,19 @@ async function probeBinary(
   return { path, version, build: build ? Number(build) : null };
 }
 
-/** The parent's environment without llama.cpp settings or Hugging Face tokens, which would override our flags. */
-function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(
+/**
+ * The parent's environment without llama.cpp settings or Hugging Face tokens, which would override our flags. On
+ * Linux, a binary with `libllama.so` beside it also gets its directory on `LD_LIBRARY_PATH`: release zips before the
+ * `$ORIGIN` runpath (b5501 among them) find their libraries only that way.
+ */
+function childEnv(env: NodeJS.ProcessEnv, binaryPath: string): NodeJS.ProcessEnv {
+  const child = Object.fromEntries(
     Object.entries(env).filter(([name]) => !/^LLAMA_/i.test(name) && !/^(HF_TOKEN|HUGGING_FACE_HUB_TOKEN)$/i.test(name))
   );
+  const dir = dirname(resolve(binaryPath));
+  if (process.platform === 'linux' && existsSync(join(dir, 'libllama.so')))
+    child.LD_LIBRARY_PATH = child.LD_LIBRARY_PATH ? `${dir}:${child.LD_LIBRARY_PATH}` : dir;
+  return child;
 }
 
 export interface LlamaServerTuning {
@@ -490,7 +499,7 @@ export async function startLlamaServer(options: StartLlamaServerOptions): Promis
   let child: ChildProcess;
   try {
     child = spawn(options.binaryPath, serverArgs(options, alias, contextSize), {
-      env: { ...childEnv(options.env ?? process.env), LLAMA_API_KEY: apiKey },
+      env: { ...childEnv(options.env ?? process.env, options.binaryPath), LLAMA_API_KEY: apiKey },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       // Its own process group, so stop() reaches whatever a launcher started.

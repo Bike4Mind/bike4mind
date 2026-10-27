@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MIN_LLAMA_SERVER_BUILD, findLlamaServer } from './llamaServer';
 import { LlamaServerRuntime } from './llamaServerRuntime';
@@ -40,7 +40,8 @@ describe.runIf(BINARY && GGUF)('live llama-server', () => {
   it('serves the model on loopback behind its key and answers a chat request', async () => {
     const server = await runtime.start(model);
     expect(await runtime.loaded()).toEqual([expect.objectContaining({ name: model, contextLength: 2048 })]);
-    expect((await fetch(`${server.baseUrl}/v1/models`)).status).toBe(401);
+    // b5501 answers /v1/models without a key; /props needs it in every supported build.
+    expect((await fetch(`${server.baseUrl}/props`)).status).toBe(401);
     const response = await fetch(`${server.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${server.apiKey}`, 'content-type': 'application/json' },
@@ -72,7 +73,9 @@ describe.runIf(BINARY && GGUF)('live llama-server', () => {
     async () => {
       const launched = new LlamaServerRuntime({
         binaryPath: '/usr/bin/env',
-        binaryArgs: ['-i', BINARY as string],
+        binaryArgs: ['-u', 'LLAMA_API_KEY', BINARY as string],
+        // A launcher's own directory says nothing about the libraries of the binary it runs.
+        env: { ...process.env, LD_LIBRARY_PATH: dirname(BINARY as string) },
         modelsDir: dir,
         contextSize: 2048,
       });
