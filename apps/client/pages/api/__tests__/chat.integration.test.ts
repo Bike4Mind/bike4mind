@@ -628,7 +628,9 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', [field]: 16 } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect((mockInvoke.mock.calls[0][0] as { body: { max_tokens?: number } }).body.max_tokens).toBe(16);
+      expect(
+        (mockInvoke.mock.calls[0][0] as { body: { params: { max_tokens?: number } } }).body.params.max_tokens
+      ).toBe(16);
     });
   });
 
