@@ -1,4 +1,4 @@
-import { Card, CardContent, Divider, Stack, Typography } from '@mui/joy';
+import { Sheet, Stack, Typography } from '@mui/joy';
 import { formatUsdAmount, type TeamPlanSettings } from '@bike4mind/common';
 import {
   listCatalogPacks,
@@ -8,6 +8,7 @@ import {
   type CatalogPlanGrant,
 } from '@client/lib/checkoutCatalog';
 import { DataTable, StatusChip, type DataColumn } from './shared';
+import { adminSurface } from './shared/adminStyles';
 
 const formatCredits = (credits: number) => credits.toLocaleString('en-US');
 
@@ -65,36 +66,39 @@ const PLAN_COLUMNS: readonly DataColumn<CatalogPlan>[] = [
 /**
  * Read-only view of every credit pack and plan checkout sells, from the constants checkout charges
  * from (see lib/checkoutCatalog). Packs are charged as an ad-hoc amount, so they have no price id.
+ * Not a SectionCard: its body is a definition list, and these are tables.
  */
 export const CheckoutCatalogPanel = ({ teamPlan }: { teamPlan: TeamPlanSettings | undefined }) => (
-  <Card variant="outlined" data-testid="admin-growth-pricing-section-catalog">
-    <Typography level="title-lg">What checkout sells</Typography>
-    <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-      Credit packs and plans as checkout in this build charges and grants them. Prices and price ids are set in code and
-      deploy environment variables, so they cannot be edited here. Custom credit amounts sell at Price Per Credit above.
-    </Typography>
-    <Divider inset="none" />
-    <CardContent>
-      <Stack spacing={2}>
-        <DataTable
-          rows={listCatalogPacks()}
-          columns={PACK_COLUMNS}
-          getRowId={pack => pack.id}
-          label="Credit packs"
-          onRetry={noRetry}
-          testId="admin-catalog-packs-table"
-          rowTestId={pack => `admin-catalog-pack-row-${pack.id}`}
-        />
-        <DataTable
-          rows={listCatalogPlans(teamPlan)}
-          columns={PLAN_COLUMNS}
-          getRowId={plan => plan.name}
-          label="Plans"
-          onRetry={noRetry}
-          testId="admin-catalog-plans-table"
-          rowTestId={plan => `admin-catalog-plan-row-${plan.name}`}
-        />
+  <Sheet variant="outlined" sx={{ ...adminSurface, p: 2 }} data-testid="admin-growth-pricing-section-catalog">
+    <Stack spacing={2}>
+      <Stack spacing={0.5}>
+        <Typography level="title-md" sx={{ color: 'admin.ink' }}>
+          What checkout sells
+        </Typography>
+        <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+          Credit packs and plans as checkout in this build charges and grants them. Prices and price ids are set in code
+          and deploy environment variables, so they cannot be edited here. Custom credit amounts sell at Price Per
+          Credit above.
+        </Typography>
       </Stack>
-    </CardContent>
-  </Card>
+      <DataTable
+        rows={listCatalogPacks()}
+        columns={PACK_COLUMNS}
+        getRowId={pack => pack.id}
+        label="Credit packs"
+        onRetry={noRetry}
+        testId="admin-catalog-packs-table"
+        rowTestId={pack => `admin-catalog-pack-row-${pack.id}`}
+      />
+      <DataTable
+        rows={listCatalogPlans(teamPlan)}
+        columns={PLAN_COLUMNS}
+        getRowId={plan => plan.name}
+        label="Plans"
+        onRetry={noRetry}
+        testId="admin-catalog-plans-table"
+        rowTestId={plan => `admin-catalog-plan-row-${plan.name}`}
+      />
+    </Stack>
+  </Sheet>
 );
