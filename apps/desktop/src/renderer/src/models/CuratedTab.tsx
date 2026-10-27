@@ -134,6 +134,8 @@ interface RowError {
   text: string;
   /** Set when Explore can show the Hugging Face repo as it is now. */
   repo: string | null;
+  /** Set when the download finished but Ollama could not describe it, so the check can run again. */
+  recheck?: boolean;
 }
 
 /** The Download flow shared by the picks and the full list: check with main, confirm, then pull. */
@@ -144,11 +146,14 @@ function useCuratedPull(onRecheck: () => void) {
   // Only the latest Download click may open the dialog; an earlier, slower check is dropped.
   const latest = useRef(0);
 
-  const showError = (where: string, failure: ModelHubError, build: CuratedBuildView) =>
+  const [checking, setChecking] = useState<string | null>(null);
+
+  const showError = (where: string, failure: ModelHubError, build: CuratedBuildView, installed = false) =>
     setError({
       where,
       text: hubErrorText(failure),
       repo: failure.kind === 'upstream-changed' && build.ollamaRef.startsWith('hf.co/') ? build.repo : null,
+      recheck: installed && failure.kind === 'unverified',
     });
 
   const review = async (where: string, entry: CuratedEntryView, build: CuratedBuildView) => {
@@ -177,13 +182,26 @@ function useCuratedPull(onRecheck: () => void) {
     setConfirming(null);
     try {
       const failure = await startPull(pending.model, pending.build, consent, onRecheck, pending.curated);
-      if (failure) showError(pending.where, failure, build);
+      if (failure) showError(pending.where, failure, build, true);
     } catch {
       setError({ where: pending.where, text: CHECK_FAILED, repo: null });
     }
   };
 
-  return { preparing, confirming, error, review, confirm, cancel: () => setConfirming(null) };
+  const checkAgain = async (where: string, entry: CuratedEntryView, build: CuratedBuildView) => {
+    setChecking(where);
+    try {
+      const result = await window.b4m.models.checkCurated(entry.id, build.id);
+      if (result.ok) setError(current => (current?.where === where ? null : current));
+      else showError(where, result.error, build, true);
+    } catch {
+      setError({ where, text: CHECK_FAILED, repo: null, recheck: true });
+    } finally {
+      setChecking(null);
+    }
+  };
+
+  return { preparing, confirming, checking, error, review, confirm, checkAgain, cancel: () => setConfirming(null) };
 }
 
 type CuratedPull = ReturnType<typeof useCuratedPull>;
@@ -228,16 +246,29 @@ function CuratedBuild({
           sx={{ my: 0.5 }}
           data-testid="models-curated-error"
           endDecorator={
-            error.repo && (
+            error.recheck ? (
               <Button
                 size="sm"
                 variant="outlined"
                 color="danger"
-                onClick={() => error.repo && onOpenInExplore(error.repo)}
-                data-testid="models-curated-explore-btn"
+                loading={flow.checking === where}
+                onClick={() => void flow.checkAgain(where, entry, build)}
+                data-testid="models-curated-check-again-btn"
               >
-                Open in Explore
+                Check again
               </Button>
+            ) : (
+              error.repo && (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="danger"
+                  onClick={() => error.repo && onOpenInExplore(error.repo)}
+                  data-testid="models-curated-explore-btn"
+                >
+                  Open in Explore
+                </Button>
+              )
             )
           }
         >

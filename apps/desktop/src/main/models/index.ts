@@ -16,6 +16,7 @@ function text(value: unknown): string | null {
 }
 
 const invalid = { ok: false, error: { kind: 'invalid', message: 'Invalid request.' } } as const;
+const warn = (message: string) => console.warn(message);
 
 /**
  * The Models screen's backend. Hugging Face is only reached from here, never the renderer. The app keeps no
@@ -33,9 +34,10 @@ export function registerModels({ localContext }: Pick<ModelHubServiceDeps, 'loca
     // Chat's own probe, so badges and chat size context from the same reading of this machine.
     hardware: () => localHardware.profile().then(profile => profile ?? probeHardware()),
     localContext,
-    curated: loadCuratedManifest(message => console.warn(message)),
+    curated: loadCuratedManifest(warn),
     onPullsChanged: pulls => send(IPC_CHANNELS.modelsPullsChanged, pulls),
     onInstalledChanged: () => send(IPC_CHANNELS.modelsInstalledChanged),
+    warn,
   });
 
   ipcMain.handle(IPC_CHANNELS.modelsGetStatus, () => service.status());
@@ -56,6 +58,11 @@ export function registerModels({ localContext }: Pick<ModelHubServiceDeps, 'loca
     const entry = text(entryId);
     const build = text(buildId);
     return entry && build ? service.curatedPull(entry, build) : invalid;
+  });
+  ipcMain.handle(IPC_CHANNELS.modelsCheckCurated, (_event, entryId: unknown, buildId: unknown) => {
+    const entry = text(entryId);
+    const build = text(buildId);
+    return entry && build ? service.checkCurated(entry, build) : invalid;
   });
   ipcMain.handle(IPC_CHANNELS.modelsPull, (_event, request: unknown) => {
     const body = request && typeof request === 'object' ? (request as Record<string, unknown>) : null;
