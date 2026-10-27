@@ -80,7 +80,11 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
     if (!creditTransactionId) return;
 
     await alertIfRewardsSpike(
-      getSettingsValue('ReferralAlertRewardsPerDay', settings, settingsMap.ReferralAlertRewardsPerDay.defaultValue)
+      getSettingsValue(
+        'ReferralAlertRewardsPerDay',
+        settings,
+        settingsMap.ReferralAlertRewardsPerDay.schema.parse(undefined)
+      )
     );
   } catch (err) {
     Logger.error('[referral] first-answer reward failed', err, { friendId });
