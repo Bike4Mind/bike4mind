@@ -22,6 +22,7 @@ vi.mock('./List/UsersBulkActionDialog', async importOriginal => ({
 }));
 vi.mock('./Profile/useOpenUserProfile', () => ({ useOpenUserProfile: () => vi.fn() }));
 vi.mock('./Views/RecentActivityView', () => ({ default: () => null }));
+vi.mock('../Signups/SignupActivityPanel', () => ({ SignupActivityPanel: () => null }));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import { DEFAULT_USERS_PARAMS, useUsersTab } from './useUsersTabParams';
