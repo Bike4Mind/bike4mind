@@ -15,7 +15,7 @@ import {
  */
 
 const REAL_SCRIPT = join(__dirname, '../scripts/generate-premium-glue.mjs');
-const GENERATED = 'app/premium-generated/premiumEntitlementGrants.generated.ts';
+const GENERATED = 'packages/server-utils/src/premium-generated/premiumEntitlementGrants.generated.ts';
 
 let sandbox: string;
 let script: string;
@@ -38,7 +38,7 @@ function runCodegen() {
 function generate() {
   const result = runCodegen();
   expect(result.status, result.stderr).toBe(0);
-  return readFileSync(join(clientRoot, GENERATED), 'utf8');
+  return readFileSync(join(sandbox, GENERATED), 'utf8');
 }
 
 function expectRejected(pattern: RegExp) {

@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository: { findPlanHolder
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn: vi.fn() } } }));
 
 // Fixture registry: behavior of the real rows is covered by
-// lib/entitlements/registry.test.ts; here we test the resolver's wiring and
+// server-utils lib/entitlements/registry.test.ts; here we test the resolver's wiring and
 // gate semantics against controlled mappings (and avoid product literals).
 vi.mock('@bike4mind/server-utils/lib/entitlements/registry', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/server-utils/lib/entitlements/registry')>(

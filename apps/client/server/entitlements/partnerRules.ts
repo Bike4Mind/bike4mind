@@ -5,7 +5,7 @@
  *
  * This module is SERVER-ONLY: it reads `@bike4mind/database`, so it must never
  * be imported from `apps/client/app/**` (the browser bundle) - the pure
- * registry (`@client/lib/entitlements/registry`) stays the isomorphic layer.
+ * registry (`@bike4mind/server-utils/lib/entitlements/registry`) stays the isomorphic layer.
  * The env registry rows remain a fallback (see the resolver callers) so nothing
  * regresses before the collection is seeded.
  *
