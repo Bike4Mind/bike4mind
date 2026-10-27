@@ -506,6 +506,19 @@ describe('models show', () => {
     expect(text).toMatch(/Pull one with: b4m models pull Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
   });
 
+  it('lists a build with an unsupported quant as not pullable with the reason', async () => {
+    const hub = fakeHub({
+      getModel: vi.fn().mockResolvedValue(
+        detail({
+          builds: [build('Q4_K_L', 500_000_000, { ollamaRef: null, ollamaRefIssue: 'unsupported-quant' })],
+        })
+      ),
+    });
+    const h = harness({ hub });
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    expect(h.lines.join('\n')).toMatch(/Q4_K_L\s+500 MB\s+none: Ollama cannot pull this quant from Hugging Face/);
+  });
+
   it('explains how to get access to a gated repo', async () => {
     const hub = fakeHub({ getModel: vi.fn().mockResolvedValue(detail({ gated: 'manual', canDownload: false })) });
     const h = harness({ hub });
@@ -648,6 +661,22 @@ describe('models pull (Hugging Face)', () => {
     const h = harness({ answers: [true] });
     await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:F16` }, h.deps)).rejects.toThrow(/split into shards/);
     expect(h.questions).toEqual([]);
+  });
+
+  it('refuses a build with an unsupported quant tag before asking', async () => {
+    const hub = fakeHub({
+      getModel: vi.fn().mockResolvedValue(
+        detail({
+          builds: [build('Q4_K_L', 500_000_000, { ollamaRef: null, ollamaRefIssue: 'unsupported-quant' })],
+        })
+      ),
+    });
+    const h = harness({ hub, answers: [true] });
+    await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_L` }, h.deps)).rejects.toThrow(
+      /Ollama cannot pull this quant from Hugging Face/
+    );
+    expect(h.questions).toEqual([]);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
   });
 
   it('lists the available quants when the requested one is missing', async () => {
