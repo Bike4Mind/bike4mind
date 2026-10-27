@@ -17,6 +17,7 @@ import type {
 import { readOllamaManifest } from '../commands/ollamaRegistry.js';
 import {
   CancelledError,
+  NO_LICENSE,
   abortable,
   clean,
   formatBytes,
@@ -120,6 +121,8 @@ function pullSummary(plan: PullPlan) {
   };
 }
 
+type PullSummary = ReturnType<typeof pullSummary>;
+
 /** The download size, plus the vision projector Ollama's Hugging Face registry adds to the pull. */
 function sizeText(summary: PullSummary): string {
   return 'visionProjectorUpTo' in summary && summary.visionProjectorUpTo
@@ -132,12 +135,10 @@ function gatedLine(summary: PullSummary): string[] {
   return [`Gated: yes (${summary.gated === 'manual' ? 'manual approval' : 'automatic approval'}), access granted.`];
 }
 
-type PullSummary = ReturnType<typeof pullSummary>;
-
 function licenseSentence(summary: PullSummary): string {
   const { license } = summary;
   if (license.permissive) return `License: ${license.label}.`;
-  if (license.label === 'none declared') return `License: none declared. Read the model page first: ${license.link}`;
+  if (license.label === NO_LICENSE) return `License: ${NO_LICENSE}. Read the model page first: ${license.link}`;
   return `License: ${license.label}, not all permissive. Read ${license.link} before accepting.`;
 }
 
