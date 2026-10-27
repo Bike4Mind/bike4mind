@@ -251,13 +251,11 @@ export class OllamaRuntime implements LocalRuntime {
 
   async inspect(model: string, options: InspectOptions = {}): Promise<ModelInspection> {
     const [shown, tags] = await Promise.all([
-      this.show(model, false, options.signal),
+      this.show(model, false, options),
       options.tags === false ? Promise.resolve([]) : this.tags().catch(() => []),
     ]);
     if (isRemote(shown)) throw new LocalRuntimeError(`${model} is cloud-backed, not a local model`, this.id);
-    const show = needsVerboseShow(shown.model_info)
-      ? await this.show(model, true, options.signal).catch(() => shown)
-      : shown;
+    const show = needsVerboseShow(shown.model_info) ? await this.show(model, true, options).catch(() => shown) : shown;
     const tagged = withDefaultTag(model);
     const tag = tags.find(entry => entry.name === model || entry.name === tagged);
     return {
@@ -388,13 +386,17 @@ export class OllamaRuntime implements LocalRuntime {
     });
   }
 
-  private async show(model: string, verbose = false, signal?: AbortSignal): Promise<ShowResponse> {
+  private async show(
+    model: string,
+    verbose = false,
+    options: Pick<InspectOptions, 'signal' | 'timeoutMs'> = {}
+  ): Promise<ShowResponse> {
     try {
       return await requestJson(this.client, '/api/show', showSchema, {
         method: 'POST',
         body: verbose ? { model, verbose } : { model },
-        signal,
-        timeoutMs: this.requestTimeoutMs,
+        signal: options.signal,
+        timeoutMs: options.timeoutMs ?? this.requestTimeoutMs,
       });
     } catch (error) {
       if (error instanceof RuntimeHttpError && error.status === 404) throw new ModelNotFoundError(this.id, model);

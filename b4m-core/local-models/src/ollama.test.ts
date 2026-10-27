@@ -271,6 +271,19 @@ describe('OllamaRuntime.inspect', () => {
     await expect(reading).rejects.toMatchObject({ name: 'TimeoutError' });
   });
 
+  it('waits past the request deadline for a read given its own', async () => {
+    server = await startFakeServer({
+      'POST /api/show': async (_request, response) => {
+        await delay(150);
+        sendJson(response, gemma4Show);
+      },
+    });
+    const runtime = new OllamaRuntime({ baseUrl: server.baseUrl, requestTimeoutMs: 50 });
+    await expect(runtime.inspect(fixtureTags.gemma4.name, { tags: false })).rejects.toThrow('timed out after 50ms');
+    const result = await runtime.inspect(fixtureTags.gemma4.name, { tags: false, timeoutMs: 2_000 });
+    expect(result.contents?.template).toBe(gemma4Show.template ?? null);
+  });
+
   it.each([[[]], [null]])('re-reads /api/show verbosely when per-layer arrays come back as %j', async blank => {
     const info = {
       'general.architecture': 'hybrid',
