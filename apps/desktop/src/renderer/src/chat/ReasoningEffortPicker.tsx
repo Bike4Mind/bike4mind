@@ -79,8 +79,10 @@ export function ReasoningEffortPicker({
   const sx = { fontWeight: 'normal', minWidth: 0 } as const;
 
   // A local model's server takes no effort, only thinking on or off; any setting but Off thinks.
-  if (modelId && models.find(model => model.id === modelId)?.thinkingToggle) {
-    const thinkingOn = effort !== THINKING_OFF_SETTING;
+  const local = modelId ? models.find(model => model.id === modelId) : undefined;
+  if (local?.thinkingToggle) {
+    const alwaysOn = local.thinkingAlwaysOn === true;
+    const thinkingOn = alwaysOn || effort !== THINKING_OFF_SETTING;
     return (
       <Dropdown>
         <MenuButton
@@ -98,10 +100,12 @@ export function ReasoningEffortPicker({
         <Menu size="sm" placement="top-start" sx={{ minWidth: 240 }}>
           {THINKING_CHOICES.map(choice => {
             const selected = choice.setting === THINKING_OFF_SETTING ? !thinkingOn : thinkingOn;
+            const unavailable = alwaysOn && choice.setting === THINKING_OFF_SETTING;
             return (
               <MenuItem
                 key={choice.setting}
                 selected={selected}
+                disabled={unavailable}
                 onClick={() => onSelect(choice.setting)}
                 data-testid="effort-picker-option"
               >
@@ -111,7 +115,7 @@ export function ReasoningEffortPicker({
                     {choice.label}
                   </Typography>
                   <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                    {choice.description}
+                    {unavailable ? 'This model always thinks.' : choice.description}
                   </Typography>
                 </Stack>
               </MenuItem>

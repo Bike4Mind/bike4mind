@@ -17,7 +17,14 @@ type ReasonPickerProps = {
   'data-testid': string;
   label?: string;
   autoFocus?: boolean;
+  /**
+   * False while the endpoint behind this action has no reason field: the helper then says the
+   * reason is not stored instead of promising an audit entry.
+   */
+  audited?: boolean;
 };
+
+export const UNSTORED_REASON_NOTE = 'Not stored yet: the audit entry for this action has no reason field.';
 
 /**
  * Required audit reason: preset chips plus a free-text note. Submit `composeAdminReason(value)` and
@@ -30,6 +37,7 @@ export const ReasonPicker: React.FC<ReasonPickerProps> = ({
   'data-testid': testId,
   label = 'Reason',
   autoFocus,
+  audited = true,
 }) => {
   const labelId = useId();
   const composed = composeAdminReason(value);
@@ -75,9 +83,13 @@ export const ReasonPicker: React.FC<ReasonPickerProps> = ({
         }}
       />
       <FormHelperText data-testid={`${testId}-helper`}>
-        {isAdminReasonComplete(value)
-          ? `Recorded in the audit log as "${composed}".`
-          : `${ADMIN_REASON_HINT} Recorded in the audit log.`}
+        {!audited
+          ? isAdminReasonComplete(value)
+            ? UNSTORED_REASON_NOTE
+            : `${ADMIN_REASON_HINT} ${UNSTORED_REASON_NOTE}`
+          : isAdminReasonComplete(value)
+            ? `Recorded in the audit log as "${composed}".`
+            : `${ADMIN_REASON_HINT} Recorded in the audit log.`}
       </FormHelperText>
     </FormControl>
   );

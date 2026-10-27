@@ -1,4 +1,3 @@
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 import { IUserDocument, resolveUserStorageLimit, storageLimitToBytes, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { computeStoragePercent } from '@client/app/components/admin/Users/Views/storageUtils';
@@ -6,29 +5,30 @@ import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import { CreditIcon } from '@client/app/components/svgs/icons/CreditIcon';
 import SdStorageIcon from '@mui/icons-material/SdStorage';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
-import { Input, Stack, Tooltip, LinearProgress, Typography, Box, Button, Textarea, FormHelperText } from '@mui/joy';
+import { Input, Stack, Tooltip, LinearProgress, Typography, Box, Button, Textarea } from '@mui/joy';
 import React, { useState } from 'react';
 import prettyBytes from 'pretty-bytes';
 import { api } from '@client/app/contexts/ApiContext';
 import { useQueryClient } from '@tanstack/react-query';
+import { AdjustCreditsDialog } from '../Profile/actions/AdjustCreditsDialog';
+import { formatCredits } from '../Profile/actions/creditAdjustment';
+import type { AdminUserProfile } from '../Profile/userProfileModel';
 
 interface Bike4MindUserDetailsProps {
-  user: AdminUserListItem;
+  user: AdminUserProfile;
   userKey: string;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
-  /** Optional reason for a manual credit change; recorded on the audit trail. */
-  creditReason?: string;
-  onCreditReasonChange?: (value: string) => void;
 }
 
 const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
-  ({ user, editedFields, onFieldChange, userKey, creditReason = '', onCreditReasonChange }) => {
+  ({ user, editedFields, onFieldChange, userKey }) => {
     const [isRecalculating, setIsRecalculating] = useState(false);
     const [unlockReason, setUnlockReason] = useState('');
     const [unlockError, setUnlockError] = useState('');
     const [unlockResult, setUnlockResult] = useState('');
     const [unlocking, setUnlocking] = useState(false);
+    const [adjustCreditsOpen, setAdjustCreditsOpen] = useState(false);
     const queryClient = useQueryClient();
     const storage = resolveUserStorageLimit(user);
     const storagePercent = computeStoragePercent(user.currentStorageSize, storage.limitMb);
@@ -56,25 +56,11 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
       onFieldChange('numReferralsAvailable', newValue);
     };
 
-    const handleCreditsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newValue = parseInt(e.target.value, 10) || 0;
-      onFieldChange('currentCredits', newValue);
-    };
-
     const handleStorageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.value === '') return;
       const newValue = Number(e.target.value);
       if (Number.isFinite(newValue) && newValue >= 0 && newValue <= MAX_STORAGE_LIMIT_MB) {
         onFieldChange('storageLimitOverride', newValue);
-      }
-    };
-
-    const handleCreditsKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        const currentValue = parseInt(e.currentTarget.value, 10) || 0;
-        const newValue = e.key === 'ArrowUp' ? currentValue + 50 : Math.max(currentValue - 50, 0);
-        handleCreditsChange({ target: { value: newValue.toString() } } as React.ChangeEvent<HTMLInputElement>);
       }
     };
 
@@ -88,9 +74,16 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
         {user.signupGrantAssessment && (
           <Typography level="body-sm" data-testid="admin-user-grant-assessment">
             Signup assessment: {user.signupGrantAssessment.band}; {user.signupGrantAssessment.status}; policy:{' '}
-            {user.signupGrantAssessment.policyVersion ?? 'none'}
+            {user.signupGrantAssessment.policyVersion ?? 'none'}; score: {user.signupGrantAssessment.score ?? 'n/a'}
           </Typography>
         )}
+        {user.signupGrantAssessment &&
+          (user.signupGrantAssessment.reasons.length > 0 || user.signupGrantAssessment.missing.length > 0) && (
+            <Typography level="body-sm" data-testid="admin-user-grant-assessment-reasons">
+              Matched: {user.signupGrantAssessment.reasons.join(', ') || 'none'}; missing:{' '}
+              {user.signupGrantAssessment.missing.join(', ') || 'none'}
+            </Typography>
+          )}
         {user.signupGrant?.stage === 'signup' && (
           <Stack spacing={1}>
             <Textarea
@@ -179,48 +172,22 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
           </Stack>
         </Tooltip>
 
-        <Tooltip title="Credits">
-          <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px', width: '100%' }}>
-            <CreditIcon />
-            <Input
-              key={`credits-${userKey}`}
-              sx={{
-                borderColor: editedFields?.currentCredits ? 'danger.500' : 'default',
-                flex: 1,
-              }}
-              type="number"
-              value={user.currentCredits}
-              onChange={handleCreditsChange}
-              onKeyDown={handleCreditsKeyDown}
-              slotProps={{
-                input: {
-                  step: 50,
-                  'data-testid': 'admin-user-credits-input',
-                  'data-admin-credits-input': true,
-                  'aria-label': 'Credit balance',
-                },
-              }}
-            />
-          </Stack>
-        </Tooltip>
-
-        {/* Reason surfaces only once credits are edited - it applies to that change. */}
-        {editedFields?.currentCredits && onCreditReasonChange && (
-          <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', padding: '0px 16px 0px 8px' }}>
-            <Box sx={{ width: 24 }} />
-            <Box sx={{ flex: 1 }}>
-              <Textarea
-                data-testid="admin-credit-reason-input"
-                minRows={2}
-                maxRows={4}
-                placeholder="Reason for credit adjustment (required, min 5 characters)"
-                value={creditReason}
-                onChange={e => onCreditReasonChange(e.target.value)}
-              />
-              <FormHelperText>Required to save. Recorded on the credit audit trail.</FormHelperText>
-            </Box>
-          </Stack>
-        )}
+        <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px', width: '100%' }}>
+          <CreditIcon />
+          <Typography data-testid="user-card-credits-balance" level="body-md" sx={{ flex: 1 }}>
+            {formatCredits(user.currentCredits ?? 0)}
+          </Typography>
+          <Button
+            data-testid="user-card-adjust-credits-btn"
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            onClick={() => setAdjustCreditsOpen(true)}
+          >
+            Adjust credits
+          </Button>
+        </Stack>
+        {adjustCreditsOpen && <AdjustCreditsDialog user={user} onClose={() => setAdjustCreditsOpen(false)} />}
         <Tooltip title="Storage Usage">
           <Stack spacing={1.5}>
             <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px' }}>

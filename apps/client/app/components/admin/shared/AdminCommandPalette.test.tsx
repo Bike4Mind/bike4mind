@@ -147,6 +147,21 @@ describe('AdminCommandPalette', () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it('still runs shortcuts past a closed dialog left mounted under an aria-hidden root', () => {
+    const run = vi.fn();
+    setup([{ id: 'credits', label: 'Adjust credits', shortcut: 'c', run }]);
+    const hidden = document.createElement('div');
+    hidden.setAttribute('aria-hidden', 'true');
+    hidden.innerHTML = '<div role="dialog"></div>';
+    document.body.appendChild(hidden);
+    try {
+      fireEvent.keyDown(document.body, { key: 'c' });
+      expect(run).toHaveBeenCalledOnce();
+    } finally {
+      hidden.remove();
+    }
+  });
+
   it('focuses the local search, and opens the palette from an input with Cmd/Ctrl+K', () => {
     setup();
     fireEvent.keyDown(document.body, { key: '/' });
