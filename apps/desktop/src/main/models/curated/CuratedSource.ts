@@ -212,6 +212,9 @@ export class CuratedSource {
         if (!revoked.intact) this.#log('revoked-keys.json was unreadable; rebuilt it from the cached curated list');
         await this.#revoke(recovered);
       }
+      // A list accepted before is gone, so the last success no longer describes what is shown: check again now.
+      if (!this.#cached && this.#floor() > this.#bundled.sequence)
+        this.#state = { ...this.#state, lastSuccessAt: null };
     } catch (error) {
       this.#log(`could not read the cached curated list: ${String(error)}`);
     }
