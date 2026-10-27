@@ -10,6 +10,8 @@ const MAX_BUILDS = 16;
 const MAX_CHANGELOG = 200;
 const MAX_TIERS = 32;
 const MAX_SEQUENCE = 2 ** 31;
+/** The shortest trained context, in tokens, a chat entry may declare. */
+export const MIN_CHAT_CONTEXT = 16384;
 
 // The manifest is fetched remotely and its links are opened externally, so every URL is https on a public host
 // name, and every repo path or ref is restricted to a charset that cannot traverse or inject.
@@ -194,10 +196,8 @@ const ModelfileOverrideSchema = z.object({
   draftNumPredict: z.number().int().min(1).max(16).optional(),
 });
 
-// Every layer the registry serves beside the weights; a client pulls only while it serves exactly these. hf.co
-// builds template and params from the repo's main branch, so they can change without the GGUF changing. numCtx is the
-// params layer's num_ctx. installedTemplate is the sha256 of the template /api/show reports once installed, needed
-// when no template layer is served (Ollama then shows the GGUF's own template or its renderer's placeholder).
+// Every layer the registry serves beside the weights; a client pulls only while it serves exactly these. numCtx is
+// the params layer's num_ctx; installedTemplate is the sha256 of the GGUF template /api/show reports, for hf.co builds.
 const OllamaLayersSchema = z
   .object({
     template: Sha256Schema.nullable(),
@@ -467,6 +467,9 @@ function headerIssues(entry: EntryHeader): EntryIssue[] {
   if (entry.params.activeB !== null && entry.params.activeB > entry.params.totalB) {
     issue(['params', 'activeB'], 'activeB cannot exceed totalB');
   }
+  if (roles.includes('chat') && arch.contextMax < MIN_CHAT_CONTEXT) {
+    issue(['arch', 'contextMax'], 'a chat model needs a context of at least 16384 tokens');
+  }
 
   const layered = arch.full.layers + (arch.swa?.layers ?? 0) + (arch.mla?.layers ?? 0) + (arch.recurrent?.layers ?? 0);
   if (layered > arch.blockCount) issue(['arch'], 'layer groups exceed blockCount');
@@ -624,20 +627,27 @@ const ChangelogItemSchema = z.object({
 });
 export type HubChangelogItem = z.infer<typeof ChangelogItemSchema>;
 
-// The Curated tab's per-machine slots; CPU-only machines get a light pick where GPUs get a long-context one.
 export const CURATED_SLOTS = ['best', 'fast', 'long-context', 'light'] as const;
 export type CuratedSlot = (typeof CURATED_SLOTS)[number];
+const TIER_KINDS = ['discrete', 'unified', 'cpu'] as const;
+// Each tier fills at most these slots, one pick each; CPU-only machines get a light pick instead of a long-context one.
+export const TIER_SLOTS: Record<(typeof TIER_KINDS)[number], readonly CuratedSlot[]> = {
+  discrete: ['best', 'fast', 'long-context'],
+  unified: ['best', 'fast', 'long-context'],
+  cpu: ['best', 'fast', 'light'],
+};
 const TierPickSchema = z.object({ slot: z.enum(CURATED_SLOTS), entry: SlugSchema, build: SlugSchema });
 // minGiB is GPU memory on a discrete machine and total memory otherwise, in the GiB the hardware is sold with.
 const TierSchema = z.object({
-  memoryKind: z.enum(['discrete', 'unified', 'cpu']),
+  memoryKind: z.enum(TIER_KINDS),
   minGiB: z.number().int().nonnegative().max(65536),
-  picks: z.array(TierPickSchema).max(CURATED_SLOTS.length),
+  picks: z.array(TierPickSchema).max(3),
 });
 export type HubTier = z.infer<typeof TierSchema>;
 export type HubTierPick = z.infer<typeof TierPickSchema>;
 
-function pickIssue(pick: HubTierPick, entries: readonly HubEntry[]): string | null {
+function pickIssue(pick: HubTierPick, tier: HubTier, entries: readonly HubEntry[]): string | null {
+  if (!TIER_SLOTS[tier.memoryKind].includes(pick.slot)) return `no ${pick.slot} slot in a ${tier.memoryKind} tier`;
   const entry = entries.find(candidate => candidate.id === pick.entry);
   if (!entry) return `no entry ${pick.entry}`;
   return entry.builds.some(build => build.id === pick.build) ? null : `no build ${pick.build} in ${pick.entry}`;
@@ -667,7 +677,7 @@ function refineManifest(manifest: ManifestShape, ctx: z.RefinementCtx<ManifestSh
     if (manifest.tiers.slice(0, t).some(o => o.memoryKind === tier.memoryKind && o.minGiB === tier.minGiB))
       issue([], 'duplicate tier');
     tier.picks.forEach((pick, p) => {
-      const reason = pickIssue(pick, manifest.entries);
+      const reason = pickIssue(pick, tier, manifest.entries);
       if (reason) issue(['picks', p], reason);
       if (tier.picks.slice(0, p).some(other => other.slot === pick.slot)) issue(['picks', p, 'slot'], 'slot taken');
     });
@@ -889,7 +899,7 @@ class TolerantReader {
         return this.drop(path, 'duplicate tier');
       const kept = tier.picks.filter((pick, p) => {
         const reason =
-          pickIssue(pick, entries) ?? (tier.picks.slice(0, p).some(o => o.slot === pick.slot) && 'slot taken');
+          pickIssue(pick, tier, entries) ?? (tier.picks.slice(0, p).some(o => o.slot === pick.slot) && 'slot taken');
         if (reason) this.drop(`${path}.picks.${p}`, reason);
         return !reason;
       });
