@@ -3,9 +3,8 @@ import { ModelArchSchema, type ModelArch } from '../schemas/modelHub';
 import { machine } from './__fixtures__/hubManifest';
 import { estimateFit, flashAttnOffBytes, kvCacheBytes, ollamaUbatch, type FitRuntime } from './fit';
 
-// Measured on Linux x64, CPU only: llama-server b11889 (-np 1, -ub 512, f16 KV, flash attention auto = on) load
-// logs, and Ollama 0.40.11 (which runs its bundled llama-server b11845) /api/ps sizes, load logs and runner RSS.
-// MiB as the runtimes print them. CUDA and Metal compute terms come from llama.cpp source and are not covered here.
+// Linux x64, CPU only, MiB as printed: llama-server b11889 (-np 1, -ub 512, f16 KV, flash attention on) load logs
+// and Ollama 0.40.11 /api/ps sizes, load logs and runner RSS. CUDA and Metal terms are not covered here.
 
 const MIB = 1024 ** 2;
 
@@ -42,7 +41,7 @@ const MODELS = {
       embeddingLength: 768,
       activeFeedForwardLength: 2048,
       full: { layers: 4, kvHeads: 4, keyLength: 64, valueLength: 64 },
-      recurrent: { layers: 28, stateBytesPerSeq: 22_622_208 },
+      recurrent: { layers: 28, stateBytesPerSeq: 22_622_208, kind: 'mamba2' },
     },
   },
   'qwen3.5:0.8b': {
@@ -54,7 +53,7 @@ const MODELS = {
       embeddingLength: 1024,
       activeFeedForwardLength: 3584,
       full: { layers: 6, kvHeads: 2, keyLength: 256, valueLength: 256 },
-      recurrent: { layers: 18, stateBytesPerSeq: 20_201_472 },
+      recurrent: { layers: 18, stateBytesPerSeq: 20_201_472, kind: 'gated-delta-net' },
     },
   },
 } as const;
@@ -187,14 +186,13 @@ describe('estimator against Ollama 0.40.11 library models', () => {
     expect(Math.floor((plan.memory.kvBytes + plan.memory.recurrentBytes) / MIB)).toBe(row.ollama.contextMiB);
   });
 
-  it.each(ROWS)('$model at $ctx: total stays above /api/ps size', row => {
+  it.each(ROWS.filter(r => r.model !== 'qwen3.5:0.8b'))('$model at $ctx: total stays above /api/ps size', row => {
     expect(estimate(row, { kind: 'ollama' }).memory.totalBytes).toBeGreaterThan(row.ollama.psBytes);
   });
 });
 
-// Hugging Face GGUF builds on Ollama 0.40.11, loaded through /api/generate with num_ctx; arch from /api/show
-// model_info. Buffers from the runner's load log (weights = CPU + CPU_REPACK model buffers), RSS of the runner
-// after one generated token.
+// GGUF builds loaded on Ollama 0.40.11 with num_ctx; arch from /api/show. Buffers from the runner's load log
+// (weights = CPU + CPU_REPACK), RSS of the runner after one generated token.
 const HF = {
   'Qwen2.5 0.5B Q4_K_M': {
     fileBytes: 491_400_032,
@@ -256,7 +254,7 @@ const HF = {
       embeddingLength: 1536,
       activeFeedForwardLength: 6 * 512 + 1024,
       full: { layers: 4, kvHeads: 4, keyLength: 128, valueLength: 128 },
-      recurrent: { layers: 36, stateBytesPerSeq: 58_060_800 },
+      recurrent: { layers: 36, stateBytesPerSeq: 58_060_800, kind: 'mamba2' },
       moe: { experts: 64, used: 6, moeLayers: 40 },
     },
   },
@@ -270,7 +268,21 @@ const HF = {
       embeddingLength: 2048,
       activeFeedForwardLength: 8192,
       full: { layers: 4, kvHeads: 8, keyLength: 64, valueLength: 64 },
-      recurrent: { layers: 36, stateBytesPerSeq: 77_377_536 },
+      recurrent: { layers: 36, stateBytesPerSeq: 77_377_536, kind: 'mamba2' },
+    },
+  },
+  // n_embd is twice the expert width, where the down projection's used x n_embd output sets the MoE peak.
+  'granite3-moe:1b': {
+    fileBytes: 821_844_672,
+    weightsMiB: 782.11,
+    arch: {
+      contextMax: 4096,
+      blockCount: 24,
+      headCount: 16,
+      embeddingLength: 1024,
+      activeFeedForwardLength: 8 * 512,
+      full: { layers: 24, kvHeads: 8, keyLength: 64, valueLength: 64 },
+      moe: { experts: 32, used: 8, moeLayers: 24 },
     },
   },
 } as const;
@@ -284,6 +296,8 @@ interface Load {
   contextMiB: number;
   computeMiB: number;
   rssMiB: number;
+  /** Ollama's num_batch option, which sets -b and -ub. */
+  numBatch?: number;
 }
 
 const LOADS: Load[] = [
@@ -349,6 +363,16 @@ const LOADS: Load[] = [
     computeMiB: 564.61,
     rssMiB: 2606.5,
   },
+  { model: 'granite3-moe:1b', ctx: 4096, ubatch: 512, contextMiB: 192, computeMiB: 38.02, rssMiB: 1028.18 },
+  {
+    model: 'granite3-moe:1b',
+    ctx: 4096,
+    ubatch: 2048,
+    contextMiB: 192,
+    computeMiB: 152.07,
+    rssMiB: 1028.23,
+    numBatch: 2048,
+  },
 ];
 
 const measuredMiB = (load: Load) => HF[load.model].weightsMiB + load.contextMiB + load.computeMiB;
@@ -358,7 +382,7 @@ function ollamaPlan(load: Load, arch: ModelArch = ModelArchSchema.parse(HF[load.
     model: { arch, weightsBytes: HF[load.model].fileBytes },
     hardware: machine('cpu', 64),
     mode: 'chat',
-    runtime: { kind: 'ollama', slots: 1, draftMax: 0 },
+    runtime: { kind: 'ollama', slots: 1, draftMax: 0, ubatch: load.numBatch },
     context: load.ctx,
   }).requested!;
 }

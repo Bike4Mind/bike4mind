@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseHubManifest, type HubManifestInput, type HubRole } from '../schemas/modelHub';
 import { fixtureManifest, machine, OLD_PINS, PINS } from './__fixtures__/hubManifest';
-import type { HardwareProfile } from './fit';
+import { computeBufferBytes, type HardwareProfile } from './fit';
 import {
   pickForMachine,
   TIER_C_TOOL_REGRESSION_TOLERANCE,
@@ -66,7 +66,7 @@ describe('pickForMachine golden picks on the fixture catalog', () => {
     ['nv-8+32', 'vision', 'gemma-12b/q4@ollama slow:layer-offload 65536 f16'],
     ['nv-12+32', 'code', 'moe-35b/q4@llama-server tight:expert-offload 262144 q8_0'],
     ['nv-12+32', 'chat', 'moe-35b/q4@llama-server tight:expert-offload 65536 q8_0'],
-    ['nv-24+64', 'code', 'hybrid-27b/iq4@llama-server fast:kv-quantized 262144 q8_0'],
+    ['nv-24+64', 'code', 'dense-9b-tuned/q4@llama-server fast:kv-quantized 131072 q8_0'],
     ['nv-24+64', 'chat', 'moe-35b/q4@llama-server fast:fits 65536 f16'],
     ['cpu-16', 'code', 'dense-9b-tuned/q4@llama-server slow:cpu-only 65536 q8_0'],
     ['cpu-16', 'chat', 'gemma-12b/q4@ollama slow:cpu-only 32768 f16'],
@@ -80,8 +80,15 @@ describe('pickForMachine golden picks on the fixture catalog', () => {
 
   it('moves the fewest expert layers that fit an 8 GB GPU at the largest context', () => {
     const { best } = pick('nv-8+32', 'chat');
-    expect(best?.fit).toMatchObject({ placement: 'expert-offload', nCpuMoe: 33 });
-    expect(best!.fit.memory.totalBytes - best!.fit.memory.offloadedBytes).toBeLessThanOrEqual(8 * 1024 ** 3);
+    const { memory } = best!.fit;
+    expect(best?.fit).toMatchObject({ placement: 'expert-offload', nCpuMoe: 35 });
+    expect(memory.totalBytes - memory.offloadedBytes + memory.marginBytes).toBeLessThanOrEqual(8 * 1024 ** 3);
+    // The CUDA compute buffer also holds a copy of at least one offloaded expert tensor.
+    const expertBytesPerLayer = best!.build.tensorStats!.expertBytesPerLayer;
+    const weightsBytes = best!.build.weights.reduce((sum, w) => sum + w.sizeBytes, 0);
+    const model = { arch: best!.entry.arch, weightsBytes, expertBytesPerLayer };
+    const graph = computeBufferBytes(model, best!.fit.context, best!.fit.ubatch, { memoryKind: 'discrete' });
+    expect(memory.computeBytes).toBeGreaterThanOrEqual(graph + expertBytesPerLayer / 3);
   });
 
   it('takes a later build that is eligible over an earlier one that only fits better', () => {
@@ -182,9 +189,9 @@ describe('pickForMachine policy', () => {
         own.toolCall.exact = exact;
         own.coding.passed = coding;
       });
-    expect(pick('nv-24+64', 'code', { manifest: bFirst(19, 9) }).best?.entry.id).toBe('dense-9b-tuned');
-    expect(pick('nv-24+64', 'code', { manifest: bFirst(18, 9) }).best?.entry.id).toBe('hybrid-27b');
-    expect(pick('nv-24+64', 'code', { manifest: bFirst(20, 7) }).best?.entry.id).toBe('hybrid-27b');
+    expect(pick('mac-64', 'code', { manifest: bFirst(19, 9) }).best?.entry.id).toBe('dense-9b-tuned');
+    expect(pick('mac-64', 'code', { manifest: bFirst(18, 9) }).best?.entry.id).toBe('hybrid-27b');
+    expect(pick('mac-64', 'code', { manifest: bFirst(20, 7) }).best?.entry.id).toBe('hybrid-27b');
   });
 
   it('lets a Tier B variant win on fit when no Tier A pick is in the same verdict class', () => {
@@ -195,7 +202,7 @@ describe('pickForMachine policy', () => {
     expect(label(pick('mac-24', 'code', { manifest }).best)).toBe(
       'dense-9b-tuned/q4@llama-server tight:reduced-context 65536 q8_0'
     );
-    expect(pick('nv-24+64', 'code', { manifest }).best?.entry.id).toBe('hybrid-27b');
+    expect(pick('mac-64', 'code', { manifest }).best?.entry.id).toBe('hybrid-27b');
   });
 
   it('lists a Tier B variant only with a current own eval, and a Tier C one only with its parent regression run', () => {

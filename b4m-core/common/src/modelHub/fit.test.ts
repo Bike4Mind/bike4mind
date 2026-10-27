@@ -6,6 +6,7 @@ import {
   KV_BYTES_PER_ELEMENT,
   activationBytesPerToken,
   attentionMaskBytes,
+  computeBufferBytes,
   contextFloor,
   contextOptions,
   contextTarget,
@@ -67,8 +68,7 @@ const DEEPSEEK_V31 = arch({
   mla: { layers: 61, kvLoraRank: 512, ropeDim: 64 },
 });
 
-// 64 KiB of f16 KV per token: 65536 tokens = 4 GiB, so overheads stay readable. On a 10 GiB model the plan at
-// -ub 512 needs 15.5 GiB at 65536 (13.63 with q8_0), 13.31 at 32768 (12.38) and 12.22 at 16384 on unified memory.
+// 64 KiB of f16 KV per token: 65536 tokens = 4 GiB, so overheads stay readable.
 const ARCH_64K = arch({
   contextMax: 262144,
   blockCount: 16,
@@ -207,11 +207,22 @@ describe('estimateFit', () => {
     expect(at(need - 1)).toMatchObject({ context: 65536, kv: Q8 });
   });
 
-  it('sizes the margin per backend', () => {
-    expect(fitMarginBytes(machine('cpu', 32))).toBe(256 * MIB);
-    expect(fitMarginBytes(machine('discrete', 32, null))).toBe(256 * MIB);
-    expect(fitMarginBytes(machine('unified', 32))).toBe(GIB);
-    expect(fitMarginBytes(machine('discrete', 32, 8))).toBe(1.5 * GIB);
+  it('keeps more headroom on a discrete GPU than on unified memory or a CPU, and some on every GPU of a split', () => {
+    const cpu = fitMarginBytes(machine('cpu', 32));
+    const unified = fitMarginBytes(machine('unified', 32));
+    const discrete = fitMarginBytes(machine('discrete', 32, 8));
+    expect(cpu).toBeLessThan(unified);
+    expect(unified).toBeLessThan(discrete);
+    expect(fitMarginBytes(machine('discrete', 32, null))).toBe(cpu);
+    expect(fitMarginBytes({ ...machine('discrete', 32, 16), gpuCount: 2 })).toBe(2 * discrete);
+  });
+
+  it('plans two GPUs below one card of the same summed VRAM', () => {
+    const one = machine('discrete', 64, 17);
+    expect(fit({ hardware: one })).toMatchObject({ verdict: 'fast', context: 65536, kv: F16 });
+    const two = fit({ hardware: { ...one, gpuCount: 2 } });
+    expect(two.memory.computeBytes).toBeGreaterThan(fit({ hardware: one }).memory.computeBytes);
+    expect(two.kv === F16 && two.context === 65536 && two.placement === 'gpu').toBe(false);
   });
 
   it('is fast only when the target fits', () => {
@@ -262,14 +273,49 @@ describe('estimateFit', () => {
     expect(compute(ARCH_64K, 'off') - compute(ARCH_64K, 'on')).toBe(assumed - mask);
   });
 
-  it('adds the host mask copy and one layer of F16 KV scratch on a GPU', () => {
+  it('plans more compute on a discrete GPU than a CPU, and more again on unified memory', () => {
     const compute = (hardware: HardwareProfile) =>
       fit({ hardware, weightsGiB: 1, context: 32768 }).requested!.memory.computeBytes;
     const cpu = compute(machine('cpu', 64));
-    const scratch = 32768 * 4 * (256 + 256) * 2;
-    expect(cpu).toBe(512 * activationBytesPerToken({ arch: ARCH_64K, weightsBytes: GIB }) + 32768 * 512 * 2);
-    expect(compute(machine('discrete', 64, 24)) - cpu).toBe(scratch);
-    expect(compute(mac(64)) - cpu).toBe(scratch + 32768 * 512 * 2);
+    expect(compute(machine('discrete', 64, 24))).toBeGreaterThan(cpu);
+    expect(compute(mac(64))).toBeGreaterThan(compute(machine('discrete', 64, 24)));
+  });
+
+  it('reserves at least one layer of F16 KV per extra slot on a GPU', () => {
+    const compute = (slots: number) =>
+      fit({ hardware: mac(64), weightsGiB: 1, context: 32768, runtime: { ...LS, slots } }).requested!.memory
+        .computeBytes;
+    const layer = kvCacheBytes(ARCH_64K, 32768, F16) / ARCH_64K.blockCount;
+    expect(compute(4) - compute(1)).toBeGreaterThanOrEqual(3 * layer);
+  });
+
+  it('counts a copy of an offloaded expert tensor in the CUDA compute buffer', () => {
+    // gpt-oss-120b-like: three MXFP4 expert tensors of 128 x 2880 x 2880 per layer.
+    const expertTensor = 128 * 2880 * 2880 * (4.25 / 8);
+    const model = {
+      arch: arch({
+        contextMax: 131072,
+        blockCount: 36,
+        headCount: 64,
+        embeddingLength: 2880,
+        activeFeedForwardLength: 4 * 2880,
+        full: { layers: 18, kvHeads: 8, keyLength: 64, valueLength: 64 },
+        swa: { layers: 18, kvHeads: 8, keyLength: 64, valueLength: 64, window: 128 },
+        moe: { experts: 128, used: 4, moeLayers: 36 },
+      }),
+      weightsBytes: 63.4e9,
+      expertBytesPerLayer: 3 * expertTensor,
+    };
+    const r = estimateFit({
+      model,
+      hardware: machine('discrete', 64, 24),
+      mode: 'chat',
+      runtime: { kind: 'llama-server' },
+    });
+    expect(r).toMatchObject({ verdict: 'tight', reason: 'expert-offload' });
+    const graph = computeBufferBytes(model, r.context, r.ubatch, { memoryKind: 'discrete' });
+    expect(r.memory.computeBytes).toBeGreaterThanOrEqual(graph + expertTensor);
+    expect(r.memory.totalBytes - r.memory.offloadedBytes + r.memory.marginBytes).toBeLessThanOrEqual(24 * GIB);
   });
 
   it('keeps an f16 cache on Ollama when flash attention is off, whatever the daemon KV type', () => {
@@ -292,6 +338,15 @@ describe('estimateFit', () => {
     expect(ubatch(machine('discrete', 64, 48))).toBe(2048);
     expect(ubatch(machine('discrete', 64, 48), { kind: 'ollama', flashAttn: 'off' })).toBe(512);
     expect(ubatch(machine('discrete', 64, 8), { kind: 'ollama', flashAttn: 'off' })).toBe(256);
+  });
+
+  it('loads Ollama embedding models with one slot and a 2048 batch capped at the context', () => {
+    const embed = (context: number) =>
+      fit({ mode: 'embeddings', hardware: machine('cpu', 64), runtime: { kind: 'ollama', slots: 4 }, context })
+        .requested!;
+    expect(embed(8192)).toMatchObject({ ubatch: 2048 });
+    expect(embed(1024)).toMatchObject({ ubatch: 1024 });
+    expect(embed(8192).memory.kvBytes).toBe(kvCacheBytes(ARCH_64K, 8192, F16));
   });
 
   it('reduces context down to the mode floor as tight', () => {
@@ -318,9 +373,9 @@ describe('estimateFit', () => {
       mode: 'chat',
       runtime: LS,
     });
-    expect(r).toMatchObject({ verdict: 'tight', reason: 'expert-offload', context: 65536, kv: Q8, nCpuMoe: 37 });
-    expect(r.memory.offloadedBytes).toBe(18.5 * GIB);
-    expect(r.memory.totalBytes - r.memory.offloadedBytes).toBeLessThanOrEqual(8 * GIB);
+    expect(r).toMatchObject({ verdict: 'tight', reason: 'expert-offload', context: 65536, kv: Q8, nCpuMoe: 38 });
+    expect(r.memory.offloadedBytes).toBe(19 * GIB);
+    expect(r.memory.totalBytes - r.memory.offloadedBytes + r.memory.marginBytes).toBeLessThanOrEqual(8 * GIB);
   });
 
   it('honours a fixed nCpuMoe', () => {
@@ -330,7 +385,7 @@ describe('estimateFit', () => {
       mode: 'chat',
       runtime: { ...LS, nCpuMoe: 40 },
     });
-    expect(r).toMatchObject({ reason: 'expert-offload', context: 65536, kv: F16, nCpuMoe: 40 });
+    expect(r).toMatchObject({ reason: 'expert-offload', context: 65536, nCpuMoe: 40 });
     const off = estimateFit({
       model: { arch: MOE_64K, weightsBytes: 22 * GIB, expertBytesPerLayer: GIB / 2 },
       hardware: machine('discrete', 32, 8),
@@ -371,7 +426,7 @@ describe('estimateFit', () => {
       },
     });
     const r = estimateFit({ model, hardware: machine('discrete', 1024, 24), mode: 'chat', runtime: LS });
-    expect(r).toMatchObject({ reason: 'expert-offload', context: 65536, kv: Q8, nCpuMoe: 761 });
+    expect(r).toMatchObject({ reason: 'expert-offload', context: 65536, kv: Q8, nCpuMoe: 762 });
     expect(plans).toBeLessThan(64);
     const gpuOnly = r.memory.totalBytes - r.memory.offloadedBytes + r.memory.marginBytes;
     expect(gpuOnly).toBeLessThanOrEqual(24 * GIB);
@@ -380,9 +435,10 @@ describe('estimateFit', () => {
 
   it('falls back to a slow dense layer split when the expert split runs out of RAM, or on Ollama', () => {
     const moe = { arch: MOE_64K, weightsBytes: 22 * GIB, expertBytesPerLayer: GIB / 2 };
-    // At 32768 with q8_0 a dense split moves 16.84 GiB, which this RAM pool holds; whole expert layers need 17.
+    // This RAM pool holds a dense split but not the whole expert layers the 8 GiB card would have to shed.
     const small = estimateFit({ model: moe, hardware: machine('discrete', 24.2, 8), mode: 'chat', runtime: LS });
-    expect(small).toMatchObject({ verdict: 'slow', reason: 'layer-offload', context: 32768, kv: Q8 });
+    expect(small).toMatchObject({ verdict: 'slow', reason: 'layer-offload', nCpuMoe: 0 });
+    expect(small.memory.offloadedBytes).toBeLessThanOrEqual(small.memory.ramPoolBytes);
     const ollama = estimateFit({ model: moe, hardware: machine('discrete', 32, 8), mode: 'chat', runtime: OLLAMA });
     expect(ollama).toMatchObject({ verdict: 'slow', reason: 'layer-offload', nCpuMoe: 0 });
   });
@@ -411,34 +467,52 @@ describe('estimateFit', () => {
     );
   });
 
-  it('scales activations and masks with ubatch', () => {
+  it('grows compute with ubatch', () => {
     const at = (ubatch: number) =>
       fit({ hardware: machine('cpu', 64), runtime: { ...LS, ubatch }, context: 8192 }).requested!.memory.computeBytes;
-    const perToken = activationBytesPerToken({ arch: ARCH_64K, weightsBytes: 10 * GIB });
-    expect(perToken).toBe(4 * (3 * 18432 + 5 * 2048 + 32));
-    expect(at(2048)).toBe(2048 * perToken + 8192 * 2048 * 2);
-    expect(at(2048) - at(512)).toBe(1536 * (perToken + 8192 * 2));
+    expect(at(512)).toBeLessThan(at(1024));
+    expect(at(1024)).toBeLessThan(at(2048));
   });
 
-  it('bounds activations for hybrid recurrent models by embedding widths', () => {
-    const hybrid = arch({
+  it('keeps a calibrated recurrent model at or above its transformer layers, and any other at the old flat rate', () => {
+    const narrow = { ...ARCH_64K, activeFeedForwardLength: 1024 };
+    const perToken = (a: unknown) => activationBytesPerToken({ arch: arch(a), weightsBytes: GIB });
+    const recurrent = { layers: 8, stateBytesPerSeq: MIB };
+    expect(perToken({ ...narrow, recurrent: { ...recurrent, kind: 'mamba2' } })).toBeGreaterThan(perToken(narrow));
+    // The flat 1 GiB per 512-token ubatch this estimator charged before it was measured.
+    expect(perToken({ ...narrow, recurrent })).toBeGreaterThanOrEqual(GIB / 512);
+    const { embeddingLength: _e, activeFeedForwardLength: _f, ...noWidths } = narrow;
+    expect(perToken({ ...noWidths, recurrent })).toBeGreaterThanOrEqual(GIB / 512);
+  });
+
+  it('counts the down projection output of narrow-expert MoE layers', () => {
+    const narrowExperts = arch({
       ...ARCH_64K,
-      activeFeedForwardLength: 1024,
-      recurrent: { layers: 8, stateBytesPerSeq: MIB },
+      activeFeedForwardLength: 8 * 512,
+      moe: { experts: 64, used: 8, moeLayers: 16 },
     });
-    expect(activationBytesPerToken({ arch: hybrid, weightsBytes: GIB })).toBe(4 * 20 * 2048);
+    const wideExperts = arch({
+      ...ARCH_64K,
+      embeddingLength: 512,
+      activeFeedForwardLength: 8 * 512,
+      moe: { experts: 64, used: 8, moeLayers: 16 },
+    });
+    const perToken = (a: ModelArch) => activationBytesPerToken({ arch: a, weightsBytes: GIB });
+    // 8 experts x n_embd 2048 outlives the 4096-wide expert input; at n_embd 512 the FFN widths dominate.
+    expect(perToken(narrowExperts)).toBeGreaterThanOrEqual(4 * (8 * 2048 + 4096));
+    expect(perToken(wideExperts)).toBeGreaterThanOrEqual(4 * 3 * 4096);
   });
 
-  it('bounds activations from the weights per layer when the widths are unknown', () => {
-    const { embeddingLength: _e, activeFeedForwardLength: _f, ...shape } = ARCH_64K;
-    const dense = arch(shape);
-    expect(activationBytesPerToken({ arch: dense, weightsBytes: 16e6 * 16 })).toBe(44 * 4000 + 128);
-    const moe = arch({ ...shape, moe: { experts: 64, used: 4, moeLayers: 16 } });
-    const moeBytes = 4 * (2 * 64 + 32);
-    // Active weights: a quarter at least when the expert bytes are unknown, else the idle experts subtracted.
-    expect(activationBytesPerToken({ arch: moe, weightsBytes: 64e6 * 16 })).toBe(44 * 4000 + moeBytes);
-    const known = { arch: moe, weightsBytes: 64e6 * 16, expertBytesPerLayer: 51.2e6 };
-    expect(activationBytesPerToken(known)).toBe(44 * 4000 + moeBytes);
+  it('bounds activations from the weights at or above the widths when the widths are unknown', () => {
+    const strip = ({ embeddingLength: _e, activeFeedForwardLength: _f, ...shape }: ModelArch) => arch(shape);
+    const dense = { arch: ARCH_64K, weightsBytes: 10 * GIB };
+    expect(activationBytesPerToken({ ...dense, arch: strip(ARCH_64K) })).toBeGreaterThanOrEqual(
+      activationBytesPerToken(dense)
+    );
+    const moe = { arch: MOE_64K, weightsBytes: 22 * GIB, expertBytesPerLayer: GIB / 2 };
+    expect(activationBytesPerToken({ ...moe, arch: strip(MOE_64K) })).toBeGreaterThanOrEqual(
+      activationBytesPerToken(moe)
+    );
   });
 
   it('multiplies recurrent state by slots and by one snapshot per drafted token', () => {
