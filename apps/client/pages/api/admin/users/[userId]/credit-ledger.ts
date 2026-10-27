@@ -2,7 +2,6 @@ import {
   ADMIN_LEDGER_PAGE_SIZE,
   adminLedgerPageSchema,
   adminLedgerQuerySchema,
-  ApiKeyScope,
   BadRequestError,
   CreditHolderType,
   ForbiddenError,
@@ -30,7 +29,7 @@ type LedgerRequestQuery = { userId?: string | string[]; kind?: string; cursor?: 
  * current balance; kind-filtered pages are not contiguous, so only admin adjustments carry the
  * balance recorded when they were written.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler<{}, unknown, unknown, LedgerRequestQuery>(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
 

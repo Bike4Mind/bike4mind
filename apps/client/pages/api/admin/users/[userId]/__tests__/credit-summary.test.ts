@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope, BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({ summarize: vi.fn(), latestTopUp: vi.fn(), findUser: vi.fn() }));
 
@@ -59,7 +59,7 @@ afterEach(() => {
 
 describe('GET /api/admin/users/[userId]/credit-summary', () => {
   it('requires the ADMIN scope and rejects non-admins and bad users before any read', async () => {
-    expect((handler as unknown as { _config?: unknown })._config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect((handler as unknown as { _config?: unknown })._config).toEqual({ auth: 'jwtOnly' });
     await expect(run({}, { id: 'u2', isAdmin: false }).promise).rejects.toBeInstanceOf(ForbiddenError);
     await expect(run({ userId: '' }).promise).rejects.toBeInstanceOf(BadRequestError);
     await expect(run({ userId: 'ghost' }).promise).rejects.toBeInstanceOf(NotFoundError);

@@ -23,11 +23,15 @@ afterEach(async () => {
 
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000);
 
+// keyPrefix has a unique index, so every seeded key needs its own.
+let seeded = 0;
+
 const seedRevoked = async (overrides: Record<string, unknown> = {}) => {
+  seeded += 1;
   const doc = await UserApiKey.collection.insertOne({
     userId: 'owner-1',
     name: 'k',
-    keyPrefix: 'b4m_live_ab',
+    keyPrefix: `b4m_live_${seeded}`,
     status: ApiKeyStatus.DISABLED,
     revokedAt: minutesAgo(1),
     revokedBy: 'admin-1',

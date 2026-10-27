@@ -1,6 +1,5 @@
 import {
   adminCreditSummarySchema,
-  ApiKeyScope,
   BadRequestError,
   CreditHolderType,
   ForbiddenError,
@@ -19,7 +18,7 @@ import { respond } from '@server/utils/respond';
  * 90-day zero-filled daily spend series. Spend counts AI usage rows only (never transfers or
  * expiries), as magnitudes.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
 

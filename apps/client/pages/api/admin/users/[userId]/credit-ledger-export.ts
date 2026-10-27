@@ -1,7 +1,6 @@
 import {
   ADMIN_LEDGER_EXPORT_MAX_ROWS,
   adminLedgerQuerySchema,
-  ApiKeyScope,
   BadRequestError,
   CreditHolderType,
   ForbiddenError,
@@ -64,7 +63,7 @@ const toCsvLine = (row: AdminLedgerRow): string =>
  * the headers are long gone, so a truncated export ends with a `# Truncated at N rows` line instead
  * of an `X-Export-Truncated` header. Balance-after follows the same rule as the ledger route.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler<{}, unknown, unknown, { userId?: string | string[]; kind?: string }>(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
 

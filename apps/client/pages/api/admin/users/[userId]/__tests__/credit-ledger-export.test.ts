@@ -1,12 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import {
-  ADMIN_LEDGER_EXPORT_MAX_ROWS,
-  ApiKeyScope,
-  BadRequestError,
-  ForbiddenError,
-  NotFoundError,
-} from '@bike4mind/common';
+import { ADMIN_LEDGER_EXPORT_MAX_ROWS, BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   findLedgerPage: vi.fn(),
@@ -66,7 +60,7 @@ beforeEach(() => {
 
 describe('GET /api/admin/users/[userId]/credit-ledger-export', () => {
   it('requires the ADMIN scope and rejects non-admins and bad input before any read', async () => {
-    expect((handler as unknown as { _config?: unknown })._config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect((handler as unknown as { _config?: unknown })._config).toEqual({ auth: 'jwtOnly' });
     await expect(run({}, { id: 'u2', isAdmin: false }).promise).rejects.toBeInstanceOf(ForbiddenError);
     await expect(run({ kind: 'bogus' }).promise).rejects.toBeInstanceOf(BadRequestError);
     await expect(run({ userId: 'ghost' }).promise).rejects.toBeInstanceOf(NotFoundError);
