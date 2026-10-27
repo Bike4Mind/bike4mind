@@ -179,7 +179,10 @@ describe('validateAgentUpdate', () => {
   beforeEach(() => {
     getCallerModelList.mockReset();
     getCallerModelList.mockResolvedValue({
-      models: [{ id: 'gpt-6-astra' }, { id: 'catalog-image-model' }],
+      models: [
+        { id: 'gpt-6-astra', type: 'text' },
+        { id: 'catalog-image-model', type: 'image' },
+      ],
       supersededModels: [],
     });
   });
@@ -243,6 +246,21 @@ describe('validateAgentUpdate', () => {
       await expect(validateAgentUpdate({ preferredImageModel: 'img-nope' } as Partial<IAgent>, userId)).rejects.toThrow(
         /^Invalid image model: img-nope$/
       );
+    });
+
+    it('rejects a catalog chat model used as an image model, and an image model used as a chat model', async () => {
+      await expect(
+        validateAgentUpdate({ preferredImageModel: 'gpt-6-astra' } as Partial<IAgent>, userId)
+      ).rejects.toThrow(/^Invalid image model: gpt-6-astra$/);
+      await expect(
+        validateAgentUpdate({ preferredModel: 'catalog-image-model' } as Partial<IAgent>, userId)
+      ).rejects.toThrow(/^Invalid model: catalog-image-model$/);
+    });
+
+    it('passes the request logger to the catalog lookup', async () => {
+      const logger = { log: vi.fn() };
+      await validateAgentUpdate({ preferredModel: 'gpt-6-astra' } as Partial<IAgent>, userId, undefined, logger);
+      expect(getCallerModelList).toHaveBeenCalledWith(userId, logger);
     });
 
     it('skips the catalog lookup when the static enum already knows the model', async () => {
