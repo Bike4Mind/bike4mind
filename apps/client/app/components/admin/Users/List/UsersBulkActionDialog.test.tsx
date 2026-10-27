@@ -164,6 +164,25 @@ describe('UsersBulkActionDialog', () => {
     );
   });
 
+  it('shows the server error from the shared error envelope', async () => {
+    apiPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/preview')) return { data: preview() };
+      throw new AxiosError('Bad Request', '400', undefined, undefined, {
+        status: 400,
+        statusText: 'Bad Request',
+        data: { error: 'Reason is too long' },
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+      });
+    });
+    renderDialog('restrict');
+    await screen.findByTestId('admin-users-bulk-dry-run');
+    fireEvent.click(screen.getByTestId('admin-users-bulk-restrict-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('admin-users-bulk-restrict-confirm-btn'));
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Restrict failed: Reason is too long'));
+  });
+
   it('keeps the dialog open and re-counts when the cohort changed before commit', async () => {
     apiPost.mockImplementation(async (url: string) => {
       if (url.endsWith('/preview')) return { data: preview() };

@@ -11,6 +11,7 @@ import {
   type AdminUsersBulkPreview,
   type AdminUsersBulkTarget,
 } from '@client/app/utils/adminUsersBulk';
+import { getErrorMessage } from '@client/app/utils/error';
 import { ActionDialog } from '../../shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from '../../shared/adminReason';
 import { SegmentedControl } from '../../shared/SegmentedControl';
@@ -123,9 +124,6 @@ function buildAction(
   }
   return { type };
 }
-
-const errorMessage = (error: unknown) =>
-  isAxiosError<{ message?: string }>(error) ? (error.response?.data?.message ?? error.message) : String(error);
 
 function DryRunSummary({ preview, type }: { preview: AdminUsersBulkPreview; type: AdminUsersBulkActionType }) {
   const excluded = preview.excluded.self + preview.excluded.admins;
@@ -243,7 +241,7 @@ export function UsersBulkActionDialog({
         await preview.refetch();
         return;
       }
-      toast.error(`${copy.label} failed: ${errorMessage(error)}`);
+      toast.error(`${copy.label} failed: ${getErrorMessage(error)}`);
     }
   };
 
