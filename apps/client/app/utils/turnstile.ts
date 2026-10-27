@@ -8,6 +8,8 @@ type TurnstileApi = {
       sitekey: string;
       action: string;
       appearance: 'interaction-only';
+      theme: 'light' | 'dark';
+      'before-interactive-callback': () => void;
       callback: (token: string) => void;
       'error-callback': () => void;
       'expired-callback': () => void;
@@ -55,20 +57,36 @@ function loadTurnstile(): Promise<TurnstileApi> {
 
 /**
  * Solves a Turnstile challenge and resolves with a single-use token. The widget stays invisible
- * unless Cloudflare needs interaction, in which case it is shown in a centered overlay until solved.
+ * unless Cloudflare needs interaction, in which case it is shown in a card over a dimmed backdrop until solved.
  */
 export async function getTurnstileToken(siteKey: string, action: string): Promise<string> {
   const turnstile = await loadTurnstile();
 
+  const dark = document.documentElement.getAttribute('data-joy-color-scheme') === 'dark';
   const overlay = document.createElement('div');
   overlay.setAttribute('data-testid', 'turnstile-challenge-overlay');
   overlay.style.cssText =
     'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:2000;pointer-events:none';
+  const card = document.createElement('div');
+  card.setAttribute('data-testid', 'turnstile-challenge-card');
+  const message = document.createElement('p');
+  message.textContent = 'Quick security check - confirm you are human to get your sign-in code.';
+  message.style.cssText = 'display:none;margin:0 0 16px;font:14px/1.4 system-ui,sans-serif';
   const container = document.createElement('div');
   container.setAttribute('data-testid', 'turnstile-challenge-widget');
   container.style.pointerEvents = 'auto';
-  overlay.appendChild(container);
+  card.append(message, container);
+  overlay.appendChild(card);
   document.body.appendChild(overlay);
+
+  // The overlay stays bare and click-through on the invisible path; the backdrop and card only
+  // appear once Cloudflare decides the user must interact, so no empty modal flashes.
+  const showChrome = () => {
+    overlay.style.background = 'rgba(0,0,0,0.45)';
+    overlay.style.pointerEvents = 'auto';
+    card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-width:calc(100vw - 32px);text-align:center`;
+    message.style.display = 'block';
+  };
 
   let widgetId: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -83,6 +101,8 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
         sitekey: siteKey,
         action,
         appearance: 'interaction-only',
+        theme: dark ? 'dark' : 'light',
+        'before-interactive-callback': showChrome,
         callback: token => settle(() => resolve(token)),
         'error-callback': () => settle(() => reject(new Error('turnstile-error'))),
         'expired-callback': () => settle(() => reject(new Error('turnstile-expired'))),

@@ -2,7 +2,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getTurnstileToken } from './turnstile';
 
-type RenderOptions = { callback: (t: string) => void; 'error-callback': () => void; 'expired-callback': () => void };
+type RenderOptions = {
+  callback: (t: string) => void;
+  'error-callback': () => void;
+  'expired-callback': () => void;
+  'before-interactive-callback': () => void;
+};
 
 describe('getTurnstileToken', () => {
   const remove = vi.fn();
@@ -29,6 +34,45 @@ describe('getTurnstileToken', () => {
     expect(render.mock.calls[0][1]).toMatchObject({ sitekey: 'site', action: 'otc-send' });
     expect(remove).toHaveBeenCalledWith('widget-1');
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
+  it('shows the backdrop and card only once an interactive challenge is needed', async () => {
+    let opts: RenderOptions | undefined;
+    render.mockImplementation((_el: HTMLElement, o: RenderOptions) => {
+      opts = o;
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.waitFor(() => expect(opts).toBeDefined());
+    const overlay = document.querySelector<HTMLElement>('[data-testid="turnstile-challenge-overlay"]')!;
+    const card = document.querySelector<HTMLElement>('[data-testid="turnstile-challenge-card"]')!;
+    expect(overlay.style.pointerEvents).toBe('none');
+    expect(overlay.style.background).toBe('');
+    expect(card.textContent).toContain('security check');
+    expect(card.querySelector('p')!.style.display).toBe('none');
+
+    opts!['before-interactive-callback']();
+    expect(overlay.style.pointerEvents).toBe('auto');
+    expect(overlay.style.background).not.toBe('');
+    expect(card.style.borderRadius).toBe('12px');
+    expect(card.querySelector('p')!.style.display).toBe('block');
+
+    opts!.callback('tok-1');
+    await expect(pending).resolves.toBe('tok-1');
+    expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
+  it('matches the widget theme to the app color scheme', async () => {
+    document.documentElement.setAttribute('data-joy-color-scheme', 'dark');
+    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
+      queueMicrotask(() => opts.callback('tok-1'));
+      return 'widget-1';
+    });
+    await getTurnstileToken('site', 'otc-send');
+    document.documentElement.removeAttribute('data-joy-color-scheme');
+    await getTurnstileToken('site', 'otc-send');
+    expect(render.mock.calls[0][1]).toMatchObject({ theme: 'dark' });
+    expect(render.mock.calls[1][1]).toMatchObject({ theme: 'light' });
   });
 
   it('expires the challenge and removes its widget', async () => {
