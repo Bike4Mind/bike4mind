@@ -21,7 +21,7 @@ export function minifyRouterFunction(code: string): string {
 
 export const NOINDEX_HEADER_VALUE = 'noindex, nofollow';
 
-// Viewer-response snippet that keeps every non-production stage out of search indexes.
+// CloudFront skips viewer-response functions for origin errors and viewer-request responses.
 // Empty on production so its generated function stays byte-identical.
 export function noindexResponseInjection(stage: string): string {
   if (stage === 'production') return '';

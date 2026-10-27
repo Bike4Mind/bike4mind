@@ -9,11 +9,13 @@ import { minifyRouterFunction, noindexResponseInjection } from '../routerFunctio
 // infra/router.ts only loads inside `sst`, so wiring is asserted against its source text.
 const router = readFileSync(new URL('../router.ts', import.meta.url), 'utf8');
 
-const run = (stage: string) => {
+const run = (stage: string, headers: Record<string, { value: string }> = {}) => {
   const code = minifyRouterFunction(
     `(function(event) { ${noindexResponseInjection(stage)}; return event.response; })(event)`
   );
-  return runInNewContext(code, { event: { response: { headers: { 'cache-control': { value: 'no-store' } } } } });
+  return runInNewContext(code, {
+    event: { response: { headers: { 'cache-control': { value: 'no-store' }, ...headers } } },
+  });
 };
 
 describe('router noindex injection', () => {
@@ -24,6 +26,18 @@ describe('router noindex injection', () => {
 
   it.each(['dev', 'pr1234', 'shared-dev', 'someone'])('sets x-robots-tag noindex, nofollow on stage %s', stage => {
     expect(run(stage).headers['x-robots-tag']).toEqual({ value: 'noindex, nofollow' });
+  });
+
+  it('replaces an origin indexing opt-in on non-production stages', () => {
+    expect(run('dev', { 'x-robots-tag': { value: 'index, follow' } }).headers['x-robots-tag']).toEqual({
+      value: 'noindex, nofollow',
+    });
+  });
+
+  it('preserves the origin indexing policy on production', () => {
+    expect(run('production', { 'x-robots-tag': { value: 'index, follow' } }).headers['x-robots-tag']).toEqual({
+      value: 'index, follow',
+    });
   });
 
   it('leaves other response headers alone', () => {
