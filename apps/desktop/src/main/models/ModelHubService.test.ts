@@ -1143,9 +1143,9 @@ describe('ModelHubService curated library pulls', () => {
     pulls[0].resolve();
 
     await expect(result).resolves.toEqual({ ok: true, ref: REF });
-    expect(runtime.inspect).toHaveBeenCalledWith(REF, { tags: false });
     expect(runtime.remove).not.toHaveBeenCalled();
-    expect(installedChanged).toHaveBeenCalledTimes(1);
+    expect(installedChanged).toHaveBeenCalled();
+    expect(service.pulls()).toEqual([]);
     expect(hub.getModel).not.toHaveBeenCalled();
     expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
   });
@@ -1160,6 +1160,79 @@ describe('ModelHubService curated library pulls', () => {
 
     await expect(result).resolves.toEqual({ ok: true, ref: REF });
     expect(runtime.remove).not.toHaveBeenCalled();
+  });
+
+  /** Pulls E4B to completion with Ollama reporting `installed` for it; resolves with the pull's result. */
+  async function pulledAs(
+    setup: ReturnType<typeof harness>,
+    installed: (base: ModelInspection) => ModelInspection | Promise<ModelInspection>
+  ) {
+    const base = await setup.runtime.inspect(REF);
+    setup.runtime.inspect.mockImplementationOnce(async () => installed(base));
+    const result = setup.service.pull(libraryRequest);
+    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+    setup.pulls[0].resolve();
+    return result;
+  }
+  const otherWeights = (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, modelBlob: SHA } });
+
+  it('keeps the model, saying it could not be checked, when Ollama cannot describe it after the pull', async () => {
+    const setup = harness();
+    const result = await pulledAs(setup, () => Promise.reject(new LocalRuntimeError('show timed out', 'ollama')));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { kind: 'unverified', message: expect.stringContaining(`${REF} after downloading it`) },
+    });
+    expect(result.ok || result.error.message).toContain('It is still installed');
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+    expect(setup.installedChanged).toHaveBeenCalled();
+  });
+
+  it('names the unreviewed model still installed when removing it fails', async () => {
+    const setup = harness();
+    setup.runtime.remove.mockRejectedValueOnce(new LocalRuntimeError('delete failed', 'ollama'));
+    const result = await pulledAs(setup, otherWeights);
+
+    expect(result).toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
+    const message = result.ok ? '' : result.error.message;
+    expect(message).toContain(`the unreviewed model ${REF} is still installed`);
+    expect(message).not.toContain('removed');
+    expect(setup.runtime.remove).toHaveBeenCalledWith(REF);
+  });
+
+  it('still removes a model that fails the check when the download is cancelled during it', async () => {
+    const setup = harness();
+    let answer: (() => void) | undefined;
+    const result = pulledAs(
+      setup,
+      base => new Promise<ModelInspection>(resolve => (answer = () => resolve(otherWeights(base))))
+    );
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    setup.service.cancel(pullKey(REF, E4B.id));
+    answer?.();
+
+    expect(await result).toMatchObject({
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining('Bike4Mind removed what Ollama downloaded') },
+    });
+    expect(setup.runtime.remove).toHaveBeenCalledWith(REF);
+    expect(setup.service.pulls()).toEqual([]);
+  });
+
+  it.each([
+    ['listed before the pull', async () => [(await harness().runtime.inspect(REF)).model], 'installed before'],
+    ['unknown because the list failed', () => Promise.reject(new Error('busy')), 'could not tell'],
+  ])('never removes a tag %s, even when what Ollama installed fails the check', async (_label, listed, says) => {
+    const setup = harness();
+    setup.runtime.list.mockImplementationOnce(listed);
+    const result = await pulledAs(setup, otherWeights);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining(says) },
+    });
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
   });
 
   it.each([

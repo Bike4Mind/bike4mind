@@ -534,27 +534,43 @@ export class ModelHubService {
   }
 
   /**
-   * After a curated pull: removes the model unless Ollama installed the reviewed build, since the registry can
-   * change between the check and Ollama's own manifest read.
+   * After a curated pull: removes the model only when Ollama definitely installed something other than the reviewed
+   * build, since the registry can change between the check and Ollama's own read, and never a tag it already had.
    */
-  async #checkInstalled(reviewed: HubBuild, ref: string): Promise<ModelHubError | null> {
-    let error: ModelHubError | null = null;
+  async #checkInstalled(reviewed: HubBuild, ref: string, hadTag: boolean | null): Promise<ModelHubError | null> {
+    let inspection: ModelInspection;
     try {
-      const inspection = await this.#deps.runtime.inspect(ref, { tags: false });
-      if (!installedReviewed(inspection, reviewed))
-        error = hubError(
-          'upstream-changed',
-          `${LAYERS_CHANGED} Bike4Mind removed what Ollama downloaded.${libraryOf(reviewed) ? '' : EXPLORE_HINT}`
-        );
+      inspection = await this.#deps.runtime.inspect(ref, { tags: false });
     } catch {
-      error = hubError(
-        'failed',
-        'Ollama could not describe the downloaded model, so Bike4Mind could not check it against the reviewed ' +
-          'build and removed it. Download it again.'
+      return hubError(
+        'unverified',
+        `Ollama could not describe ${ref} after downloading it, so Bike4Mind could not check it against the ` +
+          'reviewed build. It is still installed; remove it from Installed unless you trust it.'
       );
     }
-    if (error) await this.#deps.runtime.remove(ref).catch(() => undefined);
-    return error;
+    if (installedReviewed(inspection, reviewed)) return null;
+    const changed = (outcome: string) =>
+      hubError('upstream-changed', `${LAYERS_CHANGED} ${outcome}${libraryOf(reviewed) ? '' : EXPLORE_HINT}`);
+    if (hadTag !== false)
+      return changed(
+        hadTag
+          ? `${ref} was installed before this download, so Bike4Mind left it in place.`
+          : `Bike4Mind could not tell whether ${ref} was installed before this download, so it left it in place.`
+      );
+    try {
+      await this.#deps.runtime.remove(ref);
+    } catch {
+      return changed(
+        `Bike4Mind could not remove it, so the unreviewed model ${ref} is still installed. Remove it from Installed.`
+      );
+    }
+    return changed('Bike4Mind removed what Ollama downloaded.');
+  }
+
+  /** Whether Ollama lists `ref`; null when the list cannot be read. */
+  async #hasTag(ref: string): Promise<boolean | null> {
+    const models = await this.#deps.runtime.list().catch(() => null);
+    return models && models.some(model => model.name.toLowerCase() === ref.toLowerCase());
   }
 
   #curatedBuild(entry: HubEntry, build: HubBuild, sizing: Sizing, version: string | null) {
@@ -797,6 +813,8 @@ export class ModelHubService {
     if (!prepared.ok) return prepared.listed ? this.#fail(key, entry, prepared.error) : refuse(prepared.error);
     const { ref } = prepared;
 
+    const hadTag = curated ? await this.#hasTag(ref) : null;
+    if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
     entry.view = { ...entry.view, ref, phase: 'downloading' };
     this.#push(true);
     try {
@@ -818,7 +836,7 @@ export class ModelHubService {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       return this.#fail(key, entry, pullEofError(error, ref) ?? toModelHubError(error));
     }
-    const installed = curated ? await this.#checkInstalled(curated.build, ref) : null;
+    const installed = curated ? await this.#checkInstalled(curated.build, ref, hadTag) : null;
     this.#deps.onInstalledChanged();
     if (installed) return refuse(installed);
     this.#drop(key, entry);
