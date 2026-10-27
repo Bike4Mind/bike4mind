@@ -41,7 +41,10 @@ export type ActionDialogProps = {
   reasonPresets: readonly string[];
   /** Repeats the consequence where it helps: "Set balance to 0". */
   confirmLabel: string;
-  /** Receives the composed audit reason. The caller closes the dialog once the write succeeds. */
+  /**
+   * Receives the composed audit reason. The caller closes the dialog once the write succeeds and
+   * surfaces its own failures: a rejection is not caught here and leaves the dialog open.
+   */
   onConfirm: (reason: string) => void | Promise<void>;
   /** Solid danger is reserved for this final confirm of a destructive command. */
   tone?: 'neutral' | 'danger';
