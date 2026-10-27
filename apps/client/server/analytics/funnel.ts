@@ -216,18 +216,21 @@ export async function recordFirstValue(opts: {
     const res = await User.updateOne({ _id: opts.user.id, firstValueAt: null }, { $set: { firstValueAt: now } });
     if (res.modifiedCount !== 1) return false;
     await opts.onRecorded?.();
-    await rewardInviterForFirstAnswer(opts.user.id);
     const createdAt = opts.user.createdAt ? new Date(opts.user.createdAt).getTime() : NaN;
-    return await emitFunnelEvent({
-      user: opts.user,
-      event: 'first_value',
-      metadata: {
-        feature: opts.feature,
-        ...(Number.isFinite(createdAt) && {
-          secondsSinceSignup: Math.max(0, Math.round((now.getTime() - createdAt) / 1000)),
-        }),
-      },
-    });
+    const [emitted] = await Promise.all([
+      emitFunnelEvent({
+        user: opts.user,
+        event: 'first_value',
+        metadata: {
+          feature: opts.feature,
+          ...(Number.isFinite(createdAt) && {
+            secondsSinceSignup: Math.max(0, Math.round((now.getTime() - createdAt) / 1000)),
+          }),
+        },
+      }),
+      rewardInviterForFirstAnswer(opts.user.id),
+    ]);
+    return emitted;
   } catch (err) {
     console.warn('[b4m-analytics] first_value not recorded', err instanceof Error ? err.message : err);
     return false;
