@@ -458,6 +458,13 @@ describe('SmartChunker', () => {
       expect(out).toContain('payload');
     });
 
+    it('falls back to BOM-free text chunking for a BOM-prefixed file that is not JSON', async () => {
+      const out = await chunkTexts('\uFEFF{"a": nope, "note": "bom fallback"}');
+
+      expect(out).toContain('bom fallback');
+      expect(out).not.toContain('\uFEFF');
+    });
+
     it('falls back to text chunking for a file that is not JSON', async () => {
       const out = await chunkTexts('{"a": nope, "note": "still searchable"}');
 
