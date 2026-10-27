@@ -93,6 +93,7 @@ export async function runNoCardUnlock(reason: NoCardUnlockReason, userId: string
     },
     validators,
     withTransaction,
+    settings,
   });
 
   if (result.granted) {

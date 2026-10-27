@@ -211,6 +211,7 @@ export interface GrantNoCardUnlockAdapters {
   };
   validators: Record<NoCardUnlockReason, NoCardUnlockValidator>;
   withTransaction: <T>(fn: () => Promise<T>) => Promise<T>;
+  settings?: NoCardUnlockSettings;
 }
 
 const refused = (refusal: NoCardUnlockRefusal): GrantNoCardUnlockResult => ({ granted: false, refusal });
@@ -218,9 +219,9 @@ const refused = (refusal: NoCardUnlockRefusal): GrantNoCardUnlockResult => ({ gr
 export async function grantNoCardUnlock(
   userId: string,
   reason: NoCardUnlockReason,
-  { db, validators, withTransaction }: GrantNoCardUnlockAdapters
+  { db, validators, withTransaction, settings: preloaded }: GrantNoCardUnlockAdapters
 ): Promise<GrantNoCardUnlockResult> {
-  const settings = await loadNoCardUnlockSettings(db.adminSettings);
+  const settings = preloaded ?? (await loadNoCardUnlockSettings(db.adminSettings));
   if (!settings.enabled) return refused('disabled');
 
   const reasonCredits = reason === 'github_verified' ? settings.githubCredits : settings.workEmailCredits;
