@@ -44,6 +44,18 @@ Each request is charged to your personal credit balance, or to your organization
 
 Either way, top up your balance (or ask your organization admin to raise the cap) before you retry. Retrying unchanged will fail again.
 
+### Free-tier daily allowance
+
+When credit enforcement is enabled, free-tier accounts also have a daily personal-spend allowance.
+Once your recorded spend reaches it, new requests return HTTP 429 with
+`errorCode: "daily_free_limit_reached"` and a `Retry-After` header in seconds until midnight UTC.
+The request that crosses the allowance is allowed to finish; concurrent requests can overshoot it.
+
+The default allowance is 500 credits for accounts under 24 hours old, 300 credits from 24 hours
+to under seven days old, and 200 credits thereafter. Your deployment administrator can change
+these limits. Paid ladder-tier subscribers and organization-billed requests are exempt; organization
+spend does not count toward your personal allowance. See [Troubleshooting](./errors.md#daily-free-tier-limit).
+
 ## Rate limits and size
 
 Each API key has a per-minute and a per-day request limit; the in-app reference lists the defaults. Exceeding either returns `429` with a `Retry-After` header in seconds. On this endpoint the `X-RateLimit-Limit-*`, `X-RateLimit-Remaining-*` and `X-RateLimit-Reset-*` headers (`Minute` and `Day` variants, reset as Unix epoch seconds) are sent only on an API-key `429`, not on successful responses. A request body over the size limit returns `413`. The in-app reference describes the limits shared across endpoints: [https://app.bike4mind.com/api/v1/docs](https://app.bike4mind.com/api/v1/docs).

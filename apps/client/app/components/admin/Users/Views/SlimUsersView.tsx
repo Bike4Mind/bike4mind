@@ -157,19 +157,25 @@ const PageCheckbox: React.FC<{ users: AdminUserListItem[]; selection: UserSelect
   );
 };
 
+// One table surface (DESIGN_GUIDE.md, "Tables"): a 38px header and 56px rows split by 1px lines.
+const ROW_SX = {
+  px: 1.5,
+  borderBottom: '1px solid',
+  borderColor: 'admin.border',
+  display: 'flex',
+  alignItems: 'center',
+} as const;
+
 const SlimUsersViewHeader: React.FC<SlimUsersContainerProps> = ({ users, selection }) => (
-  <Card
-    variant="outlined"
+  <Box
+    role="row"
     sx={{
-      mb: 1,
-      width: '100%',
-      bgcolor: 'background.surface',
-      p: 1,
+      ...ROW_SX,
+      minHeight: 38,
+      bgcolor: 'admin.surfaceSubtle',
       position: 'sticky',
       top: 0,
       zIndex: 1,
-      borderBottom: 2,
-      borderColor: 'divider',
     }}
   >
     <Grid container spacing={2} sx={{ width: '100%' }} alignItems="center">
@@ -189,25 +195,25 @@ const SlimUsersViewHeader: React.FC<SlimUsersContainerProps> = ({ users, selecti
         <Grid key={label} xs={width}>
           <Stack direction="row" spacing={1} alignItems="center">
             {label === 'Name' && selection && <PageCheckbox users={users} selection={selection} />}
-            <Typography level="title-sm" sx={{ fontWeight: 600, color: 'text.primary', ...ELLIPSIS_SX }}>
+            <Typography level="body-xs" role="columnheader" sx={{ color: 'admin.inkMuted', ...ELLIPSIS_SX }}>
               {label}
             </Typography>
           </Stack>
         </Grid>
       ))}
     </Grid>
-  </Card>
+  </Box>
 );
 
-const SlimUsersView: React.FC<SlimUsersViewProps> = ({ user, index, selection }) => (
-  <Card
-    variant="outlined"
+const SlimUsersView: React.FC<Omit<SlimUsersViewProps, 'index'>> = ({ user, selection }) => (
+  <Box
+    role="row"
     data-testid="admin-user-card"
     sx={{
-      mb: 1,
-      width: '100%',
-      bgcolor: index % 2 ? 'background.level1' : 'background.level2',
-      p: 1,
+      ...ROW_SX,
+      minHeight: 56,
+      '&:last-of-type': { borderBottom: 0 },
+      '&:hover': { bgcolor: 'admin.surfaceSubtle' },
     }}
   >
     <Grid container spacing={2} sx={{ width: '100%' }} alignItems="center">
@@ -281,7 +287,7 @@ const SlimUsersView: React.FC<SlimUsersViewProps> = ({ user, index, selection })
         <UserActions userId={user.id} />
       </Grid>
     </Grid>
-  </Card>
+  </Box>
 );
 
 /**
@@ -331,12 +337,12 @@ const SlimUsersContainer: React.FC<SlimUsersContainerProps> = ({ users, selectio
   }
 
   return (
-    <>
+    <Card variant="outlined" role="table" aria-label="Users" sx={{ p: 0, gap: 0, overflow: 'clip' }}>
       <SlimUsersViewHeader users={users} selection={selection} />
-      {users.map((user, index) => (
-        <SlimUsersView user={user} index={index} key={user.id} selection={selection} />
+      {users.map(user => (
+        <SlimUsersView user={user} key={user.id} selection={selection} />
       ))}
-    </>
+    </Card>
   );
 };
 

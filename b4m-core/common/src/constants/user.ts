@@ -63,3 +63,11 @@ export const GRANDFATHERED_POLICY_VERSION = 'grandfathered';
 
 /** Shared challenge action for requesting an email login code. */
 export const TURNSTILE_ACTION_OTC_SEND = 'otc-send';
+
+/**
+ * Entitlement key held by a user with an active paid ladder plan (Basic or Pro, org seats included).
+ * Derived only from subscriptions in apps/client/server/entitlements/index.ts, never from a tag,
+ * partner rule or contribution (reserved in isReservedContributionKey). The free-tier model gate in
+ * b4m-core/services/src/llm/modelAdmission.ts reads it.
+ */
+export const PAID_PLAN_ENTITLEMENT_KEY = 'plan:paid';

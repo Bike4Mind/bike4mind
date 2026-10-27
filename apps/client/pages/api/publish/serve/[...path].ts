@@ -960,6 +960,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       // inlined as on the buffered path, while it fits.
       manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path) && !signed.has(f.path)),
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
+      // index.html ships inside a double-quoted srcdoc attribute: `&` and `"` grow (see renderBundleWrapper)
+      reservedBytes: Buffer.byteLength(indexHtml.replace(/&/g, '&amp;').replace(/"/g, '&quot;')),
     });
     inlineAssets = collected.assets;
     for (const path of collected.oversized.filter(p => inlineTypeFor(p)?.startsWith('image/'))) {

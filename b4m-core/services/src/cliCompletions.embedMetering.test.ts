@@ -4,6 +4,12 @@ import { CreditHolderType } from '@bike4mind/common';
 // enforceCredits is read via getSettingsValue; make it controllable per test.
 let enforceCredits = true;
 
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 // Keep the real pure cap helpers (isMemberCreditCapExceeded etc.); only stub the write.
 vi.mock('./creditService', async importOriginal => ({

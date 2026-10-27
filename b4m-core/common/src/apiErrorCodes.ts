@@ -2,8 +2,10 @@ export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
+export const MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE = 'model_requires_subscription';
 export const BILLING_ORGANIZATION_MISMATCH_ERROR_CODE = 'billing_organization_mismatch';
 export const REQUEST_TIMEOUT_ERROR_CODE = 'request_timeout';
+export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
@@ -32,12 +34,16 @@ export const API_ERROR_CODES = [
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */
   'spend_cap_exceeded',
+  /** A free-tier user spent their daily credit allowance; remediation is waiting for UTC midnight or upgrading. */
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   /** WE have no usable key for the provider. Do not confuse with the next one. */
   'provider_not_configured',
   /** The provider REFUSED the key we sent. */
   'provider_rejected',
   /** The `model` is not one this caller can use; remediation is choosing an id from GET /api/v1/models. */
   UNKNOWN_MODEL_ERROR_CODE,
+  /** The model is outside the free-tier allowlist; remediation is a paid plan or a model from GET /api/v1/models. */
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
   /** An organization-billed API key named a different billing organization; remediation is omitting it. */
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   /** A blocking request ran past its server-side deadline; the turn was ended and the body names it for polling. */

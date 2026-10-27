@@ -168,7 +168,12 @@ import {
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
-import { createModelAdmission, loadModelConfigurations, type ModelAdmission } from './modelAdmission';
+import {
+  createModelAdmission,
+  loadFreeTierAllowedModels,
+  loadModelConfigurations,
+  type ModelAdmission,
+} from './modelAdmission';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
@@ -2543,9 +2548,14 @@ export class ChatCompletionProcess {
       this.modelAdmission = createModelAdmission({
         user: this.user,
         configs: await loadModelConfigurations(this.db.adminSettings),
-        getEntitlements: async () => (await this.resolveEntitlementKeys()).keys,
+        getEntitlements: async () => {
+          const { keys, resolved } = await this.resolveEntitlementKeys();
+          if (!resolved) throw new Error('entitlement resolution failed');
+          return keys;
+        },
         models,
         enforceCredits: getSettingsValue('enforceCredits', defaultAdminSettings) === true,
+        freeTierAllowedModels: await loadFreeTierAllowedModels(this.db.adminSettings),
       });
       // Always the final id, remapped or not: /api/chat admits the requested model in
       // ChatCompletionInvoke, but the quest/Slack queue handlers construct this class directly.

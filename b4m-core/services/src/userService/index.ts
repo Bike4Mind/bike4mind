@@ -30,3 +30,5 @@ export * from './accountState';
 export * from './flagDisputePending';
 export * from './requestModerationAppeal';
 export * from './usagePatternSignals';
+export * from './signupClusterKeys';
+export * from './signupCohorts';

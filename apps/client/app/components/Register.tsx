@@ -46,6 +46,7 @@ import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { CURRENT_POLICY_VERSION, FirstRunEvents, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { useJoinWaitlist } from '@client/app/hooks/useJoinWaitlist';
 
 const registerSchema = z.object({
   // Same rules the server enforces in registerUser.
@@ -66,6 +67,7 @@ type RegisterStep = 'form' | 'otc';
 const Register: React.FC = () => {
   const { setCurrentUser, currentUser } = useUser();
   const navigate = useNavigate();
+  const joinWaitlist = useJoinWaitlist();
   const router = useRouter();
   const theme = useTheme();
   const { t } = useTranslation();
@@ -613,6 +615,19 @@ const Register: React.FC = () => {
                         onChange={e => setInviteCode(e.target.value)}
                         sx={inputStyles}
                       />
+                      {registrationClosed && (
+                        <Typography level="body-xs" sx={{ mt: '6px', color: 'text.tertiary' }}>
+                          {t('auth.noInviteCode')}{' '}
+                          <Link
+                            component="button"
+                            type="button"
+                            data-testid="register-join-waitlist-link"
+                            onClick={() => joinWaitlist('register_signup_closed', emailValue)}
+                          >
+                            {t('auth.joinWaitlist')}
+                          </Link>
+                        </Typography>
+                      )}
                     </FormControl>
 
                     {/* P0-B abuse gate: AUP/ToS acceptance + 18+ attestation. Both are

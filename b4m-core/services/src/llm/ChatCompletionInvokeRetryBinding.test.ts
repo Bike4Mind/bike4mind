@@ -3,6 +3,12 @@ import { NotFoundError } from '@bike4mind/utils';
 
 // Only the two collaborators that reach out of process need mocking; the error classes and
 // helpers from @bike4mind/utils stay real so the code under test behaves normally.
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('../apiKeyService', () => ({
   getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}),
 }));
