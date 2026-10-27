@@ -14,6 +14,7 @@ import {
   type InstalledModel,
   type LoadedModel,
   type PullOptions,
+  type PullProgress,
   type RuntimeHealth,
 } from '@bike4mind/local-models';
 import {
@@ -137,6 +138,7 @@ function blockedReason(detail: HubModelDetail, build: HubGgufBuild): string | nu
   if (!build.complete) return 'Some of its files are missing from the repo.';
   if (build.ollamaRefIssue === 'no-quant-label') return 'Its file name has no quant label Ollama can pull by.';
   if (build.ollamaRefIssue === 'unsupported-name') return "Its repo or file name breaks Ollama's naming rules.";
+  if (build.ollamaRefIssue === 'unsupported-quant') return 'Ollama cannot pull this quant from Hugging Face yet.';
   if (!build.files[0]?.sha256)
     return detail.ollamaNeedsSshKey
       ? 'Needs access: Hugging Face hides this file until your account is granted access.'
@@ -283,7 +285,7 @@ export class ModelHubService {
     try {
       // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
       const detail = await this.#deps.hub.getModel(request.repo);
-      const build = detail.builds.find(candidate => candidate.id === request.buildId);
+      const build = detail.builds.find((candidate: HubGgufBuild) => candidate.id === request.buildId);
       if (!build) return refuse(hubError('not-found', 'That build is no longer in this repo.'));
       if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)
         return refuse(hubError('changed', 'This repo changed since you reviewed it. Review it again, then download.'));
@@ -320,7 +322,7 @@ export class ModelHubService {
     try {
       await this.#deps.runtime.pull(ref, {
         signal: controller.signal,
-        onProgress: progress => {
+        onProgress: (progress: PullProgress) => {
           const phase = phaseOf(progress.status);
           const changed = phase !== entry.view.phase;
           entry.view = {

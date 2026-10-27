@@ -20,3 +20,6 @@ export * from './ActionDialog';
 export * from './AdminDialog';
 export * from './UndoToast';
 export * from './matchSavedView';
+export * from './SegmentedControl';
+export * from './ChangePreview';
+export * from './Kbd';

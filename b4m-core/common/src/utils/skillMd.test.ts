@@ -8,6 +8,7 @@ import {
   b4mOnlyHints,
   buildClaudeCodeInstallCommand,
   parseSkillMd,
+  referencedRelativePaths,
   toSkillMd,
   SKILL_MD_THIRD_PARTY_NOTE,
   type SkillMdSkill,
@@ -86,10 +87,51 @@ describe('parseSkillMd', () => {
         description: 'Review a PR',
         argumentHint: '[pr]',
         disableModelInvocation: true,
+        claudeCodeAllowedTools: ['Bash', 'Read'],
         body: 'Do it.',
       },
-      dropped: ['allowed-tools', 'model', 'hooks'],
+      dropped: ['model', 'hooks'],
     });
+  });
+
+  it.each([
+    ['a comma string', 'allowed-tools: Bash(git:*), Read', ['Bash(git:*)', 'Read']],
+    [
+      'a space string with a space inside parens',
+      'allowed-tools: Bash(git add:*) Read Grep',
+      ['Bash(git add:*)', 'Read', 'Grep'],
+    ],
+    ['a YAML list', 'allowed-tools:\n  - Bash(gh pr view:*)\n  - Read', ['Bash(gh pr view:*)', 'Read']],
+    ['a YAML list entry packing several tools', 'allowed-tools:\n  - "Read(x), Bash"', ['Read(x)', 'Bash']],
+    ['an unclosed paren', 'allowed-tools: Read, Bash(git add', ['Read', 'Bash(git add']],
+  ])('keeps allowed-tools given as %s', (_label, line, expected) => {
+    const result = parseSkillMd(`---\nname: x\n${line}\n---\nDo it.`);
+    expect(result).toMatchObject({ ok: true, fields: { claudeCodeAllowedTools: expected }, dropped: [] });
+  });
+
+  it('does not report an empty allowed-tools list as dropped', () => {
+    expect(parseSkillMd('---\nname: x\nallowed-tools: []\n---\nDo it.')).toMatchObject({ ok: true, dropped: [] });
+  });
+
+  it('reports an allowed-tools value it cannot read as dropped', () => {
+    const result = parseSkillMd('---\nname: x\nallowed-tools:\n  bash: yes\n---\nDo it.');
+    expect(result).toMatchObject({ ok: true, dropped: ['allowed-tools'] });
+    expect(result.ok && result.fields.claudeCodeAllowedTools).toBeUndefined();
+  });
+
+  it('round-trips allowed-tools through toSkillMd, never writing B4M allowedTools', () => {
+    const md = toSkillMd({
+      name: 'commit',
+      description: 'Commit',
+      body: 'Do it.',
+      claudeCodeAllowedTools: ['Bash(git add:*)', 'Read'],
+    });
+    expect(md).toContain('allowed-tools: Bash(git add:*), Read');
+    const parsed = parseSkillMd(md);
+    expect(parsed.ok && parsed.fields.claudeCodeAllowedTools).toEqual(['Bash(git add:*)', 'Read']);
+    expect(toSkillMd({ name: 'x', description: 'y', body: 'z', claudeCodeAllowedTools: [] })).not.toContain(
+      'allowed-tools'
+    );
   });
 
   it.each([
@@ -245,6 +287,27 @@ describe('frontmatterHasSourceStamp', () => {
     const result = parseSkillMd(text);
     expect(result.ok).toBe(true);
     expect(result.ok && result.source).toBeUndefined();
+  });
+});
+
+describe('referencedRelativePaths', () => {
+  it('finds relative link targets and bare script/doc paths, ignoring URLs, anchors and absolute paths', () => {
+    const body = [
+      'Run `scripts/lint.sh` then ./tools/fix.py.',
+      'See [the guide](reference.md#setup) and ![chart](img/chart.png).',
+      'Not these: [site](https://example.test/a/install.sh), [top](#usage), [root](/etc/x.md), mailto:[a](mailto:a@b.test).',
+      'Nor package.json or Node.js in prose; scripts/lint.sh again.',
+    ].join('\n');
+    expect(referencedRelativePaths(body)).toEqual([
+      'reference.md',
+      'img/chart.png',
+      'scripts/lint.sh',
+      './tools/fix.py',
+    ]);
+  });
+
+  it('returns nothing for a self-contained body', () => {
+    expect(referencedRelativePaths('Summarize the diff in three bullets.')).toEqual([]);
   });
 });
 

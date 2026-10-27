@@ -8,6 +8,8 @@ import {
   ChatWaitResponseSchema,
   ChatQuestPollResultSchema,
   ChatWaitTimeoutErrorSchema,
+  ChatWaitUnprocessableErrorSchema,
+  ChatWaitUpstreamErrorSchema,
   ApiErrorSchema,
 } from '../../schemas/chat';
 
@@ -27,7 +29,7 @@ export const chatContract = defineEndpoint({
     'returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send ' +
     '`wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is ' +
     'bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and ' +
-    'answered with a 504 naming the quest in `quest_id`. Send long or tool-heavy turns (large ' +
+    'answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large ' +
     'attachments, tool calls) in the default async mode and poll instead. A tool that produced ' +
     'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
@@ -76,7 +78,8 @@ export const chatContract = defineEndpoint({
         'states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` ' +
         'with `type` left at `"message"`, and a recovered stuck quest that still has renderable ' +
         'content resolves as a success (`status: "done"`, no error) by design, to avoid destroying ' +
-        'content to report a failure. ' +
+        'content to report a failure. The one exception is output-budget exhaustion: a `wait: true` ' +
+        'request answers it with the 422 or 502 error envelope (plus `quest_id`) instead of this body. ' +
         '`errorCode` then names the failure reason, but only for the billing failures that have one - ' +
         '`"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use ' +
         'its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` ' +
@@ -129,14 +132,23 @@ export const chatContract = defineEndpoint({
     422: {
       description:
         'Request body failed schema validation, or `sessionId` and `newConversation: true` were sent ' +
-        'together (they are mutually exclusive).',
-      schema: ApiErrorSchema,
+        'together (they are mutually exclusive). A `wait: true` turn whose `max_tokens` a reasoning ' +
+        'model spent entirely on thinking is `errorCode: output_budget_exhausted`; `quest_id` names ' +
+        'the settled quest. Raise `max_tokens` or omit it.',
+      schema: ChatWaitUnprocessableErrorSchema,
     },
     429: {
       description:
         'Per-user rate limit exceeded. A free-tier daily credit cap hit is distinguished by ' +
         '`errorCode: daily_free_limit_reached` and a `Retry-After` header until the next UTC midnight.',
       schema: ApiErrorSchema,
+    },
+    502: {
+      description:
+        'A `wait: true` turn failed upstream: a reasoning model spent the whole server-chosen output ' +
+        'budget thinking and produced no answer. The quest (`quest_id`) is settled as an error. An unchanged retry is likely to fail the same way; ' +
+        'a shorter prompt or an explicit `max_tokens` may help.',
+      schema: ChatWaitUpstreamErrorSchema,
     },
     504: {
       description:

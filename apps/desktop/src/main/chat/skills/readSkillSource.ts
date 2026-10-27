@@ -29,7 +29,7 @@ export async function readSkillSource(path: string): Promise<SkillUploadPreview>
     const others = isSkillMd
       ? (await readdir(dirname(file))).filter(name => name !== SKILL_MD && !name.startsWith('.')).sort()
       : [];
-    const { name, description, body, argumentHint, disableModelInvocation } = parsed.fields;
+    const { name, description, body, argumentHint, claudeCodeAllowedTools, disableModelInvocation } = parsed.fields;
     return {
       ok: true,
       fields: {
@@ -37,6 +37,7 @@ export async function readSkillSource(path: string): Promise<SkillUploadPreview>
         description: description ?? '',
         body: body ?? '',
         ...(argumentHint !== undefined ? { argumentHint } : {}),
+        ...(claudeCodeAllowedTools !== undefined ? { claudeCodeAllowedTools } : {}),
         ...(disableModelInvocation !== undefined ? { disableModelInvocation } : {}),
       },
       dropped: parsed.dropped,

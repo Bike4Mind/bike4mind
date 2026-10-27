@@ -11,6 +11,7 @@ import {
   validateSkillBody,
   validateSkillArgumentHint,
   validateSkillAllowedTools,
+  validateSkillClaudeCodeAllowedTools,
 } from '@server/utils/skillValidation';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import {
@@ -59,6 +60,9 @@ const handler = baseApi()
     if (body.body !== undefined) patch.body = validateSkillBody(body.body);
     if (body.argumentHint !== undefined) patch.argumentHint = validateSkillArgumentHint(body.argumentHint);
     if (body.allowedTools !== undefined) patch.allowedTools = validateSkillAllowedTools(body.allowedTools);
+    if (body.claudeCodeAllowedTools !== undefined) {
+      patch.claudeCodeAllowedTools = validateSkillClaudeCodeAllowedTools(body.claudeCodeAllowedTools);
+    }
     if (body.disableModelInvocation !== undefined) {
       patch.disableModelInvocation = Boolean(body.disableModelInvocation);
     }

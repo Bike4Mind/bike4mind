@@ -26,6 +26,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
+const mockAudit = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+
 let userIdPage: Array<{ _id: string }> = [];
 const mockAggregate = vi.fn(() => Promise.resolve(userIdPage));
 
@@ -63,6 +66,7 @@ describe('/api/admin/mementos/reembed', () => {
     // mockImplementation - otherwise the self-shrinking-filter test's custom implementation
     // leaks into every test that runs after it.
     mockAggregate.mockReset();
+    mockAudit.mockClear();
     reembedMock.mockReset();
     userIdPage = [];
     mockAggregate.mockImplementation(() => Promise.resolve(userIdPage));
@@ -92,6 +96,22 @@ describe('/api/admin/mementos/reembed', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(reembedMock).toHaveBeenCalledWith('u1', expect.objectContaining({ dryRun: true }));
     expect(res._getJSONData()).toMatchObject({ dryRun: true });
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('records an audit entry with the totals on an execute pass', async () => {
+    userIdPage = [{ _id: 'u1' }];
+    reembedMock.mockResolvedValue({ ...emptyStats, total: 4, reembedded: 3, failed: 1 });
+    const { req, res } = makeReq({ execute: true });
+    await (handler as any)._post(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][0]).toBe(req);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.mementos.reembedded',
+      target: { kind: 'system', id: 'mementos-reembed' },
+      details: { reembedded: 3, failed: 1, processedUsers: 1 },
+    });
   });
 
   it('passes dryRun:false only when execute is explicitly true', async () => {

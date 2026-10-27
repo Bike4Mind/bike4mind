@@ -3831,6 +3831,38 @@ describe('GET /api/publish/serve - signed file delivery', () => {
     expect(res.getHeader('X-Publish-Dropped-Asset-Names')).toContain('media/clip.mp4');
   });
 
+  it('keeps a stylesheet listed after the images and sends the overflow images to signed URLs', async () => {
+    const images = Array.from({ length: 10 }, (_, i) => `slides/${i}.png`);
+    mockArtifactFindOne.mockReturnValue(
+      gated({
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          ...images.map(path => ({ path, mimeType: 'image/png' })),
+          { path: 'style.css', mimeType: 'text/css' },
+        ],
+      })
+    );
+    mockDownload.mockImplementation((key: string) => {
+      if (key.endsWith('index.html')) {
+        const imgs = images.map(path => `<img src="${path}">`).join('');
+        return Promise.resolve(
+          Buffer.from(`<html><head><link rel="stylesheet" href="style.css"></head><body>${imgs}</body></html>`)
+        );
+      }
+      if (key.endsWith('.css')) return Promise.resolve(Buffer.from('.slide{color:red}'.repeat(9000))); // ~150 KB
+      return Promise.resolve(Buffer.alloc(560 * 1024)); // six fill the budget, leaving no room for the CSS
+    });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: await proofCookie(), fetchDest: 'document' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Publish-Dropped-Assets')).toBeUndefined();
+    expect(res._getData() as string).toContain('.slide{color:red}');
+    const signedPngs = mockGetSignedUrl.mock.calls.filter(([key]) => String(key).endsWith('.png'));
+    expect(signedPngs.length).toBeGreaterThan(0);
+    expect(mockGetSignedUrl.mock.calls.some(([key]) => String(key).endsWith('.css'))).toBe(false);
+  });
+
   describe('a gated render where storage cannot sign for the browser', () => {
     beforeEach(() => {
       mockBrowserSigningOrigin.mockResolvedValue('');

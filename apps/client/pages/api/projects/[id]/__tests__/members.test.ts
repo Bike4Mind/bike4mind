@@ -39,7 +39,8 @@ vi.mock('@bike4mind/database', () => ({
 
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   ProjectEvents: { REMOVE_MEMBER: 'remove_member', PROJECT_LEAVED: 'project_leaved' },
 }));
 
