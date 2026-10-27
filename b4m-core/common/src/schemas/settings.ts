@@ -4027,7 +4027,8 @@ export const settingsMap = {
     defaultValue: 0,
     int: true,
     min: 0,
-    description: 'A linked GitHub account must be at least this many days old to qualify.',
+    description:
+      'A linked GitHub account must be at least this many days old to qualify. 0 disables the GitHub unlock.',
     category: 'Users',
   }),
   noCardUnlockGithubMinRepos: makeNumberSetting({
@@ -4036,7 +4037,8 @@ export const settingsMap = {
     defaultValue: 0,
     int: true,
     min: 0,
-    description: 'A linked GitHub account must have at least this many public repositories to qualify.',
+    description:
+      'A linked GitHub account must have at least this many public repositories to qualify. 0 disables the GitHub unlock.',
     category: 'Users',
   }),
   noCardUnlockWorkEmailDomainDailyCap: makeNumberSetting({
@@ -4053,7 +4055,7 @@ export const settingsMap = {
     name: 'No-Card Unlock: Allow When Catch-All Check Is Inconclusive',
     defaultValue: false,
     description:
-      'When the check for a catch-all mail domain cannot reach a verdict, grant the work-email unlock anyway. OFF (default) refuses it.',
+      'Grant the work-email unlock when the catch-all mail-domain check cannot reach a verdict. This deployment cannot run that check, so ON grants work-email unlocks after only the MX and disposable-domain checks. OFF (default) refuses them.',
     category: 'Users',
     userReadable: true,
   }),

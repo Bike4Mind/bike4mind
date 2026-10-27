@@ -9,6 +9,7 @@ import {
   NO_CARD_UNLOCK_REASONS,
   noCardUnlockTransactionId,
   personalEmailProviders,
+  regionalPersonalEmailProviders,
   resolveNoCardUnlockSettings,
   type NoCardUnlockReason,
   type NoCardUnlockRefusal,
@@ -142,7 +143,7 @@ export function workEmailValidator(deps: WorkEmailValidatorDeps): NoCardUnlockVa
     const registrable = registrableDomain(domain);
     if (!domain || !registrable) return deny('work_email_no_mx');
 
-    const free: readonly string[] = personalEmailProviders;
+    const free: readonly string[] = [...personalEmailProviders, ...regionalPersonalEmailProviders];
     if (free.includes(domain) || free.includes(registrable)) return deny('work_email_free');
     if (isDisposable(email)) return deny('work_email_disposable');
 

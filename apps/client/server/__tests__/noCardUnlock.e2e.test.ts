@@ -210,8 +210,8 @@ describe('grantNoCardUnlock on a real replica set', () => {
 
   it('never exceeds the maximum when both reasons race across many users', async () => {
     await seedSettings({ noCardUnlockMaxCredits: 12, noCardUnlockWorkEmailDomainDailyCap: 100 });
-    const adapters = await build();
     for (let i = 0; i < 12; i++) {
+      const adapters = await build(i + 1);
       const id = await seedUser();
       const results = await Promise.all([
         grantNoCardUnlock(id, 'github_verified', adapters),

@@ -176,6 +176,11 @@ describe('workEmailValidator', () => {
     expect(await run({ id: 'u', email: '' })).toEqual({ ok: false, refusal: 'work_email_no_mx' });
   });
 
+  it('refuses regional personal email providers', async () => {
+    const { run } = build();
+    expect(await run({ id: 'u', email: 'x@qq.com' })).toEqual({ ok: false, refusal: 'work_email_free' });
+  });
+
   it('refuses disposable domains', async () => {
     const { run } = build({ isDisposable: () => true });
     expect(await run(user)).toEqual({ ok: false, refusal: 'work_email_disposable' });
