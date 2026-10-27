@@ -973,12 +973,13 @@ describe('wafPolicy', () => {
 
   describe('forgery-guard rule', () => {
     for (const stage of ['dev']) {
-      it(`counts requests that carry a forged x-amzn-waf-x-waf-anon-ip header on ${stage}`, () => {
+      it(`blocks requests that carry a forged x-amzn-waf-x-waf-* header on ${stage}`, () => {
         const rules: WafRule[] = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
         const rule = rules.find(r => r.Name === 'block-forged-waf-forwarding-headers');
         expect(rule).toBeDefined();
         expect(rule!.Priority).toBe(28);
-        expect((rule!.Action as any).Count).toBeDefined();
+        // AWS WAF inserts these headers only after inspection, so a match here is always viewer-sent.
+        expect(rule!.Action).toEqual({ Block: {} });
         const stmts = (rule!.Statement as any).OrStatement.Statements;
         const headers = stmts.map((s: any) => s.ByteMatchStatement.FieldToMatch.SingleHeader.Name);
         expect(headers).toContain('x-amzn-waf-x-waf-anon-ip');

@@ -91,7 +91,7 @@ An ASN-keyed rule shares one counter across every client on a network, so size i
 
 `AWSManagedRulesAmazonIpReputationList` counts instead of blocking on the stage-owned ACL (dev, staging, previews), so these stages no longer enforce it. This keeps the reputation signal visible without blocking shared-egress clients while the rule is evaluated.
 
-`forward-anon-ip-label` (31) and `forward-bot-signal-label` (32) are Count rules that match the AnonymousIPList label and the Bot Control `bot:` label namespace and insert a request header. AWS WAF prefixes inserted headers with `x-amzn-waf-`, so the app reads `x-amzn-waf-x-waf-anon-ip` and `x-amzn-waf-x-waf-bot-signal` (`apps/client/server/auth/networkMeta.ts`). `infra/web.ts` sets `WAF_LABEL_FORWARDING` only when the stage owns the ACL; an externally managed ACL must add these two rules itself before that flag applies to it.
+`forward-anon-ip-label` (31) and `forward-bot-signal-label` (32) are Count rules that match the AnonymousIPList label and the Bot Control `bot:` label namespace and insert a request header. AWS WAF prefixes inserted headers with `x-amzn-waf-`, so the app reads `x-amzn-waf-x-waf-anon-ip` and `x-amzn-waf-x-waf-bot-signal` (`apps/client/server/auth/networkMeta.ts`). `infra/web.ts` sets `WAF_LABEL_FORWARDING` only when the stage owns the ACL; an externally managed ACL must add these two rules itself before that flag applies to it. `block-forged-waf-forwarding-headers` (28) blocks any viewer request that already carries either inserted header set to `1`: WAF inserts them only after inspection, so rule 28 never sees a genuine one.
 
 ## Bot Control telemetry
 
