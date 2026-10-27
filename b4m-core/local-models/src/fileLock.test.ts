@@ -101,6 +101,34 @@ describe('lockFile', () => {
     await expect(stat(`${path}.lock.takeover`)).rejects.toThrow();
   });
 
+  it('clears a takeover guard dated before the machine booted at once', async () => {
+    const path = target();
+    await writeFile(`${path}.lock`, '{}');
+    await writeFile(`${path}.lock.takeover`, '');
+    await age(`${path}.lock`, uptime() * 1000 + 60_000);
+    await age(`${path}.lock.takeover`, uptime() * 1000 + 60_000);
+    await (await lockFile(path, 'test', { staleMs: 3_600_000_000 })).release();
+    await expect(stat(`${path}.lock.takeover`)).rejects.toThrow();
+  });
+
+  it('gives a stale lock behind a stale guard to exactly one of many contenders', async () => {
+    for (let trial = 0; trial < 20; trial++) {
+      const path = target();
+      await writeFile(`${path}.lock`, '{}');
+      await writeFile(`${path}.lock.takeover`, '');
+      await age(`${path}.lock`, LOCK_STALE_MS + 5_000);
+      await age(`${path}.lock.takeover`, LOCK_STALE_MS + 5_000);
+      const results = await Promise.allSettled(Array.from({ length: 6 }, () => lockFile(path, 'test')));
+      const won = results.filter(result => result.status === 'fulfilled');
+      expect(won).toHaveLength(1);
+      expect(results.filter(result => result.status === 'rejected').map(result => result.reason)).toEqual(
+        Array(5).fill(expect.any(ModelFileBusyError))
+      );
+      await (won[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof lockFile>>>).value.release();
+      await expect(stat(`${path}.lock.takeover`)).rejects.toThrow();
+    }
+  });
+
   it('reports a directory that does not exist as a storage error', async () => {
     const error = await lockFile(join(dir, 'missing', 'x.gguf'), 'test').catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(RuntimeStorageError);

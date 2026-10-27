@@ -85,9 +85,25 @@ async function readHolder(lockPath: string): Promise<Holder | null> {
   }
 }
 
-function isStale(holder: Holder, staleMs: number): boolean {
+function isStale(holder: { mtimeMs: number }, staleMs: number): boolean {
   const bootedAt = Date.now() - uptime() * 1000;
   return holder.mtimeMs < bootedAt || Date.now() - holder.mtimeMs > staleMs;
+}
+
+/** Moves a takeover guard left by a process that died during its takeover out of the way, once it is stale. */
+async function clearStaleGuard(guard: string, nonce: string, staleMs: number): Promise<void> {
+  const left = await stat(guard, { bigint: true }).catch(() => null);
+  if (!left || !isStale({ mtimeMs: Number(left.mtimeMs) }, staleMs)) return;
+  const aside = `${guard}.stale-${nonce}`;
+  const renamed = await rename(guard, aside).then(
+    () => true,
+    () => false
+  );
+  if (!renamed) return;
+  // A contender may have replaced the stale guard with its own between the stat and the rename.
+  const moved = await stat(aside, { bigint: true }).catch(() => null);
+  if (moved && moved.ino !== left.ino) await link(aside, guard).catch(() => undefined);
+  await rm(aside, { force: true });
 }
 
 const same = (a: Holder | null, b: Holder) => a !== null && a.ino === b.ino && a.text === b.text;
@@ -104,10 +120,8 @@ async function takeOver(lockPath: string, judged: Holder, nonce: string, staleMs
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      // A guard outlives its takeover only if that process died within it.
-      const left = await stat(guard).catch(() => null);
-      if (attempt > 0 || (left && Date.now() - left.mtimeMs <= staleMs)) return false;
-      if (left) await rm(guard, { force: true });
+      if (attempt > 0) return false;
+      await clearStaleGuard(guard, nonce, staleMs);
     }
   }
   try {
