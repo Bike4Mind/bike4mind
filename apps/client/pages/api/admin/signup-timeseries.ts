@@ -17,7 +17,13 @@ const querySchema = z.object({
 export default baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   if (!req.user?.isAdmin) return res.status(403).json({ message: 'Admin access required' });
   const parsed = querySchema.safeParse(req.query);
-  if (!parsed.success) return res.status(400).json({ message: 'Range must be one of 24h, 7d, 30d or 90d.' });
+  if (!parsed.success) {
+    const message =
+      parsed.error.issues[0]?.path[0] === 'tzOffset'
+        ? 'tzOffset must be a whole number of minutes between -840 and 840.'
+        : 'Range must be one of 24h, 7d, 30d or 90d.';
+    return res.status(400).json({ message });
+  }
   res.setHeader('Cache-Control', 'private, no-store');
   return res.json(await getSignupTimeseries({ range: parsed.data.range, tzOffsetMinutes: parsed.data.tzOffset }));
 });

@@ -25,7 +25,9 @@ describe('signup time-series route', () => {
 
   it('rejects a range outside the supported set', async () => {
     expect((await run(true, { range: '1y' }))._getStatusCode()).toBe(400);
-    expect((await run(true, { range: '7d', tzOffset: '9999' }))._getStatusCode()).toBe(400);
+    const badOffset = await run(true, { range: '7d', tzOffset: '9999' });
+    expect(badOffset._getStatusCode()).toBe(400);
+    expect(badOffset._getJSONData().message).toContain('tzOffset');
     expect(mocks.timeseries).not.toHaveBeenCalled();
   });
 
