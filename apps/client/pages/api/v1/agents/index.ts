@@ -63,7 +63,8 @@ const createRoute = nextRouteForContract(createAgentContract, {
         triggerWords: body.trigger_words,
       },
       req.user.id,
-      v1FieldLabel
+      v1FieldLabel,
+      req.logger
     ));
   } catch (error) {
     throw toV1AgentError(error);
