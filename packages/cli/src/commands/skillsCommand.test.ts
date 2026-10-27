@@ -409,6 +409,7 @@ describe('handleSkillsCommand', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
+    vi.stubEnv('B4M_API_KEY', '');
     ARGS.path = path.dirname(await writeSkill('my-skill/SKILL.md', SKILL));
     handlerMocks.tokens = { expiresAt: new Date(Date.now() + 60_000).toISOString() };
     handlerMocks.api.get.mockResolvedValue({ data: [] });
@@ -416,7 +417,10 @@ describe('handleSkillsCommand', () => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
-  afterEach(() => logSpy.mockRestore());
+  afterEach(() => {
+    logSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
 
   it('fails with the login hint and no API call when there are no tokens', async () => {
     handlerMocks.tokens = null;
