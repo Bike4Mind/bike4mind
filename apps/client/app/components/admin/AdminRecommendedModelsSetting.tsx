@@ -104,7 +104,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
                 size="sm"
                 aria-label={`Move ${label} up`}
                 data-testid={`admin-recommended-models-${id}-up-btn`}
-                disabled={index === 0}
+                disabled={index === 0 || stagedDraft.pending}
                 onClick={() => move(index, -1)}
               >
                 <ArrowUpwardIcon />
@@ -113,7 +113,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
                 size="sm"
                 aria-label={`Move ${label} down`}
                 data-testid={`admin-recommended-models-${id}-down-btn`}
-                disabled={index === draft.length - 1}
+                disabled={index === draft.length - 1 || stagedDraft.pending}
                 onClick={() => move(index, 1)}
               >
                 <ArrowDownwardIcon />
@@ -123,6 +123,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
                 color="danger"
                 aria-label={`Remove ${label}`}
                 data-testid={`admin-recommended-models-${id}-remove-btn`}
+                disabled={stagedDraft.pending}
                 onClick={() => setDraft(prev => prev.filter(x => x !== id))}
               >
                 <CloseIcon />
@@ -138,7 +139,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
           sx={{ flex: 1 }}
           placeholder="Add a model"
           value={null}
-          disabled={addable.length === 0}
+          disabled={addable.length === 0 || stagedDraft.pending}
           onChange={(_, id: string | null) => id && setDraft(prev => [...prev, id])}
           slotProps={{ button: { 'data-testid': 'admin-recommended-models-add-select' } }}
         >
