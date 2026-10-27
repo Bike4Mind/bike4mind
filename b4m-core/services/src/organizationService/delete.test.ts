@@ -439,6 +439,28 @@ describe('organizationService - delete', () => {
       expect(callOrder.indexOf('clearOrganizationPointer')).toBeGreaterThan(callOrder.lastIndexOf('upsertGrant'));
     });
 
+    it("hands a roster creator's lake to the billing owner even though the creator held its seeded owner grant", async () => {
+      // createDataLake seeds the creator as owner; the hand-off must judge the post-lapse grants,
+      // or this expired grant would mark lakeB creator-owned and member1 would resolve as owner again.
+      // adminOnly sits in adminUserIds with no users[] row and must lapse like any member.
+      vi.spyOn(getOrganization, 'get').mockResolvedValue({
+        ...mockOrganization,
+        adminUserIds: ['manager1', 'adminOnly'],
+        users: [
+          { userId: 'user1', permissions: [] },
+          { userId: 'member1', permissions: [] },
+          { userId: 'manager1', permissions: [] },
+        ],
+      } as WithId<IOrganizationDocument>);
+      grants.push(grant('lakeB', 'member1', 'owner'), grant('lakeA', 'adminOnly', 'curator'));
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(find('lakeB', 'member1')?.expiresAt).toBeInstanceOf(Date);
+      expect(find('lakeB', 'user1')).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+      expect(find('lakeA', 'adminOnly')?.expiresAt).toBeInstanceOf(Date);
+    });
+
     it('hands a lake created by someone off the roster to the billing owner, without lapsing their grants', async () => {
       lakes.push(lake('lakeC', 'org1', 'formerMember'));
       grants.push(grant('lakeC', 'formerMember', 'curator'));
