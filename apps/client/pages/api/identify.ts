@@ -1,6 +1,6 @@
 import { requireUser } from '@server/middlewares/requireUser';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { ExtractJwt } from 'passport-jwt';
 import { respond } from '@server/utils/respond';

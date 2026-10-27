@@ -4,7 +4,7 @@ import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/err
 import { securityDashboardSnapshotRepository, type ISecurityDashboardFinding } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { handler as runCloudScan } from '@server/security/cloudScan';
+import { handler as runCloudScan } from '@bike4mind/server-utils/security/cloudScan';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';

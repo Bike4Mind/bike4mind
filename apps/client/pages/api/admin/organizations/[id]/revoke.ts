@@ -6,7 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { z } from 'zod';

@@ -16,6 +16,7 @@ type NavigateOptions = {
  * `vi.mock('@tanstack/react-router', async () => (await import('<relative>/__tests__/fakeAdminRouter')).fakeRouterModule)`.
  */
 let currentSearch: SearchRecord = {};
+let currentPathname = '/admin';
 const listeners = new Set<() => void>();
 
 const validate = (search: SearchRecord): SearchRecord =>
@@ -30,7 +31,8 @@ export const fakeAdminRouter = {
   get search(): SearchRecord {
     return currentSearch;
   },
-  reset: (search: SearchRecord = {}) => {
+  reset: (search: SearchRecord = {}, pathname = '/admin') => {
+    currentPathname = pathname;
     setSearch(search);
     fakeAdminRouter.navigate.mockClear();
   },
@@ -45,6 +47,7 @@ const subscribe = (listener: () => void) => {
 };
 
 export const fakeRouterModule = {
+  useRouter: () => ({ state: { location: { pathname: currentPathname, search: currentSearch } } }),
   useSearch: ({ select }: { select?: (search: SearchRecord) => unknown } = {}) => {
     const search = useSyncExternalStore(subscribe, () => currentSearch);
     return select ? select(search) : search;

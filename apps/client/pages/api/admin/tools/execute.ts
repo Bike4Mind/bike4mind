@@ -2,6 +2,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@bike4mind/utils';
 import { initializeServerAdminTools, getServerAdminToolService } from '@client/server/tools/adminToolsServer';
+import { collectModalChanges } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { AdminToolContext, AdminToolParams, ApiKeyScope } from '@bike4mind/common';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
@@ -36,7 +38,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     };
 
     // Execute the tool
-    const result = await adminToolService.execute(tool, context, toolParams);
+    const { result, changes } = await collectModalChanges(
+      () => adminToolService.execute(tool, context, toolParams),
+      partial => recordModalChanges(req, partial, 'admin-tool')
+    );
+
+    await recordModalChanges(req, changes, 'admin-tool');
 
     return res.json(result);
   })

@@ -16,7 +16,7 @@ import { AdminSettings, slackDevWorkspaceRepository } from '@bike4mind/database'
 import { SecopsTriageConfigSchema, SECOPS_TRIAGE_SCAN_SOURCES } from '@bike4mind/common';
 import { GitHubService } from '@server/services/githubService';
 import { createSecopsTriageService } from '@workers/services/secopsTriageService';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';

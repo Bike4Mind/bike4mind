@@ -1,4 +1,4 @@
-import type { AgentStep } from '@bike4mind/agents';
+import { usableEvidenceConfidence, type AgentStep, type ScoredToolCall } from '@bike4mind/agents';
 
 /**
  * Consecutive low-confidence iterations before the gate pauses. One weak tool result
@@ -22,7 +22,7 @@ export interface ConfidenceGateInput {
 export interface ConfidenceGateEvaluation {
   /** Agent-reported (1-indexed) iteration. */
   iteration: number;
-  /** The confidence the decision was made on; record this as telemetry unless `overridden`. */
+  /** The confidence the decision was made on (see `usableEvidenceConfidence`); record as telemetry unless `overridden`. */
   confidence: number;
   /** Advances the persisted low-confidence streak when true, resets it when false. */
   belowThreshold: boolean;
@@ -48,11 +48,11 @@ export function confidenceOverrideFor(overrides: readonly number[] | undefined, 
  * Evaluate the confidence gate for one iteration. Returns null when the gate has
  * nothing to evaluate: no tools ran, or every tool call failed.
  *
- * Failed tool calls (`metadata.toolFailed`, set by ReActAgent only where a call
- * threw or could not run) are left out of the average. The model already sees the
- * error and can retry, switch tools, or report it, while a human answering the
- * gate cannot fix a broken tool - pausing on one only parks the run in `paused`,
- * which counts against the per-user concurrency cap.
+ * The iteration is below threshold only when it produced no usable evidence: every
+ * call that ran scored below it (`usableEvidenceConfidence`). Failed tool calls
+ * (`metadata.toolFailed`) never count - a human answering the gate cannot fix a
+ * broken tool, and pausing on one only parks the run in `paused`, which counts
+ * against the per-user concurrency cap.
  */
 export function evaluateConfidenceGate({
   gate,
@@ -64,11 +64,29 @@ export function evaluateConfidenceGate({
 }: ConfidenceGateInput): ConfidenceGateEvaluation | null {
   if (gate === null) return null;
 
-  const scored = scoredConfidence(gate.confidence, iterationSteps);
-  if (scored === null) return null;
+  const calls: ScoredToolCall[] = [];
+  for (const step of iterationSteps) {
+    if (step.type !== 'observation') continue;
+    calls.push({ confidence: step.metadata?.confidence ?? 0, toolFailed: step.metadata?.toolFailed });
+  }
+
+  // `gate.confidence` is the agent's mean over every call it scored this iteration. When the
+  // steps reproduce that mean they cover the iteration; the else arm below is defensive only.
+  const allCallsMean = calls.reduce((sum, call) => sum + call.confidence, 0) / calls.length;
+  const stepsCoverIteration = calls.length > 0 && Math.abs(allCallsMean - gate.confidence) < 1e-9;
+  const visibleEvidence = usableEvidenceConfidence(calls);
+  let evidenceConfidence: number;
+  if (stepsCoverIteration) {
+    if (visibleEvidence === null) return null;
+    evidenceConfidence = visibleEvidence;
+  } else {
+    // Partial view: a visible good call still proves usable evidence, and a mean at or
+    // above threshold implies some call was; otherwise keep the agent's own value.
+    evidenceConfidence = Math.max(gate.confidence, visibleEvidence ?? 0);
+  }
 
   const override = confidenceOverrideFor(confidenceOverrides, gate.iteration);
-  const confidence = override ?? scored;
+  const confidence = override ?? evidenceConfidence;
   return {
     iteration: gate.iteration,
     confidence,
@@ -76,31 +94,6 @@ export function evaluateConfidenceGate({
     pausable: !isComplete && !reachedMaxIterations,
     overridden: override !== undefined,
   };
-}
-
-/** The agent's iteration average with failed calls left out, or null when every call failed. */
-function scoredConfidence(agentConfidence: number, iterationSteps: AgentStep[]): number | null {
-  let total = 0;
-  let count = 0;
-  let scoredTotal = 0;
-  let scoredCount = 0;
-  for (const step of iterationSteps) {
-    if (step.type !== 'observation') continue;
-    const confidence = step.metadata?.confidence ?? 0;
-    total += confidence;
-    count++;
-    if (!step.metadata?.toolFailed) {
-      scoredTotal += confidence;
-      scoredCount++;
-    }
-  }
-
-  // The agent averages its own per-call scores, which can include observations
-  // outside `allSteps` (e.g. a checkpoint restored mid-iteration). Only re-derive
-  // the value when the steps reproduce the agent's average; otherwise keep it.
-  const stepsMatchGate = count > 0 && Math.abs(total / count - agentConfidence) < 1e-9;
-  if (!stepsMatchGate || scoredCount === count) return agentConfidence;
-  return scoredCount === 0 ? null : scoredTotal / scoredCount;
 }
 
 /** Whether a low-confidence streak (as returned by `recordIterationConfidence`) pauses the run. */

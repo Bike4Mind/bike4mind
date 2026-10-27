@@ -5,8 +5,8 @@ import passport from '@server/auth/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { issueStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { OAUTH_NONCE_HASH_REQ_KEY } from '@server/auth/passportOAuthStateStore';
 import { isLocalAppUrl } from '@server/utils/validators';
 

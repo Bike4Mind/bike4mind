@@ -54,13 +54,14 @@ export interface ICreditHolderIdentifier {
 /**
  * Type guard to check if an entity implements ICreditHolder
  */
-export function isCreditHolder(entity: any): entity is ICreditHolder {
+export function isCreditHolder(entity: unknown): entity is ICreditHolder {
+  if (typeof entity !== 'object' || entity === null) return false;
+  const e = entity as Partial<ICreditHolder>;
   return (
-    entity &&
-    typeof entity.currentCredits === 'number' &&
-    (entity.lastCreditsPurchasedAt === null ||
-      entity.lastCreditsPurchasedAt === undefined ||
-      entity.lastCreditsPurchasedAt instanceof Date)
+    typeof e.currentCredits === 'number' &&
+    (e.lastCreditsPurchasedAt === null ||
+      e.lastCreditsPurchasedAt === undefined ||
+      e.lastCreditsPurchasedAt instanceof Date)
   );
 }
 

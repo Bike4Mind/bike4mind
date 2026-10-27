@@ -18,7 +18,7 @@ export enum OrganizationTabs {
 
 /**
  * Who may see the org's feedback analysis. Mirrors the server gate the feedback-report routes run
- * (apps/client/server/utils/orgAccess.ts, verifyOrgAccess): a platform admin, the org owner, or a
+ * (packages/server-utils/src/utils/orgAccess.ts, verifyOrgAccess): a platform admin, the org owner, or a
  * manager - NOT every member holding manage permissions, so the tab is never offered to someone the
  * API would answer with a 404. Must stay in sync with that function.
  *
