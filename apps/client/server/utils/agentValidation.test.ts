@@ -268,6 +268,41 @@ describe('validateAgentUpdate', () => {
       expect(getCallerModelList).not.toHaveBeenCalled();
     });
 
+    it('rethrows a failure from the catalog lookup', async () => {
+      getCallerModelList.mockRejectedValue(new Error('down'));
+      await expect(validateAgentUpdate({ preferredModel: 'gpt-6-astra' } as Partial<IAgent>, userId)).rejects.toThrow(
+        'down'
+      );
+    });
+
+    it('looks the catalog up once for an enum chat model plus a catalog-only image model', async () => {
+      await validateAgentUpdate(
+        { preferredModel: ChatModels.CLAUDE_4_SONNET, preferredImageModel: 'catalog-image-model' } as Partial<IAgent>,
+        userId
+      );
+      expect(getCallerModelList).toHaveBeenCalledTimes(1);
+      await expect(
+        validateAgentUpdate(
+          { preferredModel: ChatModels.CLAUDE_4_SONNET, preferredImageModel: 'img-nope' } as Partial<IAgent>,
+          userId
+        )
+      ).rejects.toThrow(/^Invalid image model: img-nope$/);
+    });
+
+    it('rejects a field the cheap checks fail without a catalog lookup', async () => {
+      await expect(
+        validateAgentUpdate({ temperature: 5, preferredModel: 'gpt-6-astra' } as Partial<IAgent>, userId)
+      ).rejects.toThrow(/^Temperature must be between 0 and 2$/);
+      expect(getCallerModelList).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-string model id as a bad request without a catalog lookup', async () => {
+      await expect(validateAgentUpdate({ preferredModel: {} } as unknown as Partial<IAgent>, userId)).rejects.toThrow(
+        AgentValidationError
+      );
+      expect(getCallerModelList).not.toHaveBeenCalled();
+    });
+
     it('reports an empty catalog as unavailable rather than blaming the model', async () => {
       getCallerModelList.mockResolvedValue({ models: [], supersededModels: [] });
       await expect(validateAgentUpdate({ preferredModel: 'gpt-6-astra' } as Partial<IAgent>, userId)).rejects.toThrow(

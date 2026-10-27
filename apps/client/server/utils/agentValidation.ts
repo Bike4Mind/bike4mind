@@ -164,14 +164,21 @@ type CatalogLogger = Parameters<typeof getCallerModelList>[1];
 /**
  * The static enums only know models that shipped with the build; newer ones arrive through the
  * dynamic catalog and chat accepts them by that route. An enum hit passes without a lookup, so the
- * live fan-out runs only for ids the enums miss. The catalog is the caller's own picker list, so
- * "accepted here" means "selectable in chat for this user".
+ * live fan-out runs only for ids the enums miss. An id is accepted when the build knows it or, for
+ * a catalog-only id, when it is selectable in chat for this user.
  */
 async function assertModelsSelectable(agentData: Partial<IAgent>, userId: string, logger: CatalogLogger) {
   const checks = [
-    { id: agentData.preferredModel, known: supportedChatModels, type: 'text', message: 'Invalid model' },
-    { id: agentData.preferredImageModel, known: supportedImageModels, type: 'image', message: 'Invalid image model' },
+    { id: agentData.preferredModel, known: supportedChatModels, type: 'text' as const, message: 'Invalid model' },
+    {
+      id: agentData.preferredImageModel,
+      known: supportedImageModels,
+      type: 'image' as const,
+      message: 'Invalid image model',
+    },
   ].filter(({ id, known }) => id && !known.safeParse(id).success);
+  const malformed = checks.find(({ id }) => typeof id !== 'string');
+  if (malformed) throw new AgentValidationError(`${malformed.message}: expected a string`);
   if (checks.length === 0) return;
 
   const { models } = await getCallerModelList(userId, logger);
