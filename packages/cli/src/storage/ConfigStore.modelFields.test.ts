@@ -26,6 +26,22 @@ describe('ConfigStore defaultModel and ollamaHost across processes', () => {
 
   const disk = async () => JSON.parse(await fs.readFile(configPath, 'utf-8'));
 
+  it.each(['null', 'true', '42', '"invalid config"', '[]'])(
+    'repairs a non-object disk config (%s) when saving an already loaded session',
+    async rawConfig => {
+      const store = new ConfigStore(configPath);
+      const recovered = await store.load();
+      await fs.writeFile(configPath, rawConfig, 'utf-8');
+
+      await store.update({ preferences: { theme: 'light' } });
+
+      expect(await disk()).toMatchObject({
+        defaultModel: recovered.defaultModel,
+        preferences: { theme: 'light' },
+      });
+    }
+  );
+
   async function sessionThenModels(patch: { defaultModel?: string; ollamaHost?: string; localDefaultModel?: string }) {
     const session = new ConfigStore(configPath);
     await session.load();

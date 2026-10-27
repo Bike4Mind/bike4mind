@@ -568,6 +568,17 @@ describe('models pull (Hugging Face)', () => {
     expect(same.hub.getModel).toHaveBeenCalledTimes(2);
   });
 
+  it('refuses changed license IDs even when their display is unchanged', async () => {
+    const original = detail({ licenses: ['mit'] });
+    const current = detail({ licenses: ['other'], licenseName: 'mit' });
+    expect(licenseFor(current, ENDPOINT).label).toBe(licenseFor(original, ENDPOINT).label);
+    const getModel = vi.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(current);
+    const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
+    await expect(pullModel(REPO, h.deps, OPTS)).rejects.toThrow(/changed since you reviewed it/);
+    expect(h.hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
   it('downloads nothing when the confirmation is declined', async () => {
     const h = harness({ answers: [false] });
     expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q8_0` }, h.deps)).toBe(0);
@@ -911,6 +922,21 @@ describe('models pull (Ollama library)', () => {
 });
 
 describe('models rm', () => {
+  it.each([
+    ['qwen2.5', 'qwen2.5:latest', true],
+    ['library/qwen2.5', 'qwen2.5:latest', true],
+    ['library/qwen2.5:latest', 'qwen2.5:latest', true],
+    ['someone/qwen2.5', 'someone/qwen2.5:latest', true],
+    ['qwen2.5:0.5b', 'qwen2.5:latest', false],
+    ['someone/qwen2.5', 'qwen2.5:latest', false],
+    ['qwen2.5', undefined, false],
+  ])('warns only when removing the default alias %s (%s)', async (name, defaultModel, warns) => {
+    const h = harness({ config: { defaultModel } });
+    await runModelsCommand('rm', { _: [], name, yes: true }, h.deps);
+    expect(h.runtime.remove).toHaveBeenCalledWith(name);
+    expect(h.lines.some(line => line.includes('It was your default model'))).toBe(warns);
+  });
+
   it('removes only after confirmation', async () => {
     const declined = harness({ answers: [false] });
     await runModelsCommand('rm', { _: [], name: 'qwen2.5:0.5b' }, declined.deps);

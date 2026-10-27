@@ -395,8 +395,9 @@ export async function requireUnchangedLicenses(
   shown: { label: string; link: string },
   signal: AbortSignal
 ): Promise<void> {
-  const now = licenseFor(await hub.getModel(detail.id, { signal }), hub.endpoint);
-  if (now.label !== shown.label || now.link !== shown.link) {
+  const currentDetail = await hub.getModel(detail.id, { signal });
+  const now = licenseFor(currentDetail, hub.endpoint);
+  if (!sameList(currentDetail.licenses, detail.licenses) || now.label !== shown.label || now.link !== shown.link) {
     throw changedSinceReview(clean(detail.id), `its license is now ${now.label}`);
   }
 }

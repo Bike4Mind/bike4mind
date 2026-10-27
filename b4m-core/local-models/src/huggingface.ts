@@ -332,7 +332,7 @@ function firstStemEndingWith(stems: readonly string[]): (tag: string) => number 
   };
   return tag => {
     const key = reversed(tag.toUpperCase());
-    const [lo, hi] = [lowerBound(key), lowerBound(`${key}￿`)];
+    const [lo, hi] = [lowerBound(key), lowerBound(`${key}\uFFFF`)];
     if (lo >= hi) return Infinity;
     const level = 31 - Math.clz32(hi - lo);
     const row = levels[level] ?? [];
@@ -757,7 +757,13 @@ export class HuggingFaceHub {
         throw new RuntimeProtocolError(`${this.id} ${shown} sent more than ${MAX_RESPONSE_BYTES} bytes`, this.id);
       throw this.#connectionError(shown, error, context.signal);
     }
-    return { data: parseJson(this.#client, shown, text, schema), headers: response.headers };
+    try {
+      return { data: parseJson(this.#client, shown, text, schema), headers: response.headers };
+    } catch (error) {
+      if (!(error instanceof RuntimeProtocolError)) throw error;
+      // Parser causes can quote truncated token fragments that exact-token redaction cannot remove.
+      throw new RuntimeProtocolError(error.message, this.id);
+    }
   }
 
   /** Follows same-origin redirects for GET (renamed repos); a HEAD returns its redirect, which means "readable". */

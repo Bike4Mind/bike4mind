@@ -384,10 +384,17 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
   }
   await removeInstalled(target, name, deps.signal);
   deps.log(`Removed ${clean(name)}.`);
-  if (deps.config.defaultModel === name) {
+  if (deps.config.defaultModel && normalizeModelName(deps.config.defaultModel) === normalizeModelName(name)) {
     deps.log('It was your default model; pick another with: b4m models use <name>');
   }
   return 0;
+}
+
+function normalizeModelName(name: string): string {
+  const withoutLibrary = name.replace(/^library\//i, '');
+  return withoutLibrary.lastIndexOf(':') > withoutLibrary.lastIndexOf('/')
+    ? withoutLibrary
+    : `${withoutLibrary}:latest`;
 }
 
 export async function useModel(name: string, deps: ModelsDeps): Promise<number> {

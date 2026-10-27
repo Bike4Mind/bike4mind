@@ -9,6 +9,10 @@
  *   for 3 consecutive 60s evaluation periods (3 min) before firing
  * - Message age: any message older than 1 hour (3600s) triggers alarm
  *   (single evaluation period — the 1hr threshold already provides built-in delay)
+ * - Missing data: 'ignore', which holds the current state, so a range with no SQS datapoint
+ *   cannot resolve a firing alarm to OK and re-page on the next point. The age alarms score
+ *   IF(visible > 0, age, 0) because SQS stops publishing the age metric on an empty queue;
+ *   the known residuals are documented at the age alarms below.
  *
  * Stage-gated: Only deployed to `dev` and `production` stages.
  * Set ENABLE_MONITORING=true to opt in for other stages.
@@ -65,7 +69,12 @@ import {
 } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
-import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  bindDlqAlarmDimensions,
+  buildDlqAgeMetricQueries,
+  buildDlqAlarmSpecs,
+} from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 
@@ -169,7 +178,7 @@ if (isMonitoredStage) {
     period: 60,
     statistic: 'Maximum',
     threshold: 0,
-    treatMissingData: 'notBreaching',
+    treatMissingData: 'ignore',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
     alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
@@ -183,13 +192,11 @@ if (isMonitoredStage) {
       'DlqAlarmHandlerDlq oldest message exceeds 1 hour -- the alarm-to-Slack Lambda has been failing for an extended period.',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'ApproximateAgeOfOldestMessage',
-    namespace: 'AWS/SQS',
-    period: 60,
-    statistic: 'Maximum',
     threshold: 3600,
-    treatMissingData: 'notBreaching',
-    dimensions: { QueueName: dlqAlarmHandlerDlq.name },
+    treatMissingData: 'ignore',
+    // Same IF(visible > 0, age, 0) metric math as the fleet age alarms; see
+    // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
+    metricQueries: buildDlqAgeMetricQueries(60, { QueueName: dlqAlarmHandlerDlq.name }),
     alarmActions: [oobAlarmTopic!.arn],
     tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
   });
@@ -515,10 +522,11 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
 function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
   // Alarm names, thresholds, and tags come from the shared spec builder; only the
   // resource-bound pieces (queue dimensions, SNS actions) are wired here.
+  const dimensions = { QueueName: dlq.queue.nodes.queue.name };
   for (const spec of buildDlqAlarmSpecs(dlq, { appName: $app.name, stage: $app.stage })) {
     new aws.cloudwatch.MetricAlarm(spec.resourceName, {
       ...spec.args,
-      dimensions: { QueueName: dlq.queue.nodes.queue.name },
+      ...bindDlqAlarmDimensions(spec, dimensions),
       alarmActions: [dlqAlarmTopic!.arn],
       okActions: [dlqAlarmTopic!.arn],
     });
