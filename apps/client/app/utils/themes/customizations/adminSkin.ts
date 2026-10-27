@@ -6,8 +6,9 @@ import { adminPalette, type AdminPalette } from '../admin';
  * `data-admin-surface` (the admin layout root), so every admin tab inherits the design guide look
  * (`components/admin/DESIGN_GUIDE.md` sections 2 and 5) without touching the rest of the app.
  *
- * Every rule is wrapped in `:where(...)`, so it adds no specificity over the component's own class:
- * the skin replaces Joy's defaults but a tab's own `sx` still wins.
+ * Every rule is wrapped in `:where(...)`, so it adds no specificity over the component's own class.
+ * Rules still nest under that class, so a property the skin sets directly beats a tab's flat `sx`;
+ * where the skin works through a Joy CSS variable (the palette remap, `body-sm`), `sx` wins.
  */
 export const ADMIN_SURFACE_ATTRIBUTE = 'data-admin-surface';
 
