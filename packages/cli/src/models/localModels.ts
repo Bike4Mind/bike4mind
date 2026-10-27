@@ -378,11 +378,7 @@ function changedSinceReview(subject: string, what: string): Error {
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((entry, index) => entry === b[index]);
 
-const sameSet = (a: string[], b: string[]) => {
-  const left = new Set(a);
-  const right = new Set(b);
-  return left.size === right.size && [...left].every(entry => right.has(entry));
-};
+const sameEntries = (a: string[], b: string[]) => sameList([...a].sort(), [...b].sort());
 
 /**
  * Re-reads the manifest after the user approved it, because Ollama then pulls by tag and a tag can move.
@@ -412,7 +408,7 @@ export async function requireUnchangedLicenses(
   // The Hub may list the same ids in another order; the label is rebuilt in the order the user saw.
   const reviewed = licenseFor({ ...currentDetail, licenses: detail.licenses }, hub.endpoint);
   if (
-    !sameSet(currentDetail.licenses, detail.licenses) ||
+    !sameEntries(currentDetail.licenses, detail.licenses) ||
     reviewed.label !== shown.label ||
     reviewed.link !== shown.link
   ) {

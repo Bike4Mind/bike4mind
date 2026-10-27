@@ -623,12 +623,14 @@ describe('models pull (Hugging Face)', () => {
   });
 
   it.each([
-    ['added', ['apache-2.0', 'mit', 'gemma']],
-    ['removed', ['mit']],
-  ])('refuses when a license ID was %s after the prompt', async (_label, licenses) => {
+    ['added', ['apache-2.0', 'mit'], ['apache-2.0', 'mit', 'gemma']],
+    ['removed', ['apache-2.0', 'mit'], ['mit']],
+    ['duplicated', ['mit'], ['mit', 'mit']],
+    ['duplicated in place of another', ['apache-2.0', 'apache-2.0', 'mit'], ['apache-2.0', 'mit', 'mit']],
+  ])('refuses when a license ID was %s after the prompt', async (_label, before, licenses) => {
     const getModel = vi
       .fn()
-      .mockResolvedValueOnce(detail({ licenses: ['apache-2.0', 'mit'] }))
+      .mockResolvedValueOnce(detail({ licenses: before }))
       .mockResolvedValueOnce(detail({ licenses }));
     const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
     await expect(pullModel(REPO, h.deps, OPTS)).rejects.toThrow(/changed since you reviewed it/);
