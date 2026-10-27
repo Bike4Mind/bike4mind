@@ -8,9 +8,12 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({ useAccessToken: vi.fn() }))
 
 const getMock = vi.fn();
 const solveMock = vi.fn();
-vi.mock('@client/app/utils/turnstile', () => ({ getTurnstileToken: (...args: unknown[]) => solveMock(...args) }));
+vi.mock('@client/app/utils/turnstile', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/turnstile')>()),
+  getTurnstileToken: (...args: unknown[]) => solveMock(...args),
+}));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: (...args: unknown[]) => getMock(...args), post: vi.fn() },
+  api: { get: (...args: unknown[]) => getMock(...args), post: () => Promise.resolve() },
 }));
 
 import { oauthStartProvider, oauthStartUrl, useStartOAuthSignIn } from './auth';
