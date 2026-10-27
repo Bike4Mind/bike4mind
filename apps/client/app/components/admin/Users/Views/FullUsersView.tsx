@@ -123,6 +123,8 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
   onUserDeleted,
 }) => {
   const isPage = variant === 'page';
+  // The page has no card edge to inset from, so panels align with the header and tabs.
+  const tabPanelPadding = isPage ? { py: 2 } : { p: { xs: 1, sm: 2 } };
   const deleteUser = useDeleteUser();
   const updateUser = useUpdateUser();
   const loginAsUser = useLoginAsUser();
@@ -546,9 +548,15 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
 
   return (
     <Card
-      variant="outlined"
+      // On its own page the profile sits on the canvas; only the list card is a card.
+      variant={isPage ? 'plain' : 'outlined'}
       key={user.id}
-      sx={{ mb: isPage ? 0 : { xs: 1, sm: 3 }, width: '100%', bgcolor: 'background.level1' }}
+      sx={{
+        mb: isPage ? 0 : { xs: 1, sm: 3 },
+        width: '100%',
+        bgcolor: isPage ? 'transparent' : 'background.level1',
+        ...(isPage && { p: 0 }),
+      }}
     >
       {/* Mobile compact summary - visible only on xs, and only for a card in the list */}
       {!isPage && (
@@ -592,11 +600,11 @@ export const FullUsersView: React.FC<UsersViewProps> = ({
         <UserViewTabs tabs={isPage ? USER_PROFILE_TABS : CARD_TABS} value={activeTab} onChange={setActiveTab} />
 
         {/* Overview and Admin stay mounted while hidden, so staged edits survive a tab switch. */}
-        <Box sx={{ p: { xs: 1, sm: 2 }, display: activeTab === 'overview' ? 'block' : 'none' }}>
+        <Box sx={{ ...tabPanelPadding, display: activeTab === 'overview' ? 'block' : 'none' }}>
           {isPage ? pageOverview : cardOverview}
         </Box>
         {isPage && (
-          <Box sx={{ p: { xs: 1, sm: 2 }, display: activeTab === 'admin' ? 'block' : 'none' }}>
+          <Box sx={{ ...tabPanelPadding, display: activeTab === 'admin' ? 'block' : 'none' }}>
             <Card variant="outlined" color="danger" data-testid="user-profile-danger-zone" sx={{ maxWidth: 640 }}>
               <SectionBody section={adminActionsSection} />
             </Card>

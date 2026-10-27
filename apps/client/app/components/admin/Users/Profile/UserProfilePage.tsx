@@ -91,7 +91,8 @@ export const UserProfilePage: React.FC<UserProfilePageProps> = ({ userId, tab, o
   };
 
   return (
-    <Sheet data-testid="user-profile-page" sx={{ minHeight: '100vh', overflowY: 'auto' }}>
+    // Admin skin scope (utils/themes/customizations/adminSkin.ts); #5844 moves it to the admin layout root.
+    <Sheet data-testid="user-profile-page" data-admin-surface sx={{ minHeight: '100vh', overflowY: 'auto' }}>
       <Box sx={{ maxWidth: 1440, mx: 'auto', p: { xs: 1, sm: 2, md: 3 } }}>
         <Button
           size="sm"

@@ -215,8 +215,9 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
     );
   }
 
+  // On desktop the toolbar sits on the page canvas; only the table below is a card.
   return (
-    <Card sx={{ px: 2, py: 1, gap: 1 }}>
+    <Stack spacing={1}>
       {/* Search stretches into the remaining space so the row has no dead gap. */}
       <Stack direction="row" spacing={1} alignItems="center">
         {searchInput}
@@ -244,7 +245,7 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
           </Chip>
         )}
       </Stack>
-    </Card>
+    </Stack>
   );
 };
 
