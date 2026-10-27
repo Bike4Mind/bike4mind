@@ -36,12 +36,21 @@ describe('evaluateSignupSignals', () => {
     expect(evaluate({ formToken: signSignupFormToken(NOW), nowMs: NOW + MIN })).toEqual([]);
   });
 
-  it('gives no signal for an expired token', () => {
+  it('gives no signal for a recently expired token', () => {
     const expired = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW }, 'test-secret', {
       algorithm: 'HS256',
       expiresIn: -10,
     });
     expect(evaluate({ formToken: expired })).toEqual([]);
+  });
+
+  it('flags a token expired longer than the grace window as invalid', () => {
+    const exp = Math.floor(NOW / 1000) - 3600;
+    const stale = jwt.sign({ purpose: 'signup_form', issuedAtMs: NOW - 7_200_000, exp }, 'test-secret', {
+      algorithm: 'HS256',
+    });
+    expect(evaluate({ formToken: stale, nowMs: exp * 1000 + 24 * 3_600_000 })).toEqual([]);
+    expect(evaluate({ formToken: stale, nowMs: exp * 1000 + 24 * 3_600_000 + 1 })).toEqual(['signup_token_invalid']);
   });
 
   it('flags a not-yet-valid token as invalid', () => {
