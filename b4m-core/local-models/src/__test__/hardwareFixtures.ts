@@ -159,7 +159,6 @@ export const intelArcB580Xe: PciDeviceFixture = {
   vendor: '0x8086',
   device: '0xe20b',
   driver: 'xe',
-  files: { 'tile0/physical_vram_size_bytes': '12884901888' },
 };
 
 export const intelArcA770I915: PciDeviceFixture = {

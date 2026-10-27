@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseWindowsGpus, scanLinuxGpus, WINDOWS_GPU_SCRIPT, windowsGpuCommand } from './gpus';
 import { parseNvidiaSmi, probeHardware, type ExecLike } from './hardware';
 import {
@@ -241,10 +243,18 @@ describe('probeHardware on Linux without nvidia-smi', () => {
   it('skips an APU with a large carve-out by its KFD gfx target, though its node has no CPU cores', async () => {
     const raphael16 = { ...amdRaphaelIgpu, files: { mem_info_vram_total: String(16 * GiB) } };
     expect(await linux({ devices: [raphael16], kfdNodes: amdKfd })).toMatchObject({ ...cpuOnly, confidence: 'high' });
-    expect(await linux({ devices: [amdStrixHalo], kfdNodes: [KFD_CPU_NODE, KFD_STRIX_HALO_NODE] })).toMatchObject({
-      ...cpuOnly,
-      confidence: 'high',
-    });
+  });
+
+  it('keeps the supported Strix Halo APU visible without treating shared RAM as dedicated VRAM', async () => {
+    for (const memory of [GiB, 64 * GiB]) {
+      const device = { ...amdStrixHalo, files: { mem_info_vram_total: String(memory) } };
+      expect(await linux({ devices: [device], kfdNodes: [KFD_STRIX_HALO_NODE] })).toMatchObject({
+        memoryKind: 'discrete',
+        gpuMemoryBytes: null,
+        gpuCount: 1,
+        confidence: 'low',
+      });
+    }
   });
 
   it('still skips an APU whose KFD node reports CPU cores, as ACPI CRAT topologies do', async () => {
@@ -302,14 +312,14 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     expect(profile).toMatchObject({ ...cpuOnly, confidence: 'high' });
   });
 
-  it('reads Intel Arc VRAM from xe tiles and skips the iGPU', async () => {
+  it('records Intel Arc on xe with unknown VRAM and skips the iGPU', async () => {
     const profile = await linux({ devices: [intelIgpu, intelArcB580Xe], pciIds: PCI_IDS });
     expect(profile).toMatchObject({
       memoryKind: 'discrete',
-      gpuMemoryBytes: 12 * GiB,
+      gpuMemoryBytes: null,
       gpuName: 'Intel Battlemage G21 [Arc B580]',
       gpuCount: 1,
-      confidence: 'high',
+      confidence: 'low',
     });
   });
 
@@ -324,14 +334,14 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     });
   });
 
-  it('reports the largest single-vendor group instead of summing across vendors', async () => {
+  it('keeps mixed-vendor VRAM unknown when Intel memory cannot be measured', async () => {
     const profile = await linux({ devices: [amdRx7900xtx, intelArcB580Xe], kfdNodes: amdKfd, pciIds: PCI_IDS });
     expect(profile).toMatchObject({
       memoryKind: 'discrete',
-      gpuMemoryBytes: 25753026560,
+      gpuMemoryBytes: null,
       gpuName: 'AMD Navi 31 [Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M]',
-      gpuCount: 1,
-      confidence: 'high',
+      gpuCount: 2,
+      confidence: 'low',
     });
   });
 
@@ -386,6 +396,21 @@ describe('probeHardware on Linux without nvidia-smi', () => {
     expect(await linux({ deviceTreeCompatible: 'nvidia,p3768-0000+p3767-0005\0nvidia,tegra234\0' })).toMatchObject(low);
   });
 
+  it.each(['class', 'vendor', 'device'])('keeps missing PCI %s metadata at low confidence', async field => {
+    const root = sysfs({ devices: [amdRx7900xtx], kfdNodes: amdKfd });
+    unlinkSync(join(root, 'sys/bus/pci/devices', amdRx7900xtx.address, field));
+    expect(await scanLinuxGpus(root, {})).toBeNull();
+    expect(
+      await probeHardware({ exec: execFrom({}), os: os(64 * GiB), platform: 'linux', rootDir: root, env: {} })
+    ).toMatchObject({ ...cpuOnly, confidence: 'low' });
+  });
+
+  it('keeps an existing but inaccessible GPU device at low confidence', async () => {
+    const root = sysfs({ devices: [amdRx7900xtx], kfdNodes: amdKfd });
+    chmodSync(join(root, 'dev/dri/renderD128'), 0);
+    expect(await scanLinuxGpus(root, {})).toBeNull();
+  });
+
   it('detects WSL with a custom kernel from its environment, interop handler or /dev/dxg', async () => {
     const low = { ...cpuOnly, confidence: 'low' };
     expect(await linux({}, execFrom({}), { WSL_DISTRO_NAME: 'Ubuntu-24.04' })).toMatchObject(low);
@@ -417,6 +442,17 @@ describe('probeHardware on Windows without nvidia-smi', () => {
     expect(Buffer.from(encoded, 'base64').toString('utf16le')).toBe(WINDOWS_GPU_SCRIPT);
   });
 
+  it('terminates on controller enumeration errors before serializing an empty result', () => {
+    const enumeration = WINDOWS_GPU_SCRIPT.slice(
+      WINDOWS_GPU_SCRIPT.indexOf('try {'),
+      WINDOWS_GPU_SCRIPT.indexOf('$rows =')
+    );
+    expect(enumeration).toContain('Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop');
+    expect(enumeration).toContain('catch {');
+    expect(enumeration).toContain('[Console]::Error.WriteLine($_.Exception.Message)');
+    expect(enumeration).toContain('exit 1');
+  });
+
   it('is confidently CPU-only with only integrated graphics', async () => {
     expect(await windows(POWERSHELL_INTEL_IGPU_ONLY)).toMatchObject({ ...cpuOnly, confidence: 'high' });
     expect(await windows('[]')).toMatchObject({ ...cpuOnly, confidence: 'high' });
@@ -441,6 +477,16 @@ describe('probeHardware on Windows without nvidia-smi', () => {
     });
   });
 
+  it('reports the largest single-vendor group instead of summing across vendors', async () => {
+    const controllers = `[${POWERSHELL_AMD_DISCRETE_AND_APU.slice(1, -1)},${POWERSHELL_INTEL_ARC}]`;
+    expect(await windows(controllers)).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 25753026560,
+      gpuCount: 1,
+      confidence: 'high',
+    });
+  });
+
   it('measures an NVIDIA GPU from the registry when nvidia-smi is missing', async () => {
     expect(await windows(POWERSHELL_NVIDIA)).toMatchObject({
       memoryKind: 'discrete',
@@ -461,6 +507,14 @@ describe('probeHardware on Windows without nvidia-smi', () => {
     expect(await windows('')).toMatchObject(low);
     expect(await windows('Get-CimInstance : Access denied')).toMatchObject(low);
   });
+
+  it.each(['null', 'false', '42', '"error"', '{}', '[null]', '[{}]', '[false]'])(
+    'keeps malformed controller data at low confidence: %s',
+    async stdout => {
+      expect(parseWindowsGpus(stdout)).toBeNull();
+      expect(await windows(stdout)).toMatchObject({ ...cpuOnly, confidence: 'low' });
+    }
+  );
 });
 
 describe('parseWindowsGpus', () => {
@@ -494,7 +548,7 @@ describe('parseWindowsGpus', () => {
     expect(count('AMD Radeon(TM) Vega 8 Graphics')).toBe(0);
     expect(count('AMD Radeon 780M Graphics')).toBe(0);
     expect(count('AMD Radeon(TM) 610M')).toBe(0);
-    expect(count('AMD Radeon 8060S Graphics')).toBe(0);
+    expect(count('AMD Radeon 8060S Graphics')).toBe(1);
     expect(count('AMD Radeon RX 7600M XT')).toBe(1);
     expect(count('Radeon RX Vega')).toBe(1);
     expect(count('Radeon Pro WX 7100 Graphics')).toBe(1);
@@ -502,6 +556,35 @@ describe('parseWindowsGpus', () => {
 
   it('treats 1 GiB of AMD memory as an APU carve-out', () => {
     expect(parseWindowsGpus(amd({ memoryBytes: GiB }))).toEqual([]);
+  });
+
+  it.each(['AMD Radeon 8050S Graphics', 'AMD Radeon 8060S Graphics'])(
+    'keeps supported shared-memory graphics unmeasured: %s',
+    name => {
+      expect(parseWindowsGpus(amd({ name, memoryBytes: 64 * GiB }))).toEqual([
+        { vendor: 'amd', name, memoryBytes: null },
+      ]);
+    }
+  );
+
+  it.each(['AMD Radeon HD 5450', 'AMD Radeon HD 6450', 'AMD Radeon HD 7670'])(
+    'skips pre-GCN graphics without a supported runtime: %s',
+    name => {
+      expect(parseWindowsGpus(amd({ name, memoryBytes: 2 * GiB }))).toEqual([]);
+    }
+  );
+
+  it.each(['AMD Radeon HD 8570D', 'AMD Radeon HD 8670D'])(
+    'skips legacy integrated graphics with a large carve-out: %s',
+    name => {
+      expect(parseWindowsGpus(amd({ name, memoryBytes: 2 * GiB }))).toEqual([]);
+    }
+  );
+
+  it('keeps GCN discrete Radeon cards on the other side of the legacy boundary', () => {
+    expect(parseWindowsGpus(amd({ name: 'AMD Radeon HD 7770', memoryBytes: 2 * GiB }))).toEqual([
+      { vendor: 'amd', name: 'AMD Radeon HD 7770', memoryBytes: 2 * GiB },
+    ]);
   });
 
   it('reads the PCI bus from raw and resolved LocationInformation', () => {

@@ -1,5 +1,7 @@
 import { access, readdir, readFile, readlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { basename, join } from 'node:path';
+import { z } from 'zod';
 
 const GIB = 1024 ** 3;
 /** The cut-off Ollama's former amdgpu discovery used: an APU's default carve-out reports 1 GiB or less. */
@@ -23,7 +25,6 @@ const AMD_APU_GFX_TARGETS = new Set([
   100307, // Mendocino
   110003, // Phoenix, Hawk Point
   110500, // Strix Point
-  110501, // Strix Halo
   110502, // Krackan Point
 ]);
 const AMD_DISCRETE_GFX_TARGETS = new Set([
@@ -56,7 +57,7 @@ const PCI_IDS_FILES = ['usr/share/hwdata/pci.ids', 'usr/share/misc/pci.ids', 'us
 
 export type GpuVendor = 'nvidia' | 'amd' | 'intel';
 
-/** A discrete GPU a local runtime can use; integrated GPUs and cards no runtime drives are left out. */
+/** A GPU a local runtime can use; unsupported integrated GPUs and cards no runtime drives are left out. */
 export interface DetectedGpu {
   vendor: GpuVendor;
   name: string | null;
@@ -124,33 +125,41 @@ async function kfdNodes(root: string): Promise<Map<string, KfdNode>> {
   return byAddress;
 }
 
-async function xeVram(dir: string): Promise<number | null> {
-  const entries = await readdir(dir).catch((): string[] => []);
-  const tiles = await Promise.all(
-    entries.filter(entry => /^tile\d+$/.test(entry)).map(tile => readText(join(dir, tile, 'physical_vram_size_bytes')))
-  );
-  const total = tiles.reduce((sum, value) => sum + (positive(value) ?? 0), 0);
-  return total > 0 ? total : null;
+async function canOpenDevice(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.R_OK | constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-/** Whether this mount namespace can open the card: a container without the GPU passed in still sees its sysfs. */
+/** Check device permissions too: a container without the GPU passed in can still see its sysfs. */
 async function reachable(root: string, dir: string, driver: string): Promise<boolean> {
-  if (driver === 'nvidia') return exists(join(root, 'dev/nvidiactl'));
+  if (driver === 'nvidia') return canOpenDevice(join(root, 'dev/nvidiactl'));
   const entries = await readdir(join(dir, 'drm')).catch((): string[] => []);
   const nodes = entries.filter(entry => entry.startsWith('renderD'));
-  const found = await Promise.all(nodes.map(node => exists(join(root, 'dev/dri', node))));
+  const found = await Promise.all(nodes.map(node => canOpenDevice(join(root, 'dev/dri', node))));
   return found.includes(true);
 }
 
-type Classified = { gpu: PciGpu; reachable: boolean } | null;
+type Classified = { gpu: PciGpu; reachable: boolean } | null | undefined;
 
 async function linuxGpu(root: string, dir: string, address: string, kfd: Map<string, KfdNode>): Promise<Classified> {
-  if (!(await readText(join(dir, 'class')))?.startsWith('0x03')) return null;
+  const pciClass = await readText(join(dir, 'class'));
+  if (!pciClass || !/^0x[0-9a-f]{6}$/i.test(pciClass)) return undefined;
+  if (!pciClass.startsWith('0x03')) return null;
   const [vendorText, deviceText, driverLink] = await Promise.all([
     readText(join(dir, 'vendor')),
     readText(join(dir, 'device')),
-    readlink(join(dir, 'driver')).catch(() => null),
+    readlink(join(dir, 'driver')).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+      throw error;
+    }),
   ]);
+  if (!/^0x[0-9a-f]{4}$/i.test(vendorText ?? '') || !/^0x[0-9a-f]{4}$/i.test(deviceText ?? '')) {
+    return undefined;
+  }
   const vendorId = vendorText?.replace(/^0x/i, '').toLowerCase() ?? '';
   const deviceId = deviceText?.replace(/^0x/i, '').toLowerCase() ?? '';
   const vendor = VENDORS[vendorId];
@@ -170,6 +179,8 @@ async function linuxGpu(root: string, dir: string, address: string, kfd: Map<str
     if (driver !== 'amdgpu') return null;
     const vram = positive(await readText(join(dir, 'mem_info_vram_total')));
     const node = kfd.get(address);
+    // Ollama enables Strix Halo by default, but its firmware carve-out is shared RAM, not dedicated VRAM.
+    if (node?.gfxTarget === 110501) return classified(null);
     if (vram !== null && vram <= INTEGRATED_MAX_VRAM_BYTES) return null;
     if (node && (AMD_APU_GFX_TARGETS.has(node.gfxTarget) || node.cpuCores > 0)) return null;
     // Unless the target is a known card, an APU's firmware carve-out could pass for VRAM, so leave it unmeasured.
@@ -178,7 +189,8 @@ async function linuxGpu(root: string, dir: string, address: string, kfd: Map<str
   // Intel integrated graphics sit on the root bus (00:02.0); discrete Arc cards hang off a PCIe port.
   const bus = parseInt(address.split(':')[1] ?? '', 16);
   if ((driver !== 'i915' && driver !== 'xe') || bus === 0) return null;
-  return classified(driver === 'xe' ? await xeVram(dir) : null);
+  // Current xe/i915 expose memory sizes through DRM ioctls, not a VRAM sysfs attribute.
+  return classified(null);
 }
 
 async function pciIdsLookup(root: string): Promise<(vendorId: string, deviceId: string) => string | null> {
@@ -204,7 +216,7 @@ async function isWsl(root: string, env: Environment): Promise<boolean> {
   return markers.includes(true);
 }
 
-/** Discrete GPUs from Linux sysfs; null when they cannot be listed or opened (no PCI sysfs, WSL, Jetson, container). */
+/** Usable GPUs from Linux sysfs; null when they cannot be listed or opened (no PCI sysfs, WSL, Jetson, container). */
 export async function scanLinuxGpus(root = '/', env: Environment = process.env): Promise<DetectedGpu[] | null> {
   const devicesDir = join(root, 'sys/bus/pci/devices');
   let addresses: string[];
@@ -220,7 +232,10 @@ export async function scanLinuxGpus(root = '/', env: Environment = process.env):
   ]);
   if (wsl || deviceTree?.includes('nvidia,tegra')) return null;
 
-  const found = await Promise.all(addresses.map(address => linuxGpu(root, join(devicesDir, address), address, kfd)));
+  const found = await Promise.all(
+    addresses.map(address => linuxGpu(root, join(devicesDir, address), address, kfd).catch(() => undefined))
+  );
+  if (found.includes(undefined)) return null;
   const usable = found.filter((entry): entry is NonNullable<Classified> => entry !== null);
   if (usable.some(entry => !entry.reachable)) return null;
   const gpus = usable.map(entry => entry.gpu);
@@ -240,7 +255,13 @@ export async function scanLinuxGpus(root = '/', env: Environment = process.env):
 export const WINDOWS_GPU_SCRIPT = `$ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$rows = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-Object {
+try {
+  $controllers = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop)
+} catch {
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}
+$rows = @($controllers | ForEach-Object {
   $enum = Get-ItemProperty -LiteralPath ('HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\' + $_.PNPDeviceID)
   $driver = if ($enum.Driver) { Get-ItemProperty -LiteralPath ('HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\' + $enum.Driver) }
   $memory = $driver.'HardwareInformation.qwMemorySize'
@@ -259,6 +280,7 @@ export function windowsGpuCommand(env: Environment = process.env): [string, stri
 
 /** APU graphics: "Radeon(TM) Graphics", "RX Vega 11 Graphics", "780M Graphics", "610M"; cards say RX or Pro. */
 function isAmdApuName(name: string): boolean {
+  if (/\bHD\s*\d{4}D\b/i.test(name)) return true;
   if (/\bVega \d+ Graphics\b/i.test(name)) return true;
   return !/\b(RX|Pro|FirePro|VII|HD)\b/i.test(name) && (/\bGraphics\s*$/i.test(name) || /\b\d{3,4}[MS]\b/.test(name));
 }
@@ -270,7 +292,18 @@ function pciBus(location: unknown): number | null {
   return match ? Number(match[1]) : null;
 }
 
-/** Parses WINDOWS_GPU_SCRIPT's JSON; null when it is not JSON (PowerShell missing, blocked or timed out). */
+const windowsControllerSchema = z.object({
+  pnpDeviceId: z.string(),
+  name: z.string().nullish(),
+  adapterRam: z.union([z.number(), z.string()]).nullish(),
+  memoryBytes: z.union([z.number(), z.string()]).nullish(),
+  location: z.string().nullish(),
+  errorCode: z.number().nullish(),
+  status: z.string().nullish(),
+});
+const windowsControllersSchema = z.union([z.array(windowsControllerSchema), windowsControllerSchema]);
+
+/** Parses WINDOWS_GPU_SCRIPT's JSON; null when enumeration failed or the controller data is malformed. */
 export function parseWindowsGpus(stdout: string): DetectedGpu[] | null {
   let parsed: unknown;
   try {
@@ -278,10 +311,10 @@ export function parseWindowsGpus(stdout: string): DetectedGpu[] | null {
   } catch {
     return null;
   }
-  const rows: unknown[] = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? [parsed] : [];
-  return rows.flatMap((row): DetectedGpu[] => {
-    if (!row || typeof row !== 'object') return [];
-    const fields = row as Record<string, unknown>;
+  const result = windowsControllersSchema.safeParse(parsed);
+  if (!result.success) return null;
+  const rows = Array.isArray(result.data) ? result.data : [result.data];
+  return rows.flatMap((fields): DetectedGpu[] => {
     const disabled =
       (typeof fields.errorCode === 'number' && fields.errorCode !== 0) ||
       (typeof fields.status === 'string' && fields.status !== 'OK');
@@ -298,7 +331,12 @@ export function parseWindowsGpus(stdout: string): DetectedGpu[] | null {
     const gpu = [{ vendor, name, memoryBytes }];
 
     if (vendor === 'nvidia') return parseInt(ids[2], 16) >= NVIDIA_FIRST_MAXWELL_DEVICE ? gpu : [];
-    if (vendor === 'amd') return small || (name !== null && isAmdApuName(name)) ? [] : gpu;
+    if (vendor === 'amd') {
+      if (name && /\b(?:8050S|8060S)\b/i.test(name)) return [{ vendor, name, memoryBytes: null }];
+      // Pre-GCN Radeon HD parts have neither a ROCm nor a Vulkan backend.
+      if (name && /\bHD\s*(?:[2-6]\d{3}|7[0-6]\d{2})\b/i.test(name)) return [];
+      return small || (name !== null && isAmdApuName(name)) ? [] : gpu;
+    }
     return bus === 0 || (bus === null && small) ? [] : gpu;
   });
 }
