@@ -10,6 +10,13 @@ const mocks = vi.hoisted(() => ({
   setComplianceUserId: vi.fn(),
 }));
 
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('@client/app/hooks/useHelpPanel', () => ({ openHelpPanel: vi.fn() }));
+vi.mock('../BulkAbuseResponseModal', () => ({
+  default: ({ selectedUserIds, recordAction }: { selectedUserIds: string[]; recordAction: string }) => (
+    <div role="dialog" data-testid="bulk-abuse-modal" data-user={selectedUserIds[0]} data-action={recordAction} />
+  ),
+}));
 vi.mock('./actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks.update }));
 vi.mock('../ComplianceModal', () => ({
   useComplianceModal: (select: (state: { setUserId: (id: string) => void }) => unknown) =>
@@ -124,6 +131,23 @@ describe('UserProfileView', () => {
       press('s');
 
       expect(screen.queryByTestId('suspend-dialog')).not.toBeInTheDocument();
+    });
+
+    it('lists the profile commands in the palette, with Suspend disabled for a suspended account', () => {
+      setup(buildProfile({ isBanned: true }));
+
+      expect(screen.getByTestId('admin-command-credits-btn')).toBeEnabled();
+      expect(screen.getByTestId('admin-command-suspend-btn')).toBeDisabled();
+    });
+
+    it('Revoke API keys opens the audited revoke flow for this user only', () => {
+      setup();
+
+      fireEvent.click(screen.getByTestId('admin-command-revoke-btn'));
+
+      const modal = screen.getByTestId('bulk-abuse-modal');
+      expect(modal).toHaveAttribute('data-user', buildProfile().id);
+      expect(modal).toHaveAttribute('data-action', 'revoke');
     });
 
     it('closes the dialog from its cancel button', async () => {

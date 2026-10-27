@@ -1,9 +1,13 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Box, Button, Link, Stack, Typography } from '@mui/joy';
+import { useQueryClient } from '@tanstack/react-query';
 import BlockIcon from '@mui/icons-material/Block';
 import { useComplianceModal } from '../ComplianceModal';
 import GrantSubscriptionModal from '../Details/GrantSubscriptionModal';
 import { UserActivityTabPanel } from '../Activity/UserViewTabs';
+import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
+import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
+import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
 import { Kbd, useUndoToast } from '../../shared';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { SuspendDialog } from './actions/SuspendDialog';
@@ -19,7 +23,6 @@ import {
 } from './actions/accountDialogs';
 import { useAdminUserUpdate } from './actions/useAdminUserUpdate';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
-import { useProfileShortcuts } from './useProfileShortcuts';
 import { UserProfileHeader } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
@@ -154,19 +157,28 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
 /** The profile of one user: every write is a named action that opens its own dialog. */
 export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onTabChange, onBack }) => {
   const [action, setAction] = useState<ProfileAction | null>(null);
+  // Revoking keys has no profile dialog of its own; it reuses the audited bulk flow for this one user.
+  const [revokeKeysOpen, setRevokeKeysOpen] = useState(false);
   const update = useAdminUserUpdate(user.id);
   const showUndo = useUndoToast();
+  const queryClient = useQueryClient();
   const setComplianceUserId = useComplianceModal(state => state.setUserId);
   const openAdminLog = () => onTabChange('admin');
 
-  useProfileShortcuts(
-    {
-      c: () => setAction('credits'),
-      s: () => {
-        if (!user.isBanned) setAction('suspend');
+  // The palette ignores its single-key shortcuts while any dialog is open, so `c` never fires behind one.
+  const profileCommands = useMemo<AdminCommand[]>(
+    () => [
+      { id: 'credits', label: 'Adjust credits', shortcut: 'c', run: () => setAction('credits') },
+      {
+        id: 'suspend',
+        label: 'Suspend account',
+        shortcut: 's',
+        disabled: !!user.isBanned,
+        run: () => setAction('suspend'),
       },
-    },
-    action === null
+      { id: 'revoke', label: 'Revoke API keys', run: () => setRevokeKeysOpen(true) },
+    ],
+    [user.isBanned]
   );
 
   // Reinstating is the undo of a suspension, so it acts at once and offers its own undo.
@@ -199,6 +211,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   return (
     <Stack gap={2.5} data-testid="user-profile-view">
       <Breadcrumb name={displayName(user)} onBack={onBack} />
+      <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />
       <StatusBanner user={user} onReinstate={() => void reinstate()} onLiftRestriction={() => setAction('restrict')} />
       <UserProfileHeader user={user} onAction={setAction} onCompliance={() => setComplianceUserId(user.id)} />
       <UserProfileStats user={user} />
@@ -220,6 +233,17 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
           onClose={() => setAction(null)}
           onAudit={openAdminLog}
           onDeleted={onBack}
+        />
+      )}
+      {revokeKeysOpen && (
+        <BulkAbuseResponseModal
+          selectedUserIds={[user.id]}
+          recordAction="revoke"
+          onClose={() => setRevokeKeysOpen(false)}
+          onExecuted={() => {
+            void queryClient.invalidateQueries({ queryKey: ['users'] });
+            void queryClient.invalidateQueries({ queryKey: ['admin', 'users', user.id] });
+          }}
         />
       )}
     </Stack>
