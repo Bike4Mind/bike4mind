@@ -391,6 +391,7 @@ const localRuleSources = [
   './eslint-rules/no-raw-entity-response.mjs',
   './eslint-rules/no-raw-admin-joy.mjs',
   './eslint-rules/admin-joy-legacy.mjs',
+  './eslint-rules/admin-joy-legacy-imports.mjs',
 ];
 const localRulesPlugin = {
   meta: {
