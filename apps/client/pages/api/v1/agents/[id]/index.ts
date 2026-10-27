@@ -66,7 +66,7 @@ const updateRoute = nextRouteForContract(updateAgentContract, {
   const reset = (['preferredModel', 'temperature', 'maxTokens'] as const).filter(field => fields[field] === null);
   const changes: Partial<IAgent> = Object.fromEntries(Object.entries(fields).filter(([, value]) => value != null));
   try {
-    await validateAgentUpdate(changes, req.user.id, v1FieldLabel);
+    await validateAgentUpdate(changes, req.user.id, v1FieldLabel, req.logger);
   } catch (error) {
     throw toV1AgentError(error);
   }
