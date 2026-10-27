@@ -196,7 +196,7 @@ describe('generate-premium-glue.mjs', () => {
       fs.rmSync(path.join(root, 'node_modules'), { recursive: true });
       expect(run(root).status).toBe(0);
       expect(exists(root, API_STUB)).toBe(false);
-      expect(read(root, ROUTES)).toBeTruthy();
+      expect(read(root, ROUTES)).toContain('PremiumRouteDescriptor[] = [];');
     });
   });
 });
