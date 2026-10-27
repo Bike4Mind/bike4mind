@@ -5,6 +5,7 @@ import {
   IAgent,
   IAgentCapabilities,
   IAgentDocument,
+  IUserDocument,
   UserLevelType,
 } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
@@ -45,17 +46,19 @@ export async function assertAgentLimit(user: { id: string; level?: UserLevelType
  */
 export async function createAgent(
   agentData: Partial<IAgent>,
-  userId: string,
+  creator: IUserDocument,
   label?: (field: string) => string,
   logger?: Parameters<typeof validateAgentUpdate>[3]
 ) {
+  const userId = creator.id;
+
   // Validate required fields
   if (!agentData.name) {
     throw new AgentValidationError('Agent name is required');
   }
 
   // Normalizes agentData in place, so the fields below read the validated values.
-  await validateAgentUpdate(agentData, userId, label, logger);
+  await validateAgentUpdate(agentData, creator, label, logger);
 
   // Always use a default description if empty or undefined
   // This ensures the MongoDB schema validation passes
