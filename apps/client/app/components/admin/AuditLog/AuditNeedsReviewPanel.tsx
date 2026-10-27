@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Box, Card, Chip, IconButton, Stack, Typography } from '@mui/joy';
+import { Box, Chip, IconButton, Stack, Typography } from '@mui/joy';
+import { SectionCard } from '../shared';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import type { AuditAlertStatus, AuditEntry, AuditLogFilters, AuditSummaryWindow } from '@bike4mind/common';
@@ -46,45 +47,51 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
   const countLabel = `${entries.length}${hasNextPage ? '+' : ''}`;
 
   return (
-    <Card variant="outlined" size="sm" data-testid="audit-needs-review-panel">
-      <Stack direction="row" spacing={1} alignItems="center">
-        <IconButton
-          size="sm"
-          variant="plain"
-          aria-expanded={expanded}
-          aria-label={expanded ? 'Collapse needs review' : 'Expand needs review'}
-          onClick={() => setUserExpanded(!expanded)}
-          data-testid="audit-needs-review-toggle-btn"
-        >
-          {expanded ? <KeyboardArrowDownIcon /> : <KeyboardArrowRightIcon />}
-        </IconButton>
-        <Typography level="title-sm">Needs review</Typography>
-        {summary && !isError && (
-          <Chip size="sm" variant="soft" color={isEmpty ? 'neutral' : 'danger'} data-testid="audit-needs-review-count">
-            {isEmpty ? `Nothing critical in ${windowDays} days` : `${countLabel} critical in ${windowDays} days`}
-          </Chip>
+    <Box data-testid="audit-needs-review-panel">
+      <SectionCard title="Needs review">
+        <Stack direction="row" spacing={1} alignItems="center">
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse needs review' : 'Expand needs review'}
+            onClick={() => setUserExpanded(!expanded)}
+            data-testid="audit-needs-review-toggle-btn"
+          >
+            {expanded ? <KeyboardArrowDownIcon /> : <KeyboardArrowRightIcon />}
+          </IconButton>
+          {summary && !isError && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color={isEmpty ? 'neutral' : 'danger'}
+              data-testid="audit-needs-review-count"
+            >
+              {isEmpty ? `Nothing critical in ${windowDays} days` : `${countLabel} critical in ${windowDays} days`}
+            </Chip>
+          )}
+        </Stack>
+        {expanded && (
+          <Box>
+            <Typography level="body-xs" sx={{ mb: 1 }}>
+              {describeCriticalRules(alertStatus)}
+            </Typography>
+            <AuditEventTable
+              testIdPrefix="audit-needs-review-table"
+              entries={entries}
+              pageResetKey={JSON.stringify(filters)}
+              isLoading={isLoading}
+              errorMessage={isError ? LIST_ERROR_MESSAGE : undefined}
+              emptyMessage={`No critical entries in the last ${windowDays} days`}
+              hasMore={Boolean(hasNextPage)}
+              isFetchingMore={isFetchingNextPage}
+              onLoadMore={() => void fetchNextPage()}
+              onRetry={() => void refetch()}
+              onSelectEntry={onSelectEntry}
+            />
+          </Box>
         )}
-      </Stack>
-      {expanded && (
-        <Box>
-          <Typography level="body-xs" sx={{ mb: 1 }}>
-            {describeCriticalRules(alertStatus)}
-          </Typography>
-          <AuditEventTable
-            testIdPrefix="audit-needs-review-table"
-            entries={entries}
-            pageResetKey={JSON.stringify(filters)}
-            isLoading={isLoading}
-            errorMessage={isError ? LIST_ERROR_MESSAGE : undefined}
-            emptyMessage={`No critical entries in the last ${windowDays} days`}
-            hasMore={Boolean(hasNextPage)}
-            isFetchingMore={isFetchingNextPage}
-            onLoadMore={() => void fetchNextPage()}
-            onRetry={() => void refetch()}
-            onSelectEntry={onSelectEntry}
-          />
-        </Box>
-      )}
-    </Card>
+      </SectionCard>
+    </Box>
   );
 };

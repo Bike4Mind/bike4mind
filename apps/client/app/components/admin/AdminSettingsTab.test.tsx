@@ -34,6 +34,7 @@ vi.mock('./AdminStringListSettingField', () => ({
 type SearchRecord = Record<string, unknown>;
 const router = vi.hoisted(() => ({ search: {} as Record<string, unknown>, navigate: vi.fn() }));
 vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
   useSearch: () => router.search,
   useNavigate: () => router.navigate,
 }));
