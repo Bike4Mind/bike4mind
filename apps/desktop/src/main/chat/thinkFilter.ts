@@ -12,6 +12,9 @@ const CLOSE = '</think>';
  * @bike4mind/common's streamVisibility, which tracks nesting depth and treats a stray close as
  * text.
  *
+ * `startInReasoning` swaps in a different rule (see prefilledFilter): the first close ends the
+ * reasoning and later markers are reply text.
+ *
  * Markers can split across deltas, so a tail that could still become one is held back until
  * the next push (or `flush`) settles it.
  */
