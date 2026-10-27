@@ -1,0 +1,239 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import mongoose from 'mongoose';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
+import {
+  createMongoReplSet,
+  settleAutoIndexBuilds,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../packages/database/src/__test__/createMongoServer';
+import { noCardUnlockTransactionId } from '@bike4mind/common';
+import {
+  AdminSettings,
+  Cache,
+  CreditTransaction,
+  GithubUnlockClaim,
+  User,
+  adminSettingsRepository,
+  cacheRepository,
+  creditTransactionRepository,
+  githubUnlockClaimRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
+const { grantNoCardUnlock, githubValidator, workEmailValidator } = userService;
+
+let replSet: MongoMemoryReplSet;
+
+beforeAll(async () => {
+  replSet = await createMongoReplSet();
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
+});
+
+afterAll(async () => {
+  await mongoose.disconnect();
+  await replSet?.stop();
+});
+
+beforeEach(async () => {
+  await mongoose.connection.dropDatabase();
+  await Promise.all(
+    [User, CreditTransaction, AdminSettings, Cache, GithubUnlockClaim].map(model => model.createIndexes())
+  );
+});
+
+const GITHUB = 11;
+const WORK = 7;
+const MAX = 15;
+
+const seedSettings = async (over: Record<string, unknown> = {}) => {
+  const values: Record<string, unknown> = {
+    noCardUnlockEnabled: true,
+    noCardUnlockGithubCredits: GITHUB,
+    noCardUnlockWorkEmailCredits: WORK,
+    noCardUnlockMaxCredits: MAX,
+    noCardUnlockGithubMinAgeDays: 30,
+    noCardUnlockGithubMinRepos: 1,
+    noCardUnlockWorkEmailDomainDailyCap: 2,
+    ...over,
+  };
+  for (const [settingName, settingValue] of Object.entries(values)) {
+    await AdminSettings.create({ settingName, settingValue });
+  }
+};
+
+const seedUser = async (over: Record<string, unknown> = {}) => {
+  const tag = Math.random().toString(36).slice(2, 10);
+  const doc = await User.create({
+    name: 'Dev',
+    username: `dev-${tag}`,
+    email: `dev-${tag}@acme-corp.test`,
+    password: null,
+    hasUsablePassword: false,
+    emailVerified: true,
+    currentCredits: 0,
+    ...over,
+  });
+  return doc.id as string;
+};
+
+const ghProfile = (githubId: number, ageDays: number) => ({
+  getUser: async () => ({
+    id: githubId,
+    login: 'octo',
+    created_at: new Date(Date.now() - ageDays * 86_400_000).toISOString(),
+    public_repos: 3,
+  }),
+  getEmails: async () => [{ email: 'a@b.test', verified: true, primary: true }],
+});
+
+const build = async (githubId = 1, ageDays = 400) => {
+  const settings = await userService.loadNoCardUnlockSettings(adminSettingsRepository);
+  return {
+    db: {
+      adminSettings: adminSettingsRepository,
+      creditTransactions: creditTransactionRepository,
+      users: userRepository,
+    },
+    withTransaction: <T>(fn: () => Promise<T>) => withTransaction(fn),
+    validators: {
+      github_verified: githubValidator({
+        settings,
+        github: ghProfile(githubId, ageDays),
+        getAccessToken: async () => 'token',
+        claimGithubId: (id, userId) => githubUnlockClaimRepository.claim(id, userId),
+      }),
+      work_email_verified: workEmailValidator({
+        settings,
+        cache: cacheRepository,
+        resolveMx: async () => [{ exchange: 'mx', priority: 1 }],
+        catchAllProbe: async () => false,
+        isDisposable: () => false,
+      }),
+    },
+  };
+};
+
+const balance = async (id: string) => (await User.findById(id).lean())?.currentCredits;
+const rows = (id: string) => CreditTransaction.countDocuments({ ownerId: id, transactionId: /^unlock-grant:/ });
+
+describe('grantNoCardUnlock on a real replica set', () => {
+  it('credits once with the per-reason ledger id and treats a replay as already granted', async () => {
+    await seedSettings();
+    const id = await seedUser();
+    const adapters = await build();
+
+    expect(await grantNoCardUnlock(id, 'github_verified', adapters)).toMatchObject({ granted: true, credits: GITHUB });
+    expect(await grantNoCardUnlock(id, 'github_verified', adapters)).toEqual({
+      granted: false,
+      refusal: 'already_granted',
+    });
+    expect(await balance(id)).toBe(GITHUB);
+    expect(
+      await CreditTransaction.countDocuments({ transactionId: noCardUnlockTransactionId('github_verified', id) })
+    ).toBe(1);
+  });
+
+  it('refuses a young GitHub account and leaves the balance unchanged', async () => {
+    await seedSettings();
+    const id = await seedUser();
+    expect(await grantNoCardUnlock(id, 'github_verified', await build(1, 3))).toEqual({
+      granted: false,
+      refusal: 'github_too_new',
+    });
+    expect(await balance(id)).toBe(0);
+    expect(await rows(id)).toBe(0);
+  });
+
+  it('unlocks one GitHub id for one account only', async () => {
+    await seedSettings();
+    const [a, b] = [await seedUser(), await seedUser()];
+    expect(await grantNoCardUnlock(a, 'github_verified', await build(42))).toMatchObject({ granted: true });
+    expect(await grantNoCardUnlock(b, 'github_verified', await build(42))).toEqual({
+      granted: false,
+      refusal: 'github_already_claimed',
+    });
+    expect(await balance(b)).toBe(0);
+  });
+
+  it('refuses when disabled, unverified or banned, and writes nothing', async () => {
+    await seedSettings({ noCardUnlockEnabled: false });
+    const id = await seedUser();
+    expect(await grantNoCardUnlock(id, 'github_verified', await build())).toEqual({
+      granted: false,
+      refusal: 'disabled',
+    });
+
+    await AdminSettings.updateOne({ settingName: 'noCardUnlockEnabled' }, { settingValue: true });
+    const unverified = await seedUser({ emailVerified: false });
+    const banned = await seedUser({ isBanned: true });
+    for (const target of [unverified, banned]) {
+      expect(await grantNoCardUnlock(target, 'github_verified', await build(Math.random()))).toMatchObject({
+        granted: false,
+      });
+      expect(await balance(target)).toBe(0);
+    }
+  });
+
+  it('caps the combined unlocks at the maximum, trimming the second grant', async () => {
+    await seedSettings();
+    const id = await seedUser();
+    const adapters = await build();
+    expect(await grantNoCardUnlock(id, 'github_verified', adapters)).toMatchObject({ credits: GITHUB });
+    expect(await grantNoCardUnlock(id, 'work_email_verified', adapters)).toMatchObject({
+      granted: true,
+      credits: MAX - GITHUB,
+    });
+    expect(await balance(id)).toBe(MAX);
+  });
+
+  it('refuses with cap_reached once the maximum is spent by the other reason', async () => {
+    await seedSettings({ noCardUnlockMaxCredits: GITHUB });
+    const id = await seedUser();
+    const adapters = await build();
+    await grantNoCardUnlock(id, 'github_verified', adapters);
+    expect(await grantNoCardUnlock(id, 'work_email_verified', adapters)).toEqual({
+      granted: false,
+      refusal: 'cap_reached',
+    });
+    expect(await balance(id)).toBe(GITHUB);
+  });
+
+  it('never exceeds the maximum when both reasons race', async () => {
+    await seedSettings({ noCardUnlockMaxCredits: 12 });
+    const id = await seedUser();
+    const adapters = await build();
+    await Promise.all([
+      grantNoCardUnlock(id, 'github_verified', adapters),
+      grantNoCardUnlock(id, 'work_email_verified', adapters),
+    ]);
+    expect(await balance(id)).toBeLessThanOrEqual(12);
+    expect(await rows(id)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('credits once when the same reason races with itself', async () => {
+    await seedSettings();
+    const id = await seedUser();
+    const adapters = await build();
+    const results = await Promise.all([
+      grantNoCardUnlock(id, 'github_verified', adapters),
+      grantNoCardUnlock(id, 'github_verified', adapters),
+    ]);
+    expect(results.filter(r => r.granted)).toHaveLength(1);
+    expect(await balance(id)).toBe(GITHUB);
+  });
+
+  it('enforces the per-domain daily cap across accounts', async () => {
+    await seedSettings();
+    const users = [await seedUser(), await seedUser(), await seedUser()];
+    const adapters = await build();
+    const results = [];
+    for (const id of users) results.push(await grantNoCardUnlock(id, 'work_email_verified', adapters));
+    expect(results.map(r => r.granted)).toEqual([true, true, false]);
+    expect(results[2]).toEqual({ granted: false, refusal: 'domain_cap_reached' });
+  });
+});

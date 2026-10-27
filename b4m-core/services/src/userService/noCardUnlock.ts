@@ -1,0 +1,237 @@
+import { resolve as dnsResolve } from 'node:dns/promises';
+import {
+  CreditHolderType,
+  IAdminSettingsRepository,
+  ICacheRepository,
+  ICreditTransactionRepository,
+  IUserRepository,
+  NO_CARD_UNLOCK_REASONS,
+  noCardUnlockTransactionId,
+  personalEmailProviders,
+  resolveNoCardUnlockSettings,
+  type NoCardUnlockReason,
+  type NoCardUnlockRefusal,
+  type NoCardUnlockSettings,
+} from '@bike4mind/common';
+import { registrableDomain } from '@bike4mind/utils';
+import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService/addCredits';
+import { accountBlockReasons } from './accountState';
+import { isDisposableEmail } from './disposableEmail';
+
+export type NoCardUnlockCheck = { ok: true } | { ok: false; refusal: NoCardUnlockRefusal };
+
+export interface NoCardUnlockUser {
+  id: string;
+  email: string;
+}
+
+export type NoCardUnlockValidator = (user: NoCardUnlockUser) => Promise<NoCardUnlockCheck>;
+
+export type GithubProfile = { id: number; login: string; created_at: string; public_repos: number };
+export type GithubEmail = { email: string; verified: boolean; primary: boolean };
+
+export class GithubApiError extends Error {
+  constructor(readonly status: number) {
+    super(`GitHub API responded ${status}`);
+    this.name = 'GithubApiError';
+  }
+}
+
+export interface GithubClient {
+  getUser(token: string): Promise<GithubProfile>;
+  getEmails(token: string): Promise<GithubEmail[]>;
+}
+
+const REAUTHORIZE_STATUSES = new Set([401, 403, 404]);
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const deny = (refusal: NoCardUnlockRefusal): NoCardUnlockCheck => ({ ok: false, refusal });
+const OK: NoCardUnlockCheck = { ok: true };
+
+export interface GithubValidatorDeps {
+  settings: NoCardUnlockSettings;
+  github: GithubClient;
+  getAccessToken: (userId: string) => Promise<string | null>;
+  claimGithubId: (githubId: number, userId: string) => Promise<{ claimed: boolean }>;
+  now?: () => Date;
+}
+
+export function githubValidator(deps: GithubValidatorDeps): NoCardUnlockValidator {
+  return async user => {
+    const token = await deps.getAccessToken(user.id);
+    if (!token) return deny('github_not_linked');
+
+    let profile: GithubProfile;
+    let emails: GithubEmail[];
+    try {
+      profile = await deps.github.getUser(token);
+      emails = await deps.github.getEmails(token);
+    } catch (error) {
+      if (error instanceof GithubApiError && REAUTHORIZE_STATUSES.has(error.status)) {
+        return deny('github_reauthorize_required');
+      }
+      throw error;
+    }
+
+    if (typeof profile.id !== 'number' || !Number.isSafeInteger(profile.id)) return deny('github_not_linked');
+
+    const createdAt = Date.parse(profile.created_at);
+    const ageDays = Number.isNaN(createdAt) ? -1 : ((deps.now?.() ?? new Date()).getTime() - createdAt) / DAY_MS;
+    if (ageDays < 0 || ageDays < deps.settings.githubMinAgeDays) return deny('github_too_new');
+    if (typeof profile.public_repos !== 'number' || profile.public_repos < deps.settings.githubMinRepos) {
+      return deny('github_few_repos');
+    }
+    if (!Array.isArray(emails) || !emails.some(e => e.verified === true)) return deny('github_email_unverified');
+
+    const claim = await deps.claimGithubId(profile.id, user.id);
+    return claim.claimed ? OK : deny('github_already_claimed');
+  };
+}
+
+export interface WorkEmailValidatorDeps {
+  settings: NoCardUnlockSettings;
+  cache: Pick<ICacheRepository, 'tryIncrementWithinLimitFixedWindow'>;
+  resolveMx?: (domain: string) => Promise<unknown[]>;
+  /** true = domain accepts any local part, false = it rejects unknown ones, null = could not tell. */
+  catchAllProbe: (domain: string) => Promise<boolean | null>;
+  isDisposable?: (email: string) => boolean;
+}
+
+const defaultResolveMx = (domain: string) => dnsResolve(domain, 'MX');
+
+export function workEmailValidator(deps: WorkEmailValidatorDeps): NoCardUnlockValidator {
+  const { settings } = deps;
+  const resolveMx = deps.resolveMx ?? defaultResolveMx;
+  const isDisposable = deps.isDisposable ?? isDisposableEmail;
+
+  return async user => {
+    const email = (user.email ?? '').trim().toLowerCase();
+    const at = email.lastIndexOf('@');
+    const domain = at > 0 ? email.slice(at + 1) : '';
+    const registrable = registrableDomain(domain);
+    if (!domain || !registrable) return deny('work_email_no_mx');
+
+    const free: readonly string[] = personalEmailProviders;
+    if (free.includes(domain) || free.includes(registrable)) return deny('work_email_free');
+    if (isDisposable(email)) return deny('work_email_disposable');
+
+    let mx: unknown[] = [];
+    try {
+      mx = await resolveMx(domain);
+    } catch {
+      mx = [];
+    }
+    if (!Array.isArray(mx) || mx.length === 0) return deny('work_email_no_mx');
+
+    let catchAll: boolean | null = null;
+    try {
+      catchAll = await deps.catchAllProbe(domain);
+    } catch {
+      catchAll = null;
+    }
+    if (catchAll === true) return deny('work_email_catch_all');
+    if (catchAll === null && !settings.probeInconclusiveAllows) return deny('work_email_probe_inconclusive');
+
+    const cap = settings.workEmailDomainDailyCap;
+    if (cap <= 0) return deny('domain_cap_reached');
+    const { success } = await deps.cache.tryIncrementWithinLimitFixedWindow(
+      `no-card-unlock:domain:${domain}`,
+      cap,
+      DAY_MS
+    );
+    return success ? OK : deny('domain_cap_reached');
+  };
+}
+
+const SETTING_NAMES = [
+  'noCardUnlockEnabled',
+  'noCardUnlockGithubCredits',
+  'noCardUnlockWorkEmailCredits',
+  'noCardUnlockMaxCredits',
+  'noCardUnlockGithubMinAgeDays',
+  'noCardUnlockGithubMinRepos',
+  'noCardUnlockWorkEmailDomainDailyCap',
+  'noCardUnlockProbeInconclusiveAllows',
+] as const;
+
+export async function loadNoCardUnlockSettings(
+  adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>
+): Promise<NoCardUnlockSettings> {
+  const rows = await Promise.all(SETTING_NAMES.map(name => adminSettings.findBySettingName(name)));
+  const raw: Record<string, unknown> = {};
+  SETTING_NAMES.forEach((name, i) => {
+    raw[name] = rows[i]?.settingValue;
+  });
+  return resolveNoCardUnlockSettings(raw);
+}
+
+export type GrantNoCardUnlockResult =
+  { granted: true; credits: number; currentCredits: number } | { granted: false; refusal: NoCardUnlockRefusal };
+
+export interface GrantNoCardUnlockAdapters {
+  db: {
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>;
+    creditTransactions: ICreditTransactionRepository;
+    users: IUserRepository;
+  };
+  validators: Record<NoCardUnlockReason, NoCardUnlockValidator>;
+  withTransaction: <T>(fn: () => Promise<T>) => Promise<T>;
+}
+
+const refused = (refusal: NoCardUnlockRefusal): GrantNoCardUnlockResult => ({ granted: false, refusal });
+
+export async function grantNoCardUnlock(
+  userId: string,
+  reason: NoCardUnlockReason,
+  { db, validators, withTransaction }: GrantNoCardUnlockAdapters
+): Promise<GrantNoCardUnlockResult> {
+  const settings = await loadNoCardUnlockSettings(db.adminSettings);
+  if (!settings.enabled) return refused('disabled');
+
+  const reasonCredits = reason === 'github_verified' ? settings.githubCredits : settings.workEmailCredits;
+  if (reasonCredits <= 0) return refused('disabled');
+
+  const user = await db.users.findById(userId);
+  if (!user || !user.emailVerified || accountBlockReasons(user).length > 0) return refused('disabled');
+
+  const transactionId = noCardUnlockTransactionId(reason, userId);
+  if (await db.creditTransactions.findOne({ transactionId })) return refused('already_granted');
+
+  const check = await validators[reason]({ id: user.id, email: user.email ?? '' });
+  if (!check.ok) return refused(check.refusal);
+
+  try {
+    return await withTransaction(async () => {
+      const current = await db.users.findById(userId);
+      if (!current || accountBlockReasons(current).length > 0) return refused('disabled');
+
+      let granted = 0;
+      for (const other of NO_CARD_UNLOCK_REASONS) {
+        const row = await db.creditTransactions.findOne({ transactionId: noCardUnlockTransactionId(other, userId) });
+        granted += row?.credits ?? 0;
+      }
+      const amount = Math.min(reasonCredits, settings.maxCredits - granted);
+      if (amount <= 0) return refused('cap_reached');
+
+      const { creditHolder } = await addCreditsWithLedgerRow(
+        {
+          ownerId: userId,
+          ownerType: CreditHolderType.User,
+          credits: amount,
+          type: 'generic_add',
+          transactionId,
+          reason: `no_card_unlock:${reason}`,
+        },
+        {
+          db: { creditTransactions: db.creditTransactions },
+          creditHolderMethods: db.users,
+          duplicateTransactionId: 'throw',
+        }
+      );
+      return { granted: true, credits: amount, currentCredits: creditHolder.currentCredits };
+    });
+  } catch (error) {
+    if (error instanceof DuplicateCreditTransactionError) return refused('already_granted');
+    throw error;
+  }
+}
