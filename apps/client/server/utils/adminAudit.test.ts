@@ -18,6 +18,7 @@ import {
   parseAdminActionReason,
   recordAdminActionFromRequest,
   systemAuditActor,
+  userAuditTarget,
   type RecordAdminActionFromRequestInput,
 } from './adminAudit';
 import { ADMIN_REASON_PRESETS, composeAdminReason } from '@client/app/components/admin/shared/adminReason';
@@ -251,5 +252,18 @@ describe('denySelfAdminAction', () => {
     await expect(denySelfAdminAction(buildRequest(), { ...denied, message: 'Use settings.' })).rejects.toThrow(
       'Use settings.'
     );
+  });
+});
+
+describe('userAuditTarget', () => {
+  beforeEach(() => h.findById.mockReset());
+
+  it('labels the target with the email, then the username, then the id', async () => {
+    h.findById.mockResolvedValueOnce({ email: 'a@example.com', username: 'a' });
+    expect(await userAuditTarget('u1')).toEqual({ kind: 'user', id: 'u1', displayName: 'a@example.com' });
+    h.findById.mockResolvedValueOnce({ username: 'a' });
+    expect((await userAuditTarget('u1')).displayName).toBe('a');
+    h.findById.mockResolvedValueOnce(null);
+    expect((await userAuditTarget('u1')).displayName).toBe('u1');
   });
 });

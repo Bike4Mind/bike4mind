@@ -16,7 +16,7 @@ import {
 } from '@bike4mind/services/llm';
 import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
-import { type Logger } from '@bike4mind/observability';
+import { type Logger, describeErrorCause } from '@bike4mind/observability';
 import {
   buildClientToolPassthrough,
   currentTurnUserMessage,
@@ -428,7 +428,17 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       if (!res.writableEnded) res.end();
       return;
     }
-    req.logger.error({ err }, '[voice-v2/llm-proxy] full pipeline failed');
+    // Flat strings next to `err`: the alert sink prints each field with `${value}`, which turned
+    // the nested error object into `[object Object]`.
+    req.logger.error(
+      {
+        err,
+        errorName: err instanceof Error ? err.name : typeof err,
+        errorMessage: err instanceof Error ? err.message : String(err),
+        errorCause: describeErrorCause(err),
+      },
+      '[voice-v2/llm-proxy] full pipeline failed'
+    );
     try {
       if (res.writableEnded) return;
       // Only speak the fallback if nothing was streamed yet - otherwise the agent

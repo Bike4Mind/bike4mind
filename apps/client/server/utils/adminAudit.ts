@@ -185,3 +185,9 @@ export const systemAuditActor = (name: string): AuditActor => ({
   name,
   wasAdmin: false,
 });
+
+/** Audit target for the account an admin action is taken against. */
+export const userAuditTarget = async (userId: string) => {
+  const user = await userRepository.findById(userId);
+  return { kind: 'user' as const, id: userId, displayName: user?.email ?? user?.username ?? userId };
+};

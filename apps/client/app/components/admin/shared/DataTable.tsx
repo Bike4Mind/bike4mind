@@ -50,7 +50,8 @@ export type DataTableProps<Row> = {
   /** Controlled sort; with it, rows are shown in the order given. */
   sort?: DataTableSort;
   onSortChange?: (sort: DataTableSort) => void;
-  pagination?: DataTablePagination;
+  /** `false` shows every row with no footer, for callers that page with their own controls. */
+  pagination?: DataTablePagination | false;
   groups?: readonly DataTableGroup[];
   /** Ghost controls in a trailing cell, shown while the row is hovered or holds focus. */
   rowActions?: (row: Row) => ReactNode;
@@ -84,7 +85,7 @@ export function DataTable<Row>({
   pageResetKey,
   sort: controlledSort,
   onSortChange,
-  pagination,
+  pagination: paginationProp,
   groups,
   rowActions,
   minWidth = '40rem',
@@ -117,11 +118,15 @@ export function DataTable<Row>({
       })
     : rows;
 
+  const pagination = paginationProp || undefined;
   const pageSize = pagination?.pageSize ?? localPageSize;
   const total = pagination?.total ?? rows.length;
   const lastPage = Math.max(0, Math.ceil(total / pageSize) - 1);
   const currentPage = pagination ? Math.min(pagination.page - 1, lastPage) : Math.min(localPage, lastPage);
-  const pageRows = pagination ? sorted : sorted.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const pageRows =
+    pagination || paginationProp === false
+      ? sorted
+      : sorted.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
   const goToPage = (page: number) => (pagination ? pagination.onPageChange(page + 1) : setLocalPage(page));
 
   const sections = groupSections(pageRows, getRowId, groups);
@@ -384,64 +389,71 @@ export function DataTable<Row>({
           </tbody>
         </Table>
       </Box>
-      <Stack
-        direction="row"
-        alignItems="center"
-        flexWrap="wrap"
-        gap={1.5}
-        sx={{ px: 1.5, py: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
-        data-testid="admin-table-footer"
-      >
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mr: 'auto' }} data-testid="admin-table-range">
-          {firstShown.toLocaleString()} to {lastShown.toLocaleString()} of {total.toLocaleString()}
-        </Typography>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} component="span" id={`${testId}-page-size-label`}>
-          Rows per page
-        </Typography>
-        <Select
-          aria-labelledby={`${testId}-page-size-label`}
-          size="sm"
-          value={pageSize}
-          disabled={loading}
-          data-testid="admin-table-page-size"
-          onChange={(_, value) => {
-            if (value === null) return;
-            if (pagination) pagination.onPageSizeChange(value);
-            else {
-              setLocalPageSize(value);
-              setLocalPage(0);
-            }
-          }}
+      {paginationProp !== false && (
+        <Stack
+          direction="row"
+          alignItems="center"
+          flexWrap="wrap"
+          gap={1.5}
+          sx={{ px: 1.5, py: 1, borderTop: '1px solid', borderColor: 'admin.border' }}
+          data-testid="admin-table-footer"
         >
-          {PAGE_SIZES.map(size => (
-            <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
-              {size}
-            </Option>
-          ))}
-        </Select>
-        <Stack direction="row" gap={0.5}>
-          <IconButton
-            size="sm"
-            variant="outlined"
-            aria-label="Previous page"
-            disabled={loading || currentPage === 0}
-            onClick={() => goToPage(currentPage - 1)}
-            data-testid="admin-table-previous-btn"
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mr: 'auto' }} data-testid="admin-table-range">
+            {firstShown.toLocaleString()} to {lastShown.toLocaleString()} of {total.toLocaleString()}
+          </Typography>
+          <Typography
+            level="body-sm"
+            sx={{ color: 'admin.inkMuted' }}
+            component="span"
+            id={`${testId}-page-size-label`}
           >
-            <ChevronLeftIcon />
-          </IconButton>
-          <IconButton
+            Rows per page
+          </Typography>
+          <Select
+            aria-labelledby={`${testId}-page-size-label`}
             size="sm"
-            variant="outlined"
-            aria-label="Next page"
-            disabled={loading || currentPage === lastPage}
-            onClick={() => goToPage(currentPage + 1)}
-            data-testid="admin-table-next-btn"
+            value={pageSize}
+            disabled={loading}
+            data-testid="admin-table-page-size"
+            onChange={(_, value) => {
+              if (value === null) return;
+              if (pagination) pagination.onPageSizeChange(value);
+              else {
+                setLocalPageSize(value);
+                setLocalPage(0);
+              }
+            }}
           >
-            <ChevronRightIcon />
-          </IconButton>
+            {PAGE_SIZES.map(size => (
+              <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
+                {size}
+              </Option>
+            ))}
+          </Select>
+          <Stack direction="row" gap={0.5}>
+            <IconButton
+              size="sm"
+              variant="outlined"
+              aria-label="Previous page"
+              disabled={loading || currentPage === 0}
+              onClick={() => goToPage(currentPage - 1)}
+              data-testid="admin-table-previous-btn"
+            >
+              <ChevronLeftIcon />
+            </IconButton>
+            <IconButton
+              size="sm"
+              variant="outlined"
+              aria-label="Next page"
+              disabled={loading || currentPage === lastPage}
+              onClick={() => goToPage(currentPage + 1)}
+              data-testid="admin-table-next-btn"
+            >
+              <ChevronRightIcon />
+            </IconButton>
+          </Stack>
         </Stack>
-      </Stack>
+      )}
     </Box>
   );
 }

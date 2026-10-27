@@ -26,6 +26,7 @@ import {
 
 /** Channel-specific Slack incoming-webhook settings (each maps to a dedicated Slack channel). */
 type SlackChannelSettingKey =
+  | 'SlackSecurityAlertsWebhookUrl'
   | 'SlackGeneralWebhookUrl'
   | 'SlackLiveopsWebhookUrl'
   | 'SlackUserActivityWebhookUrl'
@@ -42,9 +43,11 @@ function normalizeWebhookUrl(raw: string | undefined): string {
 /**
  * Resolves the Slack incoming-webhook URL for a channel, falling back to the
  * admin-configurable default (`SlackDefaultWebhookUrl`) and finally the
- * `SLACK_WEBHOOK_URL` secret. Returns an empty string when none are configured.
+ * `SLACK_WEBHOOK_URL` secret. Security alerts use only their dedicated URL; empty disables them.
+ * Returns an empty string when no eligible webhook is configured.
  */
 export function resolveSlackWebhookUrl(channel: SlackChannelSettingKey, settings: Record<string, string>): string {
+  if (channel === 'SlackSecurityAlertsWebhookUrl') return normalizeWebhookUrl(getSettingsValue(channel, settings));
   // Trim each source before the `||` so a padded URL is usable and a whitespace-only value is treated
   // as empty, letting the fallback chain (channel -> SlackDefaultWebhookUrl -> SLACK_WEBHOOK_URL) continue.
   const resolved =
@@ -100,16 +103,17 @@ export function resolveFeedbackSlackRoute(
  * the signal - e.g. deduping an alert as "sent" - needs to tell the two apart; everyone else ignores
  * the result.
  */
-export async function postMessageToSlack(message: string): Promise<boolean> {
+export async function postMessageToSlack(
+  message: string,
+  channel: SlackChannelSettingKey = 'SlackLiveopsWebhookUrl',
+  options: { timeoutMs?: number } = {}
+): Promise<boolean> {
   try {
-    // Generic / operational notifications route to the LiveOps channel.
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const slackWebhookUrl = resolveSlackWebhookUrl('SlackLiveopsWebhookUrl', settings);
+    const slackWebhookUrl = resolveSlackWebhookUrl(channel, settings);
 
     if (!slackWebhookUrl) {
-      Logger.error(
-        'Error posting message to Slack: no SlackLiveopsWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
-      );
+      Logger.error(`Error posting message to Slack: no eligible webhook configured for ${channel}`);
       return false;
     }
 
@@ -118,6 +122,7 @@ export async function postMessageToSlack(message: string): Promise<boolean> {
       { text: message },
       {
         headers: { 'Content-Type': 'application/json' },
+        timeout: options.timeoutMs ?? 10_000,
       }
     );
     return true;

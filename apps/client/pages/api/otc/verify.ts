@@ -1,3 +1,4 @@
+import { signupProtection } from '@server/auth/signupProtection';
 import {
   AuthEvents,
   HTTPError,
@@ -421,6 +422,7 @@ const handler = baseApi({ auth: false })
           {
             db: {
               users: userRepository,
+              signupProtection,
               adminSettings: adminSettingsRepository,
               registrationInvites: registrationInviteRepository,
               subscribers: subscriberRepository,
