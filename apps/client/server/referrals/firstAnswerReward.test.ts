@@ -83,6 +83,8 @@ describe('rewardInviterForFirstAnswer', () => {
   it.each([
     ['is deleted', { deletedAt: new Date() }],
     ['is synthetic', { isSynthetic: true }],
+    ['is banned', { isBanned: true }],
+    ['has a chargeback pending', { disputePending: true }],
     ['is suspended', { moderation: { status: 'suspended' } }],
     ['is pending suspension', { moderation: { status: 'suspend_pending' } }],
     ['no longer exists', null],

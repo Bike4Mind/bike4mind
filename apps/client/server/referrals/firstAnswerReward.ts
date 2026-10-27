@@ -8,6 +8,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
+import { accountBlockReasons, type AccountStateFields } from '@bike4mind/services/userService/accountState';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { Logger } from '@bike4mind/observability';
@@ -19,13 +20,13 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 type RewardParty = {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
-  moderation?: { status?: string } | null;
-};
+} & AccountStateFields;
 
+// Stricter than accountBlockReasons: a money path also skips suspend_pending.
 const isBlockedInviter = (inviter: RewardParty) =>
   !!inviter.deletedAt ||
   !!inviter.isSynthetic ||
-  inviter.moderation?.status === 'suspended' ||
+  accountBlockReasons(inviter).length > 0 ||
   inviter.moderation?.status === 'suspend_pending';
 
 /**
@@ -57,7 +58,7 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
 
     const inviterId = String(friend.referredByUserId);
     const inviter = await User.findById(inviterId)
-      .select('isSynthetic deletedAt moderation.status')
+      .select('isSynthetic deletedAt isBanned disputePending moderation.status')
       .lean<RewardParty>();
     if (!inviter || isBlockedInviter(inviter)) return;
 
