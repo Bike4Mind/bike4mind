@@ -64,6 +64,11 @@ describe('parseLenientJson', () => {
     expect(parseLenientJson('{"a":{"b":[1,2],},"c":"x", /* tail */ }')).toEqual({ a: { b: [1, 2] }, c: 'x' });
   });
 
+  it('does not drop everything after an unterminated block comment', () => {
+    expect(() => parseLenientJson('{"a":1}\n/*\n{"b":2}')).toThrow(SyntaxError);
+    expect(() => parseLenientJson('{"a":1} /* oops')).toThrow(SyntaxError);
+  });
+
   it('throws on text that is not JSON even after cleaning', () => {
     expect(() => parseLenientJson('{"a": nope,}')).toThrow(SyntaxError);
     expect(() => parseLenientJson('# just markdown')).toThrow(SyntaxError);
