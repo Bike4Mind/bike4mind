@@ -154,7 +154,8 @@ function harness(
     detail?: HubModelDetail;
     verified?: string | null;
     healthy?: boolean;
-    version?: string;
+    /** null: Ollama answers but reports no version. */
+    version?: string | null;
     curated?: HubManifest;
     hardware?: HardwareProfile;
     setting?: LocalContextSetting;
@@ -166,7 +167,7 @@ function harness(
     health: vi.fn(async (): Promise<Health> =>
       options.healthy === false
         ? { ok: false, version: null, error: 'connection refused' }
-        : { ok: true, version: options.version ?? '0.40.11', error: null }
+        : { ok: true, version: options.version === undefined ? '0.40.11' : options.version, error: null }
     ),
     list: vi.fn(async (): Promise<InstalledModel[]> => []),
     inspect: vi.fn(async (name: string): Promise<ModelInspection> => ({
@@ -984,6 +985,33 @@ describe('ModelHubService curated list', () => {
     });
     expect(libraryLayers).not.toHaveBeenCalled();
   });
+
+  it('keeps a pick listed with Download off while Ollama reports no version, and refuses its download', async () => {
+    const { service, runtime, libraryLayers } = harness({ hardware: machine('cpu', 62), version: null });
+    const list = await service.curated();
+    const best = list.entries.find(entry => entry.id === 'gemma-4-26b')?.builds[0];
+    expect(best?.blockedReason).toBe('Needs Ollama 0.30.6 or newer, and Ollama did not report its version');
+    expect(list.picks.map(pick => pick.slot)).toEqual(['best', 'fast', 'light']);
+    expect(list.picks.find(pick => pick.recommended)?.slot).not.toBe('best');
+
+    const refusal = { ok: false, error: { kind: 'cannot-pull', message: expect.stringContaining('did not report') } };
+    expect(await service.curatedPull('gemma-4-26b', 'qat-q4-0')).toMatchObject(refusal);
+    const reviewed = CURATED.entries.find(entry => entry.id === 'gemma-4-26b')?.builds[0];
+    const library = reviewed && libraryOf(reviewed);
+    if (!reviewed || !library) throw new Error('the bundled list lost its Gemma 4 26B pick');
+    const pull = await service.pull({
+      repo: library.ref,
+      buildId: reviewed.id,
+      revision: library.digest,
+      sizeBytes: library.sizeBytes,
+      acceptLicense: false,
+      confirmAccess: false,
+      curated: { entryId: 'gemma-4-26b', buildId: reviewed.id },
+    });
+    expect(pull).toMatchObject(refusal);
+    expect(libraryLayers).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
 });
 
 describe('ModelHubService curated library pulls', () => {
@@ -1203,6 +1231,35 @@ describe('ModelHubService curated Hugging Face pulls', () => {
     expect(result.ok && result.build.fit).toEqual(row?.fit);
     expect(hub.getModel).toHaveBeenCalledWith(GSQ.lineage.base, expect.anything());
     expect(hub.ollamaLayers).toHaveBeenCalledWith(GSQ_REPO, 'IQ3_S', expect.anything());
+  });
+
+  it('rates the dialog build exactly as its row, from the pinned projector and context, not the live repo', async () => {
+    const projectors = [
+      ...gsqDetail().projectors,
+      { path: 'mmproj-F32.gguf', quant: 'F32', sizeBytes: 1_862_293_056, sha256: 'd'.repeat(64), url: 'https://x' },
+    ];
+    const gguf = { architecture: 'qwen35', contextLength: 8192, parameterCount: null };
+    for (const hardware of [CPU_16, machine('discrete', 32, 15.9), machine('unified', 64)]) {
+      const { service } = gsqHarness({ hardware, detail: gsqDetail({}, { projectors, gguf }) });
+      const row = (await service.curated()).entries.find(entry => entry.id === GSQ.id)?.builds[0];
+      const result = await service.curatedPull(GSQ.id, IQ3.id);
+
+      expect(result.ok && result.build.fit).toEqual(row?.fit);
+      expect(result.ok && result.model.projectorBytes).toBe(931_146_528);
+      expect(result.ok && result.build.sizeBytes + (result.model.projectorBytes ?? 0)).toBe(row?.sizeBytes);
+    }
+  });
+
+  it('keys a pull of the repo under any casing as its Curated row does', async () => {
+    const { service, pulls } = gsqHarness();
+    const row = (await service.curated()).entries.find(entry => entry.id === GSQ.id)?.builds[0];
+    if (!row) throw new Error('no row');
+    const result = service.pull({ ...gsqRequest, repo: GSQ_REPO.toLowerCase() });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+
+    expect(service.pulls().map(pull => pull.key)).toEqual([pullKey(row.repo, row.pullBuildId)]);
+    pulls[0].resolve();
+    await result;
   });
 
   it.each([
