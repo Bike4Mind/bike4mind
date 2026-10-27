@@ -1267,6 +1267,8 @@ export type ChatStreamEvent =
   | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string }
   /** A local model's prompt overflowed its context, so the oldest `dropped` messages were left out. */
   | { type: 'context-trimmed'; sessionId: string; dropped: number }
+  /** Auto changed a local model's context mid-turn in a way that affects its replies (slower, or smaller). */
+  | { type: 'context-notice'; sessionId: string; message: string }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`

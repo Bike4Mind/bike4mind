@@ -118,6 +118,7 @@ const api: DesktopApi = {
     listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
     getLocalContext: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContext),
     setLocalContext: setting => ipcRenderer.invoke(IPC_CHANNELS.chatSetLocalContext, setting),
+    getLocalContextFit: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContextFit),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     setSessionHistory: (sessionId: string, enabled: boolean) =>

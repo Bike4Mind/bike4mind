@@ -2,6 +2,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
+import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 
 function wireModel(overrides: Record<string, unknown> = {}) {
   return {
@@ -143,6 +144,100 @@ describe('ModelCatalog', () => {
       'local:ollama:qwen',
     ]);
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks the device and the server at the same time', async () => {
+    let finishLocal: (models: unknown[]) => void = () => undefined;
+    const local = {
+      models: vi.fn(
+        () =>
+          new Promise<unknown[]>(resolve => {
+            finishLocal = resolve;
+          })
+      ),
+    };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    const listed = catalog.list();
+    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    finishLocal([{ id: 'local:ollama:qwen', name: 'qwen' }]);
+    expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
+  });
+
+  it("shows a local model's context as it is now: grown by a conversation, or sized again after Settings", async () => {
+    const GIB = 1024 ** 3;
+    const machine = (gib: number) => ({
+      platform: 'linux',
+      arch: 'x64',
+      memoryKind: 'cpu' as const,
+      totalMemoryBytes: gib * GIB,
+      gpuMemoryBytes: null,
+      gpuName: null,
+      gpuCount: 0,
+      chip: null,
+      diskFreeBytes: null,
+      confidence: 'high' as const,
+    });
+    const arch = {
+      contextMax: 131072,
+      blockCount: 32,
+      headCount: 32,
+      full: { layers: 32, kvHeads: 8, keyLength: 128, valueLength: 128 },
+      mtpLayers: 0,
+    };
+    let hardware = machine(32);
+    const footprint = () => ({ arch, weightsBytes: 4.9 * GIB, hardware });
+    const replies = [
+      () =>
+        Response.json(
+          { error: 'request (70000 tokens) exceeds the available context size (65536 tokens), try increasing it' },
+          { status: 400 }
+        ),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith('/api/tags')) return Response.json({ models: [{ name: 'qwen', size: 1, digest: 'one' }] });
+        if (url.endsWith('/api/show'))
+          return Response.json({ capabilities: ['completion'], model_info: { 'llama.context_length': 131072 } });
+        return (replies.shift() ?? (() => new Response(`${JSON.stringify({ done: true })}\n`)))();
+      })
+    );
+    const local = new OllamaLocal(undefined, {
+      setting: async () => ({ mode: 'auto' }),
+      footprint: async () => footprint(),
+      cachedFootprint: footprint,
+    });
+    catalog = new ModelCatalog(
+      { logger: { debug: vi.fn(), warn: vi.fn() }, getApiClient: () => null, getEnvironmentUrl: () => environmentUrl },
+      local
+    );
+    try {
+      const contextOf = async () => (await catalog.list()).models.find(model => model.id === 'local:ollama:qwen');
+      expect((await contextOf())?.contextWindow).toBe(65536);
+      await local.stream(
+        { model: 'local:ollama:qwen', messages: [{ role: 'user', content: 'long' }] },
+        () => undefined
+      );
+      const grown = await local.contextTokens('local:ollama:qwen');
+      expect(grown).toBeGreaterThan(65536);
+      expect((await contextOf())?.contextWindow).toBe(grown);
+
+      hardware = machine(16);
+      forgetLocalContexts();
+      catalog.forgetLocal();
+      expect((await contextOf())?.contextWindow).toBe(32768);
+    } finally {
+      forgetLocalContexts();
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each([false, true])('offers local models while signed out or the hosted catalog fails (%s)', async failed => {

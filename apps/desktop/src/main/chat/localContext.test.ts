@@ -1,31 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import type { HardwareProfile, ModelArch } from '@bike4mind/common';
+import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
 import {
+  chatContextTokens,
   estimateTokens,
   fitsInMemory,
   fitToContext,
-  grownContextTokens,
+  grownContext,
   LOCAL_CONTEXT_TARGET_TOKENS,
-  localContextTokens,
+  loadsInMemory,
   localTranscriptChars,
-  memoryContextTokens,
   overflowTokens,
   shrunkTranscriptChars,
   type LocalModelFootprint,
   type OllamaMessage,
 } from './localContext';
 
-describe('localContextTokens', () => {
+const UNMEASURED: LocalModelFootprint = { arch: null, weightsBytes: null, hardware: null };
+
+describe('chatContextTokens without a measurement', () => {
   it.each([
     { limit: undefined, configured: undefined, expected: LOCAL_CONTEXT_TARGET_TOKENS },
     { limit: 32768, configured: undefined, expected: 16384 },
     { limit: 262144, configured: undefined, expected: 16384 },
     { limit: 8192, configured: undefined, expected: 8192 },
     { limit: 32768, configured: 2048, expected: 16384 },
-    { limit: 131072, configured: 65536, expected: 65536 },
-    { limit: 32768, configured: 65536, expected: 32768 },
+    // A Modelfile num_ctx is honoured only once it is known to stay resident.
+    { limit: 131072, configured: 65536, expected: 16384 },
+    { limit: 32768, configured: 65536, expected: 16384 },
   ])('sizes $limit / $configured to $expected', ({ limit, configured, expected }) => {
-    expect(localContextTokens(limit, configured)).toBe(expected);
+    expect(
+      chatContextTokens({ setting: AUTO_LOCAL_CONTEXT, footprint: UNMEASURED, modelLimit: limit, configured })
+    ).toBe(expected);
   });
 });
 
@@ -204,25 +210,69 @@ const cpuMachine = (gib: number): HardwareProfile => ({
   diskFreeBytes: null,
   confidence: 'high',
 });
-const eightBOn = (gib: number): LocalModelFootprint => ({
+// Qwen3-4B-Instruct-2507 Q4_K_M as Ollama reports it.
+const fourB: ModelArch = {
+  contextMax: 262144,
+  blockCount: 36,
+  headCount: 32,
+  full: { layers: 36, kvHeads: 8, keyLength: 128, valueLength: 128 },
+  mtpLayers: 0,
+};
+const FOUR_B_BYTES = 2_497_283_341;
+const lowConfidence = (gib: number): HardwareProfile => ({ ...cpuMachine(gib), confidence: 'low' });
+const discrete = (vramGib: number, ramGib: number): HardwareProfile => ({
+  ...cpuMachine(ramGib),
+  memoryKind: 'discrete',
+  gpuMemoryBytes: vramGib * GIB,
+  gpuName: 'GPU',
+  gpuCount: 1,
+});
+const unified = (gib: number): HardwareProfile => ({
+  ...cpuMachine(gib),
+  platform: 'darwin',
+  arch: 'arm64',
+  memoryKind: 'unified',
+  gpuCount: 1,
+});
+const eightBOn = (hardware: HardwareProfile | number): LocalModelFootprint => ({
   arch: eightB,
   weightsBytes: 4.9 * GIB,
-  hardware: cpuMachine(gib),
+  hardware: typeof hardware === 'number' ? cpuMachine(hardware) : hardware,
 });
+const fourBOn = (hardware: HardwareProfile): LocalModelFootprint => ({
+  arch: fourB,
+  weightsBytes: FOUR_B_BYTES,
+  hardware,
+});
+const auto = (footprint: LocalModelFootprint, configured?: number) =>
+  chatContextTokens({ setting: AUTO_LOCAL_CONTEXT, footprint, configured });
 
-describe('memoryContextTokens', () => {
+describe('chatContextTokens', () => {
   it.each([
-    { gib: 12, expected: 8192 },
-    { gib: 16, expected: 32768 },
+    { machine: 'CPU 12 GiB', footprint: eightBOn(12), expected: 16384 },
+    { machine: 'CPU 20 GiB', footprint: eightBOn(20), expected: 32768 },
     // The estimator's chat target caps it below the model's trained 128K.
-    { gib: 32, expected: 65536 },
-    { gib: 4, expected: 8192 },
-  ])('sizes an 8B model on $gib GiB to $expected', ({ gib, expected }) => {
-    expect(memoryContextTokens(eightBOn(gib))).toBe(expected);
+    { machine: 'CPU 32 GiB', footprint: eightBOn(32), expected: 65536 },
+    { machine: 'CPU 4 GiB, nothing resident', footprint: eightBOn(4), expected: 16384 },
+    // 16K fits on the GPU; 32K would move most of the weights to system RAM.
+    { machine: 'GPU 8 GiB / RAM 32 GiB', footprint: fourBOn(discrete(8, 32)), expected: 16384 },
+    { machine: 'GPU 12 GiB / RAM 32 GiB', footprint: fourBOn(discrete(12, 32)), expected: 32768 },
+    { machine: 'GPU 24 GiB / RAM 64 GiB', footprint: fourBOn(discrete(24, 64)), expected: 65536 },
+    { machine: 'GPU 8 GiB, nothing resident', footprint: eightBOn(discrete(4, 32)), expected: 16384 },
+    { machine: 'unified 8 GiB', footprint: eightBOn(unified(8)), expected: 16384 },
+    { machine: 'unified 16 GiB', footprint: fourBOn(unified(16)), expected: 32768 },
+    { machine: 'unified 32 GiB', footprint: fourBOn(unified(32)), expected: 65536 },
+    // A GPU the probe cannot measure may be there; nothing larger is picked up front.
+    { machine: 'low-confidence probe, 62 GiB', footprint: fourBOn(lowConfidence(62)), expected: 16384 },
+  ])('Auto on $machine: $expected', ({ footprint, expected }) => {
+    expect(auto(footprint)).toBe(expected);
   });
 
   it("stops at the model's trained length", () => {
-    expect(memoryContextTokens({ arch: qwenHalfB, weightsBytes: 397_821_000, hardware: cpuMachine(64) })).toBe(32768);
+    expect(auto({ arch: qwenHalfB, weightsBytes: 397_821_000, hardware: cpuMachine(64) })).toBe(32768);
+    expect(
+      chatContextTokens({ setting: { mode: 'fixed', tokens: 262144 }, footprint: eightBOn(64), modelLimit: 32768 })
+    ).toBe(32768);
   });
 
   it.each([
@@ -230,46 +280,77 @@ describe('memoryContextTokens', () => {
     { arch: eightB, weightsBytes: null, hardware: cpuMachine(32) },
     { arch: eightB, weightsBytes: 4.9 * GIB, hardware: null },
     { arch: eightB, weightsBytes: 4.9 * GIB, hardware: cpuMachine(0) },
-  ])('cannot say without the model shape, its size and the machine', footprint => {
-    expect(memoryContextTokens(footprint)).toBeUndefined();
+  ])('stays at 16K without the model shape, its size and the machine', footprint => {
+    expect(auto(footprint)).toBe(16384);
     expect(fitsInMemory(footprint, 16384)).toBeUndefined();
   });
 
-  it('never takes the context below the 16K Desktop needs', () => {
-    expect(localContextTokens(eightB.contextMax, undefined, memoryContextTokens(eightBOn(12)))).toBe(16384);
-    expect(localContextTokens(eightB.contextMax, undefined, memoryContextTokens(eightBOn(4)))).toBe(16384);
-    expect(localContextTokens(eightB.contextMax, undefined, memoryContextTokens(eightBOn(32)))).toBe(65536);
-  });
-
-  it('puts the memory estimate in place of a Modelfile num_ctx, which may be the whole trained length', () => {
-    expect(localContextTokens(262144, 262144, 65536)).toBe(65536);
-    expect(localContextTokens(262144, 4096, 32768)).toBe(32768);
-    expect(localContextTokens(262144, 262144, undefined)).toBe(262144);
+  it('honours a larger Modelfile num_ctx only when it stays resident within the trained length', () => {
+    expect(auto(eightBOn(16), 4096)).toBe(32768);
+    expect(auto(fourBOn(cpuMachine(32)), 98304)).toBe(98304);
+    expect(auto(fourBOn(cpuMachine(32)), 262144)).toBe(65536);
+    expect(auto(fourBOn(discrete(8, 32)), 32768)).toBe(16384);
+    expect(auto(fourBOn(lowConfidence(62)), 40960)).toBe(16384);
+    expect(auto({ arch: qwenHalfB, weightsBytes: 397_821_000, hardware: cpuMachine(64) }, 65536)).toBe(32768);
   });
 });
 
 describe('fitsInMemory', () => {
-  it('checks one context against the estimate', () => {
+  it('counts only a resident plan, while loadsInMemory also counts layers moved to RAM', () => {
     expect(fitsInMemory(eightBOn(16), 20480)).toBe(true);
     expect(fitsInMemory(eightBOn(16), 40960)).toBe(false);
     expect(fitsInMemory(eightBOn(64), 262144)).toBe(false);
+    expect(fitsInMemory(fourBOn(discrete(8, 32)), 16384)).toBe(true);
+    expect(fitsInMemory(fourBOn(discrete(8, 32)), 32768)).toBe(false);
+    expect(loadsInMemory(fourBOn(discrete(8, 32)), 32768)).toBe(true);
+    expect(loadsInMemory(eightBOn(16), 40960)).toBe(false);
   });
 });
 
-describe('grownContextTokens', () => {
+describe('grownContext', () => {
+  it('jumps once to the largest resident context, not to the next 4K step', () => {
+    expect(grownContext(eightBOn(20), 33_000, undefined, undefined, 32768)).toEqual({ tokens: 57344, slower: false });
+    expect(grownContext(fourBOn(discrete(12, 32)), 33_000, undefined, undefined, 32768)).toEqual({
+      tokens: 45056,
+      slower: false,
+    });
+  });
+
+  it('grows to the next Settings size anyway when no resident size holds the prompt, and says it is slower', () => {
+    expect(grownContext(fourBOn(discrete(8, 32)), 17_000, undefined, undefined, 16384)).toEqual({
+      tokens: 32768,
+      slower: true,
+    });
+  });
+
+  it('grows by Settings sizes on a probe that could not measure the GPU', () => {
+    expect(grownContext(fourBOn(lowConfidence(62)), 17_000, undefined, undefined, 16384)).toEqual({
+      tokens: 32768,
+      slower: false,
+    });
+    expect(grownContext(fourBOn(lowConfidence(62)), 40_000, undefined, undefined, 32768)).toEqual({
+      tokens: 65536,
+      slower: false,
+    });
+  });
+
   it.each([
-    { measured: 10_569, maxTokens: undefined, limit: 32768, expected: 16384 },
-    { measured: 30_000, maxTokens: undefined, limit: 131072, expected: 32768 },
-    { measured: 3_000, maxTokens: 8192, limit: undefined, expected: 4096 },
-    { measured: 31_000, maxTokens: undefined, limit: 32768, expected: undefined },
-  ])('grows to $expected for $measured tokens within $limit', ({ measured, maxTokens, limit, expected }) => {
-    expect(grownContextTokens(measured, maxTokens, limit)).toBe(expected);
+    {
+      why: 'model-limit',
+      footprint: { arch: qwenHalfB, weightsBytes: 397_821_000, hardware: cpuMachine(64) },
+      measured: 31_000,
+    },
+    { why: 'unmeasured', footprint: UNMEASURED, measured: 20_000 },
+    { why: 'memory', footprint: eightBOn(unified(8)), measured: 17_000 },
+    { why: 'memory', footprint: eightBOn(20), measured: 70_000 },
+  ])('says why it cannot grow: $why', ({ why, footprint, measured }) => {
+    expect(grownContext(footprint, measured, undefined, undefined, 16384)).toEqual({ reason: why });
   });
 
   it('leaves the reply the room fitToContext reserves', () => {
     for (const measured of [5_000, 17_000, 40_000, 70_001]) {
-      const grown = grownContextTokens(measured, undefined, undefined) ?? 0;
-      expect(grown % 4096).toBe(0);
+      const growth = grownContext(fourBOn(lowConfidence(62)), measured, undefined, undefined, 4096);
+      const grown = growth.tokens ?? 0;
       expect(grown - Math.min(2048, Math.floor(grown / 4))).toBeGreaterThanOrEqual(measured);
     }
   });

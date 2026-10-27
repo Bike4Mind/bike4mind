@@ -2658,7 +2658,8 @@ export class ChatService {
               },
               onCompletionEvent,
               controller.signal,
-              dropped => this.emit({ type: 'context-trimmed', sessionId, dropped })
+              dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
+              message => this.emit({ type: 'context-notice', sessionId, message })
             )
           : await streamRound(
               api!.getAxiosInstance(),
@@ -5806,10 +5807,11 @@ async function streamLocalRound(
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
   signal?: AbortSignal,
-  onTrimmed?: (dropped: number) => void
+  onTrimmed?: (dropped: number) => void,
+  onNotice?: (message: string) => void
 ): Promise<Error | null> {
   try {
-    await local.stream(request, onEvent, signal, onTrimmed);
+    await local.stream(request, onEvent, signal, onTrimmed, onNotice);
     return null;
   } catch (err) {
     if (signal?.aborted) return null;

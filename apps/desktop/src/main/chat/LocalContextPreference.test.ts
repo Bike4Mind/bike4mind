@@ -24,6 +24,17 @@ describe('LocalContextPreference', () => {
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ mode: 'fixed', tokens: 32768 });
   });
 
+  it('saves two quick changes without one tripping over the other', async () => {
+    const file = await preferenceFile();
+    const preference = new LocalContextPreference(file);
+    await expect(
+      Promise.all([preference.record({ mode: 'fixed', tokens: 32768 }), preference.record({ mode: 'auto' })])
+    ).resolves.toEqual([{ mode: 'fixed', tokens: 32768 }, { mode: 'auto' }]);
+    expect([{ mode: 'auto' }, { mode: 'fixed', tokens: 32768 }]).toContainEqual(
+      JSON.parse(await readFile(file, 'utf8'))
+    );
+  });
+
   it('stores Auto for a size Settings does not offer', async () => {
     const file = await preferenceFile();
     expect(await new LocalContextPreference(file).record({ mode: 'fixed', tokens: 1000 })).toEqual({ mode: 'auto' });

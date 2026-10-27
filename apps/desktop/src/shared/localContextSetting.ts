@@ -7,6 +7,9 @@ export type LocalContextSetting = { mode: 'auto' } | { mode: 'fixed'; tokens: Lo
 
 export const AUTO_LOCAL_CONTEXT: LocalContextSetting = { mode: 'auto' };
 
+/** For each size, the local models the memory estimate says it would not fit. */
+export type LocalContextFit = Partial<Record<LocalContextSize, string[]>>;
+
 /** Anything unreadable is Auto, the default. */
 export function parseLocalContextSetting(value: unknown): LocalContextSetting {
   if (!value || typeof value !== 'object') return AUTO_LOCAL_CONTEXT;

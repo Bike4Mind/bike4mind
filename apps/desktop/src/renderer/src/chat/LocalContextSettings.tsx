@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { MODE_CONTEXT_TARGETS } from '@bike4mind/common';
 import Option from '@mui/joy/Option';
 import Select from '@mui/joy/Select';
 import Stack from '@mui/joy/Stack';
@@ -9,19 +8,30 @@ import {
   LOCAL_CONTEXT_SIZES,
   contextSizeLabel,
   parseLocalContextSetting,
+  type LocalContextFit,
+  type LocalContextSize,
   type LocalContextSetting,
 } from '@shared/localContextSetting';
 
 export function localContextSummary(setting: LocalContextSetting | null): string {
   if (!setting) return 'Loading';
   return setting.mode === 'auto'
-    ? `Auto: ${LOCAL_CONTEXT_SIZES[0] / 1024}K to ${contextSizeLabel(MODE_CONTEXT_TARGETS.chat)}, as this computer's memory allows`
-    : `${contextSizeLabel(setting.tokens)} for every local model`;
+    ? `Auto: ${contextSizeLabel(LOCAL_CONTEXT_SIZES[0])} or more as this computer's memory allows, less for a model trained on less`
+    : `${contextSizeLabel(setting.tokens)} for every local model, less for a model trained on less`;
+}
+
+/** The note beside a fixed size the memory estimate says some local model would not fit. */
+export function localContextFitNote(fit: LocalContextFit, tokens: LocalContextSize): string | null {
+  const models = fit[tokens] ?? [];
+  if (models.length === 0) return null;
+  const which = models.length <= 2 ? models.join(' and ') : `${models.length} local models`;
+  return `May not fit this computer's memory with ${which}`;
 }
 
 export function useLocalContextSetting() {
   const [setting, setSetting] = useState<LocalContextSetting | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fit, setFit] = useState<LocalContextFit>({});
   useEffect(() => {
     let live = true;
     void window.b4m.chat
@@ -32,6 +42,12 @@ export function useLocalContextSetting() {
       .catch(err => {
         if (live) setError(`Could not load this setting. ${String(err)}`);
       });
+    void window.b4m.chat
+      .getLocalContextFit()
+      .then(next => {
+        if (live) setFit(next);
+      })
+      .catch(() => undefined);
     return () => {
       live = false;
     };
@@ -44,7 +60,7 @@ export function useLocalContextSetting() {
       setError(`Could not save this setting. ${String(err)}`);
     }
   }, []);
-  return [setting, save, error] as const;
+  return [setting, save, error, fit] as const;
 }
 
 const AUTO = 'auto';
@@ -58,17 +74,21 @@ export function LocalContextSettings({
   setting,
   onChange,
   error,
+  fit = {},
 }: {
   setting: LocalContextSetting | null;
   onChange: (setting: LocalContextSetting) => void;
   error: string | null;
+  fit?: LocalContextFit;
 }) {
+  const chosenNote = setting?.mode === 'fixed' ? localContextFitNote(fit, setting.tokens) : null;
   return (
     <Stack spacing={1.25}>
       <Typography level="body-xs" textColor="text.tertiary">
-        A larger context lets a local model read longer conversations and uses more memory. Auto also gives one long
-        message more room when memory allows. No model goes past the context it was trained on. A model reloads on its
-        next message after this changes.
+        A larger context lets a local model read longer conversations and uses more memory. Auto starts each model at
+        the largest of 64K, 32K or 16K tokens that fits this computer&apos;s GPU, or its memory when there is no GPU,
+        and gives a conversation that outgrows it more room. It stays at 16K when Desktop cannot measure the GPU. No
+        model goes past the context it was trained on. A model reloads on its next message after this changes.
       </Typography>
       <Select
         size="sm"
@@ -86,12 +106,36 @@ export function LocalContextSettings({
         <Option value={AUTO} data-testid="settings-local-context-option-auto">
           Auto (fits this computer)
         </Option>
-        {LOCAL_CONTEXT_SIZES.map(tokens => (
-          <Option key={tokens} value={String(tokens)} data-testid={`settings-local-context-option-${tokens}`}>
-            {contextSizeLabel(tokens)}
-          </Option>
-        ))}
+        {LOCAL_CONTEXT_SIZES.map(tokens => {
+          const note = localContextFitNote(fit, tokens);
+          return (
+            <Option
+              key={tokens}
+              value={String(tokens)}
+              label={contextSizeLabel(tokens)}
+              data-testid={`settings-local-context-option-${tokens}`}
+            >
+              <Stack>
+                {contextSizeLabel(tokens)}
+                {note && (
+                  <Typography
+                    level="body-xs"
+                    color="warning"
+                    data-testid={`settings-local-context-option-${tokens}-note`}
+                  >
+                    {note}
+                  </Typography>
+                )}
+              </Stack>
+            </Option>
+          );
+        })}
       </Select>
+      {chosenNote && (
+        <Typography level="body-xs" color="warning" data-testid="settings-local-context-fit-note">
+          {chosenNote}
+        </Typography>
+      )}
       {error && (
         <Typography level="body-xs" color="danger" role="alert" data-testid="settings-local-context-error">
           {error}

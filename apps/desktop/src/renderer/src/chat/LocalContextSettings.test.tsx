@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { LocalContextSetting } from '@shared/localContextSetting';
+import type { LocalContextFit, LocalContextSetting } from '@shared/localContextSetting';
 import { desktopTheme } from '../theme';
 import { LocalContextSettings, localContextSummary, useLocalContextSetting } from './LocalContextSettings';
 
@@ -21,13 +21,14 @@ window.matchMedia ??= ((query: string) => ({
 
 const getLocalContext = vi.fn<() => Promise<LocalContextSetting>>();
 const setLocalContext = vi.fn<(setting: LocalContextSetting) => Promise<LocalContextSetting>>();
+const getLocalContextFit = vi.fn<() => Promise<LocalContextFit>>();
 
 function Harness() {
-  const [setting, save, error] = useLocalContextSetting();
+  const [setting, save, error, fit] = useLocalContextSetting();
   return (
     <>
       <span data-testid="summary">{localContextSummary(setting)}</span>
-      <LocalContextSettings setting={setting} onChange={next => void save(next)} error={error} />
+      <LocalContextSettings setting={setting} onChange={next => void save(next)} error={error} fit={fit} />
     </>
   );
 }
@@ -39,7 +40,10 @@ const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-test
 beforeEach(async () => {
   getLocalContext.mockReset().mockResolvedValue({ mode: 'auto' });
   setLocalContext.mockReset().mockImplementation(async setting => setting);
-  Object.assign(window, { b4m: { chat: { getLocalContext, setLocalContext } } });
+  getLocalContextFit
+    .mockReset()
+    .mockResolvedValue({ 131072: ['qwen3:8b'], 262144: ['qwen3:8b', 'gpt-oss:20b', 'gemma3:27b'] });
+  Object.assign(window, { b4m: { chat: { getLocalContext, setLocalContext, getLocalContextFit } } });
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -59,14 +63,34 @@ afterEach(async () => {
 
 describe('LocalContextSettings', () => {
   it('shows the saved choice and saves a fixed size picked from the list', async () => {
-    expect(byTestId('summary')?.textContent).toBe("Auto: 16K to 64K tokens, as this computer's memory allows");
+    expect(byTestId('summary')?.textContent).toBe(
+      "Auto: 16K tokens or more as this computer's memory allows, less for a model trained on less"
+    );
     expect(byTestId('settings-local-context-select')?.textContent).toBe('Auto (fits this computer)');
 
     await act(async () => byTestId('settings-local-context-select')?.click());
     await act(async () => byTestId('settings-local-context-option-32768')?.click());
 
     expect(setLocalContext).toHaveBeenCalledWith({ mode: 'fixed', tokens: 32768 });
-    expect(byTestId('summary')?.textContent).toBe('32K tokens for every local model');
+    expect(byTestId('summary')?.textContent).toBe('32K tokens for every local model, less for a model trained on less');
+    expect(byTestId('settings-local-context-select')?.textContent).toBe('32K tokens');
+  });
+
+  it('notes the sizes that may not fit this computer, and still lets them be picked', async () => {
+    await act(async () => byTestId('settings-local-context-select')?.click());
+    expect(byTestId('settings-local-context-option-16384-note')).toBeNull();
+    expect(byTestId('settings-local-context-option-131072-note')?.textContent).toBe(
+      "May not fit this computer's memory with qwen3:8b"
+    );
+    expect(byTestId('settings-local-context-option-262144-note')?.textContent).toBe(
+      "May not fit this computer's memory with 3 local models"
+    );
+
+    await act(async () => byTestId('settings-local-context-option-262144')?.click());
+    expect(setLocalContext).toHaveBeenCalledWith({ mode: 'fixed', tokens: 262144 });
+    expect(byTestId('settings-local-context-fit-note')?.textContent).toBe(
+      "May not fit this computer's memory with 3 local models"
+    );
   });
 
   it('says when the choice could not be saved', async () => {

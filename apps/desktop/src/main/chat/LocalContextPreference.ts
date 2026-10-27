@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { parseLocalContextSetting, type LocalContextSetting } from '@shared/localContextSetting';
@@ -23,7 +24,7 @@ export class LocalContextPreference {
   async record(next: unknown): Promise<LocalContextSetting> {
     const setting = parseLocalContextSetting(next);
     await mkdir(dirname(this.filePath), { recursive: true });
-    const temporary = `${this.filePath}.tmp`;
+    const temporary = `${this.filePath}.${randomUUID()}.tmp`;
     await writeFile(temporary, JSON.stringify(setting, null, 2), { encoding: 'utf8', mode: 0o600 });
     await rename(temporary, this.filePath);
     this.setting = setting;

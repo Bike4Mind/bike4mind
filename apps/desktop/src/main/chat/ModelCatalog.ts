@@ -3,7 +3,7 @@ import type { VideoModel } from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import { parseVideoModels } from './media/videoModels';
 import { supportsReasoningEffort } from './reasoningEffort';
-import { OllamaLocal } from './OllamaLocal';
+import { currentLocalContext, OllamaLocal } from './OllamaLocal';
 
 /**
  * The model list is per-DEPLOYMENT and per-ACCOUNT, never a constant in this client.
@@ -101,26 +101,33 @@ export class ModelCatalog {
   }
 
   async list(force = false): Promise<ChatModelCatalog> {
-    const local = await this.listLocal(force);
-    if (!force && this.deps.getApiClient()) {
-      const hit = this.cached();
-      if (hit) return { models: hit };
-    }
-
     const api = this.deps.getApiClient();
-    if (!api) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
+    const entry = this.cache;
+    const hostedHit =
+      !force && api && entry?.environmentUrl === this.deps.getEnvironmentUrl() && Date.now() < entry.expiresAt
+        ? entry.models
+        : null;
+    // The device and the server are asked at the same time; neither waits on the other.
+    const [local, hosted] = await Promise.all([
+      this.listLocal(force),
+      api && !hostedHit
+        ? api.get<{ models?: WireModel[] }>(MODELS_PATH).then(
+            response => ({ ok: true as const, models: selectUsableModels(response?.models) }),
+            (err: unknown) => ({ ok: false as const, err })
+          )
+        : null,
+    ]);
+    if (hostedHit) return { models: this.mergeLocal(hostedHit) };
+    if (!api || !hosted) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
 
-    let models: ChatModelOption[];
-    try {
-      const response = await api.get<{ models?: WireModel[] }>(MODELS_PATH);
-      models = selectUsableModels(response?.models);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    if (!hosted.ok) {
+      const message = hosted.err instanceof Error ? hosted.err.message : String(hosted.err);
       this.deps.logger.warn(`CHAT: model list lookup failed: ${message}`);
       return local.length
         ? { models: local }
         : { models: [], error: 'Could not load the model list from this server.' };
     }
+    const models = hosted.models;
 
     if (models.length === 0) {
       this.cache = null;
@@ -142,12 +149,20 @@ export class ModelCatalog {
     if (force || !this.localCache || Date.now() >= this.localCache.expiresAt) {
       this.localCache = { models: await this.local.models(), expiresAt: Date.now() + 5_000 };
     }
-    return this.localCache.models;
+    return withCurrentContexts(this.localCache.models);
+  }
+
+  /** After the local context setting changes, so the next list sizes every local model again. */
+  forgetLocal(): void {
+    this.localCache = null;
   }
 
   private mergeLocal(hosted: ChatModelOption[]): ChatModelOption[] {
     const local = this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : [];
-    return [...hosted.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
+    return [
+      ...hosted.filter(model => !local.some(candidate => candidate.id === model.id)),
+      ...withCurrentContexts(local),
+    ];
   }
 
   /**
@@ -210,6 +225,14 @@ export class ModelCatalog {
 }
 
 const VIDEO_MODELS_PATH = '/api/v1/video-models';
+
+/** A context that grew or fell back since the list was cached replaces the one it advertised. */
+function withCurrentContexts(models: ChatModelOption[]): ChatModelOption[] {
+  return models.map(model => {
+    const tokens = currentLocalContext(model.id);
+    return tokens === undefined || tokens === model.contextWindow ? model : { ...model, contextWindow: tokens };
+  });
+}
 
 /** Image-generation model ids from the server's catalog, in the order it listed them. */
 export function selectImageModels(wire: unknown): string[] {
