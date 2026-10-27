@@ -32,6 +32,38 @@ function StatefulTable({ children }: { children?: ReactNode }) {
 }
 
 describe('DataTable', () => {
+  it('renders a server page without slicing or locally sorting it', () => {
+    const onPageChange = vi.fn();
+    const onPageSizeChange = vi.fn();
+    renderTable({
+      rows: rows.slice(25, 50),
+      serverPagination: { page: 2, pageSize: 25, total: 101, onPageChange, onPageSizeChange },
+    });
+    expect(tableRows()).toHaveLength(25);
+    expect(tableRows()[0]).toHaveAttribute('data-testid', 'admin-table-row-26');
+    expect(screen.getByText('26-50 of 101')).toBeTruthy();
+    expect(screen.queryByTestId('admin-table-sort-count-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(onPageChange).toHaveBeenLastCalledWith(3);
+    fireEvent.click(screen.getByTestId('admin-table-previous-btn'));
+    expect(onPageChange).toHaveBeenLastCalledWith(1);
+    fireEvent.click(screen.getByTestId('admin-table-page-size'));
+    fireEvent.click(screen.getByTestId('admin-table-page-size-50'));
+    expect(onPageSizeChange).toHaveBeenCalledWith(50);
+  });
+
+  it('retains server pagination recovery controls on an empty page', () => {
+    const onPageChange = vi.fn();
+    renderTable({
+      rows: [],
+      serverPagination: { page: 3, pageSize: 25, total: 40, onPageChange, onPageSizeChange: vi.fn() },
+    });
+    expect(screen.getByTestId('admin-empty-state')).toBeTruthy();
+    expect(screen.getByTestId('admin-table-next-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('admin-table-previous-btn'));
+    expect(onPageChange).toHaveBeenCalledWith(2);
+  });
+
   it('paginates the complete result at 25, 50 and 100 rows', () => {
     renderTable();
     expect(tableRows()).toHaveLength(25);
