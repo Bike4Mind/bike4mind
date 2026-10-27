@@ -17,10 +17,12 @@ export function readNetworkMeta(req: NetworkRequest): INetworkMeta {
   const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'];
   const { asn, country } = getClientNetwork(req);
-  const ja4 =
-    process.env.ORIGIN_VERIFY_SECRET && process.env.B4M_SELF_HOST !== 'true'
-      ? ja4FingerprintSchema.safeParse(req.headers[CLOUDFRONT_VIEWER_JA4_HEADER])
-      : null;
+  const deployed = Boolean(process.env.ORIGIN_VERIFY_SECRET) && process.env.B4M_SELF_HOST !== 'true';
+  const ja4 = deployed ? ja4FingerprintSchema.safeParse(req.headers[CLOUDFRONT_VIEWER_JA4_HEADER]) : null;
+  // x-waf-* headers are injected by WAF after the CloudFront viewer-request function strips any
+  // viewer-forged copies, so they are authoritative only on deployed stages with WAF attached.
+  const wafAnonIp = deployed ? req.headers['x-waf-anon-ip'] === '1' : null;
+  const wafBotSignal = deployed ? req.headers['x-waf-bot-signal'] === '1' : null;
   return {
     ip: ip === 'unknown' ? null : ip,
     userAgent: (Array.isArray(userAgent) ? userAgent[0] : userAgent) || null,
@@ -29,6 +31,8 @@ export function readNetworkMeta(req: NetworkRequest): INetworkMeta {
     country,
     isDatacenter: asn === null ? null : DATACENTER_ASNS.has(asn),
     ja4: ja4?.success ? ja4.data : null,
+    wafAnonIp,
+    wafBotSignal,
   };
 }
 

@@ -45,6 +45,10 @@ export interface INetworkMeta {
   /** Whether the ASN is a hosting/datacenter network; null when the ASN is unknown. */
   isDatacenter: boolean | null;
   ja4?: string | null;
+  /** WAF anonymous-IP label matched; null on self-host (no WAF). */
+  wafAnonIp?: boolean | null;
+  /** WAF bot-control label matched; null on self-host (no WAF). */
+  wafBotSignal?: boolean | null;
 }
 
 export interface ISignupMeta extends INetworkMeta {
