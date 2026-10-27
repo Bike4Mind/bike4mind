@@ -64,8 +64,10 @@ export class CuratedSource {
   #cached: Copy | null = null;
   #state: CuratedCheckState = { lastSuccessAt: null, lastAttemptAt: null, failures: 0, floors: {} };
   #revoked = new Set<string>();
-  // Set while revoked-keys.json is unreadable and only a recovery-signed list may rebuild it.
+  // Set while both copies of the revoked set are damaged and only a recovery-signed list may rebuild it.
   #repairing = false;
+  // Set while the revoked set could not be read at all; nothing from disk is used and each check reads it again.
+  #unread = false;
   #enabled = true;
   #status: 'idle' | 'checking' | Outcome = 'idle';
   #inFlight: Promise<void> | null = null;
@@ -186,39 +188,54 @@ export class CuratedSource {
   }
 
   async #open(): Promise<void> {
-    const { store } = this.#deps;
     try {
-      this.#enabled = await store.readEnabled();
-      if (!this.available || !this.#source) return;
-      const revoked = await store.readRevoked();
-      this.#revoked = revoked.ids;
-      this.#state = await store.readState(this.#source);
-      const copy = await store.readCopy(this.#source);
-      const verdict = copy ? this.#verify(copy.manifest, copy.signature) : null;
-      if (copy && verdict && !verdict.ok) {
-        this.#log(`deleted the cached curated list: ${verdict.detail}`);
-        await store.deleteCopy(this.#source);
-      }
-      const recovered = verdict?.ok ? this.#revocations(verdict) : null;
-      if (!revoked.intact && recovered === null) {
-        this.#repairing = true;
-        this.#state = { ...this.#state, lastSuccessAt: null };
-        this.#log(
-          'revoked-keys.json is unreadable and no recovery-signed cached list can rebuild it; using the bundled list until a recovery-signed list does'
-        );
-        return;
-      }
-      if (copy && verdict?.ok) this.#cached = this.#copy(verdict, copy.manifest, copy.signature);
-      if (recovered && (!revoked.intact || recovered.some(id => !this.#revoked.has(id)))) {
-        if (!revoked.intact) this.#log('revoked-keys.json was unreadable; rebuilt it from the cached curated list');
-        await this.#revoke(recovered);
-      }
-      // A list accepted before is gone, so the last success no longer describes what is shown: check again now.
-      if (!this.#cached && this.#floor() > this.#bundled.sequence)
-        this.#state = { ...this.#state, lastSuccessAt: null };
+      this.#enabled = await this.#deps.store.readEnabled();
+      if (this.available) await this.#restore();
     } catch (error) {
       this.#log(`could not read the cached curated list: ${String(error)}`);
     }
+  }
+
+  /** Reads the revoked set, the check state and the cached copy; false while the revoked set cannot be read. */
+  async #restore(): Promise<boolean> {
+    const { store } = this.#deps;
+    const source = this.#source as string;
+    const revoked = await store.readRevoked();
+    this.#state = await store.readState(source);
+    if (revoked.status === 'unavailable') {
+      this.#unread = true;
+      this.#state = { ...this.#state, lastSuccessAt: null };
+      this.#log(`could not read the revoked curated keys (${revoked.detail}); the next check reads them again`);
+      return false;
+    }
+    this.#unread = false;
+    this.#revoked = revoked.ids;
+    const copy = await store.readCopy(source);
+    const verdict = copy ? this.#verify(copy.manifest, copy.signature) : null;
+    if (copy && verdict && !verdict.ok) {
+      this.#log(`deleted the cached curated list: ${verdict.detail}`);
+      await store.deleteCopy(source);
+    }
+    const recovered = verdict?.ok ? this.#revocations(verdict) : null;
+    const lost = revoked.status === 'lost';
+    if (lost && recovered === null) {
+      this.#repairing = true;
+      this.#state = { ...this.#state, lastSuccessAt: null };
+      this.#log(
+        'both copies of revoked-keys.json are damaged and no recovery-signed cached list can rebuild them; using the bundled list until a recovery-signed list does'
+      );
+      return true;
+    }
+    if (copy && verdict?.ok) this.#cached = this.#copy(verdict, copy.manifest, copy.signature);
+    const repair = revoked.status === 'ok' && revoked.repair;
+    if (lost || repair || recovered?.some(id => !this.#revoked.has(id))) {
+      if (lost) this.#log('both copies of revoked-keys.json were damaged; rebuilt them from the cached curated list');
+      else if (repair) this.#log('repaired a damaged or missing copy of revoked-keys.json');
+      await this.#revoke(recovered ?? []);
+    }
+    // A list accepted before is gone, so the last success no longer describes what is shown: check again now.
+    if (!this.#cached && this.#floor() > this.#bundled.sequence) this.#state = { ...this.#state, lastSuccessAt: null };
+    return true;
   }
 
   /** The ids a recovery-signed list revokes, less this build's recovery keys; null when no recovery key signed it. */
@@ -283,7 +300,7 @@ export class CuratedSource {
     this.#deps.onChange();
     let outcome: Outcome;
     try {
-      outcome = await this.#run(this.#deps.url as string);
+      outcome = this.#unread && !(await this.#restore()) ? 'failed' : await this.#run(this.#deps.url as string);
     } catch (error) {
       this.#log(`curated list check failed: ${String(error)}`);
       outcome = 'failed';
@@ -349,9 +366,7 @@ export class CuratedSource {
     const revocations = this.#revocations(verdict);
     if (this.#repairing) {
       if (revocations === null) {
-        this.#log(
-          'rejected the curated list: only a recovery-signed list can rebuild the unreadable revoked-keys.json'
-        );
+        this.#log('rejected the curated list: only a recovery-signed list can rebuild the damaged revoked-keys.json');
         return 'rejected';
       }
       if (!(await this.#revoke(revocations))) return 'failed';

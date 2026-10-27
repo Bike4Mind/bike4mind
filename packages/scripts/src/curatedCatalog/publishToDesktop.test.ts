@@ -124,7 +124,11 @@ describe('curated:publish to Desktop', () => {
       await store.put(`${CURATED_PREFIX}${key}`, leaked.sig, '', null);
     await client.checkNow();
     expect(client.view()).toMatchObject({ sequence: 4 });
-    expect((await new CuratedStore(path.join(dir, 'a')).readRevoked()).ids).toEqual(new Set());
+    expect(await new CuratedStore(path.join(dir, 'a')).readRevoked()).toEqual({
+      status: 'ok',
+      ids: new Set(),
+      repair: false,
+    });
 
     const revokeLeaked: Parameters<typeof catalogBytes>[1] = catalog => {
       catalog.revokedKeyIds = [signing.key.keyId];
@@ -135,7 +139,11 @@ describe('curated:publish to Desktop', () => {
       await each.checkNow();
       expect(each.view()).toMatchObject({ origin: 'updated', sequence: 5, check: 'updated' });
     }
-    expect((await new CuratedStore(path.join(dir, 'a')).readRevoked()).ids).toEqual(new Set([signing.key.keyId]));
+    expect(await new CuratedStore(path.join(dir, 'a')).readRevoked()).toEqual({
+      status: 'ok',
+      ids: new Set([signing.key.keyId]),
+      repair: false,
+    });
 
     expect(await publish(list(6, [recovery, replacement], revokeLeaked))).toBe(EXIT.ok);
     await client.checkNow();

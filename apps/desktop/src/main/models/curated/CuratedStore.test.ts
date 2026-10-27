@@ -84,6 +84,8 @@ describe('CuratedStore', () => {
       expect(synced).toEqual([
         expect.stringMatching(/state\.json\.[^/]+\.tmp$/),
         join(dir, SOURCE),
+        expect.stringMatching(/revoked-keys\.backup\.json\.[^/]+\.tmp$/),
+        dir,
         expect.stringMatching(/revoked-keys\.json\.[^/]+\.tmp$/),
         dir,
       ]);
@@ -118,15 +120,31 @@ describe('CuratedStore', () => {
     expect((await store.readState(SOURCE)).floors).toEqual({ [KEY_B]: 4 });
   });
 
-  it('tells a missing revoked set from an unreadable one, keeping the valid ids it can', async () => {
-    expect(await store.readRevoked()).toEqual({ ids: new Set(), intact: true });
-    await writeFile(join(dir, 'revoked-keys.json'), '[');
-    expect(await store.readRevoked()).toEqual({ ids: new Set(), intact: false });
-    await writeFile(join(dir, 'revoked-keys.json'), JSON.stringify([KEY_A, 'bad']));
-    expect(await store.readRevoked()).toEqual({ ids: new Set([KEY_A]), intact: false });
+  it('keeps the revoked set in two copies, reads either, and tells a damaged pair from an unreadable one', async () => {
+    const primary = join(dir, 'revoked-keys.json');
+    const backup = join(dir, 'revoked-keys.backup.json');
+    expect(await store.readRevoked()).toEqual({ status: 'ok', ids: new Set(), repair: false });
+    expect(await store.addRevoked([])).toEqual(new Set());
+    await expect(readFile(primary)).rejects.toThrow();
 
-    expect(await store.addRevoked([KEY_B])).toEqual(new Set([KEY_A, KEY_B]));
-    expect(JSON.parse(await readFile(join(dir, 'revoked-keys.json'), 'utf8'))).toEqual([KEY_A, KEY_B]);
-    expect(await store.readRevoked()).toEqual({ ids: new Set([KEY_A, KEY_B]), intact: true });
+    expect(await store.addRevoked([KEY_A])).toEqual(new Set([KEY_A]));
+    for (const copy of [primary, backup]) expect(JSON.parse(await readFile(copy, 'utf8'))).toEqual([KEY_A]);
+    await writeFile(primary, '[');
+    expect(await store.readRevoked()).toEqual({ status: 'ok', ids: new Set([KEY_A]), repair: true });
+    await writeFile(backup, JSON.stringify([KEY_B, 'bad']));
+    expect(await store.readRevoked()).toEqual({ status: 'lost', ids: new Set([KEY_B]) });
+    expect(await store.addRevoked([KEY_A])).toEqual(new Set([KEY_B, KEY_A]));
+    for (const copy of [primary, backup]) expect(JSON.parse(await readFile(copy, 'utf8'))).toEqual([KEY_B, KEY_A]);
+    expect(await store.readRevoked()).toEqual({ status: 'ok', ids: new Set([KEY_A, KEY_B]), repair: false });
+
+    await rm(backup);
+    await writeFile(primary, '{"not":"a list"}');
+    expect(await store.readRevoked()).toEqual({ status: 'ok', ids: new Set(), repair: true });
+    await store.addRevoked([]);
+    await expect(readFile(primary)).rejects.toThrow();
+
+    await mkdir(primary);
+    expect(await store.readRevoked()).toEqual({ status: 'unavailable', detail: 'EISDIR' });
+    await expect(store.addRevoked([KEY_A])).rejects.toThrow(/EISDIR/);
   });
 });
