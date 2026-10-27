@@ -314,11 +314,14 @@ const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
 /** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
 export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
 
-/** Final reply when a reasoning model spent its whole output budget and the caller set `max_tokens`. */
+/**
+ * Final reply when a reasoning model spent its whole output budget and the caller set `max_tokens`
+ * (API callers, and the web UI, which always sends one). Worded so it is actionable on both.
+ */
 export const OUTPUT_BUDGET_EXHAUSTED_REPLY =
-  'The model used its whole output budget reasoning before it could answer. Raise max_tokens, or leave it unset to use the model default.';
+  'The model used its whole output budget reasoning before it could answer. Raise the max tokens setting (max_tokens in the API), or use the model default.';
 
-/** Same failure when the server chose the budget (web UI, voice): nothing for the user to raise. */
+/** Same failure when the server chose the budget (voice, or an API call that sent no `max_tokens`): nothing for the user to raise. */
 export const OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY =
   'The model ran out of room while reasoning and could not answer. Please try again or simplify the request.';
 
@@ -5427,7 +5430,8 @@ export class ChatCompletionProcess {
           } catch (attemptError) {
             lastError = attemptError as Error;
             // Aborts (user cancel, client disconnect, or request/idle timeout) are
-            // benign - log the raw error at warn so its stack stays out of the
+            // benign, and output-budget exhaustion is deterministic and settled as terminal
+            // below (an error log would trip the alert) - log the raw error at warn so its stack stays out of the
             // CloudWatch ERROR to LiveOps/Slack alerts. This bare dump was
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
@@ -7072,7 +7076,9 @@ export class ChatCompletionProcess {
         // does not DLQ-retry a deterministic failure; the /api/chat wait route reads terminalError.
         logger.warn(`[Output Budget] Quest ${questId}: ${err.message}`);
         this.terminalError = err;
-        setErrorReply(params.max_tokens ? OUTPUT_BUDGET_EXHAUSTED_REPLY : OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY);
+        setErrorReply(
+          (params.max_tokens ?? 0) > 0 ? OUTPUT_BUDGET_EXHAUSTED_REPLY : OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY
+        );
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

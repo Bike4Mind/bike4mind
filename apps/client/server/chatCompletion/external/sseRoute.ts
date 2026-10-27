@@ -133,14 +133,15 @@ function toStreamErrorFrame(error: unknown, requestId: string, callerSetMaxToken
   let code: CompletionSseErrorCode | undefined = questCode;
   if (!questCode) {
     const status = error instanceof Error ? getHttpStatus(error) : undefined;
-    // Deterministic too: retrying the same budget fails the same way, unlike provider_error. Only a
-    // budget the caller chose gets its own code; a server-chosen one is not theirs to raise.
+    // Retrying the same budget fails the same way, unlike provider_error. Only a budget the caller
+    // chose gets its own code; a server-chosen one is not theirs to raise.
     if (callerSetMaxTokens && isOutputBudgetExhaustedError(error)) {
       frameError = new Error(
         'The model used your whole max_tokens budget reasoning before it could answer. Raise max_tokens, or omit it to use the model default.'
       );
       code = 'output_budget_exhausted';
     } else if (error instanceof Error && isSafetyRefusalError(error)) {
+      // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
     } else if (isUpstreamCallerError(error)) {

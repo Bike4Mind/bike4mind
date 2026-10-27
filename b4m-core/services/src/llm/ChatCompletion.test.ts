@@ -11708,7 +11708,7 @@ describe('ChatCompletionProcess', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.any(OutputBudgetExhaustedError));
     });
 
-    it('settles with a reply that does not mention max_tokens when the server chose the budget', async () => {
+    it.each([undefined, 0, -1])('settles with the server reply when max_tokens is %s', async maxTokens => {
       setupStreamIdleTimeoutMocks();
       mockedShouldTriggerFallback.mockReturnValue(false);
       mockedGetLlmByModel.mockReturnValue({
@@ -11719,7 +11719,7 @@ describe('ChatCompletionProcess', () => {
 
       const body = {
         ...startQuestParams,
-        params: { ...startQuestParams.params, max_tokens: undefined },
+        params: { ...startQuestParams.params, max_tokens: maxTokens },
         tools: [],
         projectId: undefined,
         organizationId: undefined,

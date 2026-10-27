@@ -492,6 +492,8 @@ describe('KimiBackend streaming reasoning', () => {
 
     const err = await runStream(backend, ChatModels.KIMI_K3, { abortSignal }).catch((e: unknown) => e);
     expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/returned no content/);
   });
 
   it('throws a diagnosable error when a stream produces no content and no tool', async () => {

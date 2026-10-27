@@ -22,6 +22,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
+import { Logger } from '@bike4mind/observability';
 
 const {
   mockCheckFreeTierDailySpendCap,
@@ -1336,14 +1337,22 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
   });
 
   describe('output-budget exhaustion on wait: true', () => {
+    let requestLogger: Logger;
     // Models ChatCompletionProcess: the quest is settled as an error and the failure is left on
     // the instance rather than thrown.
     const processExhaustingBudget = () =>
       mockProcess.mockImplementation(async () => {
         mockTerminalError.value = new Error('output budget was exhausted');
       });
+    beforeEach(() => {
+      // req.logger is the global instance (logging middleware), so spy there.
+      requestLogger = Logger.resetMetadata();
+      vi.spyOn(requestLogger, 'error').mockImplementation(() => {});
+      vi.spyOn(requestLogger, 'warn').mockImplementation(() => {});
+    });
     afterEach(() => {
       mockTerminalError.value = undefined;
+      vi.restoreAllMocks();
     });
 
     it('answers 422 output_budget_exhausted when the caller set max_tokens', async () => {
@@ -1364,6 +1373,9 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       const body = res._getJSONData();
       expect(body).toMatchObject({ quest_id: expect.any(String) });
       expect(body).not.toHaveProperty('errorCode');
+      // The 502 is an expected, classified failure: logged at warn so it does not trip the error alert.
+      expect(requestLogger.error).not.toHaveBeenCalled();
+      expect(requestLogger.warn).toHaveBeenCalled();
     });
   });
 

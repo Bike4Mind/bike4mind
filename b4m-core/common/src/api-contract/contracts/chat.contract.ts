@@ -29,7 +29,7 @@ export const chatContract = defineEndpoint({
     'returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send ' +
     '`wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is ' +
     'bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and ' +
-    'answered with a 504 naming the quest in `quest_id`. Send long or tool-heavy turns (large ' +
+    'answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large ' +
     'attachments, tool calls) in the default async mode and poll instead. A tool that produced ' +
     'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
@@ -69,7 +69,8 @@ export const chatContract = defineEndpoint({
         'schema). With `wait: true` the body is instead the completed turn: the ACK fields plus the ' +
         'reply (`response`/`responses`), `toolPayloads`, `createdAt`, `performance` timings and, ' +
         'when requested, `promptDetails`/`promptText`. A turn that FAILS still resolves with `200`, never a 4xx, on ' +
-        'both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose ' +
+        'both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`), except the ' +
+        'output-budget case, which a `wait: true` request answers with a 422 or 502 - the prose ' +
         'explaining why lands in `reply`/`response` like any other answer, so the reply text alone ' +
         'cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it ' +
         'unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a ' +

@@ -23,6 +23,8 @@ const {
   mockProcess,
   mockWriteStaticCompletion,
   mockInvokeOptions,
+  mockSseChunk,
+  processState,
 } = vi.hoisted(() => ({
   mockVerifyVoiceSessionToken: vi.fn(),
   mockFindDuplicateQuests: vi.fn(),
@@ -32,6 +34,8 @@ const {
   mockProcess: vi.fn(),
   mockWriteStaticCompletion: vi.fn(),
   mockInvokeOptions: vi.fn(),
+  mockSseChunk: vi.fn(),
+  processState: { terminalError: undefined as Error | undefined },
 }));
 
 // Bypass baseApi's whole middleware chain (connectDB, passport, api-key auth) - this
@@ -105,6 +109,7 @@ vi.mock('@bike4mind/services/llm', () => ({
     invoke = (...args: unknown[]) => mockInvoke(...args);
   },
   ChatCompletionProcess: class {
+    terminalError = processState.terminalError;
     process = (...args: unknown[]) => mockProcess(...args);
   },
 }));
@@ -112,10 +117,13 @@ vi.mock('@bike4mind/services/llm', () => ({
 vi.mock('@bike4mind/voice', () => ({
   buildClientToolPassthrough: () => ({}),
   currentTurnUserMessage: () => 'hello there',
-  diffAccumulated: () => '',
+  diffAccumulated: (sent: string, visible: string) => visible.slice(sent.length),
   extractSystemPrompt: () => '',
   emitInitialBuffer: () => {},
-  openAiSseChunk: () => 'chunk',
+  openAiSseChunk: (...args: unknown[]) => {
+    mockSseChunk(...args);
+    return 'chunk';
+  },
   openAiSseDone: () => 'done',
   stripSpokenThinking: (text: string) => text,
   writeStaticCompletion: (...args: unknown[]) => mockWriteStaticCompletion(...args),
@@ -168,6 +176,7 @@ function primeSuccessfulTurn() {
   mockGetSettingsMap.mockResolvedValue({});
   mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
   mockProcess.mockResolvedValue(undefined);
+  processState.terminalError = undefined;
 }
 
 describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
@@ -514,6 +523,19 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () =>
     await handler(makeReq() as never, { ...makeRes(), status } as never);
 
     expect402(status);
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - settled budget error', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  it('speaks the settled reply before closing, rather than going silent', async () => {
+    processState.terminalError = new Error('budget');
+    mockInvoke.mockResolvedValue({ id: 'quest-1', replies: ['Out of room.'], reply: 'Out of room.' });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockSseChunk).toHaveBeenCalledWith(expect.objectContaining({ contentDelta: 'Out of room.' }));
   });
 });
 

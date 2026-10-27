@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
+  OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
   type ApiErrorCode,
 } from '../apiErrorCodes';
@@ -358,7 +359,7 @@ export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
  * `sessionId` are present only on that settled-turn case.
  */
 export const ChatWaitUnprocessableErrorSchema = ApiErrorSchema.extend({
-  errorCode: z.string().optional(),
+  errorCode: z.literal(OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE).optional(),
   quest_id: z.string().optional(),
   sessionId: z.string().optional(),
 });

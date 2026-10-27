@@ -523,6 +523,8 @@ describe('DeepSeekBackend streaming reasoning', () => {
 
     const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH, { abortSignal }).catch((e: unknown) => e);
     expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/returned no content/);
   });
 
   it('throws when a stream spent the whole output budget reasoning and never produced prose', async () => {
