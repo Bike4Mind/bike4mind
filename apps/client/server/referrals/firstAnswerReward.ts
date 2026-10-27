@@ -92,9 +92,10 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
   }
 }
 
-// Only the reward that crosses the threshold alerts. Each reward ranks itself by _id order instead of
-// reading a shared total, so payouts committing together cannot both skip the crossing: a race can
-// duplicate the alert but never drop it.
+// Only the reward ranked one past the threshold alerts. Each reward counts the earlier ones by _id
+// instead of reading a shared total, which narrows the race between payouts committing together but
+// does not close it: a payout whose smaller-id neighbour has not committed yet undercounts and can
+// miss the alert.
 async function alertIfRewardsSpike(transactionId: string, threshold: number): Promise<void> {
   const earlierRewards = await CreditTransaction.countDocuments({
     ownerType: CreditHolderType.User,
