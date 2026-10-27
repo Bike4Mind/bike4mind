@@ -486,6 +486,14 @@ describe('KimiBackend streaming reasoning', () => {
     expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
   });
 
+  it('does not type an aborted stream as retryable', async () => {
+    const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
+    const abortSignal = AbortSignal.abort();
+
+    const err = await runStream(backend, ChatModels.KIMI_K3, { abortSignal }).catch((e: unknown) => e);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+  });
+
   it('throws a diagnosable error when a stream produces no content and no tool', async () => {
     // The streaming path had no equivalent of the non-streaming length guard, so an
     // empty stream returned silently with zero callbacks and the chat hung.

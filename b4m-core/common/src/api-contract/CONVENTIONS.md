@@ -289,7 +289,8 @@ are published wire shapes, so what had to be shared was the vocabulary, not the 
 
 `/api/ai/v1/completions` classifies its frame with `COMPLETION_SSE_ERROR_CODES`: the billing
 codes plus `provider_rejected` (the provider refused our credentials), `content_blocked` (the
-model's safety classifier declined the request) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
+model's safety classifier declined the request), `output_budget_exhausted` (a reasoning model spent the
+caller's whole `max_tokens` thinking; unchanged retries fail the same way) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
 reaches the client.
 
 The pairing a caller needs is worth stating in the contract `description`: `/api/chat`,

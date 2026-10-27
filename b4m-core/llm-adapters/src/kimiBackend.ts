@@ -687,7 +687,10 @@ export class KimiBackend implements ICompletionBackend {
     // the stream returns silently with zero callbacks and the chat hangs.
     if (!sawProse && func.length === 0 && toolsUsed.length === 0) {
       if (streamFinishReason === 'length') throw new OutputBudgetExhaustedError('Moonshot', model);
-      if (streamFinishReason === undefined) throw new StreamEndedWithoutFinishError('Moonshot', model);
+      // An aborted stream also ends with no finish reason; that is a stop, not a dropped stream to retry.
+      if (streamFinishReason === undefined && !options.abortSignal?.aborted) {
+        throw new StreamEndedWithoutFinishError('Moonshot', model);
+      }
       throw new Error(`Moonshot returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`);
     }
 

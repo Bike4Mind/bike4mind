@@ -133,7 +133,8 @@ function toStreamErrorFrame(error: unknown, requestId: string, callerSetMaxToken
   let code: CompletionSseErrorCode | undefined = questCode;
   if (!questCode) {
     const status = error instanceof Error ? getHttpStatus(error) : undefined;
-    // A refusal is deterministic: retrying the same prompt gets the same answer, unlike provider_error.
+    // Deterministic too: retrying the same budget fails the same way, unlike provider_error. Only a
+    // budget the caller chose gets its own code; a server-chosen one is not theirs to raise.
     if (callerSetMaxTokens && isOutputBudgetExhaustedError(error)) {
       frameError = new Error(
         'The model used your whole max_tokens budget reasoning before it could answer. Raise max_tokens, or omit it to use the model default.'
@@ -396,18 +397,20 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
-      // A budget the caller chose is exhausted by their own request, not by an operator fault. The
-      // stream is always open by here (onReady precedes the provider call), so there is no JSON path.
-      const callerBudgetExhausted = body?.options?.maxTokens !== undefined && isOutputBudgetExhaustedError(error);
-      const level = jsonError.status < 500 || callerBudgetExhausted ? 'warn' : 'error';
+      // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
+      // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
+      // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.
+      const budgetExhausted = isOutputBudgetExhaustedError(error);
+      const callerSetMaxTokens = budgetExhausted && (body?.options?.maxTokens ?? 0) > 0;
+      const level = jsonError.status < 500 || budgetExhausted ? 'warn' : 'error';
       const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
       logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
       // Provider caller errors are not operator failures, including SDK errors that are not HTTPErrors.
-      if (!isUpstreamCallerError(error) && !callerBudgetExhausted) track(emitProcessingFailed('cli-sse', error));
+      if (!isUpstreamCallerError(error)) track(emitProcessingFailed('cli-sse', error));
 
       try {
         if (res.headersSent) {
-          write(serializeSSEEvent(toStreamErrorFrame(error, requestId, callerBudgetExhausted)));
+          write(serializeSSEEvent(toStreamErrorFrame(error, requestId, callerSetMaxTokens)));
           end();
           if (heartbeat) clearInterval(heartbeat);
         } else {

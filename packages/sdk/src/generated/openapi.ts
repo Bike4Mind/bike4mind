@@ -1351,6 +1351,29 @@ export interface components {
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
     };
+    sendChatMessageResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      errorCode?: string;
+      quest_id?: string;
+      sessionId?: string;
+    };
+    sendChatMessageResponse502: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      quest_id: string;
+      sessionId?: string;
+    };
     sendChatMessageResponse504: {
       error: string;
       request_id?: string;
@@ -5625,7 +5648,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['sendChatMessageResponse422'];
         };
       };
       /** @description Per-user rate limit exceeded. A free-tier daily credit cap hit is distinguished by `errorCode: daily_free_limit_reached` and a `Retry-After` header until the next UTC midnight. */
@@ -5651,7 +5674,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description A `wait: true` turn failed upstream: a reasoning model spent the whole server-chosen output budget thinking and produced no answer. The quest (`quest_id`) is settled as an error. Retry. */
+      /** @description A `wait: true` turn failed upstream: a reasoning model spent the whole server-chosen output budget thinking and produced no answer. The quest (`quest_id`) is settled as an error. An unchanged retry is likely to fail the same way; a shorter prompt or an explicit `max_tokens` may help. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -5671,7 +5694,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['sendChatMessageResponse502'];
         };
       };
       /** @description A `wait: true` turn ran past the request deadline. The turn is already ended: its quest (`quest_id`) is settled as timed out with any partial reply kept, and unused reserved credits are refunded. Retry in async mode for a long turn. */

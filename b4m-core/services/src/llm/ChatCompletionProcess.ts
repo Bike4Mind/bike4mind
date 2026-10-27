@@ -312,10 +312,15 @@ const STREAMING_HEARTBEAT_INTERVAL_MS = 10_000;
 const STREAMING_HEARTBEAT_ERROR_ESCALATION_THRESHOLD = 3;
 
 /** Final reply when the model stayed too slow through its retry and any fallback. Not "busy": the provider never said so. */
+export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
+
+/** Final reply when a reasoning model spent its whole output budget and the caller set `max_tokens`. */
 export const OUTPUT_BUDGET_EXHAUSTED_REPLY =
   'The model used its whole output budget reasoning before it could answer. Raise max_tokens, or leave it unset to use the model default.';
 
-export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Please try again in a moment.';
+/** Same failure when the server chose the budget (web UI, voice): nothing for the user to raise. */
+export const OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY =
+  'The model ran out of room while reasoning and could not answer. Please try again or simplify the request.';
 
 // Context management constants: message-history limits per query type
 
@@ -1885,9 +1890,9 @@ export class ChatCompletionProcess {
     };
   }
 
-  /** Pipeline phase durations from the most recent process() call. Available after process() resolves. */
   /** Set when the turn failed because a reasoning model spent its whole output budget; the quest is already settled. */
   public terminalError: OutputBudgetExhaustedError | undefined;
+  /** Pipeline phase durations from the most recent process() call. Available after process() resolves. */
   public pipelinePhases: Record<string, number> | null = null;
 
   /**
@@ -5430,7 +5435,8 @@ export class ChatCompletionProcess {
             if (
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
-              lastError instanceof ResponsesStreamTruncatedError
+              lastError instanceof ResponsesStreamTruncatedError ||
+              isOutputBudgetExhaustedError(lastError)
             ) {
               logger.warn(lastError);
             } else {
@@ -5586,11 +5592,18 @@ export class ChatCompletionProcess {
             // then the fallback chain.
             if (isStreamEndedWithoutFinishError(lastError) && !streamEndedWithoutFinishRetried) {
               streamEndedWithoutFinishRetried = true;
+              const EMPTY_STREAM_RETRY_DELAY_MS = 2000;
+              const jitter = Math.floor(Math.random() * 500);
+
               logger.info(
-                `🔄 [Empty Stream Retry] ${currentModel.id} stream ended without a finish reason, retrying once`
+                `[Empty Stream Retry] ${currentModel.id} stream ended without a finish reason, retrying once in ${EMPTY_STREAM_RETRY_DELAY_MS + jitter}ms`
               );
 
-              turnTiming.recordRetry(lastError, 0, currentModel.id);
+              this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
+
+              turnTiming.recordRetry(lastError, EMPTY_STREAM_RETRY_DELAY_MS + jitter, currentModel.id);
+              await new Promise(resolve => setTimeout(resolve, EMPTY_STREAM_RETRY_DELAY_MS + jitter));
+
               resetStreamStateForRetry();
 
               continue;
@@ -7059,7 +7072,7 @@ export class ChatCompletionProcess {
         // does not DLQ-retry a deterministic failure; the /api/chat wait route reads terminalError.
         logger.warn(`[Output Budget] Quest ${questId}: ${err.message}`);
         this.terminalError = err;
-        setErrorReply(OUTPUT_BUDGET_EXHAUSTED_REPLY);
+        setErrorReply(params.max_tokens ? OUTPUT_BUDGET_EXHAUSTED_REPLY : OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

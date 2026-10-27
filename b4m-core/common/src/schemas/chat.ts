@@ -353,6 +353,23 @@ export const ChatWaitTimeoutErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
+ * 422 on `wait: true`. `errorCode` is `output_budget_exhausted` when a reasoning model spent the caller's
+ * whole `max_tokens` thinking; it is optional because schema-validation 422s carry none. `quest_id` and
+ * `sessionId` are present only on that settled-turn case.
+ */
+export const ChatWaitUnprocessableErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.string().optional(),
+  quest_id: z.string().optional(),
+  sessionId: z.string().optional(),
+});
+
+/** 502 on `wait: true`: the turn settled as an error upstream; `quest_id` is the settled quest. */
+export const ChatWaitUpstreamErrorSchema = ApiErrorSchema.extend({
+  quest_id: z.string(),
+  sessionId: z.string().optional(),
+});
+
+/**
  * 400 for an upload refused on size or quota. The typed members are optional because the same 400 also
  * covers errors that carry none (an unsupported file type); when `errorCode` is present all five arrive
  * together, which the endpoint's 400 description states for integrators.

@@ -626,7 +626,10 @@ export class DeepSeekBackend implements ICompletionBackend {
     // stream returns silently with zero callbacks and the chat hangs.
     if (!sawProse && func.length === 0 && toolsUsed.length === 0) {
       if (streamFinishReason === 'length') throw new OutputBudgetExhaustedError('DeepSeek', model);
-      if (streamFinishReason === undefined) throw new StreamEndedWithoutFinishError('DeepSeek', model);
+      // An aborted stream also ends with no finish reason; that is a stop, not a dropped stream to retry.
+      if (streamFinishReason === undefined && !options.abortSignal?.aborted) {
+        throw new StreamEndedWithoutFinishError('DeepSeek', model);
+      }
       throw new Error(`DeepSeek returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`);
     }
 

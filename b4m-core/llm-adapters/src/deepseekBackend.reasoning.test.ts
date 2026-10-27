@@ -517,6 +517,14 @@ describe('DeepSeekBackend streaming reasoning', () => {
     expect((err as Error).message).not.toMatch(/abort|overload|timeout/i);
   });
 
+  it('does not type an aborted stream as retryable', async () => {
+    const { backend } = streamingBackend([[{ choices: [{ index: 0, delta: { reasoning_content: 'hm' } }] }]]);
+    const abortSignal = AbortSignal.abort();
+
+    const err = await runStream(backend, ChatModels.DEEPSEEK_FLASH, { abortSignal }).catch((e: unknown) => e);
+    expect(isStreamEndedWithoutFinishError(err)).toBe(false);
+  });
+
   it('throws when a stream spent the whole output budget reasoning and never produced prose', async () => {
     // One reasoning delta per chunk on purpose: two choices in one chunk at the same
     // index overwrite each other and a fixture that does it silently looks like a pass.

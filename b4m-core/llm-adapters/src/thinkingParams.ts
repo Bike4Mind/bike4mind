@@ -146,7 +146,7 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
  *
  * Direct Kimi K3 always reasons and spends it inside `max_completion_tokens` (see the
  * empty-turn guard in kimiBackend), but its row carries no dispatch profile to say so.
- * Direct K2.7-code (thinking cannot be turned off) and K2.6 (thinks unless told otherwise,
+ * Direct K2.7-code (thinking cannot be turned off) and K2.6 and K2.5 (think unless told otherwise,
  * see kimiParams) are the same shape.
  */
 const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
@@ -159,6 +159,7 @@ const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_7_CODE,
   ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
   ChatModels.KIMI_K2_6,
+  ChatModels.KIMI_K2_5,
 ]);
 
 /**

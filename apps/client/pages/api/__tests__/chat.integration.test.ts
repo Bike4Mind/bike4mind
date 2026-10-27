@@ -1361,6 +1361,9 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(502);
+      const body = res._getJSONData();
+      expect(body).toMatchObject({ quest_id: expect.any(String) });
+      expect(body).not.toHaveProperty('errorCode');
     });
   });
 

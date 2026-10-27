@@ -1011,8 +1011,7 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     expect(text).not.toContain('secret-model-name');
   });
 
-  it('classifies an exhausted caller max_tokens in-band, at warn, without an operator metric', async () => {
-    mockEmitProcessingFailed.mockClear();
+  it('classifies an exhausted caller max_tokens in-band and logs it at warn', async () => {
     mockExecuteCompletion.mockImplementationOnce(
       failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'secret-model-name'))
     );
@@ -1020,17 +1019,22 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     const text = await (await post({ ...COMPLETION, max_tokens: 256 })).text();
     expect(errorFrame(text)).toMatchObject({ code: 'output_budget_exhausted' });
     expect(text).not.toContain('secret-model-name');
-    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
     expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
   });
 
-  it('keeps a server-chosen budget that ran out as provider_error and an operator failure', async () => {
-    mockEmitProcessingFailed.mockClear();
+  it.each([
+    ['unset', undefined],
+    ['non-positive', 0],
+  ])('keeps a %s max_tokens budget that ran out as provider_error, still at warn', async (_label, maxTokens) => {
+    mockLoggerError.mockClear();
     mockExecuteCompletion.mockImplementationOnce(failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'm')));
 
-    const text = await (await post()).text();
+    const text = await (
+      await post(maxTokens === undefined ? COMPLETION : { ...COMPLETION, max_tokens: maxTokens })
+    ).text();
     expect(errorFrame(text)).toMatchObject({ code: 'provider_error' });
-    expect(mockEmitProcessingFailed).toHaveBeenCalledTimes(1);
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+    expect(mockLoggerError).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
   });
 
   it('classifies a Bedrock AccessDeniedException as provider_rejected and logs its status', async () => {

@@ -8,6 +8,8 @@ import {
   ChatWaitResponseSchema,
   ChatQuestPollResultSchema,
   ChatWaitTimeoutErrorSchema,
+  ChatWaitUnprocessableErrorSchema,
+  ChatWaitUpstreamErrorSchema,
   ApiErrorSchema,
 } from '../../schemas/chat';
 
@@ -132,7 +134,7 @@ export const chatContract = defineEndpoint({
         'together (they are mutually exclusive). A `wait: true` turn whose `max_tokens` a reasoning ' +
         'model spent entirely on thinking is `errorCode: output_budget_exhausted`; `quest_id` names ' +
         'the settled quest. Raise `max_tokens` or omit it.',
-      schema: ApiErrorSchema,
+      schema: ChatWaitUnprocessableErrorSchema,
     },
     429: {
       description:
@@ -143,8 +145,9 @@ export const chatContract = defineEndpoint({
     502: {
       description:
         'A `wait: true` turn failed upstream: a reasoning model spent the whole server-chosen output ' +
-        'budget thinking and produced no answer. The quest (`quest_id`) is settled as an error. Retry.',
-      schema: ApiErrorSchema,
+        'budget thinking and produced no answer. The quest (`quest_id`) is settled as an error. An unchanged retry is likely to fail the same way; ' +
+        'a shorter prompt or an explicit `max_tokens` may help.',
+      schema: ChatWaitUpstreamErrorSchema,
     },
     504: {
       description:
