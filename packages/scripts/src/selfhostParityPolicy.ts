@@ -824,7 +824,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'schedule:infra/cron.ts:disposableDomainRefresh',
-    '97144c800dc88fa3123811ec2717f7a63282367e35817126078925d51077c7a2',
+    'd4acc4d47d84373b51e0aaf008c3f5e4a263bd3a1d99510c1f42628710ca99a0',
     ['cloudwatch:PutMetricData']
   ),
   gap(
