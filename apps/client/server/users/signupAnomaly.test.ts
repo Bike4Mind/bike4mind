@@ -109,4 +109,19 @@ describe('bounded signup reads', () => {
       },
     });
   });
+
+  it('flags a burst domain with its signals and leaves webmail unflagged', async () => {
+    mocks.keys.mockReturnValue(query([]));
+    const start = Date.parse('2026-01-01T00:00:00Z');
+    const burst = Array.from({ length: 12 }, (_, i) => ({
+      _id: `c${i}`,
+      email: `person${i}@corp.test`,
+      createdAt: new Date(start + i * 2 * 60_000),
+    }));
+    const lone = { _id: 'g', email: 'solo@gmail.com', createdAt: new Date(start) };
+    mocks.users.mockReturnValue(query([...burst, lone]));
+    const { groups } = await getDomainGroups([...burst, lone]);
+    expect(groups.find(group => group.domain === 'corp.test')?.signals).toContain('domainBurst');
+    expect(groups.find(group => group.domain === 'gmail.com')?.signals).toEqual([]);
+  });
 });
