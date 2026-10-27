@@ -26,19 +26,19 @@ export function parseLenientJson(text: string): unknown {
 }
 
 // Index just past the comment starting at `i`, or `i` when none starts there. A line comment stops
-// before its newline.
-function skipComment(source: string, i: number): number {
+// before its line break (JSON.parse treats a lone CR as whitespace too). `lastClose` is the
+// precomputed `source.lastIndexOf('*/')`, so an unterminated `/*` costs O(1) instead of a rescan.
+function skipComment(source: string, i: number, lastClose: number): number {
   if (source[i] !== '/') return i;
   if (source[i + 1] === '/') {
     let end = i;
-    while (end < source.length && source[end] !== '\n') end++;
+    while (end < source.length && source[end] !== '\n' && source[end] !== '\r') end++;
     return end;
   }
   if (source[i + 1] === '*') {
-    const end = source.indexOf('*/', i + 2);
     // Unterminated: not a comment, so the stray `/*` keeps the text invalid instead of silently
     // dropping everything after it.
-    return end === -1 ? i : end + 2;
+    return lastClose < i + 2 ? i : source.indexOf('*/', i + 2) + 2;
   }
   return i;
 }
@@ -47,6 +47,7 @@ function skipComment(source: string, i: number): number {
 function stripCommentsAndTrailingCommas(source: string): string {
   let out = '';
   let lastSignificant = '';
+  const lastClose = source.lastIndexOf('*/');
   let i = 0;
   while (i < source.length) {
     const ch = source[i];
@@ -57,12 +58,12 @@ function stripCommentsAndTrailingCommas(source: string): string {
       out += source.slice(i, j + 1);
       lastSignificant = '"';
       i = j + 1;
-    } else if (skipComment(source, i) !== i) {
+    } else if (skipComment(source, i, lastClose) !== i) {
       // A space, not nothing: `1/**/2` must not fuse into `12`.
       out += ' ';
-      i = skipComment(source, i);
+      i = skipComment(source, i, lastClose);
     } else if (ch === ',') {
-      const next = nextSignificantChar(source, i + 1);
+      const next = nextSignificantChar(source, i + 1, lastClose);
       // Only a comma after a real member is trailing; `{,}` and `[1,,]` stay invalid.
       const trailing = (next === '}' || next === ']') && lastSignificant && !'{[,'.includes(lastSignificant);
       if (!trailing) {
@@ -80,10 +81,10 @@ function stripCommentsAndTrailingCommas(source: string): string {
 }
 
 // First character at or after `from` that is not whitespace or inside a comment.
-function nextSignificantChar(source: string, from: number): string | undefined {
+function nextSignificantChar(source: string, from: number, lastClose: number): string | undefined {
   let i = from;
   while (i < source.length) {
-    const afterComment = skipComment(source, i);
+    const afterComment = skipComment(source, i, lastClose);
     if (afterComment !== i) i = afterComment;
     else if (/\s/.test(source[i])) i++;
     else return source[i];

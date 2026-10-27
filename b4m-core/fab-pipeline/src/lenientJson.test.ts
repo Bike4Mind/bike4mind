@@ -69,6 +69,16 @@ describe('parseLenientJson', () => {
     expect(() => parseLenientJson('{"a":1} /* oops')).toThrow(SyntaxError);
   });
 
+  it('treats a lone CR as the end of a line comment', () => {
+    expect(parseLenientJson('{"a":1, // note\r"b":2,\r}')).toEqual({ a: 1, b: 2 });
+  });
+
+  it('stays linear on many unterminated block comments', () => {
+    const start = Date.now();
+    expect(() => parseLenientJson('{"a":1,' + '/*,'.repeat(100_000))).toThrow(SyntaxError);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
   it('throws on text that is not JSON even after cleaning', () => {
     expect(() => parseLenientJson('{"a": nope,}')).toThrow(SyntaxError);
     expect(() => parseLenientJson('# just markdown')).toThrow(SyntaxError);
