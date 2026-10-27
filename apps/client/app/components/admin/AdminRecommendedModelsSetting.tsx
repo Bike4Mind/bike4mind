@@ -24,6 +24,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
   // Same source as the picker, so "unavailable" here means the picker would skip the id too.
   const { accessibleTextModels, isLoading } = useAccessibleModels();
   const stagedDraft = useSettingsDraft('recommendedModelIds', storedIds, {
+    name: 'Recommended models',
     save: value => updateSettings.mutateAsync({ key: 'recommendedModelIds', value }),
   });
   const { value: draft, setValue: setDraft } = stagedDraft;

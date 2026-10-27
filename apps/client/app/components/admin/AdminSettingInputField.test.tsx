@@ -6,7 +6,13 @@ import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
 
 const mutate = vi.fn();
 const mutateAsync = vi.fn();
-vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
+vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({
+    state: { location: { pathname: '/admin', search: { tab: 'admin-settings' } } },
+    navigate: vi.fn(),
+  }),
+}));
 // Read at render time, so a test can put the mutation into its rejected state.
 let updateError: unknown;
 // Read at render time, so a test can simulate the save round-trip still being in flight.

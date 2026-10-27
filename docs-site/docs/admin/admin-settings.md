@@ -7,7 +7,7 @@ tags: [admin, settings, configuration]
 
 # Admin Settings
 
-The Admin Settings tab provides a centralized interface for managing all platform configuration values. Settings are organized into category tabs, each containing service groups with related configuration fields. Changes take effect immediately upon saving individual setting values.
+The Admin Settings tab provides a centralized interface for managing all platform configuration values. Settings are organized into category tabs, each containing service groups with related configuration fields. Edits are staged across sections: use the SaveBar at the bottom to save all unsaved changes (Cmd/Ctrl+S) or Discard them. Leaving with unsaved changes prompts for confirmation. Failed changes remain staged for retry; uploads and command actions still run immediately.
 
 ## Interface Overview
 

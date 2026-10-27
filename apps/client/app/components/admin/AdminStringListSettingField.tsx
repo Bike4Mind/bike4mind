@@ -46,6 +46,7 @@ const AdminStringListSettingField = ({
   const stored = toStringList(storedValue);
   const updateSettings = useUpdateSettings();
   const draft = useSettingsDraft(setting.key, stored.join('\n'), {
+    name: setting.name,
     save: text => updateSettings.mutateAsync({ key: setting.key, value: fromText(text) }),
   });
   const { value: text, setValue: setText } = draft;

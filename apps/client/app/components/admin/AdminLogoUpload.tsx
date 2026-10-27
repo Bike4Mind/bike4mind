@@ -80,6 +80,7 @@ const AdminLogoUpload: React.FC = () => {
   };
 
   const logoDraft = useSettingsDraft('logo-mode', serverUseBothLogos ?? false, {
+    name: 'Logo mode',
     save: async useBothLogos => {
       await updateSettingsMutation.mutateAsync({
         key: 'logoSettings',

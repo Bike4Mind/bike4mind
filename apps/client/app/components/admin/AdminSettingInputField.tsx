@@ -49,6 +49,7 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
   })();
   const updateSettings = useUpdateSettings();
   const draft = useSettingsDraft(setting.key, initialValue, {
+    name: setting.name,
     save: value => updateSettings.mutateAsync({ key: setting.key, value }),
   });
   const { value, setValue } = draft;
@@ -128,6 +129,7 @@ const AdminSettingInputField = ({
     setting.key,
     typeof defaultValue === 'object' ? null : (defaultValue ?? null),
     {
+      name: setting.name,
       equals: (left, right) => (setting.clearDeletesRow && left === '' ? null : left) === right,
       save: async next => {
         if (next === null) throw new Error('Enter a setting value before saving.');

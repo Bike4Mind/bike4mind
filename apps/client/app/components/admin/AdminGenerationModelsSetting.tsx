@@ -80,6 +80,7 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
     return parsed.success ? parsed.data : EMPTY_SETTINGS;
   }, [getSettingObject, schema, settingKey]);
   const draft = useSettingsDraft(settingKey, storedSettings, {
+    name: title,
     save: value => updateSettings.mutateAsync({ key: settingKey, value }),
   });
   const settings = draft.staged ? draft.value : storedSettings;

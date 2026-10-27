@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Box, Button, Option, Select, Stack, Typography } from '@mui/joy';
+import { Autocomplete, AutocompleteOption, Box, Button, Stack, Typography } from '@mui/joy';
 import type { SecurityDashboardWafBlockedRequestsResult } from '@/app/hooks/data/admin';
 import type { WafRangeInput } from '@/server/security/wafTraffic';
 import { DataTable, EmptyState, ErrorState, StatusChip } from '../shared';
@@ -73,21 +73,23 @@ export const WafBlockedRequestsTable = ({
         <>
           <Stack direction="row" flexWrap="wrap" gap={1}>
             {FILTERS.map(([key, label]) => (
-              <Select
+              <Autocomplete
                 key={key}
                 multiple
                 value={filters[key] ?? []}
                 placeholder={label}
                 aria-label={label}
                 data-testid={`filter-btn-${key}`}
-                onChange={(_, values) => setFilters(previous => ({ ...previous, [key]: values }))}
-              >
-                {[...new Set(rows.map(row => row[key]))].sort().map(value => (
-                  <Option key={value} value={value} data-testid={`waf-filter-${key}-${value}`}>
+                options={[...new Set(rows.map(row => row[key]))].sort()}
+                getOptionLabel={value => value || '(empty)'}
+                slotProps={{ input: { 'data-testid': `filter-search-${key}` } }}
+                renderOption={(props, value) => (
+                  <AutocompleteOption {...props} key={value} data-testid={`waf-filter-${key}-${value}`}>
                     {value || '(empty)'}
-                  </Option>
-                ))}
-              </Select>
+                  </AutocompleteOption>
+                )}
+                onChange={(_, values) => setFilters(previous => ({ ...previous, [key]: values }))}
+              />
             ))}
             {Object.values(filters).some(values => values.length > 0) && (
               <Button variant="plain" onClick={() => setFilters({})} data-testid="waf-clear-filters">

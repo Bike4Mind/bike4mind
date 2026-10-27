@@ -5,7 +5,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SettingsDraftProvider, useSettingsDraft } from './SettingsDraftProvider';
 
-vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
+vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({
+    state: { location: { pathname: '/admin', search: { tab: 'admin-settings' } } },
+    navigate: vi.fn(),
+  }),
+}));
 const theme = extendTheme({ ...getThemeConfig() });
 const wrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={theme}>{children}</CssVarsProvider>
@@ -13,6 +19,7 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
 
 function Field({ id, save }: { id: string; save(value: string): Promise<unknown> }) {
   const draft = useSettingsDraft(id, 'stored', {
+    name: `Setting ${id}`,
     save,
     blocked: value => (value === 'invalid' ? 'Choose a valid value' : undefined),
   });
@@ -84,7 +91,9 @@ describe('SettingsDraftProvider', () => {
     fireEvent.change(screen.getByTestId('draft-one-input'), { target: { value: 'first' } });
     fireEvent.change(screen.getByTestId('draft-two-input'), { target: { value: 'second' } });
     fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Try again'));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Setting two was not saved: Try again. Saved: Setting one.')
+    );
     expect(saved).toHaveBeenCalledWith('first');
     expect(failed).toHaveBeenCalledWith('second');
     expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
@@ -102,6 +111,6 @@ describe('SettingsDraftProvider', () => {
     fireEvent.change(screen.getByTestId('draft-one-input'), { target: { value: 'invalid' } });
     fireEvent.keyDown(window, { key: 's', metaKey: true });
     expect(save).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert')).toHaveTextContent('Choose a valid value');
+    expect(screen.getByRole('alert')).toHaveTextContent('Setting one: Choose a valid value');
   });
 });

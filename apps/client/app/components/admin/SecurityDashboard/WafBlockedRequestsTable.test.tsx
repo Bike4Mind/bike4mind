@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -34,11 +35,25 @@ describe('WafBlockedRequestsTable', () => {
     render(<WafBlockedRequestsTable data={data} range="24h" />, { wrapper });
     const table = within(screen.getByTestId('waf-blocked-requests-table'));
     expect(table.getByText('/synthetic-0')).toBeVisible();
-    fireEvent.mouseDown(within(screen.getByTestId('filter-btn-httpMethod')).getByRole('combobox'));
+    fireEvent.mouseDown(screen.getByTestId('filter-search-httpMethod'));
     fireEvent.click(screen.getByTestId('waf-filter-httpMethod-GET'));
     fireEvent.keyDown(screen.getByTestId('filter-btn-httpMethod'), { key: 'Escape' });
     expect(table.queryByText('/synthetic-1')).toBeNull();
     fireEvent.click(screen.getByTestId('waf-clear-filters'));
+    expect(table.getByText('/synthetic-1')).toBeVisible();
+  });
+  it('searches URI options and retains selections while searching again', async () => {
+    render(<WafBlockedRequestsTable data={data} range="24h" />, { wrapper });
+    const input = screen.getByTestId('filter-search-uri');
+    await userEvent.type(input, 'synthetic-1');
+    expect(screen.queryByTestId('waf-filter-uri-/synthetic-0')).toBeNull();
+    await userEvent.click(screen.getByTestId('waf-filter-uri-/synthetic-1'));
+    const table = within(screen.getByTestId('waf-blocked-requests-table'));
+    expect(table.queryByText('/synthetic-0')).toBeNull();
+    expect(table.getByText('/synthetic-1')).toBeVisible();
+    await userEvent.type(input, 'synthetic-0');
+    await userEvent.click(screen.getByTestId('waf-filter-uri-/synthetic-0'));
+    expect(table.getByText('/synthetic-0')).toBeVisible();
     expect(table.getByText('/synthetic-1')).toBeVisible();
   });
   it('retries failed queries', () => {

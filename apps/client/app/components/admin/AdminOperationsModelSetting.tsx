@@ -97,6 +97,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
       speechModelId: '',
     },
     {
+      name: 'Operations models',
       save: config => updateMutation.mutateAsync(config),
       blocked: config =>
         !config.modelId || !config.imageModelId || !config.speechModelId

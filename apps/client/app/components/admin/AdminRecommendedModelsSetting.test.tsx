@@ -6,7 +6,13 @@ import type { ModelInfo } from '@bike4mind/common';
 
 const mutate = vi.fn();
 const mutateAsync = vi.fn();
-vi.mock('@tanstack/react-router', () => ({ useBlocker: () => ({ status: 'idle' }) }));
+vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({
+    state: { location: { pathname: '/admin', search: { tab: 'admin-settings' } } },
+    navigate: vi.fn(),
+  }),
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useUpdateSettings: () => ({ mutate, mutateAsync, isPending: false }),
 }));

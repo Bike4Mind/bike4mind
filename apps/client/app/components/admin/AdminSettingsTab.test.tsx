@@ -35,6 +35,7 @@ type SearchRecord = Record<string, unknown>;
 const router = vi.hoisted(() => ({ search: {} as Record<string, unknown>, navigate: vi.fn() }));
 vi.mock('@tanstack/react-router', () => ({
   useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({ state: { location: { pathname: '/admin', search: router.search } }, navigate: router.navigate }),
   useSearch: () => router.search,
   useNavigate: () => router.navigate,
 }));
