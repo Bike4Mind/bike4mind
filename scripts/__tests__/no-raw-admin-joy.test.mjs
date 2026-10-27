@@ -130,7 +130,18 @@ describe('repository config', () => {
   });
 
   it('matches every pinned declaration and reports no stale legacy exceptions', async () => {
-    const results = await eslint.lintFiles(Object.keys(imports).map(file => path.join(admin, file)));
-    expect(results.flatMap(result => result.messages.filter(m => m.ruleId === 'b4m/no-raw-admin-joy'))).toEqual([]);
+    const guard = new ESLint({
+      cwd: root,
+      allowInlineConfig: false,
+      overrideConfigFile: true,
+      overrideConfig: {
+        files: ['**/*.tsx'],
+        languageOptions: { parser: tseslint.parser, parserOptions: { ecmaFeatures: { jsx: true } } },
+        plugins: { b4m: { rules: { 'no-raw-admin-joy': rule } } },
+        rules: { 'b4m/no-raw-admin-joy': 'error' },
+      },
+    });
+    const results = await guard.lintFiles(Object.keys(imports).map(file => path.join(admin, file)));
+    expect(results.flatMap(result => result.messages)).toEqual([]);
   });
 });
