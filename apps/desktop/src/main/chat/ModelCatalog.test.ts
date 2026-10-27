@@ -2,7 +2,13 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
+import { cpuMachine, GIB, stubArch } from './fitStub.testHelper';
 import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
+}));
 
 function wireModel(overrides: Record<string, unknown> = {}) {
   return {
@@ -171,28 +177,9 @@ describe('ModelCatalog', () => {
   });
 
   it("shows a local model's context as it is now: grown by a conversation, or sized again after Settings", async () => {
-    const GIB = 1024 ** 3;
-    const machine = (gib: number) => ({
-      platform: 'linux',
-      arch: 'x64',
-      memoryKind: 'cpu' as const,
-      totalMemoryBytes: gib * GIB,
-      gpuMemoryBytes: null,
-      gpuName: null,
-      gpuCount: 0,
-      chip: null,
-      diskFreeBytes: null,
-      confidence: 'high' as const,
-    });
-    const arch = {
-      contextMax: 131072,
-      blockCount: 32,
-      headCount: 32,
-      full: { layers: 32, kvHeads: 8, keyLength: 128, valueLength: 128 },
-      mtpLayers: 0,
-    };
-    let hardware = machine(32);
-    const footprint = () => ({ arch, weightsBytes: 4.9 * GIB, hardware });
+    // The stub estimator: 64K fits 32 GiB, 32K is the most that fits 10 GiB.
+    let hardware = cpuMachine(32);
+    const footprint = () => ({ arch: stubArch(131072), weightsBytes: 4 * GIB, hardware });
     const replies = [
       () =>
         Response.json(
@@ -230,7 +217,7 @@ describe('ModelCatalog', () => {
       expect(grown).toBeGreaterThan(65536);
       expect((await contextOf())?.contextWindow).toBe(grown);
 
-      hardware = machine(16);
+      hardware = cpuMachine(10);
       forgetLocalContexts();
       catalog.forgetLocal();
       expect((await contextOf())?.contextWindow).toBe(32768);

@@ -7,11 +7,17 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { describeCompaction, formatTokens } from '../../renderer/src/chat/statusLine';
 import { ChatService } from './ChatService';
 import { COMPACT_MAX_TOKENS } from './compaction';
+import { discreteMachine, GIB, stubArch } from './fitStub.testHelper';
 import { localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { ModelCatalog } from './ModelCatalog';
 import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
+}));
 
 interface SentRequest {
   messages: { role: string; content: string }[];
@@ -197,36 +203,15 @@ it('trims a replayed history whose earlier replies used tools, and answers', asy
 });
 
 it('tells the conversation when Auto grows the context past what fits on the GPU', async () => {
-  const GIB = 1024 ** 3;
-  const footprint = {
-    arch: {
-      contextMax: 262144,
-      blockCount: 36,
-      headCount: 32,
-      full: { layers: 36, kvHeads: 8, keyLength: 128, valueLength: 128 },
-      mtpLayers: 0,
-    },
-    weightsBytes: 2_497_283_341,
-    hardware: {
-      platform: 'linux',
-      arch: 'x64',
-      memoryKind: 'discrete' as const,
-      totalMemoryBytes: 32 * GIB,
-      gpuMemoryBytes: 8 * GIB,
-      gpuName: 'GPU',
-      gpuCount: 1,
-      chip: null,
-      diskFreeBytes: null,
-      confidence: 'high' as const,
-    },
-  };
+  // The stub estimator: 16K fits a 7 GiB GPU, and nothing that holds a 25K prompt does.
+  const footprint = { arch: stubArch(), weightsBytes: 4 * GIB, hardware: discreteMachine(7, 32) };
   let refuse = true;
   const { events, requests, id, send } = await localService(
     262_144,
     () => {
-      if (!refuse) return answer(17_000);
+      if (!refuse) return answer(25_000);
       refuse = false;
-      return overflow(17_000, 16_384);
+      return overflow(25_000, 16_384);
     },
     false,
     undefined,

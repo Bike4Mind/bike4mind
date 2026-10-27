@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { HardwareProfile, ModelArch } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
+import {
+  cpuMachine,
+  discreteMachine,
+  GIB,
+  lowConfidenceMachine,
+  STUB_TARGET_TOKENS,
+  stubArch,
+  unifiedMachine,
+} from './fitStub.testHelper';
 import {
   chatContextTokens,
   estimateTokens,
@@ -15,6 +24,11 @@ import {
   type LocalModelFootprint,
   type OllamaMessage,
 } from './localContext';
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
+}));
 
 const UNMEASURED: LocalModelFootprint = { arch: null, weightsBytes: null, hardware: null };
 
@@ -182,174 +196,114 @@ describe('localTranscriptChars', () => {
   });
 });
 
-const GIB = 1024 ** 3;
-// Shaped like an 8B GQA model (32 layers, 8 KV heads of 128) at Q4, and qwen2.5:0.5b as Ollama reports it.
-const eightB: ModelArch = {
-  contextMax: 131072,
-  blockCount: 32,
-  headCount: 32,
-  full: { layers: 32, kvHeads: 8, keyLength: 128, valueLength: 128 },
-  mtpLayers: 0,
-};
-const qwenHalfB: ModelArch = {
-  contextMax: 32768,
-  blockCount: 24,
-  headCount: 14,
-  full: { layers: 24, kvHeads: 2, keyLength: 64, valueLength: 64 },
-  mtpLayers: 0,
-};
-const cpuMachine = (gib: number): HardwareProfile => ({
-  platform: 'linux',
-  arch: 'x64',
-  memoryKind: 'cpu',
-  totalMemoryBytes: gib * GIB,
-  gpuMemoryBytes: null,
-  gpuName: null,
-  gpuCount: 0,
-  chip: null,
-  diskFreeBytes: null,
-  confidence: 'high',
-});
-// Qwen3-4B-Instruct-2507 Q4_K_M as Ollama reports it.
-const fourB: ModelArch = {
-  contextMax: 262144,
-  blockCount: 36,
-  headCount: 32,
-  full: { layers: 36, kvHeads: 8, keyLength: 128, valueLength: 128 },
-  mtpLayers: 0,
-};
-const FOUR_B_BYTES = 2_497_283_341;
-const lowConfidence = (gib: number): HardwareProfile => ({ ...cpuMachine(gib), confidence: 'low' });
-const discrete = (vramGib: number, ramGib: number): HardwareProfile => ({
-  ...cpuMachine(ramGib),
-  memoryKind: 'discrete',
-  gpuMemoryBytes: vramGib * GIB,
-  gpuName: 'GPU',
-  gpuCount: 1,
-});
-const unified = (gib: number): HardwareProfile => ({
-  ...cpuMachine(gib),
-  platform: 'darwin',
-  arch: 'arm64',
-  memoryKind: 'unified',
-  gpuCount: 1,
-});
-const eightBOn = (hardware: HardwareProfile | number): LocalModelFootprint => ({
-  arch: eightB,
-  weightsBytes: 4.9 * GIB,
+// Every size below follows from the stub's arithmetic: a 4 GiB model plus 2 GiB per 16K of context.
+const on = (hardware: HardwareProfile | number, arch: ModelArch = stubArch()): LocalModelFootprint => ({
+  arch,
+  weightsBytes: 4 * GIB,
   hardware: typeof hardware === 'number' ? cpuMachine(hardware) : hardware,
-});
-const fourBOn = (hardware: HardwareProfile): LocalModelFootprint => ({
-  arch: fourB,
-  weightsBytes: FOUR_B_BYTES,
-  hardware,
 });
 const auto = (footprint: LocalModelFootprint, configured?: number) =>
   chatContextTokens({ setting: AUTO_LOCAL_CONTEXT, footprint, configured });
 
 describe('chatContextTokens', () => {
   it.each([
-    { machine: 'CPU 12 GiB', footprint: eightBOn(12), expected: 16384 },
-    { machine: 'CPU 20 GiB', footprint: eightBOn(20), expected: 32768 },
-    // The estimator's chat target caps it below the model's trained 128K.
-    { machine: 'CPU 32 GiB', footprint: eightBOn(32), expected: 65536 },
-    { machine: 'CPU 4 GiB, nothing resident', footprint: eightBOn(4), expected: 16384 },
-    // 16K fits on the GPU; 32K would move most of the weights to system RAM.
-    { machine: 'GPU 8 GiB / RAM 32 GiB', footprint: fourBOn(discrete(8, 32)), expected: 16384 },
-    { machine: 'GPU 12 GiB / RAM 32 GiB', footprint: fourBOn(discrete(12, 32)), expected: 32768 },
-    { machine: 'GPU 24 GiB / RAM 64 GiB', footprint: fourBOn(discrete(24, 64)), expected: 65536 },
-    { machine: 'GPU 8 GiB, nothing resident', footprint: eightBOn(discrete(4, 32)), expected: 16384 },
-    { machine: 'unified 8 GiB', footprint: eightBOn(unified(8)), expected: 16384 },
-    { machine: 'unified 16 GiB', footprint: fourBOn(unified(16)), expected: 32768 },
-    { machine: 'unified 32 GiB', footprint: fourBOn(unified(32)), expected: 65536 },
+    { machine: 'CPU 5 GiB, nothing resident', footprint: on(5), expected: 16384 },
+    { machine: 'CPU 7 GiB', footprint: on(7), expected: 16384 },
+    { machine: 'CPU 9 GiB', footprint: on(9), expected: 32768 },
+    // The estimator's chat target caps it below the model's trained length.
+    { machine: 'CPU 13 GiB', footprint: on(13), expected: STUB_TARGET_TOKENS },
+    // 16K fits on the GPU; 32K would move layers to system RAM.
+    { machine: 'GPU 7 GiB / RAM 32 GiB', footprint: on(discreteMachine(7, 32)), expected: 16384 },
+    { machine: 'GPU 9 GiB / RAM 32 GiB', footprint: on(discreteMachine(9, 32)), expected: 32768 },
+    { machine: 'GPU 13 GiB / RAM 64 GiB', footprint: on(discreteMachine(13, 64)), expected: STUB_TARGET_TOKENS },
+    { machine: 'GPU 5 GiB, nothing resident', footprint: on(discreteMachine(5, 32)), expected: 16384 },
+    { machine: 'unified 7 GiB', footprint: on(unifiedMachine(7)), expected: 16384 },
+    { machine: 'unified 9 GiB', footprint: on(unifiedMachine(9)), expected: 32768 },
+    { machine: 'unified 13 GiB', footprint: on(unifiedMachine(13)), expected: STUB_TARGET_TOKENS },
     // A GPU the probe cannot measure may be there; nothing larger is picked up front.
-    { machine: 'low-confidence probe, 62 GiB', footprint: fourBOn(lowConfidence(62)), expected: 16384 },
+    { machine: 'low-confidence probe, 64 GiB', footprint: on(lowConfidenceMachine(64)), expected: 16384 },
   ])('Auto on $machine: $expected', ({ footprint, expected }) => {
     expect(auto(footprint)).toBe(expected);
   });
 
   it("stops at the model's trained length", () => {
-    expect(auto({ arch: qwenHalfB, weightsBytes: 397_821_000, hardware: cpuMachine(64) })).toBe(32768);
+    expect(auto(on(64, stubArch(32768)))).toBe(32768);
     expect(
-      chatContextTokens({ setting: { mode: 'fixed', tokens: 262144 }, footprint: eightBOn(64), modelLimit: 32768 })
+      chatContextTokens({ setting: { mode: 'fixed', tokens: 262144 }, footprint: on(64), modelLimit: 32768 })
     ).toBe(32768);
   });
 
   it.each([
-    { arch: null, weightsBytes: 4.9 * GIB, hardware: cpuMachine(32) },
-    { arch: eightB, weightsBytes: null, hardware: cpuMachine(32) },
-    { arch: eightB, weightsBytes: 4.9 * GIB, hardware: null },
-    { arch: eightB, weightsBytes: 4.9 * GIB, hardware: cpuMachine(0) },
+    { arch: null, weightsBytes: 4 * GIB, hardware: cpuMachine(32) },
+    { arch: stubArch(), weightsBytes: null, hardware: cpuMachine(32) },
+    { arch: stubArch(), weightsBytes: 4 * GIB, hardware: null },
+    { arch: stubArch(), weightsBytes: 4 * GIB, hardware: cpuMachine(0) },
   ])('stays at 16K without the model shape, its size and the machine', footprint => {
     expect(auto(footprint)).toBe(16384);
     expect(fitsInMemory(footprint, 16384)).toBeUndefined();
   });
 
   it('honours a larger Modelfile num_ctx only when it stays resident within the trained length', () => {
-    expect(auto(eightBOn(16), 4096)).toBe(32768);
-    expect(auto(fourBOn(cpuMachine(32)), 98304)).toBe(98304);
-    expect(auto(fourBOn(cpuMachine(32)), 262144)).toBe(65536);
-    expect(auto(fourBOn(discrete(8, 32)), 32768)).toBe(16384);
-    expect(auto(fourBOn(lowConfidence(62)), 40960)).toBe(16384);
-    expect(auto({ arch: qwenHalfB, weightsBytes: 397_821_000, hardware: cpuMachine(64) }, 65536)).toBe(32768);
+    expect(auto(on(9), 4096)).toBe(32768);
+    expect(auto(on(17), 98304)).toBe(98304);
+    expect(auto(on(17), 262144)).toBe(STUB_TARGET_TOKENS);
+    expect(auto(on(discreteMachine(7, 32)), 32768)).toBe(16384);
+    expect(auto(on(lowConfidenceMachine(64)), 40960)).toBe(16384);
+    expect(auto(on(64, stubArch(32768)), 65536)).toBe(32768);
   });
 });
 
 describe('fitsInMemory', () => {
   it('counts only a resident plan, while loadsInMemory also counts layers moved to RAM', () => {
-    expect(fitsInMemory(eightBOn(16), 20480)).toBe(true);
-    expect(fitsInMemory(eightBOn(16), 40960)).toBe(false);
-    expect(fitsInMemory(eightBOn(64), 262144)).toBe(false);
-    expect(fitsInMemory(fourBOn(discrete(8, 32)), 16384)).toBe(true);
-    expect(fitsInMemory(fourBOn(discrete(8, 32)), 32768)).toBe(false);
-    expect(loadsInMemory(fourBOn(discrete(8, 32)), 32768)).toBe(true);
-    expect(loadsInMemory(eightBOn(16), 40960)).toBe(false);
+    expect(fitsInMemory(on(8), 24576)).toBe(true);
+    expect(fitsInMemory(on(8), 40960)).toBe(false);
+    expect(fitsInMemory(on(discreteMachine(7, 32)), 16384)).toBe(true);
+    expect(fitsInMemory(on(discreteMachine(7, 32)), 32768)).toBe(false);
+    expect(loadsInMemory(on(discreteMachine(7, 32)), 32768)).toBe(true);
+    expect(loadsInMemory(on(8), 40960)).toBe(false);
   });
 });
 
 describe('grownContext', () => {
   it('jumps once to the largest resident context, not to the next 4K step', () => {
-    expect(grownContext(eightBOn(20), 33_000, undefined, undefined, 32768)).toEqual({ tokens: 57344, slower: false });
-    expect(grownContext(fourBOn(discrete(12, 32)), 33_000, undefined, undefined, 32768)).toEqual({
-      tokens: 45056,
+    // 10 GiB leaves 6 GiB for the cache: 48K tokens; an 11 GiB GPU leaves 7 GiB: 56K.
+    expect(grownContext(on(10), 33_000, undefined, undefined, 32768)).toEqual({ tokens: 49152, slower: false });
+    expect(grownContext(on(discreteMachine(11, 32)), 33_000, undefined, undefined, 32768)).toEqual({
+      tokens: 57344,
       slower: false,
     });
   });
 
   it('grows to the next Settings size anyway when no resident size holds the prompt, and says it is slower', () => {
-    expect(grownContext(fourBOn(discrete(8, 32)), 17_000, undefined, undefined, 16384)).toEqual({
+    expect(grownContext(on(discreteMachine(7, 32)), 25_000, undefined, undefined, 16384)).toEqual({
       tokens: 32768,
       slower: true,
     });
   });
 
   it('grows by Settings sizes on a probe that could not measure the GPU', () => {
-    expect(grownContext(fourBOn(lowConfidence(62)), 17_000, undefined, undefined, 16384)).toEqual({
+    expect(grownContext(on(lowConfidenceMachine(64)), 17_000, undefined, undefined, 16384)).toEqual({
       tokens: 32768,
       slower: false,
     });
-    expect(grownContext(fourBOn(lowConfidence(62)), 40_000, undefined, undefined, 32768)).toEqual({
+    expect(grownContext(on(lowConfidenceMachine(64)), 40_000, undefined, undefined, 32768)).toEqual({
       tokens: 65536,
       slower: false,
     });
   });
 
   it.each([
-    {
-      why: 'model-limit',
-      footprint: { arch: qwenHalfB, weightsBytes: 397_821_000, hardware: cpuMachine(64) },
-      measured: 31_000,
-    },
+    { why: 'model-limit', footprint: on(64, stubArch(32768)), measured: 31_000 },
     { why: 'unmeasured', footprint: UNMEASURED, measured: 20_000 },
-    { why: 'memory', footprint: eightBOn(unified(8)), measured: 17_000 },
-    { why: 'memory', footprint: eightBOn(20), measured: 70_000 },
+    { why: 'memory', footprint: on(unifiedMachine(6)), measured: 17_000 },
+    { why: 'memory', footprint: on(10), measured: 70_000 },
   ])('says why it cannot grow: $why', ({ why, footprint, measured }) => {
     expect(grownContext(footprint, measured, undefined, undefined, 16384)).toEqual({ reason: why });
   });
 
   it('leaves the reply the room fitToContext reserves', () => {
     for (const measured of [5_000, 17_000, 40_000, 70_001]) {
-      const growth = grownContext(fourBOn(lowConfidence(62)), measured, undefined, undefined, 4096);
+      const growth = grownContext(on(lowConfidenceMachine(64)), measured, undefined, undefined, 4096);
       const grown = growth.tokens ?? 0;
       expect(grown - Math.min(2048, Math.floor(grown / 4))).toBeGreaterThanOrEqual(measured);
     }

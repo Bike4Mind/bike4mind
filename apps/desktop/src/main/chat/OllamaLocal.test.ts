@@ -3,9 +3,15 @@ import type { HardwareProfile, ModelArch } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import type { CompletionMessage } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
+import { cpuMachine, discreteMachine, GIB, lowConfidenceMachine, stubArch, unifiedMachine } from './fitStub.testHelper';
 import type { LocalModelFootprint } from './localContext';
 import { HardwareProbe, localContextSizing } from './localContextSizing';
 import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
+}));
 
 describe('OllamaLocal', () => {
   afterEach(() => {
@@ -613,62 +619,25 @@ describe('OllamaLocal context sizing', () => {
     forgetLocalContexts();
   });
 
-  const GIB = 1024 ** 3;
-  const eightB: ModelArch = {
-    contextMax: 131072,
-    blockCount: 32,
-    headCount: 32,
-    full: { layers: 32, kvHeads: 8, keyLength: 128, valueLength: 128 },
-    mtpLayers: 0,
-  };
-  const cpu = (gib: number): HardwareProfile => ({
-    platform: 'linux',
-    arch: 'x64',
-    memoryKind: 'cpu',
-    totalMemoryBytes: gib * GIB,
-    gpuMemoryBytes: null,
-    gpuName: null,
-    gpuCount: 0,
-    chip: null,
-    diskFreeBytes: null,
-    confidence: 'high',
-  });
-  const fourB: ModelArch = {
-    contextMax: 262144,
-    blockCount: 36,
-    headCount: 32,
-    full: { layers: 36, kvHeads: 8, keyLength: 128, valueLength: 128 },
-    mtpLayers: 0,
-  };
-  const discrete = (vramGib: number, ramGib: number): HardwareProfile => ({
-    ...cpu(ramGib),
-    memoryKind: 'discrete',
-    gpuMemoryBytes: vramGib * GIB,
-    gpuName: 'GPU',
-    gpuCount: 1,
-  });
-  const unified = (gib: number): HardwareProfile => ({
-    ...cpu(gib),
-    platform: 'darwin',
-    arch: 'arm64',
-    memoryKind: 'unified',
-    gpuCount: 1,
-  });
-  const lowConfidence = (gib: number): HardwareProfile => ({ ...cpu(gib), confidence: 'low' });
+  // Sizes follow the stub estimator: a 4 GiB model plus 2 GiB per 16K of context.
+  const cpu = cpuMachine;
+  const discrete = discreteMachine;
+  const unified = unifiedMachine;
+  const lowConfidence = lowConfidenceMachine;
   type Machine = HardwareProfile | number | null;
-  const footprintOn = (machine: Machine, arch = eightB, weightsBytes = 4.9 * GIB): LocalModelFootprint =>
+  const footprintOn = (machine: Machine, arch = stubArch()): LocalModelFootprint =>
     machine === null
       ? { arch: null, weightsBytes: null, hardware: null }
-      : { arch, weightsBytes, hardware: typeof machine === 'number' ? cpu(machine) : machine };
-  const sizing = (setting: LocalContextSetting, machine: Machine, arch?: ModelArch, bytes?: number) => {
-    let footprint = footprintOn(machine, arch, bytes);
+      : { arch, weightsBytes: 4 * GIB, hardware: typeof machine === 'number' ? cpu(machine) : machine };
+  const sizing = (setting: LocalContextSetting, machine: Machine, arch?: ModelArch) => {
+    let footprint = footprintOn(machine, arch);
     return {
       setting: async () => setting,
       footprint: vi.fn(async () => footprint),
       cachedFootprint: vi.fn(() => footprint),
       /** The machine the next sizing sees, as if the model or the hardware had changed. */
       become(next: Machine) {
-        footprint = footprintOn(next, arch, bytes);
+        footprint = footprintOn(next, arch);
       },
     } satisfies LocalContextSizing & { become(next: Machine): void };
   };
@@ -710,31 +679,31 @@ describe('OllamaLocal context sizing', () => {
   const trainedFor = (tokens: number) => ({ model_info: { 'llama.context_length': tokens } });
 
   it.each([
-    { setting: AUTO_LOCAL_CONTEXT, machine: 32, show: trainedFor(131072), expected: 65536 },
-    { setting: AUTO_LOCAL_CONTEXT, machine: 16, show: trainedFor(131072), expected: 32768 },
-    { setting: AUTO_LOCAL_CONTEXT, machine: 12, show: trainedFor(131072), expected: 16384 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: 13, show: trainedFor(131072), expected: 65536 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: 9, show: trainedFor(131072), expected: 32768 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: 7, show: trainedFor(131072), expected: 16384 },
     { setting: AUTO_LOCAL_CONTEXT, machine: null, show: trainedFor(131072), expected: 16384 },
     { setting: AUTO_LOCAL_CONTEXT, machine: 32, show: trainedFor(8192), expected: 8192 },
-    { setting: AUTO_LOCAL_CONTEXT, machine: discrete(8, 32), show: trainedFor(131072), expected: 16384 },
-    { setting: AUTO_LOCAL_CONTEXT, machine: discrete(12, 32), show: trainedFor(131072), expected: 32768 },
-    { setting: AUTO_LOCAL_CONTEXT, machine: unified(16), show: trainedFor(131072), expected: 16384 },
-    { setting: AUTO_LOCAL_CONTEXT, machine: unified(32), show: trainedFor(131072), expected: 65536 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: discrete(7, 32), show: trainedFor(131072), expected: 16384 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: discrete(9, 32), show: trainedFor(131072), expected: 32768 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: unified(7), show: trainedFor(131072), expected: 16384 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: unified(13), show: trainedFor(131072), expected: 65536 },
     { setting: AUTO_LOCAL_CONTEXT, machine: lowConfidence(64), show: trainedFor(131072), expected: 16384 },
     {
       setting: AUTO_LOCAL_CONTEXT,
-      machine: 32,
+      machine: 13,
       show: { ...trainedFor(262144), parameters: 'num_ctx 262144' },
       expected: 65536,
     },
     {
       setting: AUTO_LOCAL_CONTEXT,
-      machine: 64,
+      machine: 17,
       show: { ...trainedFor(131072), parameters: 'num_ctx 98304' },
       expected: 98304,
     },
     {
       setting: AUTO_LOCAL_CONTEXT,
-      machine: 16,
+      machine: 9,
       show: { ...trainedFor(131072), parameters: 'num_ctx 4096' },
       expected: 32768,
     },
@@ -769,17 +738,16 @@ describe('OllamaLocal context sizing', () => {
 
   it('grows Auto once to the largest resident context and keeps it afterwards', async () => {
     const sent = ollama(trainedFor(131072), () => overflow(70_000));
-    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 32));
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));
     const onTrimmed = vi.fn();
     const onNotice = vi.fn();
     await local.stream(longTurn, () => undefined, undefined, onTrimmed, onNotice);
     await local.stream(longTurn, () => undefined);
-    const grown = sent()[1];
-    expect(grown).toBeGreaterThanOrEqual(73728);
-    expect(sent()).toEqual([65536, grown, grown]);
+    // 13 GiB leaves 9 GiB for the cache: 72K tokens.
+    expect(sent()).toEqual([65536, 73728, 73728]);
     expect(onTrimmed).not.toHaveBeenCalled();
     expect(onNotice).not.toHaveBeenCalled();
-    expect(await local.contextTokens('local:ollama:llama')).toBe(grown);
+    expect(await local.contextTokens('local:ollama:llama')).toBe(73728);
 
     forgetLocalContexts();
     await local.stream(longTurn, () => undefined);
@@ -807,7 +775,8 @@ describe('OllamaLocal context sizing', () => {
         return overflow(tokens);
       })
     );
-    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 20));
+    // 11 GiB: 32K up front, and room for 56K once the prompt outgrows it.
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 11));
     for (let round = 0; round < 10; round++)
       await local.stream(
         {
@@ -867,9 +836,9 @@ describe('OllamaLocal context sizing', () => {
   });
 
   it('grows past what fits on the GPU when nothing resident holds the prompt, and says replies will be slower', async () => {
-    const sent = ollama(trainedFor(262144), () => overflow(17_000));
+    const sent = ollama(trainedFor(262144), () => overflow(25_000));
     const onNotice = vi.fn();
-    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, discrete(8, 32), fourB, 2_497_283_341));
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, discrete(7, 32)));
     await local.stream(longTurn, () => undefined, undefined, undefined, onNotice);
     expect(sent()).toEqual([16384, 32768]);
     expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('replies will be slower'));
@@ -901,7 +870,7 @@ describe('OllamaLocal context sizing', () => {
   it.each([
     {
       setting: AUTO_LOCAL_CONTEXT,
-      machine: 16,
+      machine: 10,
       show: trainedFor(131072),
       measured: 70_000,
       hint: "would not fit this computer's memory",
@@ -941,10 +910,10 @@ describe('OllamaLocal context sizing', () => {
   it('offers no larger Settings size when the largest is already in use', async () => {
     ollama(trainedFor(1_048_576), () => overflow(300_000));
     await expect(
-      new OllamaLocal(
-        undefined,
-        sizing({ mode: 'fixed', tokens: 262144 }, 64, { ...eightB, contextMax: 1_048_576 })
-      ).stream(longTurn, () => undefined)
+      new OllamaLocal(undefined, sizing({ mode: 'fixed', tokens: 262144 }, 64, stubArch(1_048_576))).stream(
+        longTurn,
+        () => undefined
+      )
     ).rejects.toThrow(/more than the 262144 this model is run with\.$/);
   });
 
@@ -985,7 +954,7 @@ describe('OllamaLocal context sizing', () => {
     const local = new OllamaLocal(undefined, sized);
     await local.models();
     await local.stream(longTurn, () => undefined);
-    sized.become(16);
+    sized.become(9);
     expect((await local.models())[0].contextWindow).toBe(65536);
     sent.repull('two');
     expect((await local.models())[0].contextWindow).toBe(32768);
