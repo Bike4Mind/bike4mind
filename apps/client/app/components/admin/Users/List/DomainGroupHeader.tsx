@@ -3,6 +3,7 @@ import type { EmailDomainGroup } from '@client/app/utils/signupAnomaly';
 import { SIGNUP_SIGNAL_LABELS } from '@client/app/utils/signupSignals';
 import { StatusChip } from '../../shared/StatusChip';
 import { adminFocus } from '../../shared/adminStyles';
+import { parseDomain } from '../usersTabSearch';
 
 /** How tightly the group's accounts were created, e.g. "created within 4 min". */
 export function creationSpread(group: Pick<EmailDomainGroup, 'firstCreatedAt' | 'lastCreatedAt'>): string {
@@ -63,7 +64,8 @@ export function DomainGroupHeader({
           />
         </Box>
       ))}
-      {!filtered && (
+      {/* The "(unknown)" bucket has no domain the filter can carry. */}
+      {!filtered && parseDomain(group.domain) && (
         <Button
           size="sm"
           variant="plain"

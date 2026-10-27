@@ -126,7 +126,7 @@ export const parseInstant = (value: unknown): string | undefined => {
 };
 
 // Mirrors AdminUsersFilterSchema.emailDomain, so a link can never carry a domain the API rejects.
-const parseDomain = (value: unknown): string | undefined => {
+export const parseDomain = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const domain = value.trim().toLowerCase();
   return /^[a-z0-9.-]{1,253}$/.test(domain) ? domain : undefined;
