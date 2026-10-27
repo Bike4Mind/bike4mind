@@ -4,7 +4,7 @@ export const stripBom = (text: string): string => (text.charCodeAt(0) === 0xfeff
  * Parses JSON that is not strictly valid but is common in the wild: a leading UTF-8 BOM, `//` and
  * `/* *\/` comments, and trailing commas before `}` or `]`. Strict input parses identically to
  * `JSON.parse`. Throws the strict parser's SyntaxError when the cleaned text still is not JSON, so
- * its position refers to the original text.
+ * its position refers to the input minus any leading BOM, not to the comment-stripped text.
  *
  * Sibling: `parseToolArgsLenient` in b4m-core/agents/src/ReActAgent.ts repairs LLM tool-call JSON.
  * It is kept separate: a different input boundary (model output vs uploaded file bytes) and a
@@ -36,7 +36,9 @@ function skipComment(source: string, i: number): number {
   }
   if (source[i + 1] === '*') {
     const end = source.indexOf('*/', i + 2);
-    return end === -1 ? source.length : end + 2;
+    // Unterminated: not a comment, so the stray `/*` keeps the text invalid instead of silently
+    // dropping everything after it.
+    return end === -1 ? i : end + 2;
   }
   return i;
 }
