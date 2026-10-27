@@ -11,6 +11,9 @@ import {
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
 // the raw handler.
@@ -428,6 +431,18 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
   });
 
   const firstTouch = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
+
+  it('scores the new account once it is registered', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', req.logger);
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
+  });
 
   it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);

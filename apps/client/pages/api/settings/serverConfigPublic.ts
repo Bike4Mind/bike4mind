@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
 import { getTurnstilePolicy } from '@server/utils/auth/turnstile';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { publicAppUrl } from '@server/utils/validators';
 
 export type ServerConfigPublic = {
   apiUrl: string;
@@ -41,10 +41,7 @@ const handler = baseApi({ auth: false }).get(
     const turnstile = await getTurnstilePolicy();
 
     const config: ServerConfigPublic = {
-      // In dev, derive from request host so the URL matches the actual port
-      apiUrl: isLocalAppUrl()
-        ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}`
-        : process.env.APP_URL || '',
+      apiUrl: publicAppUrl(req),
       defaultTheme: 'bike4mind',
       allowOpenRegistration,
       pyodideBaseUrl: process.env.PYODIDE_BASE_URL || '',

@@ -3,7 +3,7 @@
  * eagerly. Tabs from later work register here by adding a slug.
  */
 
-export const USER_PROFILE_TABS = ['overview', 'activity', 'admin'] as const;
+export const USER_PROFILE_TABS = ['overview', 'activity', 'credits', 'keys', 'signins', 'admin'] as const;
 
 export type UserProfileTab = (typeof USER_PROFILE_TABS)[number];
 
@@ -12,7 +12,10 @@ export const DEFAULT_USER_PROFILE_TAB: UserProfileTab = 'overview';
 export const USER_PROFILE_TAB_LABELS: Readonly<Record<UserProfileTab, string>> = {
   overview: 'Overview',
   activity: 'Activity',
-  admin: 'Admin',
+  credits: 'Credits',
+  keys: 'API keys',
+  signins: 'Sign-ins',
+  admin: 'Admin log',
 };
 
 export type UserProfileSearch = { tab?: UserProfileTab };

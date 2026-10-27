@@ -39,6 +39,21 @@ test.describe('Admin - Navigation', () => {
       timeout: TIMEOUTS.NAVIGATION,
     });
   });
+
+  test('dashboard panel has no horizontal scroll at phone width', async ({ page, basePage, adminPage }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/admin?tab=dashboard');
+    await page.waitForLoadState('domcontentloaded');
+    await basePage.dismissModals();
+    await expect(adminPage.page.getByTestId('admin-dashboard')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+
+    const panel = page.getByRole('tabpanel').filter({ has: page.getByTestId('admin-dashboard') });
+    const { scrollWidth, clientWidth } = await panel.evaluate(el => ({
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }));
+    expect(scrollWidth).toBe(clientWidth);
+  });
 });
 
 // Independent tests - can run in parallel within workers
