@@ -14,7 +14,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 

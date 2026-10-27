@@ -15,7 +15,7 @@ vi.mock('@bike4mind/database', () => ({
 const mockCreate = vi.fn();
 const mockFindByPriceId = vi.fn();
 const mockFindNonTerminalSubs = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     create: (...a: unknown[]) => mockCreate(...a),
     findUserSubscriptionByPriceId: (...a: unknown[]) => mockFindByPriceId(...a),

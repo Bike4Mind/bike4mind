@@ -5,7 +5,7 @@ import { checkoutSurfaceParam, trackBeginCheckout, type UpsellSurface } from '@c
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
-import { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { type OrgSubscriptionSubscribeRequest } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';

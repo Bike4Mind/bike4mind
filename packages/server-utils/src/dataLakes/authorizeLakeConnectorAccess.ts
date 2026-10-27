@@ -1,6 +1,6 @@
 import { lakeConnectionOwnerForLake, type LakeConnectionOwner } from '@bike4mind/common';
-import { verifyOrgAccess, verifyOrgAdminRead } from '@bike4mind/server-utils/utils/orgAccess';
-import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { verifyOrgAccess, verifyOrgAdminRead } from '../utils/orgAccess';
+import { NotFoundError } from '../utils/errors';
 
 type LakeConnectorAccessUser = { id: string; isAdmin: boolean };
 type LakeConnectorAccessLake = { organizationId?: string | null; createdByUserId: string };

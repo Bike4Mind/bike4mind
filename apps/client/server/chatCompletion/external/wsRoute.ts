@@ -1,6 +1,6 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { checkFreeTierDailySpendCap } from '@server/billing/freeTierDailyCapGate';
-import { actorScopeForKey } from '@server/auth/apiKeyAdminScope';
+import { actorScopeForKey } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   CompletionRequestSchema,
@@ -36,8 +36,8 @@ import {
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { sendToConnection } from '@server/websocket/utils';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';

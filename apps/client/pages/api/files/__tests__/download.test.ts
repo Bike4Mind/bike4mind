@@ -62,7 +62,7 @@ vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: class SecretRotation {},
 }));
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   Subscription: class Subscription {},
 }));
 

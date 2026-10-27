@@ -1,6 +1,6 @@
 import { adminSettingsRepository, dataLakeBatchRepository, FabFile, User, withTransaction } from '@bike4mind/database';
 import { isMediaOnlyMimeType, isStorageCharged } from '@bike4mind/common';
-import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
+import { decodeS3Key, findWithRetry, withContext } from '@bike4mind/server-utils/s3/utils';
 import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFileKey';
 import {
   claimModerationScan,
@@ -13,10 +13,10 @@ import {
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
 import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
-import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
+import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 
 export const func = withContext(async (event, context, logger) => {

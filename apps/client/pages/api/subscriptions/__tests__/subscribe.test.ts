@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockFindUserSubByPrice = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findUserSubscriptionByPriceId: (...args: unknown[]) => mockFindUserSubByPrice(...args) },
 }));
 

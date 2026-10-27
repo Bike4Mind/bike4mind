@@ -21,7 +21,7 @@ import {
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract

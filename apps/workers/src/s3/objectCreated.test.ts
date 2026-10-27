@@ -23,7 +23,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // withContext just threads a logger; the handler body is the subject.
-vi.mock('@server/s3/utils', () => ({
+vi.mock('@bike4mind/server-utils/s3/utils', () => ({
   withContext: (fn: unknown) => fn,
   decodeS3Key: (k: string) => k,
   findWithRetry: <T>(fn: () => Promise<T>) => fn(),
@@ -60,8 +60,8 @@ vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUplo
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
 vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: h.recordRejectedUploadBatch }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
-vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: h.recomputeUploaded,
 }));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({

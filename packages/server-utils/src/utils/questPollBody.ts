@@ -6,7 +6,7 @@ import {
   type IChatHistoryItemDocument,
 } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
-import { toGeneratedFiles } from '@server/utils/generatedFiles';
+import { toGeneratedFiles } from './generatedFiles';
 
 /**
  * The `GET /api/v1/quests/{id}` body. Also the body of a generation completion callback

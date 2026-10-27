@@ -1,7 +1,4 @@
-import {
-  recomputeStatsForLakeTags,
-  type AttributedActor,
-} from '@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags';
+import { recomputeStatsForLakeTags, type AttributedActor } from './recomputeStatsForLakeTags';
 
 /** The file fields this needs; a lean projection or a hydrated document both satisfy it. */
 type UploadedFile = { batchId?: string | null; tags?: ({ name?: string | null } | null)[] | null };

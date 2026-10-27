@@ -6,7 +6,7 @@ import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { z } from 'zod';
 import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import dayjs from 'dayjs';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import {

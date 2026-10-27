@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({ verifyOrgAccess: vi.fn(), verifyOrgAdminRead: vi.fn() }));
 
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
+vi.mock('../utils/orgAccess', () => ({
   verifyOrgAccess: h.verifyOrgAccess,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));
 
 import { authorizeLakeConnectorAccess, authorizeLakeConnectorRead } from './authorizeLakeConnectorAccess';
-import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '../utils/errors';
 
 const member = { id: 'u1', isAdmin: false };
 

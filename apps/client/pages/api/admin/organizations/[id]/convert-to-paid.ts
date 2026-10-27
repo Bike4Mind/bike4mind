@@ -13,7 +13,7 @@ import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { z } from 'zod';
 

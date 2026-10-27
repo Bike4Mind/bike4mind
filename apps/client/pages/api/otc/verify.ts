@@ -50,7 +50,7 @@ import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { recordLoginEvent, readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
 import { assertSignupNetworkWithinLimits, createSignupRiskCollector } from '@server/auth/signupNetworkLimits';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';

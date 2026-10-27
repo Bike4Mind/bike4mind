@@ -5,7 +5,7 @@
 
 import { mongoose } from '@bike4mind/database';
 import BaseRepository from '@bike4mind/database';
-import { IUserSubscriptionRepository, IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { IUserSubscriptionRepository, IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import escapeStringRegexp from 'escape-string-regexp';
 import { executeFacetCompatible, convertPipelineForDocumentDB } from '@bike4mind/database';
 

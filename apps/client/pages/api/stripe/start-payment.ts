@@ -8,7 +8,7 @@ import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import type Stripe from 'stripe';
 
 const handler = baseApi()

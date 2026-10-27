@@ -11,8 +11,8 @@ const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOn
     mockRewardInviter: vi.fn(),
   })
 );
-vi.mock('./emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: mockEmit }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: mockEmit }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
 vi.mock('@server/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: mockRewardInviter }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({

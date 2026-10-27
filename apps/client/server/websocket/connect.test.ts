@@ -44,14 +44,14 @@ vi.mock('@server/websocket/realtimeSession', () => ({
   assertRealtimeSessionActive: (...args: unknown[]) => mockAssertSessionActive(...args),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
 }));
 
 import { func } from './connect';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const eventWithToken = (token = 'token-123') => ({

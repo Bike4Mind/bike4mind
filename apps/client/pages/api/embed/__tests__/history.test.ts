@@ -29,7 +29,7 @@ const mockRepo = vi.hoisted(() => ({ getMessages: vi.fn(), deleteConversation: v
 vi.mock('@bike4mind/database', () => ({ embedConversationRepository: mockRepo }));
 
 import '../history';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const CLAIMS = {

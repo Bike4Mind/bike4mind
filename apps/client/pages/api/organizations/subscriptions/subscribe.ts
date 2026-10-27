@@ -13,7 +13,7 @@ import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkou
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import { z } from 'zod';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';

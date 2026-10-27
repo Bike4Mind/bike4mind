@@ -17,11 +17,11 @@ vi.mock('@bike4mind/database', async importOriginal => {
     gitHubLakeAuthGrantRepository: { replace: h.replace, findLive: h.findLive, consume: h.consume },
   };
 });
-vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+vi.mock('../../../security/tokenEncryption', () => ({
   encryptToken: h.encryptToken,
   decryptToken: h.decryptToken,
 }));
-vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
+vi.mock('./lakeAppClient', () => ({
   revokeInstallerToken: h.revokeInstallerToken,
 }));
 
@@ -32,7 +32,7 @@ import {
   consumeGitHubLakeAuthGrant,
   GITHUB_LAKE_AUTH_GRANT_TTL_MS,
 } from './githubLakeAuthGrant';
-import type { GitHubLakeAppConfig } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
+import type { GitHubLakeAppConfig } from './lakeAppClient';
 
 const CONFIG: GitHubLakeAppConfig = {
   appId: 'app-1',

@@ -49,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 const sendInviteNotificationEmails = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({

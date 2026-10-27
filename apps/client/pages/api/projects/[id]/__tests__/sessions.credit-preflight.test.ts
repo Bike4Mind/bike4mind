@@ -58,7 +58,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   projectService: { get: mockProjectGet, addSessions: mockAddSessions, listSessions: vi.fn() },
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
 vi.mock('@server/utils/eventBus', () => ({ SessionEvents: { Summarize: { publish: mockPublishSummarize } } }));
 // OPERATIONS_PER_SUMMARIZE_WITH_TAGGING is deliberately left unmocked (it lives in its own
 // module) so the `operationsPerSession: 2` assertion below pins the real constant.

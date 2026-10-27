@@ -22,7 +22,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById, update: h.update },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';

@@ -7,7 +7,7 @@ vi.mock('@bike4mind/database', () => ({
   SkillListing: {},
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
-vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
+vi.mock('../middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 
 import { loadMarketSettings, meetsPublicAccountAge, numericSetting } from './market';
 

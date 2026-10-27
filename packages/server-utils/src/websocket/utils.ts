@@ -8,14 +8,14 @@ import { MessageDataToClient } from '@bike4mind/common';
 import { Connection } from '@bike4mind/database/social';
 import { Logger } from '@bike4mind/observability';
 import { Context } from 'aws-lambda';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { Config } from '../utils/config';
 import { connectDB } from '@bike4mind/database';
-import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
+import { contextToLogs } from '../utils/logger';
 import { JsonWebTokenError } from 'jsonwebtoken';
 import { ForbiddenError, HTTPError, UnauthorizedError } from '@bike4mind/common';
 import { isConnectionLostError } from '@bike4mind/db-core';
-import { ServiceUnavailableError } from '@bike4mind/server-utils/utils/errors';
-import { AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS } from '@server/auth/apiKeyAuthFailure';
+import { ServiceUnavailableError } from '../utils/errors';
+import { AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS } from '../auth/apiKeyAuthFailure';
 
 // sendToClient may be called multiple times in a single request,
 // so we cache the ApiGatewayManagementApiClient

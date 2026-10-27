@@ -34,15 +34,15 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+vi.mock('../../utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 
-vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
+vi.mock('../../utils/dlqRegistry', () => ({
   getSourceQueueUrl: vi.fn().mockReturnValue('https://sqs.us-east-2.amazonaws.com/123/sreJobQueue'),
 }));
 
-vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
+vi.mock('../slack/sreSlackApproval', () => ({
   postSreRevisionEscalationMessage: (...args: unknown[]) => mockPostEscalation(...args),
 }));
 

@@ -10,7 +10,7 @@ import {
 import { creditService } from '@bike4mind/services';
 import { accountBlockReasons, type AccountStateFields } from '@bike4mind/services/userService/accountState';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Logger } from '@bike4mind/observability';
 
 export const REFERRAL_REWARD_REASON = 'referral_reward';

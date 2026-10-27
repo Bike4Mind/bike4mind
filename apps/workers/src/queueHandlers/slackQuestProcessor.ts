@@ -58,7 +58,7 @@ import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWo
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
 import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
@@ -76,8 +76,8 @@ import {
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils/chatCompletionDefaults';
-import { recallMementosV2 } from '@server/memory/recallMementosV2';
-import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
+import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';

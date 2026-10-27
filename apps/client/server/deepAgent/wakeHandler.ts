@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import type { Logger } from '@bike4mind/observability';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   createReActRunAct,
   noopRunAct,
@@ -14,7 +14,7 @@ import {
 import '@server/deepAgent/contributedToolbelts';
 import { LlmWakeSteps } from '@bike4mind/server-utils/deepAgent/llmSteps';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
-import { loadLinkedAgentContext } from './missions';
+import { loadLinkedAgentContext } from '@bike4mind/server-utils/deepAgent/missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';

@@ -7,10 +7,10 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findByDatalakeTag: (...args: unknown[]) => findByDatalakeTag(...args) },
   fabFileRepository: {},
 }));
-vi.mock('@bike4mind/server-utils/embeddings/effectiveEmbeddingModel', () => ({
+vi.mock('../embeddings/effectiveEmbeddingModel', () => ({
   resolveEffectiveEmbeddingModel: async () => 'text-embedding-3-small',
 }));
-vi.mock('@bike4mind/server-utils/memory/recallLakeMemory', () => ({
+vi.mock('./recallLakeMemory', () => ({
   recallLakeMemory: (...args: unknown[]) => recallLakeMemoryMock(...(args as [])),
 }));
 

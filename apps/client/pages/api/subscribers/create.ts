@@ -1,7 +1,7 @@
 import { SUBSCRIBER_SOURCES } from '@bike4mind/common';
 import { Subscriber } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import * as z from 'zod';
 
 // One body for every outcome. It also stops an anonymous caller receiving the stored

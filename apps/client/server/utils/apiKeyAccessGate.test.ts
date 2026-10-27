@@ -23,7 +23,7 @@ vi.mock('@bike4mind/utils', async () => {
   const { getSettingsValue } = await import('../../../../b4m-core/utils/src/settings');
   return { getSettingsMap: getSettingsMapMock, getSettingsValue };
 });
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveUserSubscriptions, findActiveSubscriptionsByOwners },
 }));
 

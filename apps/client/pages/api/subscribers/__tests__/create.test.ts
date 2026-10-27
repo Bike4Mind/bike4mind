@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   Subscriber: { findOne: mocks.findOne, create: mocks.create },
 }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
 
 import handler from '@pages/api/subscribers/create';
 

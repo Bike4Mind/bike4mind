@@ -77,18 +77,18 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 // Mock config
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
+vi.mock('../utils/config', () => ({
   Config: mockConfig,
 }));
 
 // Mock secret encryption
-vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
+vi.mock('../security/secretEncryption', () => ({
   encryptSecret: mockEncryptSecret,
   isEncrypted: mockIsEncrypted,
 }));
 
 // Mock token encryption (rotation-aware decrypt: current key, then previous)
-vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+vi.mock('../security/tokenEncryption', () => ({
   decryptToken: mockDecryptToken,
 }));
 

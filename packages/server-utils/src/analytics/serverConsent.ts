@@ -1,6 +1,6 @@
 import type { Request } from 'express';
-import { APP_DECISION_COOKIE, DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
-import { parseCookies } from '@bike4mind/server-utils/analytics/cookies';
+import { APP_DECISION_COOKIE, DECISION_COOKIE } from '../lib/consentCookies';
+import { parseCookies } from './cookies';
 
 /**
  * Whether this request may have campaign attribution read off it, decided server-side.

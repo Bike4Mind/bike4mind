@@ -6,7 +6,7 @@ import {
   handleOrganizationSubscriptionInvoice,
 } from '@workers/lib/userSubscriptions/serverUtils';
 import { handler } from './invoicePaymentSucceeded';
-import { emitProductEvent } from '@server/analytics/emitActiveEvent';
+import { emitProductEvent } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { stableEventId } from '@server/analytics/signupEvents';
 import { userRepository } from '@bike4mind/database';
 import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
@@ -49,7 +49,7 @@ vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({
 
 // The real source-product emitter runs (signupEvents.ts); only the network edge is mocked, with
 // ingest keys for two made-up products.
-vi.mock('@server/analytics/emitActiveEvent', () => ({
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   HOST_PRODUCT_ID: 'bike4mind',
   emitProductEvent: vi.fn().mockResolvedValue(undefined),
   ingestKeyFor: (p: string) => (p === 'widgets' || p === 'gadgets' ? 'key' : undefined),

@@ -1,5 +1,9 @@
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
-import { adminRoleWithheldFor, ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import {
+  adminRoleWithheldFor,
+  ownerWithheldUsers,
+  withholdAdminRole,
+} from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
@@ -55,14 +59,14 @@ import {
   embedConversationRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
-import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@server/auth/apiKeyAuthFailure';
+import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { hydrateEmbedAgent } from './embedAgentHydration';
 import { resolveEmbedTools } from './embedToolResolver';

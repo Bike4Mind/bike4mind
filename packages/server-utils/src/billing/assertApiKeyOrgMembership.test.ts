@@ -6,7 +6,7 @@ vi.mock('@bike4mind/services', async () => ({
 }));
 
 import { assertApiKeyOrgMembership } from './assertApiKeyOrgMembership';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { withholdAdminRole } from '../auth/apiKeyAdminScope';
 
 const org = (users: string[]) =>
   ({ id: 'org1', userId: 'owner', users: users.map(userId => ({ userId })) }) as unknown as IOrganizationDocument;

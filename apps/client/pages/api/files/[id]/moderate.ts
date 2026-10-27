@@ -10,7 +10,7 @@ import {
   toVerdictPatch,
   writeModerationVerdict,
 } from '@server/s3/moderationScan';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import type { Request, Response } from 'express';
 import { setTimeout as sleep } from 'node:timers/promises';

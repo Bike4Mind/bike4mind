@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/common';
 import { toQuestPollBody } from './questPollBody';
 
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+vi.mock('./storage/index', () => ({
   getGeneratedImageStorage: () => ({ getSignedUrl: async (key: string) => `https://signed.example.invalid/${key}` }),
 }));
 

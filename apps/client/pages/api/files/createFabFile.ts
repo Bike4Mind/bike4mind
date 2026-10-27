@@ -20,7 +20,7 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFileExtension } from '@bike4mind/utils';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -35,7 +35,7 @@ import {
 } from '@server/files/fileScopes';
 import { getS3Url } from '@client/app/utils/s3Url';
 import { Resource } from 'sst';
-import { persistedIsAdmin, requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
+import { persistedIsAdmin, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object

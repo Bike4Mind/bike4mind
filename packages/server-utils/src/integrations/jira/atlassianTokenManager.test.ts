@@ -11,10 +11,10 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById, update: userUpdate },
   mcpServerRepository: { findOne: mcpFindOne, update: mcpUpdate },
 }));
-vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
+vi.mock('./atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({ clientId: 'cid', clientSecret: 'secret' }),
 }));
-vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+vi.mock('../../security/tokenEncryption', () => ({
   encryptToken: (v: string | null | undefined) => (v == null ? null : `enc:${v}`),
   decryptToken: (v: string | null | undefined) => (v == null ? null : String(v).replace(/^enc:/, '')),
   encryptEnvVariables: (vars: unknown) => vars,

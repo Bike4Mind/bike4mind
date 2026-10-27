@@ -50,7 +50,7 @@ vi.mock('@bike4mind/common', async importOriginal => {
   };
 });
 vi.mock('@server/utils/respond', () => ({ respond: (_res: any, _schema: any, data: any) => data }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
 }));

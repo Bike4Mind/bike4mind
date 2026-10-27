@@ -5,7 +5,7 @@ import { BadRequestError, ForbiddenError, InternalServerError, NotFoundError } f
 import { encryptAtRest, decryptAtRest } from '@bike4mind/utils/security';
 import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { SECRET_ROTATION_GRACE_MS } from '@server/auth/secretRotationGrace';
+import { SECRET_ROTATION_GRACE_MS } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 

@@ -2,7 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { getSettingsMap } from '@bike4mind/utils';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import type { YoungAccountSpendSummary } from '@bike4mind/database';
-import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
+import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import axios from 'axios';
 import { Resource } from 'sst';

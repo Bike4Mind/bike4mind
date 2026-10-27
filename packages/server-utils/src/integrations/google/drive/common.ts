@@ -1,18 +1,15 @@
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { Config } from '../../../utils/config';
 import { auth as googleAuth } from '@googleapis/drive';
 import dayjs from 'dayjs';
 import type { Response } from 'express';
 import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { lakeConnectionOwnerOf, type LakeConnectionOwner } from '@bike4mind/common';
-import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { createStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
-import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
-import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
-import {
-  isInvalidGrantError,
-  isTerminalDriveGrantError,
-} from '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors';
+import { encryptToken, decryptToken } from '../../../security/tokenEncryption';
+import { BadRequestError } from '../../../utils/errors';
+import { createStateToken } from '../../../auth/jwtStateStore';
+import { issueStateNonce, NONCE_SLOT } from '../../../auth/oauthFlowCookie';
+import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from './driveClient';
+import { isInvalidGrantError, isTerminalDriveGrantError } from './driveGrantErrors';
 
 export { isInvalidGrantError, isTerminalDriveGrantError };
 

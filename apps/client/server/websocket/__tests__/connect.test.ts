@@ -27,7 +27,7 @@ vi.mock('@server/websocket/realtimeSession', () => ({
   assertRealtimeSessionActive: h.assertRealtimeSessionActive,
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler,
 }));
 

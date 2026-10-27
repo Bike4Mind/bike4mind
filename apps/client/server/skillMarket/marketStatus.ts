@@ -1,6 +1,6 @@
 import { SkillListing } from '@bike4mind/database';
 import type { ISkill, ISkillMarketStatus } from '@bike4mind/common';
-import { skillContentHash } from './market';
+import { skillContentHash } from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Attach `marketStatus` to every imported skill in a page: stale when its listing has a newer

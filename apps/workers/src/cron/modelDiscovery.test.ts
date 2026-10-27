@@ -95,7 +95,7 @@ const runResult = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const { runScheduledDiscovery } = await import('@server/modelDiscovery/scheduledRun');
+const { runScheduledDiscovery } = await import('@bike4mind/server-utils/modelDiscovery/scheduledRun');
 const { handler } = await import('./modelDiscovery');
 
 const lambdaContext = (remainingMs: number) => ({ getRemainingTimeInMillis: () => remainingMs }) as unknown as Context;

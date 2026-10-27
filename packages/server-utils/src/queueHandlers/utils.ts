@@ -1,9 +1,9 @@
 import { connectDB } from '@bike4mind/database';
 import { HTTPError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@bike4mind/server-utils/utils/config';
-import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
-import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
+import { Config } from '../utils/config';
+import { registerToolGearObserver } from '../services/gears/toolGearObserver';
+import { contextToLogs } from '../utils/logger';
 import { Context, SQSEvent } from 'aws-lambda';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).

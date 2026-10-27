@@ -43,7 +43,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
   resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
   logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
@@ -78,7 +78,7 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 }));
 
 // Import after mocks are registered.
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { logAuthAudit } from '@server/utils/authAudit';
 

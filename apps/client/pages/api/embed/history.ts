@@ -14,12 +14,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
-import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import type { EmbedSessionContext } from '@server/embed/embedSessionToken';
 import { resolveEmbedOriginDecision } from '@server/embed/firstPartyOrigin';
 import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
-import { authInfraFailureHeaders, isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { authInfraFailureHeaders, isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { embedConversationRepository } from '@bike4mind/database';
 
 /** Per-IP flood backstop; the widget reads history once per load. */

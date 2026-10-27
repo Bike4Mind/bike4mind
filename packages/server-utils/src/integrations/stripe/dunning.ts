@@ -1,4 +1,4 @@
-import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
+import { stripe } from './stripe';
 
 export interface VoidOpenInvoicesResult {
   /** Invoice ids that were voided. */

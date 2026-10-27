@@ -15,10 +15,10 @@ import {
   formatFingerprintComment,
   formatSemanticFingerprintComment,
   formatPrimaryAnomaly,
-} from '@bike4mind/server-utils/services/telemetryFingerprint';
-import { escapeMarkdown } from '@bike4mind/server-utils/utils/markdownEscape';
-import { type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
-import { type Priority } from '@bike4mind/server-utils/services/issueLabels';
+} from '../services/telemetryFingerprint';
+import { escapeMarkdown } from './markdownEscape';
+import { type IssueForDedup } from '../services/issueDedup';
+import { type Priority } from '../services/issueLabels';
 
 // ─── Schemas & Types ────────────────────────────────────────────────────────
 

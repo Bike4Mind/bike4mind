@@ -31,16 +31,16 @@ vi.mock('@bike4mind/database', () => ({
 
 // Tokens pass through decryption verbatim so assertions can trace which
 // connection a token came from.
-vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+vi.mock('../security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => value ?? null,
 }));
 
-vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
+vi.mock('../security/secretEncryption', () => ({
   isEncrypted: (value: string) => value.startsWith('enc:'),
   decryptSecret: (value: string) => value.replace(/^enc:/, ''),
 }));
 
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
+vi.mock('../utils/config', () => ({
   Config: { SECRET_ENCRYPTION_KEY: 'test-key' },
 }));
 

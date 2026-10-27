@@ -18,7 +18,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { jiraWebhookConfigRepository, jiraWebhookSubscriptionRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import { IJiraWebhookSubscriptionRequest, IJiraWebhookSubscriptionResponse } from '@bike4mind/common';
-import { AtlassianTokenManager } from '@server/integrations/jira/atlassianTokenManager';
+import { AtlassianTokenManager } from '@bike4mind/server-utils/integrations/jira/atlassianTokenManager';
 import { validateFilters } from '@server/integrations/jira/types';
 
 const handler = baseApi()

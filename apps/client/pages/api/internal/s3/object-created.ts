@@ -1,7 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
-import { decodeS3Key, findWithRetry } from '@server/s3/utils';
+import { decodeS3Key, findWithRetry } from '@bike4mind/server-utils/s3/utils';
 import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFileKey';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
@@ -9,7 +9,7 @@ import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
 import { recordLandedObject } from '@server/s3/moderationScan';
 import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
-import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
+import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
 import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';

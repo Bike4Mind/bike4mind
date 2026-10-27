@@ -32,8 +32,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: purgePublishedMock,
 }));
-vi.mock('@server/skillMarket/market', () => ({ withdrawAuthorListings: withdrawListingsMock }));
-vi.mock('@server/integrations/google/drive/common', () => ({
+vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: withdrawListingsMock }));
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   revokeDriveGrant: revokeDriveMock,
   decryptStoredToken: (v: string | undefined) => (v ? `plain-${v}` : null),
 }));

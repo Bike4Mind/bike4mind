@@ -37,7 +37,7 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { IPartnerSignupRuleDocument } from '@bike4mind/common';
 import { KNOWN_ENTITLEMENT_KEYS } from '@client/lib/entitlements/registry';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import type { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
+import type { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import {
   fetchPartnerSignupRules,
   createPartnerSignupRule,

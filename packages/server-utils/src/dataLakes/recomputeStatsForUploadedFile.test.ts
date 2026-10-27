@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { dataLakeService } from '@bike4mind/services';
 
 const h = vi.hoisted(() => ({ recomputeStatsForLakeTags: vi.fn() }));
-vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags', () => ({
+vi.mock('./recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
 

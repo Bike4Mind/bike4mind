@@ -94,7 +94,7 @@ vi.mock('@server/utils/adminAudit', () => ({
   parseAdminActionReason: (value: unknown) => String(value),
   recordAdminActionFromRequest: credits.recordAdminAction,
 }));
-vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
   SubscriptionOwnerType: { Organization: 'organization' },
 }));

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { Config } from '../../utils/config';
 import { Logger } from '@bike4mind/observability';
 import { classifyStage, isPlaceholderValue } from '@bike4mind/common';
 import type {
@@ -9,20 +9,14 @@ import type {
 } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import {
-  buildEmailMirrorMessage,
-  type EmailMirrorPayload,
-} from '@bike4mind/server-utils/integrations/slack/emailMirror';
-import {
-  buildFeedbackSlackMessage,
-  type FeedbackPromptMetaInput,
-} from '@bike4mind/server-utils/integrations/slack/feedbackMessage';
-import type { FeedbackDeepLinks } from '@bike4mind/server-utils/utils/feedbackDeepLinks';
+import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
+import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
+import type { FeedbackDeepLinks } from '../../utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
   recordFeedbackDeliverySkipped,
-} from '@bike4mind/server-utils/utils/cloudwatch';
+} from '../../utils/cloudwatch';
 
 /** Channel-specific Slack incoming-webhook settings (each maps to a dedicated Slack channel). */
 type SlackChannelSettingKey =

@@ -7,7 +7,7 @@ import {
 
 const isMementosV2EnabledMock = vi.fn<(userId: string) => Promise<boolean>>();
 
-vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
+vi.mock('../memory/mementoLedgerMirror', () => ({
   isMementosV2Enabled: (userId: string) => isMementosV2EnabledMock(userId),
 }));
 

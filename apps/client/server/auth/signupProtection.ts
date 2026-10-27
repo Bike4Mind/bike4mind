@@ -2,7 +2,7 @@ import { signupProtectionRepository } from '@bike4mind/database';
 import type { SignupProtection } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { escapeSlackText } from '@bike4mind/services';
-import { postMessageToSlackWithOutcome } from '@server/integrations/slack/slack';
+import { postMessageToSlackWithOutcome } from '@bike4mind/server-utils/integrations/slack/slack';
 
 export const signupProtection: SignupProtection = {
   get repository() {

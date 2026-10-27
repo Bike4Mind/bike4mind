@@ -45,7 +45,10 @@ vi.mock('@googleapis/drive', () => ({
   drive: vi.fn(),
 }));
 
-import { releaseDriveConnection, releaseDriveConnectionForLake } from './common';
+import {
+  releaseDriveConnection,
+  releaseDriveConnectionForLake,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 import type { LakeConnectionOwner } from '@bike4mind/common';
 
 const orgA: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/common';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '../../auth/apiKeyAuthFailure';
+import { InternalServerError } from '../../utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { JsonWebTokenError, NotBeforeError, TokenExpiredError } from 'jsonwebtoken';
 import type { Context } from 'aws-lambda';
@@ -23,7 +23,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', async importOriginal => ({
   },
 }));
 
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
+vi.mock('../../utils/config', () => ({
   Config: { STAGE: 'test', MONGODB_URI: 'mongodb://test' },
 }));
 

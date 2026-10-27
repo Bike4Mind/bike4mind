@@ -30,7 +30,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEm
 const mockConnectionFind = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/social', () => ({ Connection: { find: mockConnectionFind } }));
 const mockSendToConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/websocket/utils', () => ({ sendToConnection: mockSendToConnection }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection: mockSendToConnection }));
 
 // processQuest is the heavy import chain (DB models, services). Mock it so importing the
 // server doesn't drag in the whole world and so we can assert it's invoked on a valid 202.

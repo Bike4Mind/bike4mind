@@ -19,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockCreateDispatchEvent = vi.fn();
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: vi.fn().mockResolvedValue({
       createDispatchEvent: (...args: unknown[]) => mockCreateDispatchEvent(...args),
@@ -71,7 +71,7 @@ vi.mock('@bike4mind/observability', () => {
   };
 });
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 

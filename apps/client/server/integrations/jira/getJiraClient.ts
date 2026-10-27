@@ -1,6 +1,6 @@
 import { JiraApi } from '@bike4mind/common';
 import type { JiraConfig } from '@bike4mind/common';
-import { AtlassianTokenManager } from './atlassianTokenManager';
+import { AtlassianTokenManager } from '@bike4mind/server-utils/integrations/jira/atlassianTokenManager';
 
 /**
  * Create an authenticated JiraApi client for the given user.

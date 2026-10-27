@@ -8,11 +8,11 @@ import {
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
-import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
-import { laneMetadata } from './lane';
+import { emitProductEvent, HOST_PRODUCT_ID } from '@bike4mind/server-utils/analytics/emitActiveEvent';
+import { laneMetadata } from '@bike4mind/server-utils/analytics/lane';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { stableEventId } from './signupEvents';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { rewardInviterForFirstAnswer } from '@server/referrals/firstAnswerReward';
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is

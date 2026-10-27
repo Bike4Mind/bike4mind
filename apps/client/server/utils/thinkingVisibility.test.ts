@@ -15,7 +15,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 }));
 vi.mock('@server/entitlements/activeSubscriptions', () => ({ getActiveSubscriptionsForUser: mockActiveSubscriptions }));
 
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveThinkingVisibility, resolveThinkingVisibilityForUserId } from './thinkingVisibility';
 
 const freeUser = () => ({ id: 'u1', isAdmin: false, apiKeyTrustApproved: false, lastCreditsPurchasedAt: undefined });

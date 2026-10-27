@@ -22,7 +22,7 @@ const {
 }));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => isDevelopmentMock() }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findActiveUserSubscriptions: findActiveUserSubscriptionsMock,
     findActiveSubscriptionsByOwners: findActiveSubscriptionsByOwnersMock,

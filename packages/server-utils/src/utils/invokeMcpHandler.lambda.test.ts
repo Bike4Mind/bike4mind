@@ -31,18 +31,18 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   },
 }));
 
-vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
+vi.mock('../services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: mockIsMcpServerAvailable,
 }));
 
-vi.mock('@bike4mind/server-utils/services/mcpCircuitBreakers', () => ({
+vi.mock('../services/mcpCircuitBreakers', () => ({
   getBreaker: mockGetBreaker,
   classifyOperation: mockClassifyOperation,
   flushBreakerMetrics: vi.fn().mockResolvedValue(undefined),
   CircuitBreakerError,
 }));
 
-vi.mock('@bike4mind/server-utils/utils/mcpCall', () => ({
+vi.mock('./mcpCall', () => ({
   handler: mockLocalMcpHandler,
 }));
 
@@ -61,12 +61,12 @@ vi.mock('@bike4mind/database', () => ({
   INTEGRATION_AUDIT_INTEGRATION_NAMES: ['github', 'atlassian', 'notion'],
 }));
 
-vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+vi.mock('./cloudwatch', () => ({
   recordRateLimitEvent: vi.fn(),
   recordCircuitBreakerRejection: vi.fn(),
 }));
 
-vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
+vi.mock('../integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: vi.fn().mockReturnValue({ success: vi.fn(), failure: vi.fn() }),
   },

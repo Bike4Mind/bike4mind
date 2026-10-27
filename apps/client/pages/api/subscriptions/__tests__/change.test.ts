@@ -30,12 +30,12 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
 // Real error classes: BadRequestError carries statusCode 400, so the rejection tests
 // assert the status the client receives, not only the message.
 import { BadRequestError, HttpStatus } from '@bike4mind/common';
-import { SubscriptionPlanInterval, UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
+import { SubscriptionPlanInterval, UserSubscriptionTier } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import Stripe from 'stripe';
 
 const mockFindChangeable = vi.fn();
 const mockFindActive = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findChangeableUserSubscription: (...args: unknown[]) => mockFindChangeable(...args),
     findActiveUserSubscriptions: (...args: unknown[]) => mockFindActive(...args),

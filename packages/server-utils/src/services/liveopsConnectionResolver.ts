@@ -21,9 +21,9 @@ import {
   orgSlackWorkspaceRepository,
   slackDevWorkspaceRepository,
 } from '@bike4mind/database';
-import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
-import { decryptSecret, isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { decryptToken } from '../security/tokenEncryption';
+import { decryptSecret, isEncrypted } from '../security/secretEncryption';
+import { Config } from '../utils/config';
 
 /**
  * Resolve the Slack bot token for a triage config.

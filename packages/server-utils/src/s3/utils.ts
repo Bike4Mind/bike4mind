@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { connectDB } from '@bike4mind/database';
-import { Config } from '@bike4mind/server-utils/utils/config';
-import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
+import { Config } from '../utils/config';
+import { contextToLogs } from '../utils/logger';
 import { Context, S3Event } from 'aws-lambda';
 
 /** Decode URL-encoded S3 event key (spaces are '+', special chars are %XX) */

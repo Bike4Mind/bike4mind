@@ -16,7 +16,7 @@ import {
   TEAM_PLAN_UNAVAILABLE_MESSAGE,
 } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { professionalPriceIdForStage, SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
+import { SubscriptionPlanDetail } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';

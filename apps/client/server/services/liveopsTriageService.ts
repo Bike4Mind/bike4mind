@@ -30,7 +30,7 @@ import {
 } from '@bike4mind/database';
 import type { IssueTrackerService, ExistingIssue as TrackerExistingIssue, CreateIssueParams } from './issueTrackers';
 import { SlackClient, SlackMessage } from '@bike4mind/slack';
-import { GitHubService } from './githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
 import {
   getDefaultTemplateString,
   interpolateTemplate,

@@ -1,6 +1,6 @@
 import { HTTPError } from '@bike4mind/common';
 import { isConnectionLostError } from '@bike4mind/db-core';
-import { InternalServerError, ServiceUnavailableError } from '@bike4mind/server-utils/utils/errors';
+import { InternalServerError, ServiceUnavailableError } from '../utils/errors';
 
 /** Seconds a client should wait before retrying when the database is unreachable. */
 export const AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS = 5;

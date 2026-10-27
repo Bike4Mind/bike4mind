@@ -3,7 +3,7 @@ import { Quest, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult, type CitableSource, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, type PublishUser } from '@server/services/publish';
 import { settlePublication } from '@server/services/publish/settlePublication';
-import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 import {
   REPLY_TITLE_MAX,
   replyFirstLine,

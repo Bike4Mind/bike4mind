@@ -9,7 +9,12 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import type { RequestHandler } from 'express';
 import type { GlobalSkillScan } from '@server/utils/skillAccess';
-import { enforceSubmitRateLimits, loadMarketSettings, meetsPublicAccountAge, toSnapshot } from './market';
+import {
+  enforceSubmitRateLimits,
+  loadMarketSettings,
+  meetsPublicAccountAge,
+  toSnapshot,
+} from '@bike4mind/server-utils/skillMarket/market';
 import { reviewStatusFor, runDeterministicScan } from './scanRules';
 import { scanSkillSnapshot, type ScanDeps } from './submitVersion';
 

@@ -1,7 +1,7 @@
 import type { IMcpServerDocument } from '@bike4mind/common';
 import type { MCPClient } from '@bike4mind/mcp';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 
 // Shared MCP client adapter: lazily invokes the mcpHandler Lambda per action.
 // Used by the chat queue (questProcessor), the Slack queue (slackQuestProcessor),

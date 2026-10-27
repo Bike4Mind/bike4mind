@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Mock the SST-backed Config so the test never touches `Resource`.
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
+vi.mock('../../utils/config', () => ({
   Config: mocks.config,
 }));
 
@@ -45,7 +45,7 @@ vi.mock('@bike4mind/services', () => ({
   escapeSlackText: (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
 }));
 
-vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+vi.mock('../../utils/cloudwatch', () => ({
   recordFeedbackDeliverySuccess: vi.fn(),
   recordFeedbackDeliveryFailure: vi.fn(),
   recordFeedbackDeliverySkipped: vi.fn(),
@@ -65,7 +65,7 @@ import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
   recordFeedbackDeliverySkipped,
-} from '@bike4mind/server-utils/utils/cloudwatch';
+} from '../../utils/cloudwatch';
 
 describe('resolveSlackWebhookUrl', () => {
   const channelUrl = 'https://hooks.slack.com/services/channel';

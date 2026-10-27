@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'crypto';
 import mongoose from 'mongoose';
 import { adminSettingsRepository, inboxRepository, SkillListing, SkillListingVersion } from '@bike4mind/database';
 import type { RequestHandler } from 'express';
-import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { rateLimit } from '../middlewares/rateLimit';
 import { organizationRepository } from '@bike4mind/database/infra';
 import {
   BadRequestError,
@@ -190,7 +190,7 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
     : {}),
 });
 
-export { skillContentHash } from '@bike4mind/server-utils/skillMarket/contentHash';
+export { skillContentHash } from './contentHash';
 
 export { TAG_PATTERN, MAX_TAGS };
 

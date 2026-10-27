@@ -26,9 +26,9 @@ import {
   RateLimitInfo,
 } from '@bike4mind/common';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
-import { Config } from '@bike4mind/server-utils/utils/config';
-import { encryptSecret, isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
-import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { Config } from '../utils/config';
+import { encryptSecret, isEncrypted } from '../security/secretEncryption';
+import { decryptToken } from '../security/tokenEncryption';
 
 const USER_AGENT = 'bike4mind-github-service/1.0';
 const GITHUB_REQUEST_TIMEOUT_MS = 10000; // 10s — fail fast on hung connections (GitHub gateway timeout is ~11s)

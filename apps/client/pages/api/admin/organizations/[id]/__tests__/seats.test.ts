@@ -12,10 +12,10 @@ vi.mock('@server/services/organizationService', () => ({
   setSeats: (...args: unknown[]) => mockSetSeats(...args),
   resolveSubscriptionSource: () => 'admin_grant',
 }));
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner: vi.fn().mockResolvedValue([]) },
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@server/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
   return { ...actual, recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) };

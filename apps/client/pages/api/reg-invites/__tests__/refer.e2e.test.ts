@@ -12,12 +12,12 @@ import {
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (handler: unknown) => handler }) }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   getLogoUrl: () => '',
   buildEmailLogoImg: () => '',
 }));
-vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => ({}),

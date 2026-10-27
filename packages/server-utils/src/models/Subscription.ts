@@ -7,7 +7,7 @@ import {
   TERMINAL_SUBSCRIPTION_STATUSES,
   pickDisplayedSubscription,
   resolveSubscriptionSource,
-} from '@bike4mind/server-utils/lib/subscriptions/types';
+} from '../lib/subscriptions/types';
 import BaseRepository from '@bike4mind/database';
 import { IMongoDocument } from '@bike4mind/common';
 import { executeFacetCompatible } from '@bike4mind/database';

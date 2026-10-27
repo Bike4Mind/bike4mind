@@ -62,7 +62,7 @@ vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
 
 const mockFindByStripeSubId = vi.fn();
 const mockUpdateByStripeSubId = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findByStripeSubscriptionId: (...a: unknown[]) => mockFindByStripeSubId(...a),
     updateByStripeSubscriptionId: (...a: unknown[]) => mockUpdateByStripeSubId(...a),
@@ -70,7 +70,9 @@ vi.mock('@server/models/Subscription', () => ({
 }));
 
 const mockSendToClient = vi.fn();
-vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => mockSendToClient(...a) }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
+  sendToClient: (...a: unknown[]) => mockSendToClient(...a),
+}));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';

@@ -23,8 +23,8 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 
 const mockEmitVisitEvent = vi.fn().mockResolvedValue(undefined);
 const mockIsConfigured = vi.fn(() => true);
-vi.mock('@server/analytics/emitActiveEvent', async importOriginal => {
-  const original = await importOriginal<typeof import('@server/analytics/emitActiveEvent')>();
+vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOriginal => {
+  const original = await importOriginal<typeof import('@bike4mind/server-utils/analytics/emitActiveEvent')>();
   return {
     ...original,
     isAnalyticsConfigured: () => mockIsConfigured(),

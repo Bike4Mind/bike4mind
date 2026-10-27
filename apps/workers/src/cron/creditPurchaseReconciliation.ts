@@ -33,7 +33,7 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { CreditHolderType } from '@bike4mind/common';
 import { connectDB, creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { isStripeConfigured, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';

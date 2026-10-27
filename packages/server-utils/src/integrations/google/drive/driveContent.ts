@@ -10,11 +10,8 @@ import {
   getFileParents,
   DriveListingIncompleteError,
   type DriveFile,
-} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
-import {
-  MAX_INGEST_CANDIDATES,
-  driveIngestSkipReason,
-} from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
+} from './driveClient';
+import { MAX_INGEST_CANDIDATES, driveIngestSkipReason } from './driveIngestLimits';
 
 const GOOGLE_DOC = 'application/vnd.google-apps.document';
 const GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';

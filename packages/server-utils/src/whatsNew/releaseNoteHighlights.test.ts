@@ -6,8 +6,8 @@ const { mockFindPublishedBetween, mockLoadConfig } = vi.hoisted(() => ({
   mockLoadConfig: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({ releaseNoteRepository: { findPublishedBetween: mockFindPublishedBetween } }));
-vi.mock('@bike4mind/server-utils/releaseNotes/adminReleaseNotes', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/server-utils/releaseNotes/adminReleaseNotes')>()),
+vi.mock('../releaseNotes/adminReleaseNotes', async importOriginal => ({
+  ...(await importOriginal<typeof import('../releaseNotes/adminReleaseNotes')>()),
   loadReleaseNotesConfig: mockLoadConfig,
 }));
 
