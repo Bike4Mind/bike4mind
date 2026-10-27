@@ -43,6 +43,7 @@ const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   // One bucket for every provider, so the cap is per client IP rather than per provider.
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-start' }))
+  // Admin-tunable sustained cap; the fixed limit above only catches bursts.
   .use(oauthIpRateLimit('oauth-init'))
   // After the rate limit so an unsolved challenge cannot drive unbounded siteverify calls.
   .use(requireOAuthStartTurnstile())

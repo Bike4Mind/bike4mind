@@ -10,8 +10,8 @@ import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authS
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
 import { oauthIpRateLimit } from '@server/middlewares/oauthIpRateLimit';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import passport from 'passport';
