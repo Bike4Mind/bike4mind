@@ -46,7 +46,26 @@ Click a row to open the user's [profile page](#user-profile-page). The row's **.
 
 ### Selecting rows
 
-Use the checkboxes to select rows for the bulk abuse response. Shift-click selects a range, and `x` toggles the focused row. Changing a filter, the view, or the search clears the selection; moving between pages keeps it.
+Use the checkboxes to select rows. Shift-click selects a range, and `x` toggles the focused row. Changing a filter, the view, or the search clears the selection; moving between pages keeps it. Once every row on the page is selected, **Select all N matching** extends the selection to every user that matches the current filters.
+
+### Bulk actions
+
+While rows are selected, a bar under the table offers these actions (on a narrow screen they sit in one **Actions** menu):
+
+| Action | Effect |
+|--------|--------|
+| **Suspend** | Blocks sign-in, ends live sessions and disables their API keys |
+| **Restrict** | Turns off AI features; users can still sign in and reach their data |
+| **Adjust credits** | Sets, adds or removes credits; every change is written to the credit ledger |
+| **Revoke API keys** | Disables every active API key the users own |
+| **Add tag** | Adds a tag to users who do not have it yet |
+| **Contain** | Suspends the users, sets their credits to 0 and revokes their API keys, together for each user |
+
+Each action opens a dialog with a dry run: how many users will change, who is excluded (you and other admins are never included), and how many API keys and credits are affected. A reason is required and is recorded in the audit log for every user.
+
+- A batch is limited to 500 users. If more match, narrow the filters first.
+- If the matching users change between the dry run and the confirm, nothing is applied and the dialog shows the new count to confirm again.
+- After a bulk action, an **Undo** button is shown for 30 seconds. It restores the whole batch. Sessions that were ended stay ended.
 
 ### Recent activity
 
