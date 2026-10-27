@@ -22,6 +22,7 @@ import {
 } from '../shared';
 import { adminFocus } from '../shared/adminStyles';
 import { AnomalyBanner } from './AnomalyBanner';
+import { SignupActivityPanel } from '../Signups/SignupActivityPanel';
 import BulkAbuseBar from './BulkAbuseBar';
 import BulkAbuseResponseModal from './BulkAbuseResponseModal';
 import ComplianceModal from './ComplianceModal';
@@ -232,6 +233,7 @@ const UsersTab: React.FC = () => {
         }}
       />
       {anomalyQuery.isError && <Alert color="warning">Could not check signup anomalies. Refresh to retry.</Alert>}
+      <SignupActivityPanel onSelectWindow={window => setParams({ ...window, signedUp: undefined, page: 1 })} />
 
       {showRecentActivity ? (
         <RecentActivityView />

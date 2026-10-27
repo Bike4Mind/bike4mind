@@ -1,5 +1,6 @@
-import { Button, Stack, Typography } from '@mui/joy';
+import { Box, Button, Stack, Typography } from '@mui/joy';
 import type { EmailDomainGroup } from '@client/app/utils/signupAnomaly';
+import { SIGNUP_SIGNAL_LABELS } from '@client/app/utils/signupSignals';
 import { StatusChip } from '../../shared/StatusChip';
 import { adminFocus } from '../../shared/adminStyles';
 
@@ -43,12 +44,25 @@ export function DomainGroupHeader({
         py: 0.75,
         bgcolor: 'admin.surfaceSubtle',
         boxShadow: theme =>
-          group.likelyAutomated ? `inset 3px 0 0 ${theme.vars.palette.admin.status.warn.foreground}` : 'none',
+          group.signals.length > 0 ? `inset 3px 0 0 ${theme.vars.palette.admin.status.warn.foreground}` : 'none',
       }}
     >
       <Typography sx={{ color: 'admin.ink', fontWeight: 700, fontSize: 13 }}>{group.domain}</Typography>
       <Typography sx={{ color: 'admin.inkSecondary', fontSize: 12 }}>{facts.join(' · ')}</Typography>
-      {group.likelyAutomated && <StatusChip tone="bad" dot label="Likely automated" />}
+      {group.signals.map(signal => (
+        <Box
+          key={signal}
+          component="span"
+          title={`${SIGNUP_SIGNAL_LABELS[signal].description} Review before taking action.`}
+        >
+          <StatusChip
+            tone="bad"
+            dot
+            label={SIGNUP_SIGNAL_LABELS[signal].label}
+            data-testid={`admin-users-group-${group.domain}-signal-${signal}`}
+          />
+        </Box>
+      ))}
       {!filtered && (
         <Button
           size="sm"

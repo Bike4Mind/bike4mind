@@ -60,6 +60,10 @@ const SINGLE_FILTERS: { key: Exclude<UsersFilterKey, 'emailDomain'>; label: stri
 const PRIMARY_FILTERS = new Set<string>(['status', 'plan', 'risk', 'signedUp']);
 type ExtraFilter = Exclude<UsersFilterKey, 'emailDomain'> | 'organization' | 'tags';
 
+/** The signup chart's window as chip text; the end is exclusive. */
+export const formatCreatedWindow = (from: string | undefined, to: string | undefined) =>
+  `${from ? new Date(from).toLocaleString() : 'any time'} to ${to ? new Date(to).toLocaleString() : 'now'}`;
+
 export function UsersToolbar({
   params,
   search,
@@ -173,6 +177,17 @@ export function UsersToolbar({
             options={[{ value: params.emailDomain, label: params.emailDomain }]}
             value={params.emailDomain}
             onChange={value => update({ emailDomain: value })}
+          />
+        )}
+        {(params.createdFrom || params.createdTo) && (
+          <FilterChip
+            id="createdWindow"
+            label="Created"
+            options={[{ value: 'window', label: formatCreatedWindow(params.createdFrom, params.createdTo) }]}
+            value="window"
+            onChange={value => {
+              if (value === undefined) update({ createdFrom: undefined, createdTo: undefined });
+            }}
           />
         )}
         {hidden.length > 0 && (

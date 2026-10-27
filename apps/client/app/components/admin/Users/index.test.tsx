@@ -22,6 +22,18 @@ vi.mock('./BulkAbuseResponseModal', () => ({
 }));
 vi.mock('./Profile/useOpenUserProfile', () => ({ useOpenUserProfile: () => openProfile }));
 vi.mock('./Views/RecentActivityView', () => ({ default: () => <div data-testid="recent-activity" /> }));
+vi.mock('../Signups/SignupActivityPanel', () => ({
+  SignupActivityPanel: ({
+    onSelectWindow,
+  }: {
+    onSelectWindow: (window: { createdFrom: string; createdTo: string }) => void;
+  }) => (
+    <button
+      data-testid="signup-panel-select-btn"
+      onClick={() => onSelectWindow({ createdFrom: '2026-03-10T11:00:00.000Z', createdTo: '2026-03-10T12:00:00.000Z' })}
+    />
+  ),
+}));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import { DEFAULT_USERS_PARAMS, useUsersTab } from './useUsersTabParams';
@@ -122,5 +134,30 @@ describe('UsersTab', () => {
 
     fireEvent.click(screen.getByTestId('admin-users-views-suspended-btn'));
     await waitFor(() => expect(screen.queryByTestId('bulk-abuse-selected-count')).toBeNull());
+  });
+
+  it('filters to a signup chart window, replacing the signed-up filter, and clears it from the chip', async () => {
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, signedUp: 'hour' }));
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+
+    fireEvent.click(screen.getByTestId('signup-panel-select-btn'));
+    await waitFor(() =>
+      expect(fakeAdminRouter.search).toMatchObject({
+        createdFrom: '2026-03-10T11:00:00.000Z',
+        createdTo: '2026-03-10T12:00:00.000Z',
+      })
+    );
+    expect(fakeAdminRouter.search.signedUp).toBeUndefined();
+    await waitFor(() =>
+      expect(apiGet).toHaveBeenCalledWith(
+        '/api/admin/users',
+        expect.objectContaining({ params: expect.objectContaining({ createdFrom: '2026-03-10T11:00:00.000Z' }) })
+      )
+    );
+
+    fireEvent.click(await screen.findByTestId('admin-filter-clear-createdWindow-btn'));
+    await waitFor(() => expect(fakeAdminRouter.search.createdFrom).toBeUndefined());
+    expect(screen.queryByTestId('admin-filter-createdWindow')).toBeNull();
   });
 });
