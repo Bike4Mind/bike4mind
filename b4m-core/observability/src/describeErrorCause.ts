@@ -16,7 +16,7 @@ function describeNonError(value: unknown): string {
  */
 export function describeErrorCause(err: unknown): string | undefined {
   const parts: string[] = [];
-  const seen = new Set<unknown>([err]);
+  const seen = new Set<unknown>();
   let current = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
   while (current !== undefined && parts.length < MAX_CAUSES && !seen.has(current)) {
     seen.add(current);
