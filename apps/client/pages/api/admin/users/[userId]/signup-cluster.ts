@@ -7,7 +7,7 @@ import { findSignupCluster } from '@server/utils/userSignIns';
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
 /** Other accounts that signed up with this user's signup fingerprint around the same time. */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
   const { userId } = req.query;

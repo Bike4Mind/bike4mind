@@ -9,7 +9,7 @@ import { listUserTimeline } from '@server/utils/userTimeline';
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
 /** The unified per-user timeline: sign-ins, notebooks, credit events, API key events and admin actions, merged server-side. */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
   const { userId, ...query } = req.query;

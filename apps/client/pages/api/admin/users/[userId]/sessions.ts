@@ -30,7 +30,7 @@ const parseUserId = (value: unknown): string => {
  * POST /api/users/[id]/revoke-sessions (tokenVersion bump); this one only clears that session's
  * refresh token, so its access token lapses within its short TTL, as in /api/users/me/sessions.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .get(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);

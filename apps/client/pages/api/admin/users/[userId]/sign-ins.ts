@@ -9,7 +9,7 @@ import { listUserSignIns } from '@server/utils/userSignIns';
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 
 /** A user's sign-in attempts from the auth audit, enriched with the matching client login record. */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
   const { userId, ...query } = req.query;
