@@ -153,7 +153,8 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
     if (!currentUser?.isAdmin) return;
     setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: true });
     return () => {
-      setSessionLayout({ layout: 'hide' });
+      // Reset the minimized default too, or the next floating chat opened elsewhere starts as the pill
+      setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
     };
   }, [currentUser?.isAdmin]);
 
