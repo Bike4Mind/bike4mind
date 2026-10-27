@@ -6,17 +6,21 @@ import type { ISkill } from '@bike4mind/common';
  * and may be changed on import to avoid a collision, which must not read as "locally modified".
  */
 export function skillContentHash(
-  skill: Pick<ISkill, 'description' | 'body' | 'argumentHint' | 'allowedTools' | 'disableModelInvocation'>
+  skill: Pick<ISkill, 'description' | 'body' | 'argumentHint' | 'allowedTools' | 'disableModelInvocation' | 'files'>
 ): string {
-  return createHash('sha256')
-    .update(
-      JSON.stringify([
-        skill.description,
-        skill.body,
-        skill.argumentHint ?? '',
-        skill.allowedTools ?? [],
-        Boolean(skill.disableModelInvocation),
-      ])
-    )
-    .digest('hex');
+  const fields: unknown[] = [
+    skill.description,
+    skill.body,
+    skill.argumentHint ?? '',
+    skill.allowedTools ?? [],
+    Boolean(skill.disableModelInvocation),
+  ];
+  // Appended only when present, so a skill without files keeps the hash it had before files existed.
+  if (skill.files?.length) {
+    const sorted = [...skill.files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    fields.push(sorted.map(f => [f.path, sha256(f.content)]));
+  }
+  return sha256(JSON.stringify(fields));
 }
+
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');

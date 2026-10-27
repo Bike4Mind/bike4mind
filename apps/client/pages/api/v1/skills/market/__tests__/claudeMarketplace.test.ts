@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';
 import { createMocks } from 'node-mocks-http';
+import yauzl from 'yauzl';
 import { ApiKeyScope, getClaudeMarketplaceContract, getClaudePluginZipContract } from '@bike4mind/common';
 import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
 
@@ -140,6 +141,31 @@ beforeEach(() => {
   mockFindOne.mockImplementation(async ({ _id }: { _id: string }) => doc(listing(_id)));
 });
 
+/** Entry name -> bytes and unix permission bits, in archive order. */
+const unzip = (zip: Buffer) =>
+  new Promise<Map<string, { data: Buffer; mode: number }>>((resolve, reject) => {
+    const entries = new Map<string, { data: Buffer; mode: number }>();
+    yauzl.fromBuffer(zip, { lazyEntries: true }, (err, archive) => {
+      if (err) return reject(err);
+      archive.on('entry', (entry: yauzl.Entry) => {
+        archive.openReadStream(entry, (streamErr, stream) => {
+          if (streamErr) return reject(streamErr);
+          const chunks: Buffer[] = [];
+          stream.on('data', (c: Buffer) => chunks.push(c));
+          stream.on('end', () => {
+            entries.set(entry.fileName, {
+              data: Buffer.concat(chunks),
+              mode: (entry.externalFileAttributes >>> 16) & 0o777,
+            });
+            archive.readEntry();
+          });
+        });
+      });
+      archive.on('end', () => resolve(entries));
+      archive.readEntry();
+    });
+  });
+
 const zipOf = async (id: string) => {
   const { error, res } = await call(zipHandler, { id });
   expect(error).toBeNull();
@@ -263,6 +289,11 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     const first = await zipOf(LISTING_A);
     const second = await zipOf(LISTING_A);
     expect(first.equals(second)).toBe(true);
+    // Captured before supporting files existed: a file-less version must keep its bytes, or every
+    // installed plugin would see a spurious update.
+    expect(createHash('sha256').update(first).digest('hex')).toBe(
+      'ea6975645d93539a3080731d8bf2179addb2a5db39f9a24233130e7ffb8c1133'
+    );
     // ZIP local header time/date fields: midnight 2000-01-01 in every server timezone.
     expect(first.readUInt16LE(10)).toBe(0);
     expect(first.readUInt16LE(12)).toBe((20 << 9) | (1 << 5) | 1);
@@ -275,6 +306,34 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     expect(text).toContain('Third-party skill from the Bike4Mind Skill Market');
     expect(text).not.toContain('allowed-tools');
     expect(text).not.toContain('# Exported:');
+  });
+
+  it('ships supporting files byte-identical beside SKILL.md, pinned by the feed', async () => {
+    const files = [
+      { path: 'references/api.md', content: '# API\n\u00e9t\u00e9\n' },
+      { path: 'scripts/run.py', content: 'print("hi")\n' },
+    ];
+    const withFiles = (id: string) => ({ ...version(id), snapshot: { ...version(id).snapshot, files } });
+    mockFindVersion.mockImplementation(async (versionId: string) => doc(withFiles(versionId.slice(2))));
+    mockFindVersions.mockImplementation(async ({ _id }: { _id: { $in: string[] } }) =>
+      _id.$in.map(versionId => doc(withFiles(versionId.slice(2))))
+    );
+
+    const first = await zipOf(LISTING_A);
+    expect(first.equals(await zipOf(LISTING_A))).toBe(true);
+    const { res } = await call(feedHandler, { orgId: ORG_ID });
+    expect(createHash('sha256').update(first).digest('hex')).toBe(res._getJSONData().plugins[0].source.sha256);
+
+    const entries = await unzip(first);
+    expect([...entries.keys()]).toEqual([
+      'skills/review-pr/SKILL.md',
+      'skills/review-pr/references/api.md',
+      'skills/review-pr/scripts/run.py',
+    ]);
+    for (const file of files) {
+      expect(entries.get(`skills/review-pr/${file.path}`)?.data.equals(Buffer.from(file.content))).toBe(true);
+    }
+    expect(entries.get('skills/review-pr/scripts/run.py')?.mode).toBe(0o755);
   });
 
   it('404s a pinned version that does not belong to the listing', async () => {

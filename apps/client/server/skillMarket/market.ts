@@ -181,6 +181,13 @@ export const toSnapshot = (skill: ISkill): ISkillSnapshot => ({
   ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
   ...(skill.allowedTools?.length ? { allowedTools: [...skill.allowedTools] } : {}),
   disableModelInvocation: Boolean(skill.disableModelInvocation),
+  ...(skill.files?.length
+    ? {
+        files: [...skill.files]
+          .sort((a, b) => (a.path < b.path ? -1 : 1))
+          .map(({ path, content }) => ({ path, content })),
+      }
+    : {}),
 });
 
 export { skillContentHash } from '@bike4mind/server-utils/skillMarket/contentHash';

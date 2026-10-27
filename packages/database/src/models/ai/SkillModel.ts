@@ -276,6 +276,16 @@ export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(
     argumentHint: { type: String, maxlength: 200 },
     allowedTools: { type: [String] },
     disableModelInvocation: { type: Boolean, default: false },
+    // Bounds live in checkSkillFiles (@bike4mind/common utils/skillFiles.ts), applied by every writer.
+    files: {
+      type: [
+        new Schema(
+          { path: { type: String, required: true }, content: { type: String, required: true } },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
 
     // Scope discriminator. Exactly one of userId / organizationId / isSystem
     // must be set - enforced by the pre-save validator below. Mirrors AgentModel.

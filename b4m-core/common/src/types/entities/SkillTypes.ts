@@ -1,6 +1,6 @@
 import { IBaseRepository, RepositoryUpdateOptions } from './BaseTypes';
 import { IShareableDocument, IShareableStaticMethods } from './ShareableDocumentTypes';
-import type { ISkillImportedFrom } from './SkillMarketTypes';
+import type { ISkillFile, ISkillImportedFrom } from './SkillMarketTypes';
 
 /**
  * A Skill is a reusable instruction template - markdown body authored by a user
@@ -23,6 +23,9 @@ export interface ISkill {
 
   /** When true, the skill is hidden from the LLM tool catalog (user-invocation only). */
   disableModelInvocation?: boolean;
+
+  /** Supporting `scripts/` and `references/` files, shipped beside SKILL.md in the Claude Code plugin. */
+  files?: ISkillFile[];
 
   // Scope discriminator - exactly one must be set. Same shape as IAgent:
   // user-owned (personal skill), organization-shared (team skill), or

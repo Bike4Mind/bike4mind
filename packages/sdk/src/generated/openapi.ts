@@ -1137,7 +1137,7 @@ export interface paths {
     };
     /**
      * Download a Skill Market listing as a Claude Code plugin
-     * @description A zip holding an approved version as `skills/<name>/SKILL.md`. The optional `version` query pins the listing version advertised by the feed, so later approvals do not change its bytes or `sha256`. Without it, returns the current approved version. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
+     * @description A zip holding an approved version as `skills/<name>/SKILL.md`, plus any supporting files the version ships under `skills/<name>/scripts/` and `skills/<name>/references/`. The optional `version` query pins the listing version advertised by the feed, so later approvals do not change its bytes or `sha256`. Without it, returns the current approved version. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
      */
     get: operations['getClaudePluginZip'];
     put?: never;
