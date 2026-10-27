@@ -245,8 +245,9 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
 
   /**
    * Persist a known reportId on a confirmed_csam incident without changing reviewStatus.
-   * Called when /finish fails after a successful /submit: the reportId is known and should
-   * be stored so an admin can use 'mark_reported' to finalize within NCMEC's 24-hour window.
+   * Stored after /finish fails so an admin can retry_finish within NCMEC's 24-hour window,
+   * or after finalization succeeds but recording it fails so an admin can mark_reported
+   * once the claim is stale. mark_reported records a finalized report without calling NCMEC.
    */
   async setNcmecReportId(id: string, ncmecReportId: string): Promise<void> {
     await this.model.updateOne({ _id: id, reviewStatus: 'confirmed_csam' }, { $set: { ncmecReportId } });

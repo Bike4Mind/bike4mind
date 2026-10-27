@@ -23,6 +23,7 @@ export function buildSuggestTagsUserMessage(snapshot: ISkillSnapshot, nonce: str
     `name: ${snapshot.name}`,
     `author description: ${snapshot.description}`,
     `declared tools: ${(snapshot.allowedTools ?? []).join(', ') || '(none)'}`,
+    `declared Claude Code tools: ${(snapshot.claudeCodeAllowedTools ?? []).join(', ') || '(none)'}`,
     'body:',
     snapshot.body.slice(0, MAX_BODY_CHARS),
     `=====END SKILL DATA ${nonce}=====`,

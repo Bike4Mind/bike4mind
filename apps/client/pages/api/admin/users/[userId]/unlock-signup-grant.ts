@@ -8,6 +8,7 @@ import { userService } from '@bike4mind/services';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
+import { signupProtection } from '@server/auth/signupProtection';
 import {
   denySelfAdminAction,
   isSelfOrImpersonator,
@@ -33,6 +34,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const result = await userService.unlockSignupGrant(userId, 'admin', {
       db: {
         users: userRepository,
+        signupProtection,
         adminSettings: adminSettingsRepository,
         creditTransactions: creditTransactionRepository,
         creditLots: creditLotRepository,

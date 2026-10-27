@@ -75,6 +75,7 @@ export async function importListing(user: MarketActor, listingId: string, body: 
     body: snap.body,
     argumentHint: snap.argumentHint ?? '',
     allowedTools: snap.allowedTools ?? [],
+    claudeCodeAllowedTools: snap.claudeCodeAllowedTools ?? [],
     disableModelInvocation: Boolean(snap.disableModelInvocation),
     importedFrom,
   };

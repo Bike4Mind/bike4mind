@@ -1,3 +1,4 @@
+import { signupProtection } from '@server/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
@@ -9,6 +10,9 @@ import {
 } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
+
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 // Middleware is stripped so the handler body runs directly (same pattern as the
 // email/verify suite). baseApi().use(...).use(...).post(fn) must chain and hand back
@@ -95,6 +99,7 @@ const mockReleaseClaim = vi.fn();
 const mockValidateNonce = vi.fn();
 const mockConsumeOtherCodes = vi.fn();
 const mockUserUpdate = vi.fn();
+const mockClearPending = vi.fn();
 const mockAddTagsToUser = vi.fn();
 const mockReleasePending = vi.fn();
 const mockDomainEstablished = vi.fn(async (_domain: string, _verifiedBefore: Date) => false);
@@ -131,6 +136,7 @@ vi.mock('@bike4mind/database', () => ({
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
     count: vi.fn(),
     update: (...a: unknown[]) => mockUserUpdate(...a),
+    clearPendingFreeCreditGrant: (...a: unknown[]) => mockClearPending(...a),
     addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
     existsVerifiedUserOnEmailDomain: (...a: unknown[]) => mockDomainEstablished(...a),
   },
@@ -172,6 +178,7 @@ beforeEach(() => {
   mockRecordSignupNetwork.mockClear();
   mockRecordLoginEvent.mockClear();
   claims.clear();
+  mockClearPending.mockResolvedValue({ tags: ['Customer'] });
   mockClaimOnce.mockImplementation(async (name: string, claimId: string) => {
     await Promise.resolve();
     if (claims.has(name)) return false;
@@ -425,6 +432,18 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
 
   const firstTouch = `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}`;
 
+  it('scores the new account once it is registered', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(refreshSignupRiskScore).toHaveBeenCalledWith('user-1', req.logger);
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
+  });
+
   it("credits the new account's signup to the product in its touch cookies, as an otc signup", async () => {
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
@@ -635,6 +654,7 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       expect(res._getStatusCode()).toBe(200);
       expect(registerParams().sourceClientId).toBe('b4m_acme_0a1b2c3d');
       expect(mockRegisterViaOTC.mock.calls[0][1].db.oauthClients).toBe(oauthClientRepository);
+      expect(mockRegisterViaOTC.mock.calls[0][1].db.signupProtection).toBe(signupProtection);
     });
 
     it.each([
@@ -975,7 +995,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockUserUpdate).toHaveBeenCalledTimes(2);
+    expect(mockUserUpdate).toHaveBeenCalledTimes(1);
     expect(mockUserUpdate).toHaveBeenNthCalledWith(1, {
       id: 'u-existing',
       emailVerified: true,
@@ -984,11 +1004,7 @@ describe('/api/otc/verify - existing user verification and pending free credits'
       emailVerificationExpires: null,
       emailVerificationSentAt: null,
     });
-    expect(mockUserUpdate).toHaveBeenNthCalledWith(2, {
-      id: 'u-existing',
-      tags: ['Customer'],
-      pendingCreditGrant: null,
-    });
+    expect(mockClearPending).toHaveBeenCalledWith('u-existing');
     // The release is reflected onto the response, not just the doc the handler mutated.
     expect(res._getJSONData()).toMatchObject({ tags: ['Customer'], pendingCreditGrant: null });
   });

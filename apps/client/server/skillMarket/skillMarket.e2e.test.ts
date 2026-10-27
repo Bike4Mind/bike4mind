@@ -563,6 +563,26 @@ describe('Skill Market (real mongod)', () => {
     expect((await skillRepository.findById(copyId))!.body).toBe('Rewrite as bullets v1.');
   });
 
+  it('carries Claude Code allowed-tools through publish, approval and import', async () => {
+    orgs.members.set(AUTHOR, [ORG]);
+    orgs.members.set('member-2', [ORG]);
+    orgs.admins.set('org-admin', [ORG]);
+    const tools = ['Bash(git:*)', 'Read'];
+    const { listing, version } = await publish(
+      await makeSkill(AUTHOR, 'Commit the staged changes.', { claudeCodeAllowedTools: tools }),
+      'organization',
+      ORG
+    );
+    expect(version).toMatchObject({ riskTier: 'high', snapshot: { claudeCodeAllowedTools: tools } });
+    await decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve', ackHighRisk: true });
+
+    const copyId = (await call(importHandler, 'POST', 'member-2', { id: listing.id }))._getJSONData().skill.id;
+    const copy = (await skillRepository.findById(copyId))!;
+    expect(copy.claudeCodeAllowedTools).toEqual(tools);
+    const [status] = await attachMarketStatus([copy]);
+    expect(status.marketStatus).toMatchObject({ state: 'current', locallyModified: false });
+  });
+
   it('imports the approved snapshot, then reports stale / locally modified / delisted copies', async () => {
     const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
     const { listing } = await publish(source, 'public');

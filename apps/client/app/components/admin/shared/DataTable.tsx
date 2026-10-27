@@ -27,6 +27,8 @@ export type DataTableProps<Row> = {
   activeRowId?: string;
   testId?: string;
   rowTestId?: (row: Row) => string;
+  /** Disable when the caller paginates rows on the server. */
+  pagination?: boolean;
   /** Changing this (e.g. the serialized filter state) returns the table to its first page. */
   pageResetKey?: string;
 };
@@ -48,6 +50,7 @@ export function DataTable<Row>({
   activeRowId,
   testId = 'admin-data-table',
   rowTestId,
+  pagination = true,
   pageResetKey,
 }: DataTableProps<Row>) {
   const [sort, setSort] = useState<Sort>();
@@ -72,7 +75,7 @@ export function DataTable<Row>({
     : rows;
   const lastPage = Math.max(0, Math.ceil(rows.length / pageSize) - 1);
   const currentPage = Math.min(page, lastPage);
-  const visibleRows = sorted.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const visibleRows = pagination ? sorted.slice(currentPage * pageSize, (currentPage + 1) * pageSize) : sorted;
   const selectable = selection !== undefined && onSelectionChange !== undefined;
   const isSelected = (id: string) => selection?.mode === 'allMatching' || (selection?.ids.includes(id) ?? false);
   const selectedVisible = visibleRows.filter(row => isSelected(getRowId(row))).length;
@@ -263,49 +266,51 @@ export function DataTable<Row>({
           </tbody>
         </Table>
       </Box>
-      <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
-          {rows.length === 0 ? 0 : currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, rows.length)} of{' '}
-          {rows.length.toLocaleString()}
-        </Typography>
-        <Select
-          aria-label="Rows per page"
-          size="sm"
-          value={pageSize}
-          disabled={loading}
-          data-testid="admin-table-page-size"
-          onChange={(_, value) => {
-            if (value !== null) {
-              setPageSize(value);
-              setPage(0);
-            }
-          }}
-        >
-          {PAGE_SIZES.map(size => (
-            <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
-              {size}
-            </Option>
-          ))}
-        </Select>
-        <Button
-          size="sm"
-          variant="outlined"
-          disabled={loading || currentPage === 0}
-          onClick={() => setPage(currentPage - 1)}
-          data-testid="admin-table-previous-btn"
-        >
-          Previous
-        </Button>
-        <Button
-          size="sm"
-          variant="outlined"
-          disabled={loading || currentPage === lastPage}
-          onClick={() => setPage(currentPage + 1)}
-          data-testid="admin-table-next-btn"
-        >
-          Next
-        </Button>
-      </Stack>
+      {pagination && (
+        <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+            {rows.length === 0 ? 0 : currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, rows.length)}{' '}
+            of {rows.length.toLocaleString()}
+          </Typography>
+          <Select
+            aria-label="Rows per page"
+            size="sm"
+            value={pageSize}
+            disabled={loading}
+            data-testid="admin-table-page-size"
+            onChange={(_, value) => {
+              if (value !== null) {
+                setPageSize(value);
+                setPage(0);
+              }
+            }}
+          >
+            {PAGE_SIZES.map(size => (
+              <Option key={size} value={size} data-testid={`admin-table-page-size-${size}`}>
+                {size}
+              </Option>
+            ))}
+          </Select>
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={loading || currentPage === 0}
+            onClick={() => setPage(currentPage - 1)}
+            data-testid="admin-table-previous-btn"
+          >
+            Previous
+          </Button>
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={loading || currentPage === lastPage}
+            onClick={() => setPage(currentPage + 1)}
+            data-testid="admin-table-next-btn"
+          >
+            Next
+          </Button>
+        </Stack>
+      )}
     </Stack>
   );
 }

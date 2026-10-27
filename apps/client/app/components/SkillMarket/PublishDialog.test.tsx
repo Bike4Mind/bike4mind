@@ -7,6 +7,8 @@ import type { ISkill, ISkillListingVersion } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   publish: vi.fn(),
+  submitVersion: vi.fn(),
+  myListings: undefined as Array<Record<string, unknown>> | undefined,
   rescan: vi.fn(),
   navigate: vi.fn(),
   suggest: vi.fn((_skillId: string, _enabled?: boolean) => ({
@@ -15,10 +17,19 @@ const h = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => h.navigate,
+  Link: ({ to, children, ...rest }: { to: string; children: React.ReactNode }) => (
+    <a href={to} {...rest}>
+      {children}
+    </a>
+  ),
+}));
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
   useMarketMe: () => ({ data: { organizations: [{ id: 'org-1', name: 'Acme' }], isReviewer: false, isAdmin: false } }),
   usePublishSkill: () => ({ mutateAsync: h.publish, isPending: false }),
+  useSubmitNewVersion: () => ({ mutateAsync: h.submitVersion, isPending: false }),
+  useMyListings: () => ({ data: h.myListings }),
   useRescanVersion: () => ({ mutateAsync: h.rescan, isPending: false }),
   useSuggestListingTags: (skillId: string, enabled?: boolean) => h.suggest(skillId, enabled),
 }));
@@ -59,7 +70,63 @@ const suggestions = (bySkill: Record<string, string[]>) =>
 describe('PublishDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.myListings = undefined;
     h.suggest.mockImplementation(() => ({ data: undefined, isFetching: false }));
+  });
+
+  it('submits a new version, not a new listing, when the skill is already listed', async () => {
+    h.myListings = [
+      { id: 'old', sourceSkillId: 'skill-1', status: 'withdrawn', visibility: 'public' },
+      { id: 'l9', sourceSkillId: 'skill-1', status: 'approved', visibility: 'organization' },
+    ];
+    h.submitVersion.mockResolvedValue({
+      listing: { id: 'l9', visibility: 'organization', status: 'approved' },
+      version: version({ listingId: 'l9', version: 2 }),
+    });
+    renderDialog();
+
+    expect(screen.getByTestId('market-publish-already-listed')).toHaveTextContent(
+      'Already listed (organization). Publishing submits a new version.'
+    );
+    expect(screen.queryByTestId('market-publish-visibility-public')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('market-publish-tag-input')).not.toBeInTheDocument();
+    expect(screen.getByTestId('market-publish-mine-link')).toHaveAttribute('href', '/skills/market/mine');
+
+    fireEvent.click(screen.getByTestId('market-publish-submit-btn'));
+    await waitFor(() => expect(h.submitVersion).toHaveBeenCalledWith({ listingId: 'l9' }));
+    expect(h.publish).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('market-publish-already-listed')).not.toBeInTheDocument());
+  });
+
+  it('shows the normal form when the only listing was withdrawn or delisted', () => {
+    h.myListings = [
+      { id: 'a', sourceSkillId: 'skill-1', status: 'withdrawn', visibility: 'public' },
+      { id: 'b', sourceSkillId: 'skill-1', status: 'delisted', visibility: 'public' },
+    ];
+    renderDialog();
+    expect(screen.queryByTestId('market-publish-already-listed')).not.toBeInTheDocument();
+    expect(screen.getByTestId('market-publish-visibility-public')).toBeInTheDocument();
+  });
+
+  it('keeps the already-listed form and shows the error when the new version fails', async () => {
+    h.myListings = [{ id: 'l9', sourceSkillId: 'skill-1', status: 'approved', visibility: 'public' }];
+    h.submitVersion.mockRejectedValue(new Error('Scan service unavailable'));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('market-publish-submit-btn'));
+    expect(await screen.findByTestId('market-publish-error')).toHaveTextContent('Scan service unavailable');
+    expect(screen.getByTestId('market-publish-already-listed')).toBeInTheDocument();
+    expect(h.suggest).toHaveBeenLastCalledWith('skill-1', false);
+  });
+
+  it('links My listings in the conflict error when the listing was not known up front', async () => {
+    h.publish.mockRejectedValue(
+      new Error('This skill already has a listing. Submit a new version from My listings instead.')
+    );
+    renderDialog();
+    fireEvent.click(screen.getByTestId('market-publish-submit-btn'));
+    const alert = await screen.findByTestId('market-publish-error');
+    expect(alert).toHaveTextContent('Submit a new version from My listings instead.');
+    expect(screen.getByTestId('market-publish-mine-link')).toHaveAttribute('href', '/skills/market/mine');
   });
 
   it('shows why a failed scan did not publish, with each finding', async () => {

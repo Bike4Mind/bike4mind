@@ -121,7 +121,6 @@ export default {
   'Users/Details/UserSubscriptionStatus.tsx': [[3, '6c0e4adb82c854fc']],
   'Users/LoginDetailsModal.tsx': [[3, 'ad3f82b94d383896']],
   'Users/MigrationDetails.tsx': [[1, 'b8abb7928748f7fe']],
-  'Users/Profile/UserProfilePage.tsx': [[2, 'ae52370fa130571e']],
   'Users/SystemMessageModal.tsx': [[2, 'c50515f91280e0a3']],
   'Users/UsersFilterBar.tsx': [[13, '5d3f06a63169547e']],
   'Users/Views/FullUsersView.tsx': [[2, '59f67a53df6a87dc']],
