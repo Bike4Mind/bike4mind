@@ -5586,7 +5586,9 @@ export class ChatCompletionProcess {
             // then the fallback chain.
             if (isStreamEndedWithoutFinishError(lastError) && !streamEndedWithoutFinishRetried) {
               streamEndedWithoutFinishRetried = true;
-              logger.info(`🔄 [Empty Stream Retry] ${currentModel.id} stream ended without a finish reason, retrying once`);
+              logger.info(
+                `🔄 [Empty Stream Retry] ${currentModel.id} stream ended without a finish reason, retrying once`
+              );
 
               turnTiming.recordRetry(lastError, 0, currentModel.id);
               resetStreamStateForRetry();

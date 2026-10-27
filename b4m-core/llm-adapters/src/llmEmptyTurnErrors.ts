@@ -32,7 +32,8 @@ export class StreamEndedWithoutFinishError extends Error {
 /** Match by name as well, so a second bundled copy of the class still counts. */
 export function isOutputBudgetExhaustedError(error: unknown): error is OutputBudgetExhaustedError {
   return (
-    error instanceof OutputBudgetExhaustedError || (error instanceof Error && error.name === 'OutputBudgetExhaustedError')
+    error instanceof OutputBudgetExhaustedError ||
+    (error instanceof Error && error.name === 'OutputBudgetExhaustedError')
   );
 }
 

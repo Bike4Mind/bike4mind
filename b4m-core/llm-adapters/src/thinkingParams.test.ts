@@ -420,7 +420,7 @@ describe('resolveOutputMaxTokens', () => {
 
     it.each([ChatModels.KIMI_K2_6, ChatModels.KIMI_K2_7_CODE, ChatModels.KIMI_K2_7_CODE_HIGHSPEED])(
       'defaults direct %s to the reasoning floor, not the 4096 fallback',
-      (id) => {
+      id => {
         const model: ModelInfo = { ...kimiThinking, id, name: id, max_tokens: 131_072 };
         expect(resolve(undefined, model)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
       }

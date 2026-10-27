@@ -5,7 +5,8 @@ import {
   getLlmByModel,
   isLlmTimeoutError,
   isStreamEndedWithoutFinishError,
-  type ApiKeyTable,   type ICompletionBackend,
+  type ApiKeyTable,
+  type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
 
 /**
