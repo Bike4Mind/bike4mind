@@ -1203,7 +1203,11 @@ describe('ModelHubService curated library pulls', () => {
 
     expect(await pulled(setup)).toEqual({ ok: true, ref: REF });
     expect(readsOf(setup.runtime)).toHaveLength(2);
-    expect(readsOf(setup.runtime)[1][1]).toMatchObject({ tags: false, signal: expect.any(AbortSignal) });
+    expect(readsOf(setup.runtime)[1][1]).toMatchObject({
+      tags: false,
+      signal: expect.any(AbortSignal),
+      timeoutMs: 30_000,
+    });
     expect(setup.runtime.remove).not.toHaveBeenCalled();
     expect(setup.service.pulls()).toEqual([]);
     expect(setup.warn).toHaveBeenCalledTimes(1);
