@@ -1124,11 +1124,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // The stamp doubles as the chunk-scan exclusion marker (see buildFabFileChunkScanFilter), so
       // the rescue sweep never re-enqueues a file that deterministically chunks to zero. Its own
       // field rather than prose in `notes` (#2016), which is the owner's text.
-      await FabFile.updateOne({ _id: fabFileId }, { $set: { noExtractableTextAt: new Date() } }).catch(err =>
-        logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`)
-      );
-      // No reader for this format (e.g. a legacy binary Office file): tell the user rather than
-      // completing it silently, and count it as failed so the batch shows why.
+      const stampNoExtractableText = () =>
+        FabFile.updateOne({ _id: fabFileId }, { $set: { noExtractableTextAt: new Date() } }).catch(err =>
+          logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`)
+        );
+      // No reader for this format: tell the user rather than completing it silently, and count it as
+      // failed so the batch shows why. Stamped only once the failure is recorded, since the stamp
+      // makes a redelivery skip the file.
       if (isUnreadableFormat(fabFile.mimeType)) {
         logger.warn(`fabFile ${fabFileId} has an unsupported format: ${fabFile.mimeType}`);
         await accountFileFailure({
@@ -1141,8 +1143,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           errorMessage: UNSUPPORTED_FORMAT_ERROR,
           terminal: true,
         });
+        await stampNoExtractableText();
         return;
       }
+      await stampNoExtractableText();
       // A zero-chunk file (empty / unparseable) produces no vectorize message, so it
       // would never reach a terminal batch counter and the batch would hang until the
       // reconciler. Account for it as complete here so batch math closes immediately.

@@ -242,6 +242,8 @@ import ClearSuspensionMirroredIsModerated from './20260921235945_clear-suspensio
 import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import RestoreLegacyXlsMimeType from './20260921235946_restore-legacy-xls-mime-type';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -399,6 +401,7 @@ const coreMigrations: MigrationFile[] = [
   SetLiveopsTriageConfigAuditLogRetention,
   FoldOrganizationManagerIntoAdminUserIds,
   BackfillFreeCreditClaimEmail,
+  RestoreLegacyXlsMimeType,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureAdminAuditLogReadIndexes,

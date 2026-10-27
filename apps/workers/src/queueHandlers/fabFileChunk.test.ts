@@ -1746,6 +1746,21 @@ describe('fabFileChunk handler - unsupported file format', () => {
     expect(h.incrementCounter).not.toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
   });
 
+  // The zero-chunk stamp makes a redelivery skip the file, so it must not land before the failure
+  // does: a transient error while recording the failure would otherwise leave the file "complete".
+  it('leaves the file unstamped for redelivery when recording the failure throws', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', mimeType: 'application/x-cfb' });
+    h.markFailedIfNotAlready.mockRejectedValueOnce(new Error('mongo blip'));
+    const stamp = [{ _id: 'ff1' }, { $set: { noExtractableTextAt: expect.any(Date) } }];
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('mongo blip');
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith(...stamp);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledTimes(2);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(...stamp);
+  });
+
   it.each([
     ['a supported type', 'application/pdf'],
     ['a text type chunked as plain text', 'text/x-python'],
