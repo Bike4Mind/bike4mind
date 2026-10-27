@@ -57,8 +57,8 @@ vi.mock('sst', () => ({
   },
 }));
 vi.mock('axios', () => ({ default: { post: h.axiosPost } }));
-vi.mock('@server/security/cloudScan', () => ({ handler: h.runCloudScan }));
-vi.mock('@server/security/wafScan', () => ({ handler: h.runWafScan }));
+vi.mock('@bike4mind/server-utils/security/cloudScan', () => ({ handler: h.runCloudScan }));
+vi.mock('@bike4mind/server-utils/security/wafScan', () => ({ handler: h.runWafScan }));
 
 import cloud from '../cloud';
 import cloudProwler from '../cloud-prowler';
