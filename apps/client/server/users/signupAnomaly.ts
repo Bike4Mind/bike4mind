@@ -45,16 +45,53 @@ export async function getSignupAnomalySnapshot(now = new Date()) {
   };
 }
 
-/** Domain groups for the review table, flagged by the same classifier that feeds the signup chart. */
-export async function getDomainGroups(users: { _id: unknown; email: string | null; createdAt: Date }[]) {
-  const keys = await UserApiKey.find({ userId: { $in: users.map(user => String(user._id)) } })
-    .select('userId')
-    .hint({ userId: 1, status: 1 })
-    .limit(KEY_SCAN_LIMIT + 1)
+/** Signups either side of the shown cohort that the classifier also sees, so a run cut by the filter still counts. */
+export const DOMAIN_CONTEXT_MS = 24 * 60 * 60 * 1000;
+
+type CohortRow = { _id: unknown; email?: string | null; createdAt: Date };
+const toMember = (user: CohortRow) => ({
+  id: String(user._id),
+  email: user.email ?? null,
+  createdAt: new Date(user.createdAt),
+});
+
+/**
+ * Signups around the cohort's time span. The table's cohort is usually one hour (a chart bar or "Review
+ * cluster"), where cadence can never fire; classifying it alongside this context keeps it in line with the chart.
+ */
+async function loadDomainContext(cohort: ReturnType<typeof toMember>[]) {
+  if (cohort.length === 0) return [];
+  const times = cohort.map(user => user.createdAt.getTime());
+  const rows = await User.find({
+    createdAt: {
+      $gte: new Date(Math.min(...times) - DOMAIN_CONTEXT_MS),
+      $lte: new Date(Math.max(...times) + DOMAIN_CONTEXT_MS),
+    },
+  })
+    .select('_id email createdAt')
+    .hint({ createdAt: 1 })
+    .sort({ createdAt: -1 })
+    .limit(SIGNUP_SCAN_LIMIT)
     .maxTimeMS(2000)
     .lean();
-  const cohort = users.map(user => ({ id: String(user._id), email: user.email, createdAt: new Date(user.createdAt) }));
-  const signalsById = classifyDomainCohorts(cohort);
+  return rows.map(toMember);
+}
+
+/** Domain groups for the review table, flagged by the same classifier that feeds the signup chart. */
+export async function getDomainGroups(users: CohortRow[]) {
+  const cohort = users.map(toMember);
+  const [keys, context] = await Promise.all([
+    UserApiKey.find({ userId: { $in: cohort.map(user => user.id) } })
+      .select('userId')
+      .hint({ userId: 1, status: 1 })
+      .limit(KEY_SCAN_LIMIT + 1)
+      .maxTimeMS(2000)
+      .lean(),
+    loadDomainContext(cohort),
+  ]);
+  const signalsById = classifyDomainCohorts([
+    ...new Map([...context, ...cohort].map(user => [user.id, user])).values(),
+  ]);
   const groups = groupSignupDomains(
     cohort.map(user => ({ ...user, createdAt: user.createdAt.toISOString() })),
     keys.slice(0, KEY_SCAN_LIMIT)

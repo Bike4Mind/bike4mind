@@ -4146,7 +4146,8 @@ export const settingsMap = {
     defaultValue: { signupBaseline: 0, apiKeyBaseline: 0, thresholdMultiplier: 2, minimumCount: 10 },
     description:
       'Expected hourly signups and API keys, multiplier above baseline, and minimum event count. ' +
-      'Generic defaults only; tune these for your deployment. Domain hints are review signals, not proof of abuse.',
+      'Generic defaults only; tune these for your deployment. Drives the Users-tab spike banner only; ' +
+      'domain signals in the review table come from the signup classifier and are review hints, not proof of abuse.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
     schema: z
