@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatErrorLogSlackMessage, splitErrorDetail, stackFrames } from './errorLogSlackMessage';
+import { errorTitle, formatErrorLogSlackMessage, splitErrorDetail, stackFrames } from './errorLogSlackMessage';
 
 const oktaStack = [
   'ClientError: unexpected HTTP response status code',
@@ -53,12 +53,12 @@ describe('formatErrorLogSlackMessage', () => {
   it('renders the OktaOidc error as a short titled card with fields, first frame and a folded stack', () => {
     const payload = render();
     expect(payload.text).toBe(
-      'ERROR on production: [OktaOidc] Discovery failed for custom (default) auth server at: https://trial-1234567.okta.com/oauth2/default/.well-known/openid-configuration'
+      'ERROR on production: [OktaOidc] Discovery failed for custom (default) auth server at: https://trial-1234567.okta.com/oauth2/default/.well-known/openid-configuration: ClientError: unexpected HTTP response status code'
     );
     expect(payload.attachments?.[0].color).toBe('#E01E5A');
     const blocks = blocksOf(payload);
     expect(blocks[0].text?.text).toBe(
-      ':red_circle: *ERROR on production*  |  GET /api/auth/okta\n[OktaOidc] Discovery failed for custom (default) auth server at: https://trial-1234567.okta.com/oauth2/default/.well-known/openid-configuration'
+      ':red_circle: *ERROR on production*  |  GET /api/auth/okta\n[OktaOidc] Discovery failed for custom (default) auth server at: https://trial-1234567.okta.com/oauth2/default/.well-known/openid-configuration: ClientError: unexpected HTTP response status code'
     );
     expect(blocks[1].fields?.map(f => f.text)).toEqual([
       '*Request*\nbbcf0a53-5961-49e6-a00d-c559b9b38998',
@@ -89,6 +89,42 @@ describe('formatErrorLogSlackMessage', () => {
     expect(stack).toContain('at frame6 ');
     expect(stack).not.toContain('at frame7 ');
     expect(stack).toContain('... 23 more');
+  });
+
+  it('keeps the message and stack of an unhandled Lambda error (runtime Invoke Error line)', () => {
+    const stack = [
+      "TypeError: Cannot read properties of undefined (reading 'id')",
+      '    at handler (/var/task/apps/workers/src/events/thing.js:12:30)',
+      '    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)',
+    ];
+    const line =
+      '2026-10-27T00:53:48.462Z\t3377e888-1111-2222-3333-444444444444\tERROR\tInvoke Error \t' +
+      JSON.stringify({
+        errorType: 'TypeError',
+        errorMessage: "Cannot read properties of undefined (reading 'id')",
+        stack,
+      });
+    const payload = formatErrorLogSlackMessage({
+      message: line,
+      severity: 'error',
+      metadata: { source: 'AWS' },
+      stage: 'production',
+      logGroup: '/aws/lambda/bike4mind-production-thing',
+      url: 'https://example.com/log',
+      count: 1,
+    });
+    expect(payload.text).toBe(
+      "ERROR on production: Invoke Error: TypeError: Cannot read properties of undefined (reading 'id')"
+    );
+    const blocks = blocksOf(payload);
+    expect(blocks[0].text?.text).toBe(
+      ":red_circle: *ERROR on production*\nInvoke Error: TypeError: Cannot read properties of undefined (reading 'id')"
+    );
+    expect(blocks[1].fields?.map(f => f.text)).toEqual(['*Log group*\nbike4mind-production-thing']);
+    expect(blocks[2].text?.text).toBe(
+      '*First frame*\n`at handler (/var/task/apps/workers/src/events/thing.js:12:30)`\n```at process.processTicksAndRejections (node:internal/process/task_queues:104:5)```'
+    );
+    expect(blocks[3].type).toBe('context');
   });
 
   it('shows the grouped count and duration', () => {
@@ -137,6 +173,24 @@ describe('splitErrorDetail', () => {
 
   it('keeps the first line when the tail is not JSON', () => {
     expect(splitErrorDetail('Weird {not json\nline two')).toEqual({ headline: 'Weird {not json' });
+  });
+});
+
+describe('errorTitle', () => {
+  it('appends the error name and message when the headline lacks them', () => {
+    expect(errorTitle('Boom', { name: 'TypeError', message: 'bad' })).toBe('Boom: TypeError: bad');
+  });
+
+  it('does not repeat a message the headline already carries', () => {
+    expect(errorTitle('Boom: bad', { message: 'bad' })).toBe('Boom: bad');
+  });
+
+  it('does not double a name the message already starts with', () => {
+    expect(errorTitle('', { name: 'TypeError', message: 'TypeError: bad' })).toBe('TypeError: bad');
+  });
+
+  it('falls back to Error when nothing is known', () => {
+    expect(errorTitle('', undefined)).toBe('Error');
   });
 });
 

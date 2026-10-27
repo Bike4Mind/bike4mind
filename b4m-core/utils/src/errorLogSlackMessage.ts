@@ -55,22 +55,38 @@ interface ErrorDetail {
   stack?: string;
 }
 
+/** The Node runtime prefixes unhandled-error lines with "<ts>\t<requestId>\t<LEVEL>\t". */
+const RUNTIME_PREFIX = /^\S+\t\S+\t[A-Z]+\t/;
+
 /**
- * Splits a log message of the form "<headline> {json}" that the logger produces when an Error is
- * appended to the message. Returns the headline and whatever structured detail parsed.
+ * Splits a log message of the form "<headline> {json}": the logger's "message {error}" lines and
+ * the runtime's "Invoke Error {errorType, errorMessage, stack[]}" lines. Returns the headline and
+ * whatever structured detail parsed.
  */
 export function splitErrorDetail(message: string): { headline: string; detail?: ErrorDetail } {
-  const trimmed = message.trim();
+  const trimmed = message.trim().replace(RUNTIME_PREFIX, '');
   const brace = trimmed.indexOf('{');
   if (brace > 0) {
     try {
       const parsed: unknown = JSON.parse(trimmed.slice(brace));
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         const detail = parsed as Record<string, unknown>;
-        const pick = (key: string) => (typeof detail[key] === 'string' ? (detail[key] as string) : undefined);
+        const pick = (...keys: string[]) => {
+          for (const key of keys) {
+            const value = detail[key];
+            if (typeof value === 'string') return value;
+            if (Array.isArray(value) && value.every(line => typeof line === 'string')) return value.join('\n');
+          }
+          return undefined;
+        };
         return {
           headline: trimmed.slice(0, brace).trim(),
-          detail: { code: pick('code'), name: pick('name'), message: pick('message'), stack: pick('stack') },
+          detail: {
+            code: pick('code'),
+            name: pick('name', 'errorType'),
+            message: pick('message', 'errorMessage'),
+            stack: pick('stack'),
+          },
         };
       }
     } catch {
@@ -78,6 +94,18 @@ export function splitErrorDetail(message: string): { headline: string; detail?: 
     }
   }
   return { headline: trimmed.split('\n')[0] };
+}
+
+/** Headline plus the error's own "Name: message" when the headline does not already carry it. */
+export function errorTitle(headline: string, detail?: ErrorDetail): string {
+  const described = detail?.message
+    ? detail.name && !detail.message.startsWith(detail.name)
+      ? `${detail.name}: ${detail.message}`
+      : detail.message
+    : undefined;
+  if (!described) return headline || 'Error';
+  if (!headline || headline.includes(detail?.message ?? '')) return headline || described;
+  return `${headline}: ${described}`;
 }
 
 /** Stack frames after the "Name: message" line, trimmed and capped. */
@@ -93,7 +121,7 @@ export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWe
   const severity = input.severity.toLowerCase();
   const style = SEVERITY_STYLE[severity] ?? SEVERITY_STYLE.error;
   const { headline, detail } = splitErrorDetail(input.message);
-  const title = clip(headline || detail?.message || 'Error', HEADLINE_MAX);
+  const title = clip(errorTitle(headline, detail), HEADLINE_MAX);
   const route = [input.metadata.method, input.metadata.path].filter(Boolean).join(' ');
   const headerLine = `${style.emoji} *${severity.toUpperCase()} on ${escape(input.stage)}*${route ? `  |  ${escape(route)}` : ''}`;
 
