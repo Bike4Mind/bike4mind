@@ -160,7 +160,7 @@ export const REF_ISSUES: Record<OllamaRefIssue, string> = {
 };
 
 // `ambiguous` builds can still pull: verifyOllamaRef asks the registry which file the tag serves.
-const UNPULLABLE: ReadonlySet<OllamaRefIssue> = new Set([
+export const UNPULLABLE: ReadonlySet<OllamaRefIssue> = new Set([
   'split',
   'incomplete',
   'no-quant-label',
@@ -315,10 +315,7 @@ export async function listInstalled(
   signal: AbortSignal
 ): Promise<InstalledRow[]> {
   const [models, loaded] = await abortable(
-    Promise.all([
-      runtime.list(),
-      runtime.capabilities.reportsLoaded ? runtime.loaded().catch(() => []) : Promise.resolve([]),
-    ]),
+    Promise.all([runtime.list(), runtime.capabilities.reportsLoaded ? runtime.loaded() : Promise.resolve([])]),
     signal
   );
   const loadedNames = new Set(loaded.map(model => model.name));
@@ -327,6 +324,13 @@ export async function listInstalled(
     loaded: loadedNames.has(model.name),
     default: model.name === defaultModel,
   }));
+}
+
+export function normalizeModelName(name: string): string {
+  const withoutLibrary = name.replace(/^library\//i, '');
+  return withoutLibrary.lastIndexOf(':') > withoutLibrary.lastIndexOf('/')
+    ? withoutLibrary
+    : `${withoutLibrary}:latest`;
 }
 
 export function requireRemovable(target: RuntimeTarget): void {

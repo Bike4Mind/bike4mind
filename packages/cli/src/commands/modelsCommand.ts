@@ -18,6 +18,7 @@ import {
   NOT_RECOMMENDED_LABEL,
   NO_LICENSE,
   REF_ISSUES,
+  UNPULLABLE,
   abortable,
   clean,
   formatBytes,
@@ -26,6 +27,7 @@ import {
   hubAccessMessage,
   licenseFor,
   listInstalled,
+  normalizeModelName,
   pickBuild,
   planPull,
   rankSearchHits,
@@ -246,7 +248,8 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
       deps.log(`  ${clean(projector.path)}  ${clean(projector.quant) || '-'}  ${formatBytes(projector.sizeBytes)}`);
     }
   }
-  const suggested = pickBuild(detail.builds, null) ?? detail.builds.find(build => build.ollamaRef);
+  const pullable = detail.builds.filter(build => !build.ollamaRefIssue || !UNPULLABLE.has(build.ollamaRefIssue));
+  const suggested = pickBuild(pullable, null) ?? pullable.find(build => build.ollamaRef);
   if (suggested?.quant) {
     deps.log('');
     deps.log(`Pull one with: b4m models pull ${id}:${clean(suggested.quant)}`);
@@ -388,13 +391,6 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
     deps.log('It was your default model; pick another with: b4m models use <name>');
   }
   return 0;
-}
-
-function normalizeModelName(name: string): string {
-  const withoutLibrary = name.replace(/^library\//i, '');
-  return withoutLibrary.lastIndexOf(':') > withoutLibrary.lastIndexOf('/')
-    ? withoutLibrary
-    : `${withoutLibrary}:latest`;
 }
 
 export async function useModel(name: string, deps: ModelsDeps): Promise<number> {

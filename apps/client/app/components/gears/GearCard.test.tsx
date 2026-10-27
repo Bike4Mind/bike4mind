@@ -54,4 +54,33 @@ describe('GearCard', () => {
     expect(onClaim).toHaveBeenCalledTimes(1);
     expect(onActivate).not.toHaveBeenCalled();
   });
+
+  it('shows the email-verification message for an unverified pending gear', () => {
+    const pending = { ...gear, claimable: undefined, rewardPending: true, pendingReason: 'unverified' } as GearStatus;
+    render(<GearCard gear={pending} ctaLabel="Learn more" onActivate={onActivate} onClaim={onClaim} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByTestId('gear-pending-note-projects')).toHaveTextContent('Verify your email');
+  });
+
+  it('shows the account-age message for a too-new pending gear', () => {
+    const pending = { ...gear, claimable: undefined, rewardPending: true, pendingReason: 'too_new' } as GearStatus;
+    render(<GearCard gear={pending} ctaLabel="Learn more" onActivate={onActivate} onClaim={onClaim} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByTestId('gear-pending-note-projects')).toHaveTextContent('7 days old');
+  });
+
+  it('shows the artifact-view message for a reward_check pending gear', () => {
+    const pending = {
+      ...gear,
+      claimable: undefined,
+      rewardPending: true,
+      pendingReason: 'reward_check',
+    } as GearStatus;
+    render(<GearCard gear={pending} ctaLabel="Learn more" onActivate={onActivate} onClaim={onClaim} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByTestId('gear-pending-note-projects')).toHaveTextContent('artifact link');
+  });
 });

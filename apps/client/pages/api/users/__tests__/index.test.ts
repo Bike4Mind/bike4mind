@@ -49,6 +49,7 @@ vi.mock('@server/users/sharedWorkspaceUserIds', () => ({
   findSharedWorkspaceUserIds: vi.fn().mockResolvedValue(new Set(['u1'])),
 }));
 vi.mock('@server/users/pendingProjectInviteeIds', () => ({ findPendingProjectInviteeIds: vi.fn() }));
+vi.mock('@server/users/signupAnomaly', () => ({ getDomainGroups: vi.fn(), SIGNUP_SCAN_LIMIT: 5000 }));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 vi.mock('@bike4mind/utils/escapeRegex', () => ({ escapeRegex: (s: string) => s }));
 
@@ -64,6 +65,23 @@ function mocks(user: unknown, query: Record<string, unknown>) {
 }
 
 describe('GET /api/users - publicView enumeration guards', () => {
+  it.each([{ groupBy: 'emailDomain' }, { recentSignups: 'hour' }])(
+    'restricts signup review to admins: %j',
+    async query => {
+      const { req, res } = mocks({ id: 'u1', isAdmin: false }, { ...query, publicView: 'true', search: 'abc' });
+      await mockRefs.getHandler!(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    }
+  );
+
+  it('places the recent signup range before organization joins', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { recentSignups: 'hour' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(mockRefs.pipeline[0])).toContain('createdAt');
+    expect(mockRefs.pipeline[0]).toHaveProperty('$match');
+  });
+
   beforeEach(() => {
     mockRefs.facet = undefined;
     mockRefs.pipeline = undefined;

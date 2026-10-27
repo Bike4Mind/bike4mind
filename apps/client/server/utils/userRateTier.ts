@@ -8,7 +8,7 @@ import {
   type ActiveSubscription,
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
-import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
+import { getEntitlingPlanByPriceId, getHighestLadderTier } from '@client/lib/userSubscriptions/utils';
 import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 
@@ -84,13 +84,8 @@ export function hasPaidSubscription(activeSubscriptions: readonly Pick<ActiveSub
 export function ladderRateTier(
   activeSubscriptions: readonly Pick<ActiveSubscription, 'priceId'>[]
 ): Exclude<UserRateTier, 'bypass'> {
-  let highestTier: UserSubscriptionTier | undefined;
-  for (const subscription of activeSubscriptions) {
-    const planTier = getEntitlingPlanByPriceId(subscription.priceId)?.tier;
-    if (planTier !== undefined && (highestTier === undefined || planTier > highestTier)) {
-      highestTier = planTier;
-    }
-  }
+  // Same ladder read as the `plan:paid` entitlement (@server/entitlements), so the two never disagree.
+  const highestTier = getHighestLadderTier(activeSubscriptions);
 
   if (highestTier === UserSubscriptionTier.Pro) return 'pro';
   if (highestTier === UserSubscriptionTier.Basic) return 'basic';

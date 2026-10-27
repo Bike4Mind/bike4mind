@@ -733,6 +733,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   /** Username counterpart of {@link IUserRepository.existsOtherUserWithEmail}. */
   existsOtherUserWithUsername: (username: string, excludeUserId?: string) => Promise<boolean>;
   /**
+   * Whether a live, unbanned, non-system user whose email is on `domain` or a subdomain of it
+   * verified that email no later than `verifiedBefore`. An unindexed suffix scan: call it rarely and cache the answer.
+   */
+  existsVerifiedUserOnEmailDomain: (domain: string, verifiedBefore: Date) => Promise<boolean>;
+  /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
    * group type is revoked and its instances are soft-deleted). Named for the scope so a caller
    * cannot mistake it for a single-user operation.

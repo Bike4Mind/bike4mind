@@ -3,6 +3,12 @@ import { BadRequestError, CreditHolderType } from '@bike4mind/common';
 
 // Isolate the billing routing: stub the LLM layer, settings, and credit math so
 // the test asserts *which pool* is reserved/settled, not token accounting.
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 // Keep the real pure cap helpers (isMemberCreditCapExceeded etc.); only stub the write.
 vi.mock('./creditService', async importOriginal => ({

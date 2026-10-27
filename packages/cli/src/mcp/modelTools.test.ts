@@ -113,6 +113,7 @@ async function setup(
     elicit?: Answer;
     source?: RuntimeTarget['source'];
     registry?: ModelToolsDeps['ollamaRegistry'];
+    defaultModel?: string;
   } = {}
 ) {
   const runtime = fakeRuntime();
@@ -121,7 +122,7 @@ async function setup(
     hub: () => hub,
     ollamaRegistry: options.registry ?? (async () => manifest()),
     resolveRuntime: async () => ({ runtime, source: options.source ?? 'env' }),
-    defaultModel: async () => 'qwen2.5:0.5b',
+    defaultModel: async () => options.defaultModel ?? 'qwen2.5:0.5b',
   };
   const server = new McpServer({ name: 'test', version: '0.0.0' });
   registerModelTools(server, deps);
@@ -170,6 +171,14 @@ describe('model tools', () => {
       expect.objectContaining({ name: 'qwen2.5:0.5b', loaded: true, default: true }),
       expect.objectContaining({ name: 'smollm2:135m', loaded: false, default: false }),
     ]);
+  });
+
+  it('reports a loaded-model lookup failure instead of marking every model unloaded', async () => {
+    const { call, runtime } = await setup();
+    vi.mocked(runtime.loaded).mockRejectedValue(new Error('Ollama /api/ps returned 503'));
+    const result = await call('models_list');
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('Ollama /api/ps returned 503');
   });
 
   it('leaves abliterated and uncensored builds out of search hits by default', async () => {
@@ -456,6 +465,15 @@ describe('model tools', () => {
       const removed = await call('models_remove', { name: 'smollm2:135m' });
       expect(removed.data).toEqual(expect.objectContaining({ status: 'removed', removed: true, wasDefault: false }));
       expect(runtime.remove).toHaveBeenCalledWith('smollm2:135m');
+    });
+
+    it('reports the default model as removed when the saved name is an alias', async () => {
+      const { call } = await setup({
+        defaultModel: 'library/smollm2:135m',
+        elicit: () => ({ action: 'accept', content: { remove: true } }),
+      });
+      const removed = await call('models_remove', { name: 'smollm2:135m' });
+      expect(removed.data).toEqual(expect.objectContaining({ status: 'removed', wasDefault: true }));
     });
 
     it('names a missing model', async () => {

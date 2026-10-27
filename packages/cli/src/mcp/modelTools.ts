@@ -24,6 +24,7 @@ import {
   hiddenAbliteratedMessage,
   hubAccessMessage,
   listInstalled,
+  normalizeModelName,
   planPull,
   rankSearchHits,
   removeInstalled,
@@ -439,7 +440,8 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
         }
 
         await removeInstalled(target, model.name, extra.signal);
-        const wasDefault = (await deps.defaultModel()) === model.name;
+        const defaultModel = await deps.defaultModel();
+        const wasDefault = !!defaultModel && normalizeModelName(defaultModel) === normalizeModelName(model.name);
         return toResult({ status: 'removed', removed: true, ...summary, wasDefault });
       })
   );

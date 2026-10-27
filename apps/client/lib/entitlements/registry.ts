@@ -32,6 +32,7 @@ import {
   MAX_DATA_LAKE_SLUG_LENGTH,
   isOAuthSourceTag,
   PENDING_FREE_CREDITS_TAG,
+  PAID_PLAN_ENTITLEMENT_KEY,
 } from '@bike4mind/common';
 import type { PremiumEntitlementGrants } from '@client/app/premiumContract';
 import { premiumEntitlementGrants } from '@client/app/premium-generated/premiumEntitlementGrants.generated';
@@ -351,7 +352,8 @@ export const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 /**
  * Keys and ids a contribution may never name: `base` is held by every user, `datalake:` and
  * `embed:` keys need a literal owner grant, and `source:` tags are self-assertable OAuth
- * attribution. `customer` and `pending-free-credits` are stamped on accounts by core. Must stay in sync with the codegen check.
+ * attribution. `customer` and `pending-free-credits` are stamped on accounts by core, and `plan:paid` is
+ * derived from the subscription ladder only. Must stay in sync with the codegen check.
  */
 export function isReservedContributionKey(key: string): boolean {
   return (
@@ -360,7 +362,8 @@ export function isReservedContributionKey(key: string): boolean {
     key.startsWith('embed:') ||
     isOAuthSourceTag(key) ||
     key === 'customer' ||
-    key === PENDING_FREE_CREDITS_TAG
+    key === PENDING_FREE_CREDITS_TAG ||
+    key === PAID_PLAN_ENTITLEMENT_KEY
   );
 }
 
