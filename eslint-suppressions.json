@@ -514,61 +514,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/projects/[id]/files.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 3
-    }
-  },
-  "apps/client/pages/api/projects/[id]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/projects/[id]/members.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/projects/[id]/sessions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/projects/[id]/systemPrompts/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/projects/[id]/systemPrompts/toggle.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/projects/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/projects/removeNonExistintFiles.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/prompts/[id]/update.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/prompts/get-by-name.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/prompts/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 6
-    }
-  },
   "apps/client/pages/api/reg-invites/create.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
