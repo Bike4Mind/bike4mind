@@ -144,7 +144,7 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer
 
 /**
  * Compares a verified candidate with the verified live list. Lower or equal-but-different is `behind-live`, which the
- * workflow reports as a sync lag. Refused: a step over MAX_SEQUENCE_STEP, a new revocation without a recovery
+ * workflow reports as a sync lag. Refused: a step over MAX_SEQUENCE_STEP, revocations without a recovery
  * signature, a rewritten changelog, a dropped revocation or an earlier `updatedAt`.
  */
 export function planPublish(candidate: CuratedCandidate, live: CuratedCandidate | null): PublishPlan {
@@ -163,9 +163,12 @@ export function planPublish(candidate: CuratedCandidate, live: CuratedCandidate 
       kind: 'refused',
       reason: `sequence ${next.sequence} is more than ${MAX_SEQUENCE_STEP} above live sequence ${liveSequence}`,
     };
-  const added = next.revokedKeyIds.filter(id => !live?.catalog.revokedKeyIds.includes(id));
-  if (added.length > 0 && !candidate.signers.some(key => key.role === 'recovery'))
-    return { kind: 'refused', reason: `revokedKeyIds adds ${added.join(', ')} without a recovery-key signature` };
+  // Every list carries the whole revoked set under a recovery signature, so any later list can rebuild a lost one.
+  if (next.revokedKeyIds.length > 0 && !candidate.signers.some(key => key.role === 'recovery'))
+    return {
+      kind: 'refused',
+      reason: `revokedKeyIds names ${next.revokedKeyIds.join(', ')}, so a recovery key must co-sign the list`,
+    };
   if (!live) return { kind: 'first-publish' };
   const current = live.catalog;
   if (Date.parse(next.updatedAt) < Date.parse(current.updatedAt))

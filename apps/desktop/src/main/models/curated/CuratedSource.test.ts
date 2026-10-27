@@ -341,6 +341,22 @@ describe('CuratedSource', () => {
     logged(/\(timeout\)/);
   });
 
+  it('rebuilds a lost revoked set from any later list a recovery key co-signed', async () => {
+    const second = signer('signing');
+    const keys = [signing.key, second.key, recovery.key];
+    const restating = listText(4, list => (list.revokedKeyIds = [second.key.keyId]));
+    server.publish(4, restating, sigText(restating, [signing, recovery], 4));
+    const s = source({ keys });
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ origin: 'updated', sequence: 4 });
+    expect(JSON.parse(await readFile(join(dir, 'revoked-keys.json'), 'utf8'))).toEqual([second.key.keyId]);
+
+    const fromSecond = listText(5);
+    server.publish(5, fromSecond, sigText(fromSecond, [second], 5));
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ sequence: 4, check: 'failed' });
+  });
+
   it('honors a revocation only from a recovery key, and keeps it after a restart', async () => {
     const fromSigning = listText(2, list => (list.revokedKeyIds = [recovery.key.keyId]));
     server.publish(2, fromSigning, sigText(fromSigning, [signing], 2));
