@@ -93,6 +93,16 @@ describe('useModelCatalog in local mode', () => {
     expect(catalog.runtime?.reachable).toBe(true);
   });
 
+  it('leaves the runtime unknown and rereads nothing when status rejects', async () => {
+    getStatus.mockRejectedValue(new Error('ipc down'));
+    await mount();
+    expect(catalog.runtime).toBeNull();
+    expect(listModels).toHaveBeenCalledTimes(1);
+    await tick();
+    expect(catalog.runtime).toBeNull();
+    expect(listModels).toHaveBeenCalledTimes(1);
+  });
+
   it('notices Ollama stopping while models are listed', async () => {
     getStatus.mockResolvedValue(status(true));
     listModels.mockResolvedValue({ models: [model] });
