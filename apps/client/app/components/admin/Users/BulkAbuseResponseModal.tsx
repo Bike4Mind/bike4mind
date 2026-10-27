@@ -1,5 +1,4 @@
 import {
-  isValidAdminActionReason,
   MAX_BULK_ABUSE_BATCH,
   normalizeEmailDomain,
   type BulkAbuseAction,
@@ -10,7 +9,14 @@ import {
   type BulkAbusePreviewRequest,
   type BulkAbuseTarget,
 } from '@bike4mind/common';
-import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
 import { useBulkAbuseExecute, useBulkAbusePreview } from '@client/app/hooks/data/adminBulkAbuse';
 import { getErrorMessage } from '@client/app/utils/error';
 import {
@@ -80,7 +86,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
   // Domain continuation cursor; kept across action edits so "Preview again" stays on the same batch.
   const [afterUserId, setAfterUserId] = useState<string | undefined>();
   const [actions, setActions] = useState<BulkAbuseActions>(ALL_ACTIONS);
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const [stage, setStage] = useState<Stage>({ kind: 'edit' });
   const previewMutation = useBulkAbusePreview();
   const executeMutation = useBulkAbuseExecute();
@@ -121,7 +127,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
     if (stage.kind !== 'previewed') return;
     const { request, preview } = stage;
     executeMutation.mutate(
-      { ...request, previewToken: preview.previewToken, reason },
+      { ...request, previewToken: preview.previewToken, reason: composeAdminReason(reason) },
       {
         onSuccess: result => {
           setStage({ kind: 'executed', request, result });
@@ -150,7 +156,7 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
   // A batch of only skipped users can still be applied when it carries the domain block.
   const hasWork =
     stage.kind === 'previewed' && (stage.preview.includedCount > 0 || stage.preview.blocksDomain !== null);
-  const canExecute = hasWork && isValidAdminActionReason(reason) && !busy;
+  const canExecute = hasWork && isAdminReasonComplete(reason) && !busy;
   const error = previewMutation.error ?? executeMutation.error;
   // Closing mid-run would unmount before onSuccess, losing the results and the selection reset.
   const handleClose = () => {
@@ -254,7 +260,14 @@ const BulkAbuseResponseModal: React.FC<BulkAbuseResponseModalProps> = ({ selecte
         {stage.kind === 'previewed' && <PreviewSummary preview={stage.preview} />}
         {stage.kind === 'executed' && <ExecuteSummary result={stage.result} />}
 
-        {hasWork && <AdminReasonField value={reason} onChange={setReason} data-testid="bulk-abuse-reason-input" />}
+        {hasWork && (
+          <ReasonPicker
+            presets={ADMIN_REASON_PRESETS.bulkAbuseResponse}
+            value={reason}
+            onChange={setReason}
+            data-testid="bulk-abuse-reason-input"
+          />
+        )}
 
         <Stack direction="row" spacing={1} justifyContent="flex-end">
           {stage.kind !== 'edit' && stage.request.target.kind === 'domain' && nextBatchCursor && (

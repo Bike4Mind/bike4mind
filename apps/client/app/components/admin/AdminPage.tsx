@@ -44,6 +44,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { canRenderAdminTab } from './adminTabRenderability';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
+import { UndoToastProvider } from './shared/UndoToast';
 
 export { AdminTab } from './adminSidebarConfig';
 
@@ -159,7 +160,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   }, [currentUser?.isAdmin]);
 
   return (
-    <>
+    <UndoToastProvider>
       <Tabs
         aria-label="Admin tabs"
         value={activeTab}
@@ -319,7 +320,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           />
         </Box>
       </NotebookFilepondProvider>
-    </>
+    </UndoToastProvider>
   );
 };
 
