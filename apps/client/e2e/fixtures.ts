@@ -78,6 +78,16 @@ function specAuthForProject(projectName: string): SpecAuth | null {
   }
 }
 
+/** Every seeded user id known at fixture time (core + spec users); empty before core setup runs. */
+function knownUserIds(): string[] {
+  try {
+    const { admin, manager, specUsers } = getTestUsers();
+    return [admin, manager, ...Object.values(specUsers)].filter(Boolean).map(u => u.userId);
+  } catch {
+    return [];
+  }
+}
+
 /** Fixture-page setup: modals stubbed, cookie consent pre-decided, in-app gotos authenticated as
  *  `getAuth()` through /auth/success. */
 async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promise<void> {
@@ -100,6 +110,25 @@ async function prepareAppPage(page: Page, getAuth: () => SpecAuth | null): Promi
       // Opaque origins (about:blank) have no localStorage.
     }
   });
+
+  // The gears discovery modal opens ~5s after load for any user with an unused gear (every fresh
+  // e2e user), landing mid-test behind a click-blocking backdrop. Pre-dismiss it per known user.
+  // Key and shape must stay in sync with storageKey/DiscoveryState in lib/gears/discovery.ts.
+  // Users minted mid-test aren't known here; BasePage.dismissModals() covers them.
+  const authUserId = getAuth()?.userId;
+  const userIds = [...new Set([...knownUserIds(), ...(authUserId ? [authUserId] : [])])];
+  await page.addInitScript(ids => {
+    try {
+      for (const id of ids) {
+        const key = `gears_discovery_${id}`;
+        if (!localStorage.getItem(key)) {
+          localStorage.setItem(key, JSON.stringify({ lastShownAt: 0, dismissed: true, rotation: 0 }));
+        }
+      }
+    } catch {
+      // Opaque origins (about:blank) have no localStorage.
+    }
+  }, userIds);
 
   // Authenticated projects: the access token is memory-only and dies on every full load, so a raw
   // goto to a protected route cold-loads unauthenticated and the router guard bounces to /login.
