@@ -360,3 +360,5 @@ or database failures exit unsuccessfully and log `[signup-cohort-sweep] failed`.
 ## Curated model list (Desktop)
 
 `curated:keygen`, `curated:sign`, `curated:publish` and `curated:check-build` manage the signed list in `catalog/model-hub/curated-v2.json` (see each script's header for usage). `curated:publish` trusts the keyring on the canonical repo's `main`, while Desktop trusts the keyring shipped in its own build, so a new key must ship in a Desktop release before lists signed only by it reach users.
+
+If the live list no longer verifies (corrupt bytes, or its key was dropped from `keys.json`), `curated:publish` refuses everything except a recovery-signed list: co-sign the replacement with the recovery key and give it a sequence above the one the live `latest.json.sig` names, which the script prints as a warning otherwise.

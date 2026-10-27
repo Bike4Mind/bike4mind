@@ -11,6 +11,7 @@ const signing = testSigner('signing');
 const recovery = testSigner('recovery');
 const keyring = [signing.key, recovery.key];
 const P = 'model-hub/curated-v2/';
+const bytes = (text: string) => new TextEncoder().encode(text);
 
 class FakeStore implements PublishStore {
   objects = new Map<string, { bytes: Uint8Array; etag: string }>();
@@ -202,7 +203,37 @@ describe('publishCandidate', () => {
     store.objects.delete(`${P}latest.json`);
     store.objects.delete(`${P}5.json`);
     expect(await publishCandidate(signed(6), deps())).toBe(EXIT.failed);
-    expect(lines.at(-1)).toBe(`${P}latest.json is missing and ${P}latest.json.sig does not lead to a verified list`);
+    expect(lines.at(-1)).toMatch(`${P}latest.json is missing and ${P}latest.json.sig does not lead to a verified list`);
+  });
+
+  it('lets only a recovery-signed list replace a live list that does not verify', async () => {
+    const recovered = (sequence: number) => {
+      const manifest = catalogBytes(sequence);
+      const checked = verifyCandidate(manifest, sigBytes(manifest, [recovery], sequence), keyring);
+      if (!checked.ok) throw new Error(checked.error);
+      return checked.value;
+    };
+    store.seed(`${P}latest.json`, bytes('junk'));
+    store.seed(`${P}latest.json.sig`, bytes('junk'));
+    const jsonEtag = store.objects.get(`${P}latest.json`)?.etag;
+    expect(await publishCandidate(signed(4), deps())).toBe(EXIT.failed);
+    expect(lines.at(-1)).toMatch(/does not verify .*; only a recovery-signed list can replace it$/);
+    expect(await publishCandidate(recovered(4), deps())).toBe(EXIT.ok);
+    expect(store.puts.at(-1)).toMatchObject({ key: `${P}latest.json`, condition: { ifMatch: jsonEtag } });
+    expect(store.objects.get(`${P}latest.json`)?.bytes).toEqual(recovered(4).manifest);
+
+    store = new FakeStore();
+    lines = [];
+    const removed = testSigner('signing');
+    const orphan = catalogBytes(7);
+    const orphanSig = sigBytes(orphan, [removed], 7);
+    for (const key of ['7.json', 'latest.json']) store.seed(`${P}${key}`, orphan);
+    for (const key of ['7.json.sig', 'latest.json.sig']) store.seed(`${P}${key}`, orphanSig);
+    expect(await publishCandidate(signed(8), deps())).toBe(EXIT.failed);
+    expect(await publishCandidate(recovered(5), deps())).toBe(EXIT.ok);
+    expect(lines).toContain(
+      `warning: ${P}latest.json.sig names sequence 7; Desktops that accepted that list keep it unless this list is above it or revokes its signers`
+    );
   });
 
   it('writes nothing on a dry run', async () => {

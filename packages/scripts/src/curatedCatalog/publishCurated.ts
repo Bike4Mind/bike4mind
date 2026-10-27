@@ -13,6 +13,7 @@ import {
   readMainKeyring,
   verifyCandidate,
   type CuratedCandidate,
+  type PublishPlan,
 } from './catalogChecks';
 import { cliPath, isEntry } from './cli';
 import {
@@ -44,20 +45,26 @@ interface Live {
   jsonEtag: string | null;
   /** latest.json.sig is new but latest.json is not: a run stopped between the two writes. */
   midPublish: boolean;
+  /** Why the live objects are not a verified list; only a recovery-signed list may replace them. */
+  unverifiable: string | null;
+  /** The sequence an unverifiable latest.json.sig names, unverified. */
+  claimed: number | null;
 }
 
 /** Live state from the bucket; a pair caught mid-publish or a lone sig is read through the sig's hint, as clients do. */
-async function readLive(deps: PublishDeps): Promise<Live | string> {
+async function readLive(deps: PublishDeps): Promise<Live> {
   const [json, sig] = await Promise.all([deps.store.get(LATEST), deps.store.get(LATEST_SIG)]);
-  if (!json && !sig) return { list: null, sigEtag: null, jsonEtag: null, midPublish: false };
-  if (!sig) return `${LATEST} is live without ${LATEST_SIG}; fix the bucket by hand`;
+  const hint = sig ? (parseCuratedSignatureFile(sig.bytes)?.sequence ?? null) : null;
+  const found = { sigEtag: sig?.etag ?? null, jsonEtag: json?.etag ?? null, midPublish: false, claimed: null };
+  const unverifiable = (reason: string): Live => ({ ...found, list: null, unverifiable: reason, claimed: hint });
+  if (!json && !sig) return { ...found, list: null, unverifiable: null };
+  if (!sig) return unverifiable(`${LATEST} is live without ${LATEST_SIG}`);
   let failure = `${LATEST} is missing and ${LATEST_SIG} does not lead to a verified list`;
   if (json) {
     const direct = verifyCandidate(json.bytes, sig.bytes, deps.keyring);
-    if (direct.ok) return { list: direct.value, sigEtag: sig.etag, jsonEtag: json.etag, midPublish: false };
+    if (direct.ok) return { ...found, list: direct.value, unverifiable: null };
     failure = `the live list does not verify (${direct.error})`;
   }
-  const hint = parseCuratedSignatureFile(sig.bytes)?.sequence;
   if (hint) {
     const [pairJson, pairSig] = await Promise.all([
       deps.store.get(`${CURATED_PREFIX}${hint}.json`),
@@ -66,10 +73,10 @@ async function readLive(deps: PublishDeps): Promise<Live | string> {
     const paired = pairJson && pairSig ? verifyCandidate(pairJson.bytes, pairSig.bytes, deps.keyring) : null;
     if (paired?.ok) {
       deps.log(`live is mid-publish; reading it as ${CURATED_PREFIX}${hint}.json`);
-      return { list: paired.value, sigEtag: sig.etag, jsonEtag: json?.etag ?? null, midPublish: true };
+      return { ...found, list: paired.value, midPublish: true, unverifiable: null };
     }
   }
-  return failure;
+  return unverifiable(failure);
 }
 
 const same = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer.from(b));
@@ -94,8 +101,8 @@ export async function publishCandidate(candidate: CuratedCandidate, deps: Publis
   const { store, log } = deps;
   const sequence = candidate.catalog.sequence;
   const live = await readLive(deps);
-  if (typeof live === 'string') {
-    log(live);
+  if (live.unverifiable && !isRecoverySigned(candidate)) {
+    log(`${live.unverifiable}; only a recovery-signed list can replace it`);
     return EXIT.failed;
   }
   // A live list without a recovery signature may come from a leaked key, so its revocations bind nothing.
@@ -108,7 +115,9 @@ export async function publishCandidate(candidate: CuratedCandidate, deps: Publis
     }
   }
 
-  const plan = planPublish(candidate, live.list);
+  const plan: PublishPlan | { kind: 'replace' } = live.unverifiable
+    ? { kind: 'replace' }
+    : planPublish(candidate, live.list);
   switch (plan.kind) {
     case 'already-live':
       if (!live.midPublish) {
@@ -127,7 +136,13 @@ export async function publishCandidate(candidate: CuratedCandidate, deps: Publis
   const order = [versioned, `${versioned}.sig`, LATEST_SIG, LATEST];
   if (plan.kind === 'first-publish') log(`plan: first publish of sequence ${sequence}`);
   else if (plan.kind === 'already-live') log(`plan: finish the interrupted publish of sequence ${sequence}`);
-  else if (plan.kind === 'recover')
+  else if (plan.kind === 'replace') {
+    log(`${live.unverifiable}; plan: replace it with recovery-signed sequence ${sequence}`);
+    if (live.claimed !== null && live.claimed >= sequence)
+      log(
+        `warning: ${LATEST_SIG} names sequence ${live.claimed}; Desktops that accepted that list keep it unless this list is above it or revokes its signers`
+      );
+  } else if (plan.kind === 'recover')
     log(
       `plan: sequence ${plan.liveSequence} -> ${sequence}, ${sequence < plan.liveSequence ? 'below live: ' : ''}it revokes ${plan.revokes.join(', ')}`
     );
