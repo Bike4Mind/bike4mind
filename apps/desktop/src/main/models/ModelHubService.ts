@@ -284,7 +284,7 @@ export class ModelHubService {
     let ref: string | null;
     try {
       // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
-      const detail = await this.#deps.hub.getModel(request.repo);
+      const detail = await this.#deps.hub.getModel(request.repo, { refresh: true });
       const build = detail.builds.find((candidate: HubGgufBuild) => candidate.id === request.buildId);
       if (!build) return refuse(hubError('not-found', 'That build is no longer in this repo.'));
       if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)

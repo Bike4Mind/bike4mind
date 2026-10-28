@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import { inspect } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   HubAccessError,
   HubRateLimitError,
@@ -10,7 +10,15 @@ import {
   RuntimeHttpError,
   RuntimeProtocolError,
 } from './errors';
-import { HuggingFaceHub, MAX_VERIFY_TAGS, ggufQuantLabel, hubResolveUrl, type HubModelDetail } from './huggingface';
+import {
+  HUB_CACHE_TTL_MS,
+  HuggingFaceHub,
+  MAX_VERIFY_TAGS,
+  clearHubCache,
+  ggufQuantLabel,
+  hubResolveUrl,
+  type HubModelDetail,
+} from './huggingface';
 import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
 import {
   gatedInfo,
@@ -31,7 +39,10 @@ const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
 
 const servers: FakeServer[] = [];
 
+beforeEach(clearHubCache);
+
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(servers.splice(0).map(server => server.close()));
 });
 
@@ -186,6 +197,94 @@ describe('HuggingFaceHub.search', () => {
       'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
       'bartowski/Qwen2.5-0.5B-Instruct-GGUF',
     ]);
+  });
+});
+
+describe('HuggingFaceHub cache', () => {
+  const repo = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
+
+  it('serves a repeated search and model read from cache for 10 minutes, then asks again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const first = await hub.search({ query: 'qwen' });
+    expect(await hub.search({ query: 'qwen' })).toEqual(first);
+    await hub.getModel(repo);
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(3);
+
+    vi.advanceTimersByTime(HUB_CACHE_TTL_MS - 1);
+    await hub.search({ query: 'qwen' });
+    expect(server.requests).toHaveLength(3);
+    vi.advanceTimersByTime(1);
+    await hub.search({ query: 'qwen' });
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(6);
+  });
+
+  it('keys on the query, cursor and revision, and refresh bypasses the cache', async () => {
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await hub.search({ query: 'a' });
+    await hub.search({ query: 'b' });
+    await hub.search({ query: 'a', cursor: 'next' });
+    expect(server.requests).toHaveLength(3);
+    await hub.search({ query: 'a', refresh: true });
+    await hub.search({ query: 'a' });
+    expect(server.requests).toHaveLength(4);
+    await hub.getModel(repo, { refresh: true });
+    const before = server.requests.length;
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(before);
+  });
+
+  it('never reuses an anonymous result for a token, or one token for another', async () => {
+    const server = await serve({ 'GET /api/models': json(searchPage) });
+    const anonymous = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const one = new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN });
+    const two = new HuggingFaceHub({ endpoint: server.baseUrl, token: `${TOKEN}2` });
+    await anonymous.search();
+    await one.search();
+    await two.search();
+    expect(server.requests).toHaveLength(3);
+    expect(server.requests.map(request => request.headers.authorization)).toEqual([
+      undefined,
+      `Bearer ${TOKEN}`,
+      `Bearer ${TOKEN}2`,
+    ]);
+    await new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).search();
+    await anonymous.search();
+    expect(server.requests).toHaveLength(3);
+  });
+
+  it('does not cache errors', async () => {
+    let calls = 0;
+    const server = await serve({
+      'GET /api/models': (_request, response) => {
+        calls++;
+        if (calls === 1) return reply(response, 500, {}, 'boom');
+        return json(searchPage)(_request, response);
+      },
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await expect(hub.search()).rejects.toBeInstanceOf(RuntimeHttpError);
+    expect((await hub.search()).models.length).toBeGreaterThan(0);
+    expect(calls).toBe(2);
+  });
+
+  it('hands out copies, so a caller that edits a result does not change the next one', async () => {
+    const server = await serve({ 'GET /api/models': json(searchPage) });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const first = await hub.search();
+    const id = first.models[0]?.id;
+    first.models.length = 0;
+    expect((await hub.search()).models[0]?.id).toBe(id);
   });
 });
 
