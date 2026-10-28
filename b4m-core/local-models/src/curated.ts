@@ -133,6 +133,14 @@ export function curatedListing(manifest: HubManifest): CuratedListing[] {
     .sort((a, b) => smallest(a) - smallest(b));
 }
 
+/** The offered entry and build Ollama pulls by `ref`, ignoring case; null when Curated offers none by that ref. */
+export function curatedBuildForRef(manifest: HubManifest, ref: string): { entry: HubEntry; build: HubBuild } | null {
+  const wanted = ref.toLowerCase();
+  for (const { entry, builds } of curatedListing(manifest))
+    for (const build of builds) if (curatedSource(build).ollamaRef.toLowerCase() === wanted) return { entry, build };
+  return null;
+}
+
 export interface CuratedTierPick {
   pick: HubTierPick;
   entry: HubEntry;

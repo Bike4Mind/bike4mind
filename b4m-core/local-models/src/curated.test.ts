@@ -1,6 +1,7 @@
 import type { HardwareProfile, HubEntry, HubManifest } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import {
+  curatedBuildForRef,
   curatedListing,
   curatedOllamaBlocked,
   curatedParamsLabel,
@@ -103,6 +104,26 @@ describe('curatedSource', () => {
       sizeBytes: build.weights[0].sizeBytes + projector,
       ollamaRef: `hf.co/${build.hf?.repo}:${build.quant.label}`,
     });
+  });
+});
+
+describe('curatedBuildForRef', () => {
+  it('finds an offered build by its pull ref, ignoring case', () => {
+    const list = manifest();
+    for (const { entry, builds } of curatedListing(list))
+      for (const build of builds) {
+        const ref = curatedSource(build).ollamaRef;
+        expect(curatedBuildForRef(list, ref.toUpperCase())).toEqual({ entry, build });
+      }
+    expect(curatedBuildForRef(list, 'qwen2.5:0.5b')).toBeNull();
+  });
+
+  it('finds nothing for an entry Curated does not offer', () => {
+    const list = manifest();
+    const entry = entryOf(list, 'qwen3-5-4b');
+    const ref = curatedSource(entry.builds[0]).ollamaRef;
+    entry.flags.abliterated = true;
+    expect(curatedBuildForRef(list, ref)).toBeNull();
   });
 });
 

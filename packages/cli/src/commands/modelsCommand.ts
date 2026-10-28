@@ -81,7 +81,7 @@ export interface ModelsDeps extends ModelSourceDeps {
   log: (line: string) => void;
   /** Rewrites one terminal line; only used when `isTTY`. */
   progress: { update: (line: string) => void; end: () => void };
-  /** The Curated list bundled with the CLI, the same one Desktop's Curated tab shows. */
+  /** The curated list Desktop uses, bundled with the CLI. */
   curated: () => HubManifest;
   /** This computer's memory, which picks its tier of the Curated list. */
   hardware: () => Promise<HardwareProfile>;
@@ -298,19 +298,34 @@ function tierText(tier: HubTier): string {
   return `${tier.minGiB} GiB+ ${tier.memoryKind === 'discrete' ? 'GPU memory' : 'unified memory'}`;
 }
 
-function curatedTags(entry: HubEntry): string[] {
+function curatedTags(entry: HubEntry, build: HubBuild): string {
   const { rating } = entry.toolUse;
   const tools = !entry.capabilities.tools
     ? 'no tools'
     : rating === 'unrated'
       ? 'tools'
       : `tools: ${TOOL_RATINGS[rating]}`;
+  const minimum = build.runtimeMin?.ollama;
   return [
     entry.capabilities.vision && 'vision',
     entry.capabilities.thinking && 'thinking',
     entry.roles.includes('code') && 'code',
     tools,
-  ].filter((tag): tag is string => Boolean(tag));
+    minimum && `needs Ollama >= ${clean(minimum)}`,
+  ]
+    .filter((tag): tag is string => Boolean(tag))
+    .join(', ');
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '::1', '[::1]']);
+
+function isLoopbackHost(host: string): boolean {
+  try {
+    const { hostname } = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(host) ? host : `http://${host}`);
+    return LOOPBACK_HOSTS.has(hostname.toLowerCase()) || /^127\./.test(hostname);
+  } catch {
+    return false;
+  }
 }
 
 function curatedBuildJson(build: HubBuild) {
@@ -334,6 +349,7 @@ function curatedEntryJson(entry: HubEntry) {
       id: entry.license.id,
       kind: isPermissiveEntry(entry) ? 'permissive' : 'restricted',
       url: entry.license.source,
+      base: { id: entry.license.base.id, permissive: entry.license.base.class === 'permissive' },
     },
     vision: entry.capabilities.vision,
     thinking: entry.capabilities.thinking,
@@ -345,14 +361,21 @@ function curatedEntryJson(entry: HubEntry) {
 
 function licenseCell(entry: HubEntry): string {
   const id = clean(entry.license.id);
-  return isPermissiveEntry(entry) ? id : `restricted: ${id}`;
+  if (isPermissiveEntry(entry)) return id;
+  const { base } = entry.license;
+  return `restricted: ${id}${base.class === 'permissive' ? '' : ` (base: ${clean(base.id)})`}`;
 }
+
+const sizeOfBuild = (build: HubBuild) => curatedSource(build).sizeBytes;
 
 /** Lists the Curated models without contacting any runtime; downloading one is always a separate `pull`. */
 export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
   const manifest = deps.curated();
   const hardware = await abortable(deps.hardware(), deps.signal);
-  const listing = curatedListing(manifest);
+  const listing = curatedListing(manifest).map(({ entry, builds }) => ({
+    entry,
+    builds: [...builds].sort((a, b) => sizeOfBuild(a) - sizeOfBuild(b)),
+  }));
   const { tier, picks } = curatedPicks(manifest, hardware);
 
   if (opts.json) {
@@ -391,7 +414,10 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
     return 0;
   }
   const refOf = (build: HubBuild) => clean(curatedSource(build).ollamaRef);
-  const sizeOf = (build: HubBuild) => formatBytes(curatedSource(build).sizeBytes);
+  const sizeOf = (build: HubBuild) => formatBytes(sizeOfBuild(build));
+  const host = deps.config.ollamaHost;
+  if (host && !isLoopbackHost(host))
+    deps.log(`The picks are for this computer, not the Ollama host at ${clean(host)}.`);
 
   deps.log('');
   if (!tier || picks.length === 0) {
@@ -406,7 +432,7 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
         refOf(build),
         sizeOf(build),
         licenseCell(entry),
-        curatedTags(entry).join(', '),
+        curatedTags(entry, build),
       ]),
     ]);
     for (const line of lines) deps.log(`  ${line}`);
@@ -423,7 +449,7 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
         refOf(build),
         sizeOf(build),
         licenseCell(entry),
-        curatedTags(entry).join(', '),
+        curatedTags(entry, build),
       ])
     ),
   ]);
@@ -434,7 +460,10 @@ export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promis
     deps.log('A restricted license is not a permissive open-source license; pull asks you to accept it first.');
   }
   deps.log('');
-  deps.log(`Pull one with: b4m models pull ${refOf(picks[0]?.build ?? listing[0].builds[0])}`);
+  deps.log(
+    `Pull one with: b4m models pull ${refOf(picks[0]?.build ?? listing[0].builds[0])} ` +
+      '(pull does not check the build against the reviewed one)'
+  );
   return 0;
 }
 
@@ -488,18 +517,19 @@ async function pullWithProgress(target: RuntimeTarget, ref: string, deps: Models
 /** Restricted or undeclared licenses need a yes at the prompt or `--accept-license`. */
 async function acceptLicense(license: LicenseInfo, deps: ModelsDeps, opts: ModelsOptions): Promise<boolean> {
   if (!license.restricted) return true;
-  const declared = license.label !== NO_LICENSE;
+  const declared = license.label !== NO_LICENSE || license.base !== undefined;
   const noun = license.plural ? 'licenses' : 'license';
+  const named = license.base ? `${license.label} and base model ${license.base}` : license.label;
   deps.log('');
   deps.log(
     declared
-      ? `This model is under the ${license.label} ${noun}, ${license.plural ? 'which are not all permissive open-source licenses' : 'which is not a permissive open-source license'}.`
+      ? `This model is under the ${named} ${noun}, ${license.plural ? 'which are not all permissive open-source licenses' : 'which is not a permissive open-source license'}.`
       : 'This model does not declare a license.'
   );
   deps.log(`Read ${declared ? (license.plural ? 'them' : 'it') : 'its page'} before downloading: ${license.link}`);
   if (opts.acceptLicense) return true;
   if (!deps.isTTY) throw new Error('Re-run with --accept-license once you have read and accepted the license.');
-  return deps.confirm(declared ? `Do you accept the ${license.label} ${noun}? [y/N] ` : 'Download it anyway? [y/N] ');
+  return deps.confirm(declared ? `Do you accept the ${named} ${noun}? [y/N] ` : 'Download it anyway? [y/N] ');
 }
 
 export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
@@ -509,7 +539,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
     deps.log(`Model:    ${clean(name)} (Ollama registry)`);
     deps.log(`Digest:   ${shortDigest(manifest.digest)}`);
     deps.log(`Size:     ${formatBytes(manifest.sizeBytes)}`);
-    deps.log(`License:  ${license.label}`);
+    deps.log(`License:  ${license.label}${license.base ? ` (base: ${license.base})` : ''}`);
     deps.log(`Runtime:  ${runtimeLabel(target)}`);
     if (!(await acceptLicense(license, deps, opts))) return 'declined';
     if (!(await confirmDownload(`Download ${formatBytes(manifest.sizeBytes)}? [y/N] `, deps, opts))) return 'declined';
@@ -523,7 +553,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
   deps.log(
     `Size:     ${formatBytes(build.sizeBytes)}${projector > 0 ? ` plus a vision projector of up to ${formatBytes(projector)}` : ''}`
   );
-  deps.log(`License:  ${license.label}`);
+  deps.log(`License:  ${license.label}${license.base ? ` (base: ${license.base})` : ''}`);
   deps.log(`Runtime:  ${runtimeLabel(target)}`);
   if (detail.ollamaNeedsSshKey) {
     deps.log('');

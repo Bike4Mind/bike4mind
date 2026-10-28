@@ -10,9 +10,11 @@ import {
   HuggingFaceHub,
   ModelNotFoundError,
   OllamaRuntime,
+  curatedBuildForRef,
   detectRuntimes,
   isAbliteratedModel,
   isHubRepoId,
+  isPermissiveEntry,
   type DetectedRuntime,
   type HubGgufBuild,
   type HubModelDetail,
@@ -21,6 +23,7 @@ import {
   type LocalRuntime,
   type OllamaRefIssue,
 } from '@bike4mind/local-models';
+import type { HubManifest } from '@bike4mind/common';
 import { withDefaultOllamaPort } from '../utils/ollamaHost.js';
 import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import {
@@ -69,6 +72,8 @@ export interface ModelSourceDeps {
   resolveRuntime: () => Promise<RuntimeTarget>;
   /** Aborted on Ctrl-C. */
   signal: AbortSignal;
+  /** The bundled Curated list; a pull of one of its refs also honors the license the list records for it. */
+  curated?: () => HubManifest;
 }
 
 export type PullTarget = { kind: 'hub'; repo: string; tag: string | null } | { kind: 'ollama'; name: string };
@@ -78,6 +83,8 @@ export interface LicenseInfo {
   link: string;
   restricted: boolean;
   plural?: boolean;
+  /** The base model's license when the Curated list records it as not permissive. */
+  base?: string;
 }
 
 export interface HubPullPlan {
@@ -418,7 +425,24 @@ async function planOllamaPull(name: string, deps: ModelSourceDeps): Promise<Olla
     target,
     name,
     manifest,
-    license: { label: clean(license.title), link: page, restricted: !license.permissive },
+    license: withCuratedLicense(
+      { label: clean(license.title), link: page, restricted: !license.permissive },
+      name,
+      deps
+    ),
+  };
+}
+
+/** A curated ref is restricted when the list records its own or its base model's license as not permissive. */
+function withCuratedLicense<T extends LicenseInfo>(license: T, ref: string, deps: ModelSourceDeps): T {
+  const curated = deps.curated && curatedBuildForRef(deps.curated(), ref);
+  if (!curated) return license;
+  const { entry } = curated;
+  const base = entry.license.base.class === 'permissive' ? undefined : clean(entry.license.base.id);
+  return {
+    ...license,
+    restricted: license.restricted || !isPermissiveEntry(entry),
+    ...(base && { base, plural: true }),
   };
 }
 
@@ -465,7 +489,7 @@ export async function planPull(
     detail,
     build,
     id,
-    license: licenseFor(detail, hub.endpoint),
+    license: withCuratedLicense(licenseFor(detail, hub.endpoint), `hf.co/${detail.id}:${build.quant}`, deps),
     projectorBytes: Math.max(0, ...detail.projectors.map(entry => entry.sizeBytes)),
   };
 }

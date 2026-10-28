@@ -639,12 +639,91 @@ describe('models curated', () => {
 
     const allStart = h.lines.indexOf('All curated models, smallest first:');
     expect(h.lines[allStart + 1]).toMatch(/^ {2}MODEL\s+PARAMS\s+REF\s+SIZE\s+LICENSE\s+TAGS$/);
-    const rows = curatedListing(manifest).flatMap(({ builds }) => builds.map(build => curatedSource(build).ollamaRef));
-    expect(rows.length).toBeGreaterThan(0);
-    rows.forEach((ref, index) => expect(h.lines[allStart + 2 + index]).toContain(ref));
-    expect(h.lines[h.lines.length - 1]).toBe(
-      `Pull one with: b4m models pull ${curatedSource(picks[0].build).ollamaRef}`
+    const rows = curatedListing(manifest).flatMap(({ builds }) =>
+      builds.map(build => curatedSource(build)).sort((a, b) => a.sizeBytes - b.sizeBytes)
     );
+    expect(rows.length).toBeGreaterThan(0);
+    rows.forEach(({ ollamaRef }, index) => expect(h.lines[allStart + 2 + index]).toContain(ollamaRef));
+    expect(h.lines[h.lines.length - 1]).toBe(
+      `Pull one with: b4m models pull ${curatedSource(picks[0].build).ollamaRef} ` +
+        '(pull does not check the build against the reviewed one)'
+    );
+  });
+
+  it('lists the builds of one entry smallest first, with the Ollama each needs', async () => {
+    const manifest = bundled();
+    const { entry, builds } = curatedListing(manifest).find(listed => listed.builds.length > 1) ?? {};
+    if (!entry || !builds) throw new Error('expected an entry with several builds');
+    builds[0].runtimeMin = { ollama: '9.8.7' };
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    const allStart = h.lines.indexOf('All curated models, smallest first:');
+    const rows = h.lines.slice(allStart).filter(line => line.startsWith(`  ${entry.name} `));
+    const expected = [...builds].sort((a, b) => curatedSource(a).sizeBytes - curatedSource(b).sizeBytes);
+    expect(rows.map(row => expected.findIndex(build => row.includes(curatedSource(build).ollamaRef)))).toEqual(
+      expected.map((_, index) => index)
+    );
+    const row = rows.find(line => line.includes(curatedSource(builds[0]).ollamaRef));
+    expect(row).toMatch(/, needs Ollama >= 9\.8\.7$/);
+  });
+
+  it('notes that the picks are for this computer when the saved Ollama host is elsewhere', async () => {
+    const remote = harness({ config: { ollamaHost: 'http://192.0.2.10:11434' } });
+    await runModelsCommand('curated', { _: [] }, remote.deps);
+    expect(remote.lines).toContain('The picks are for this computer, not the Ollama host at http://192.0.2.10:11434.');
+    for (const host of ['http://127.0.0.1:11434', 'localhost:11434', 'http://[::1]:11434']) {
+      const local = harness({ config: { ollamaHost: host } });
+      await runModelsCommand('curated', { _: [] }, local.deps);
+      expect(local.lines.some(line => line.startsWith('The picks are for this computer'))).toBe(false);
+    }
+  });
+
+  it('flags a restricted base model license in the listing and the JSON', async () => {
+    const manifest = bundled();
+    const [entry] = manifest.entries;
+    entry.license.base.class = 'restricted-commercial';
+    entry.license.base.id = 'llama3.1';
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    expect(h.lines.join('\n')).toMatch(
+      new RegExp(`${escape(entry.name)}.*restricted: ${escape(entry.license.id)} \\(base: llama3\\.1\\)`)
+    );
+    expect(h.lines).toContain(
+      'A restricted license is not a permissive open-source license; pull asks you to accept it first.'
+    );
+
+    const json = harness();
+    await runModelsCommand('curated', { _: [], 'output-format': 'json' }, { ...json.deps, curated: () => manifest });
+    const listed = JSON.parse(json.lines.join('\n')).entries.find((item: { id: string }) => item.id === entry.id);
+    expect(listed.license).toMatchObject({
+      id: entry.license.id,
+      kind: 'restricted',
+      base: { id: 'llama3.1', permissive: false },
+    });
+  });
+
+  it('asks to accept the license before pulling a curated ref whose base license is restricted', async () => {
+    const manifest = bundled();
+    const [entry] = manifest.entries;
+    const ref = curatedSource(entry.builds[0]).ollamaRef;
+    entry.license.base.class = 'restricted-commercial';
+    entry.license.base.id = 'llama3.1';
+
+    const scripted = harness({ isTTY: false, curated: () => manifest });
+    await expect(runModelsCommand('pull', { _: [], ref, yes: true }, scripted.deps)).rejects.toThrow(
+      /--accept-license/
+    );
+    expect(scripted.lines).toContain('License:  Apache-2.0 (base: llama3.1)');
+    expect(scripted.runtime.pull).not.toHaveBeenCalled();
+
+    const asked = harness({ answers: [true, true], curated: () => manifest });
+    expect(await runModelsCommand('pull', { _: [], ref }, asked.deps)).toBe(0);
+    expect(asked.questions[0]).toBe('Do you accept the Apache-2.0 and base model llama3.1 licenses? [y/N] ');
+    expect(asked.runtime.pull).toHaveBeenCalledWith(ref, expect.anything());
+
+    const permissive = harness({ answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref }, permissive.deps)).toBe(0);
+    expect(permissive.questions).toEqual([expect.stringMatching(/^Download .*\? \[y\/N\] $/)]);
   });
 
   it('tags tool support from the catalog', async () => {
@@ -656,8 +735,8 @@ describe('models curated', () => {
     const { h } = offline();
     await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
     const rowOf = (name: string) => h.lines.filter(line => line.includes(name)).pop();
-    expect(rowOf(first.name)).toMatch(/tools: strong$/);
-    expect(rowOf(second.name)).toMatch(/no tools$/);
+    expect(rowOf(first.name)).toMatch(/tools: strong, needs Ollama >= \d+\.\d+\.\d+$/);
+    expect(rowOf(second.name)).toMatch(/no tools, needs Ollama >= \d+\.\d+\.\d+$/);
   });
 
   it('flags a restricted license and never lists an abliterated entry', async () => {
@@ -681,8 +760,12 @@ describe('models curated', () => {
     await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
     expect(h.lines).toContain("For this computer: the list has no picks for this computer's memory yet.");
     expect(h.lines).toContain('All curated models, smallest first:');
-    const smallest = curatedListing(manifest)[0].builds[0];
-    expect(h.lines[h.lines.length - 1]).toBe(`Pull one with: b4m models pull ${curatedSource(smallest).ollamaRef}`);
+    const [smallest] = curatedListing(manifest)[0]
+      .builds.map(curatedSource)
+      .sort((a, b) => a.sizeBytes - b.sizeBytes);
+    expect(h.lines[h.lines.length - 1]).toBe(
+      `Pull one with: b4m models pull ${smallest.ollamaRef} (pull does not check the build against the reviewed one)`
+    );
   });
 
   it('describes a CPU-only machine', async () => {

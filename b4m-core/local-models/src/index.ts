@@ -42,6 +42,7 @@ export {
 } from './errors';
 export { isAbliteratedModel } from './abliterated';
 export {
+  curatedBuildForRef,
   curatedLibrary,
   curatedListing,
   curatedOllamaBlocked,
