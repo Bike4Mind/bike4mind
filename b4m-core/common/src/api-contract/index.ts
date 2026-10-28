@@ -77,6 +77,10 @@ export {
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
 } from './contracts/agents.contract';
 export {
   getClaudeBundleZipContract,
