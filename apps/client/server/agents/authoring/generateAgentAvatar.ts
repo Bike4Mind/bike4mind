@@ -223,6 +223,7 @@ export async function generateAgentAvatar(
   // We'll use the aiImageService directly instead of the full ImageGenerationService
 
   // Determine optimal parameters based on model
+  // any: the per-model params (size/quality vs width/height/...) differ and the service takes a loose bag
   const imageParams: any = {
     model: imageModelId,
     n: 1,
