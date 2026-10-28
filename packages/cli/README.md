@@ -153,14 +153,17 @@ b4m models ls | search | show | pull | rm | use   # Find, download and use local
 ```bash
 b4m models ls --ollama-host http://127.0.0.1:11434   # list installed models; a host that answers is saved
 b4m models search qwen2.5 0.5b                       # Hugging Face GGUF repos: downloads, likes, license, gated
-b4m models show Qwen/Qwen2.5-0.5B-Instruct-GGUF      # builds with size, quant and Ollama ref, license, gating
+b4m models show Qwen/Qwen2.5-0.5B-Instruct-GGUF      # builds with size, fit, quant and Ollama ref, license, gating
 b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
 b4m models pull qwen2.5:0.5b                         # Ollama registry names (model[:tag], ollama.com/owner/model)
+b4m models pull <ref> --force                        # pull even when the fit check rates it too large
 b4m models use hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M   # default model for chat
 b4m models rm qwen2.5:0.5b
 ```
 
 `search` hides abliterated and uncensored builds and prints how many it hid; `--include-abliterated` lists them last, labelled as not recommended.
+
+`show` rates each build `fits`, `tight` or `too large` for this machine, and `pull` prints the verdict with its reasoning before asking anything. It is the rough estimate Desktop gives a Hugging Face build: the file size (plus any vision projector) and compute buffers against the memory a model can use here, at the context the CLI asks Ollama for (the model's trained length capped at 32K, or at `OLLAMA_MAX_NUM_CTX`). `pull` refuses a too-large build unless `--force`. The fit is `unknown`, and never blocks, when the hardware cannot be read or the Ollama host is another machine.
 
 Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license texts, and only unmodified Apache-2.0 or MIT texts count as permissive. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes. Without a saved host, `b4m models` uses the first local runtime it detects; a scheme-less host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search` and `show` as JSON. With a saved host, `b4m -p` fails instead of switching to another model when the model picked with `b4m models use` is not available, or Ollama does not answer.
 
