@@ -9,13 +9,7 @@ import {
   embeddingModelContextWindow,
 } from './chunk';
 import { Logger } from '@bike4mind/observability';
-import {
-  countCodePoints,
-  DocumentDateSource,
-  isUnsupportedFileTypeError,
-  MIN_CHUNK_CHARS_FLOOR,
-  type UnsupportedFileTypeError,
-} from '@bike4mind/common';
+import { countCodePoints, DocumentDateSource, MIN_CHUNK_CHARS_FLOOR } from '@bike4mind/common';
 
 /**
  * Forces `getMetadata()` to reject on the next PDF opened, so the guard in `readPdfDocumentDate`
@@ -768,34 +762,64 @@ describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
     expect(small.getExtractedText()).toBe(large.getExtractedText());
   });
 
-  it('is undefined for a media-only file that yields no extractable text', async () => {
-    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
-    await expect(chunker.chunkFile(Buffer.from('anything'), 'audio/mpeg')).resolves.toEqual([]);
-    chunker.freeEncoder();
-    expect(chunker.getExtractedText()).toBeUndefined();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('throws a typed error, at warn, for an unsupported format', async () => {
+  it.each(['application/x-cfb', 'application/octet-stream'])(
+    'warns and returns no chunks for unsupported %s',
+    async mimeType => {
+      const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+      const warn = vi.spyOn(Logger.prototype, 'warn');
+      const error = vi.spyOn(Logger.prototype, 'error');
+      try {
+        await expect(chunker.chunkFile(Buffer.from('anything'), mimeType)).resolves.toEqual([]);
+        expect(warn).toHaveBeenCalledExactlyOnceWith(`Unsupported file type: ${mimeType}`);
+        expect(error).not.toHaveBeenCalled();
+        expect(chunker.getExtractedText()).toBeUndefined();
+      } finally {
+        chunker.freeEncoder();
+      }
+    }
+  );
+
+  it('returns no chunks for a file with no recorded MIME type', async () => {
     const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
     const warn = vi.spyOn(Logger.prototype, 'warn');
     const error = vi.spyOn(Logger.prototype, 'error');
-    const err = await chunker.chunkFile(Buffer.from('anything'), 'application/x-cfb').catch((e: unknown) => e);
-    chunker.freeEncoder();
+    try {
+      await expect(chunker.chunkFile({ filePath: 'untyped-file' })).resolves.toEqual([]);
+      expect(warn).toHaveBeenCalledExactlyOnceWith('Unsupported file type: undefined');
+      expect(error).not.toHaveBeenCalled();
+      expect(chunker.getExtractedText()).toBeUndefined();
+    } finally {
+      chunker.freeEncoder();
+    }
+  });
 
-    expect(isUnsupportedFileTypeError(err)).toBe(true);
-    expect((err as UnsupportedFileTypeError).mimeType).toBe('application/x-cfb');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('application/x-cfb'));
-    expect(error).not.toHaveBeenCalled();
-    expect(chunker.getExtractedText()).toBeUndefined();
-    warn.mockRestore();
-    error.mockRestore();
+  it.each(['audio/mpeg', 'video/mp4'])('keeps media-only %s quiet', async mimeType => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const error = vi.spyOn(Logger.prototype, 'error');
+    try {
+      await expect(chunker.chunkFile(Buffer.from('anything'), mimeType)).resolves.toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(chunker.getExtractedText()).toBeUndefined();
+    } finally {
+      chunker.freeEncoder();
+    }
   });
 
   it('still chunks an unknown text/* type as plain text', async () => {
     const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
-    const chunks = await chunker.chunkFile(Buffer.from('hello world'), 'text/x-foo');
-    chunker.freeEncoder();
-    expect(chunks.length).toBeGreaterThan(0);
+    try {
+      const chunks = await chunker.chunkFile(Buffer.from('hello world'), 'text/x-foo');
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getExtractedText()).toBe('hello world');
+    } finally {
+      chunker.freeEncoder();
+    }
   });
 });
 

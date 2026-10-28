@@ -29,7 +29,6 @@ import {
   isMediaOnlyMimeType,
   isSupportedEmbeddingModel,
   isSupportedFabFileMimeType,
-  isUnsupportedFileTypeError,
   provenancePayloadShape,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
@@ -134,9 +133,7 @@ async function enqueueVectorizeBatches(params: {
  * chunkScan.ts); a path that throws without it leaves the file permanently sweep-eligible, so it
  * is re-enqueued and re-DLQ'd every day forever. No-op on a non-final SQS delivery: see
  * deferFailureIfRetryable for why an earlier attempt must leave 'failed' untouched. The caller
- * always rethrows afterwards, so SQS retries and eventually routes to the DLQ - except with
- * `terminal`, for a deterministic verdict a retry cannot change: it records on the FIRST delivery
- * and the caller returns, so SQS acks with no retry and no DLQ. Mirrors
+ * always rethrows afterwards, so SQS retries and eventually routes to the DLQ. Mirrors
  * fabFileVectorize.ts's own failure handling - keep the two in sync.
  *
  * `supersedes` is for a PERMANENT verdict that outranks whatever error the file already carries.
@@ -1052,23 +1049,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger.warn(
           `FabFile ${fabFileId}: chunk claim lost (a successor claimed it, or the file was removed) - this delivery is a no-op`
         );
-        return null;
-      }
-
-      // Deterministic verdict: retrying cannot help, so record it now and ack instead of rethrowing
-      // into the retry/DLQ path.
-      if (isUnsupportedFileTypeError(err)) {
-        logger.warn(`FabFile ${fabFileId}: ${err.message}`);
-        await accountFileFailure({
-          event,
-          logger,
-          fabFileId,
-          batchId: fabFile.batchId,
-          userId,
-          action: 'Chunking',
-          errorMessage: err.message,
-          terminal: true,
-        });
         return null;
       }
 

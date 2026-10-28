@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Drive the raw handler: passthrough dispatchWithLogger (no connectDB / real logger)
 // and mock the data + service seams. Mirrors sreJob.test.ts.
@@ -174,9 +174,6 @@ vi.mock('@bike4mind/common', async () => {
     isMediaOnlyMimeType: actual.isMediaOnlyMimeType,
     DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
     ChunkClaimLostError,
-    // Real: the terminal-failure tests below depend on the handler's actual classification.
-    UnsupportedFileTypeError: actual.UnsupportedFileTypeError,
-    isUnsupportedFileTypeError: actual.isUnsupportedFileTypeError,
     // Mirrors the REAL dual-check in errors.ts exactly (not just re-declaring the class) - an
     // `instanceof`-only mock here would make F2's regression test below tautological, the same gap
     // the real bug would hide behind.
@@ -207,7 +204,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { dispatch } from './fabFileChunk';
-import { ChunkClaimLostError, UnsupportedFileTypeError } from '@bike4mind/common';
+import { ChunkClaimLostError } from '@bike4mind/common';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 const payload = { fabFileId: 'ff1', userId: 'u1' };
@@ -873,79 +870,6 @@ describe('fabFileChunk handler - chunk computation runs outside the transaction 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
-  });
-});
-
-describe('fabFileChunk handler - unsupported file format', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
-    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
-    h.markFailedIfNotAlready.mockResolvedValue(true);
-    h.incrementCounters.mockResolvedValue({ failedFiles: 1, processingFailedFiles: 1, totalFiles: 3 });
-    h.completedBatchStatus.mockReturnValue(undefined);
-    h.sendToClient.mockResolvedValue(undefined);
-    h.prepareFabFileChunks.mockRejectedValue(new UnsupportedFileTypeError('application/x-cfb'));
-  });
-
-  // Back to the file-wide defaults: later suites rely on them and clearAllMocks keeps implementations.
-  afterEach(() => {
-    h.prepareFabFileChunks.mockImplementation(async (...args: unknown[]) => ({ args }));
-    h.deferFailureIfRetryable.mockReset();
-  });
-
-  // A deferral would make the verdict wait for the final attempt and then DLQ; the stub says
-  // "non-final" so a handler that still consults it would record nothing.
-  it('is terminal on the first delivery: records the failure, counts the batch file, and acks', async () => {
-    h.deferFailureIfRetryable.mockResolvedValue(true);
-
-    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
-
-    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
-    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('application/x-cfb'));
-    expect(h.updateFileStatus).toHaveBeenCalledWith(
-      'batch-1',
-      'ff1',
-      'failed',
-      expect.stringContaining('Unsupported file format')
-    );
-    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
-    expect(h.sendToClient).toHaveBeenCalledWith(
-      'u1',
-      expect.anything(),
-      expect.objectContaining({ chunkStatus: 'failed', failedMessage: expect.stringContaining('application/x-cfb') })
-    );
-  });
-
-  it('logs at warn, not error, and still releases the chunk claim', async () => {
-    await dispatch(makeEvent(payload), {} as never, mockLogger);
-
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Unsupported file format'));
-    expect(mockLogger.error).not.toHaveBeenCalled();
-    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
-      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
-      { $set: { isChunking: false } }
-    );
-  });
-
-  it('does not dispatch vectorize work or mark the file as chunked', async () => {
-    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
-
-    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ $set: expect.objectContaining({ noExtractableTextAt: expect.anything() }) })
-    );
-    expect(h.sendToQueue).not.toHaveBeenCalled();
-    expect(h.claimFileStatus).not.toHaveBeenCalled();
-  });
-
-  it('still defers an ordinary error on a non-final attempt', async () => {
-    h.deferFailureIfRetryable.mockResolvedValue(true);
-    h.prepareFabFileChunks.mockRejectedValue(new Error('transient'));
-
-    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('transient');
-    expect(h.deferFailureIfRetryable).toHaveBeenCalled();
-    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 });
 
