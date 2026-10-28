@@ -123,6 +123,11 @@ export const matchLoginRecord = (
     )[0];
 
 const nonEmpty = (value: string | undefined | null): string | undefined => value?.trim() || undefined;
+// The client login recorder writes the literal 'Unknown' when it cannot parse a field.
+const known = (value: string | undefined | null): string | undefined => {
+  const trimmed = nonEmpty(value);
+  return trimmed?.toLowerCase() === 'unknown' ? undefined : trimmed;
+};
 
 export const authRowToSignIn = (row: UserAuthAuditRow, loginRecords: readonly ILoginRecord[]): UserSignIn => {
   const record = row.event === 'login_success' ? matchLoginRecord(row.createdAt, row.actorIp, loginRecords) : undefined;
@@ -135,10 +140,10 @@ export const authRowToSignIn = (row: UserAuthAuditRow, loginRecords: readonly IL
     method: nonEmpty(row.strategy),
     ip: nonEmpty(row.actorIp),
     userAgent: nonEmpty(row.userAgent),
-    location: nonEmpty(record?.location),
-    browser: nonEmpty(record?.browser) ?? parsed.browser,
-    operatingSystem: nonEmpty(record?.operatingSystem) ?? parsed.operatingSystem,
-    deviceType: nonEmpty(record?.deviceType),
+    location: known(record?.location),
+    browser: known(record?.browser) ?? parsed.browser,
+    operatingSystem: known(record?.operatingSystem) ?? parsed.operatingSystem,
+    deviceType: known(record?.deviceType),
   };
 };
 

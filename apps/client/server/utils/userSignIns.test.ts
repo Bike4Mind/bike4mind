@@ -129,6 +129,14 @@ describe('authRowToSignIn', () => {
     expect(signIn.ip).toBeUndefined();
     expect(signIn.location).toBeUndefined();
   });
+
+  it("reads the user agent when the login record holds the recorder's literal 'Unknown'", () => {
+    const signIn = authRowToSignIn(row(), [
+      record({ browser: 'Unknown', operatingSystem: 'Unknown', location: 'Unknown', deviceType: 'Desktop' }),
+    ]);
+    expect(signIn).toMatchObject({ browser: 'Chrome', operatingSystem: 'macOS', deviceType: 'Desktop' });
+    expect(signIn.location).toBeUndefined();
+  });
 });
 
 describe('listUserSignIns', () => {

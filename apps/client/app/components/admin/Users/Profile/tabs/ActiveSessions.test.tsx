@@ -53,6 +53,13 @@ describe('ActiveSessions', () => {
     expect(sessionDevice({ device: undefined })).toBe('-');
   });
 
+  it('parses the user agent when the session stores no browser or OS', () => {
+    const userAgent =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+    expect(sessionDevice({ device: { userAgent } })).toBe('Chrome on macOS');
+    expect(sessionDevice({ device: { userAgent: 'curl/8.0' } })).toBe('-');
+  });
+
   it('lists each active session with method, device, IP and location', async () => {
     renderSessions();
 
@@ -98,6 +105,15 @@ describe('ActiveSessions', () => {
       })
     );
     expect(mocks.delete).not.toHaveBeenCalled();
+  });
+
+  it('names an unrecognised device neutrally in the sign-out dialog', async () => {
+    mocks.get.mockResolvedValue({ data: { items: [{ ...SESSIONS[0], device: { ip: '198.51.100.4' } }] } });
+    renderSessions();
+    const rows = await screen.findAllByTestId('user-sessions-row');
+
+    fireEvent.click(within(rows[0]).getByTestId('user-sessions-revoke-btn'));
+    expect(screen.getByText(/^This session will need to sign in again\./)).toBeInTheDocument();
   });
 
   it('keeps the dialog open when the revoke fails', async () => {

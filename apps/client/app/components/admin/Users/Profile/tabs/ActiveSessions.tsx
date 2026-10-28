@@ -3,6 +3,7 @@ import { Box, Button, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import type { AdminUserSession, AuthSessionCreatedVia } from '@bike4mind/common';
 import { useRevokeUserSessions, useUserSessions } from '@client/app/hooks/data/adminUserSessions';
+import { describeUserAgent } from '@client/app/utils/describeUserAgent';
 import {
   ActionDialog,
   ADMIN_REASON_PRESETS,
@@ -31,8 +32,18 @@ const CREATED_VIA_LABELS: Readonly<Record<AuthSessionCreatedVia, string>> = {
   'legacy-migration': 'Carried over',
 };
 
-export const sessionDevice = ({ device }: Pick<AdminUserSession, 'device'>): string =>
-  [device?.browser, device?.os].filter(Boolean).join(' on ') || '-';
+/** "Browser on OS" from the stored fields, else parsed from the user agent (most sessions store only that); '-' when unknown. */
+export const sessionDevice = ({ device }: Pick<AdminUserSession, 'device'>): string => {
+  const stored = [device?.browser, device?.os].filter(Boolean).join(' on ');
+  if (stored) return stored;
+  const { label } = describeUserAgent(device?.userAgent);
+  return label === 'Unknown device' ? '-' : label;
+};
+
+const oneSessionSubject = (session: AdminUserSession): string => {
+  const device = sessionDevice(session);
+  return device === '-' ? 'This session' : device;
+};
 
 type RevokeTarget = { kind: 'one'; session: AdminUserSession } | { kind: 'all' };
 
@@ -151,7 +162,7 @@ export const ActiveSessions: React.FC<{ user: AdminUserProfile }> = ({ user }) =
           title={target.kind === 'one' ? `Sign out this session?` : `Sign ${name} out everywhere?`}
           description={
             target.kind === 'one'
-              ? `${sessionDevice(target.session)} will need to sign in again. Other sessions stay signed in.`
+              ? `${oneSessionSubject(target.session)} will need to sign in again. Other sessions stay signed in.`
               : 'Every session ends and trusted devices are forgotten, so the next sign-in asks for two-factor again.'
           }
           reasonPresets={ADMIN_REASON_PRESETS.sessionRevoke}
