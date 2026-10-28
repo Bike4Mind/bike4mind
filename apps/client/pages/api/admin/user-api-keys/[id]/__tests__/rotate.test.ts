@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   rotate: vi.fn(),
   audit: vi.fn(),
   withTransaction: vi.fn(),
+  endRealtime: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -40,7 +41,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById: h.findKey, marker: 'keys' } }));
 vi.mock('@bike4mind/services', () => ({
-  authSessionService: { endRealtimeConnections: vi.fn() },
+  authSessionService: { endRealtimeConnections: h.endRealtime },
   userApiKeyService: { rotateUserApiKey: h.rotate },
 }));
 vi.mock('@server/utils/adminAudit', async () => {
@@ -137,7 +138,6 @@ describe('POST /api/admin/user-api-keys/[id]/rotate', () => {
         db: {
           userApiKeys: expect.objectContaining({ marker: 'keys' }),
           organizations: { marker: 'orgs' },
-          realtimeConnections: { marker: 'realtime' },
         },
       }
     );
@@ -163,9 +163,23 @@ describe('POST /api/admin/user-api-keys/[id]/rotate', () => {
   });
 
   it('never returns a secret when the strict audit write fails', async () => {
-    h.audit.mockRejectedValue(new Error('audit down'));
+    h.audit.mockRejectedValueOnce(new Error('audit down'));
     const res = response();
     await expect(h.handler!(request(), res)).rejects.toThrow('audit down');
     expect(res.json).not.toHaveBeenCalled();
+    expect(h.endRealtime).not.toHaveBeenCalled();
+  });
+
+  it('ends the old secret sockets only after the rotation commits', async () => {
+    h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => {
+      const result = await fn();
+      expect(h.endRealtime).not.toHaveBeenCalled();
+      return result;
+    });
+    await h.handler!(request(), response());
+    expect(h.endRealtime).toHaveBeenCalledExactlyOnceWith(
+      { apiKeyId: 'key-1' },
+      expect.objectContaining({ db: { realtimeConnections: { marker: 'realtime' } } })
+    );
   });
 });

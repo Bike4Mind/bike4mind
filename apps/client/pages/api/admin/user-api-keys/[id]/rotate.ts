@@ -6,13 +6,19 @@ import {
   ForbiddenError,
   type IUserApiKeyDocument,
 } from '@bike4mind/common';
-import { organizationRepository, realtimeConnectionRepository, withTransaction } from '@bike4mind/database';
+import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userApiKeyService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { auditKeyRef, loadApiKeyOrThrow, ownerAuditTarget, readApiKeyIdParam } from '@server/utils/adminApiKeyActions';
+import {
+  auditKeyRef,
+  endKeyRealtimeConnections,
+  loadApiKeyOrThrow,
+  ownerAuditTarget,
+  readApiKeyIdParam,
+} from '@server/utils/adminApiKeyActions';
 import { respond } from '@server/utils/respond';
 
 /**
@@ -38,6 +44,7 @@ function assertRotatable(key: IUserApiKeyDocument): void {
     throw new ForbiddenError('Keys with the admin or bridge scope cannot be rotated by an admin');
   }
 }
+
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(csrfProtection())
   .post(async (req, res) => {
@@ -60,7 +67,6 @@ const handler = baseApi({ auth: 'jwtOnly' })
           db: {
             userApiKeys: userApiKeyRepository,
             organizations: organizationRepository,
-            realtimeConnections: realtimeConnectionRepository,
           },
         }
       );
@@ -78,6 +84,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
       });
       return result;
     });
+    // After commit, so an aborted rotation leaves the sockets of the still-valid old secret alone.
+    await endKeyRealtimeConnections(rotated.id, req.logger);
 
     res.setHeader('Cache-Control', 'no-store');
     return respond(res, adminRotateApiKeyResponseSchema, {
