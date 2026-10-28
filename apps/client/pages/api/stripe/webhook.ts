@@ -530,12 +530,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
     case 'charge.refunded': {
       const charge = event.data.object;
-      const refunds = charge.refunds?.data ?? [];
-      if (refunds.length === 0) {
-        req.logger.debug(`charge.refunded has no refund objects, skipping`);
-        break;
-      }
-
       const refundPaymentIntentId =
         typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
 
@@ -544,11 +538,18 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
+      // Runs before the refund-list guard: newer webhook API versions omit charge.refunds, and the reward only needs the cumulative amount.
       await reverseSubscriptionRewardForRefund({
         paymentIntentId: refundPaymentIntentId,
         amountRefunded: charge.amount_refunded,
         amountCaptured: charge.amount_captured || charge.amount,
       });
+
+      const refunds = charge.refunds?.data ?? [];
+      if (refunds.length === 0) {
+        req.logger.debug(`charge.refunded has no refund objects, skipping`);
+        break;
+      }
 
       const originalTx = await creditTransactionRepository.findByPaymentIntentId(refundPaymentIntentId);
       if (!originalTx) {
