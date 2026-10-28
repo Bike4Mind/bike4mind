@@ -209,16 +209,23 @@ describe('ensureToolPairingIntegrity adjacency', () => {
     expect(result[4].content).toEqual([toolResult('c')]);
   });
 
-  it('warns once per repaired message', () => {
+  it('warns once for each repaired message', () => {
     const logger = { log: vi.fn(), warn: vi.fn() };
     const messages = asMessages([
       { role: 'user', content: [toolResult('a')] },
       { role: 'assistant', content: [toolUse('a')] },
       { role: 'user', content: [toolResult('a')] },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: [toolResult('a')] },
     ]);
 
     ensureToolPairingIntegrity(messages, logger);
 
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('message 0 with no matching tool_use'));
+    const adjacencyWarnings = logger.warn.mock.calls
+      .map(([message]) => String(message))
+      .filter(message => message.includes('with no matching tool_use in the preceding message'));
+    expect(adjacencyWarnings).toHaveLength(2);
+    expect(adjacencyWarnings[0]).toContain('message 0');
+    expect(adjacencyWarnings[1]).toContain('message 4');
   });
 });
