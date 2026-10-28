@@ -212,6 +212,16 @@ describe('agent ops admin audit', () => {
     });
   });
 
+  it('activate records a null before when no version was active', async () => {
+    h.repo.getActiveMetaPrompt.mockResolvedValue(null);
+    h.repo.activateMetaPromptVersion.mockResolvedValue({});
+    const res = await call(activate, 'POST', undefined, { version: '1' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      changes: [{ field: 'activeVersion', before: null, after: 1 }],
+    });
+  });
+
   it('activate does not audit when the version is already active', async () => {
     h.repo.getActiveMetaPrompt.mockResolvedValue({ versionNumber: 3, isActive: true });
     h.repo.activateMetaPromptVersion.mockResolvedValue({});
