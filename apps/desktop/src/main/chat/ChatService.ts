@@ -3116,9 +3116,17 @@ export class ChatService {
           ? { stopReason: SERVER_CREDENTIALS_STOP }
           : {};
 
+      if (segmentSettled) {
+        // settleSegment already stored this reply whole, rounds and artifacts included; a
+        // rewrite from the raw stream would drop them, so only the failure is added.
+        const updated = await this.deps.store.updateMessage(sessionId, replyId, { error: message, ...stop });
+        if (updated) this.captureSessionHistory(updated, historyScope);
+        this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+        return expired ? 'expired' : 'failed';
+      }
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
-      await this.settleReply(sessionId, !!resume || segmentSettled, historyScope, {
+      await this.settleReply(sessionId, !!resume, historyScope, {
         id: replyId,
         role: 'assistant',
         content,

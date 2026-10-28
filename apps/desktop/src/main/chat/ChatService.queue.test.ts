@@ -791,6 +791,36 @@ describe('ChatService queued messages', () => {
       }
     );
 
+    it('keeps the settled reply whole when a relay after it fails to store', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await waitForPost(1);
+      queue.enqueueRelay(id, 'first relay', relayFrom);
+      queue.enqueueRelay(id, 'second relay', relayFrom);
+      const appendMessage = store.appendMessage.bind(store);
+      vi.spyOn(store, 'appendMessage').mockImplementation(async (sessionId, message) => {
+        if (message.content === 'second relay') throw new Error('transient write failure');
+        return appendMessage(sessionId, message);
+      });
+
+      streamFor(0).write(
+        frame({
+          type: 'content',
+          text: 'Here it is. <artifact identifier="plan" type="text/markdown" title="Plan">steps</artifact>',
+        })
+      );
+      askForTool(0);
+      await waitForEvent('error');
+
+      const reply = (await store.get(id))?.messages.find(message => message.role === 'assistant');
+      expect(reply).toMatchObject({
+        content: 'Here it is.',
+        error: 'transient write failure',
+        rounds: [{ text: 'Here it is.', toolCallIds: ['call_0'] }],
+        artifacts: [{ identifier: 'plan' }],
+      });
+    });
+
     it('hands a relay to the next request with the framing its own turn would carry', async () => {
       const { id } = await service.createSession();
       await service.send(id, 'build it');
