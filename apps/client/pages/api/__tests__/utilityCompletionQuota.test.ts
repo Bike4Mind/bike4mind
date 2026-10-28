@@ -34,6 +34,7 @@ vi.mock('@client/server/agents/systemPromptRateLimit', () => ({ assertSystemProm
 vi.mock('@server/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
 vi.mock('@server/help/retrieval', () => ({ searchHelpContext: vi.fn() }));
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit: () => async () => 20 }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   completionRequestCeilingUsd: vi.fn(),
   completionUsd: vi.fn(),
