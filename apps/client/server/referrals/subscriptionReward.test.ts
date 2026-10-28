@@ -188,6 +188,17 @@ describe('recordSubscriptionPaymentReward', () => {
     );
   });
 
+  it('retries at the next step when a concurrent invoice of the payer took the step', async () => {
+    mockRepo.countClaimedSteps.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    mockRepo.create.mockResolvedValueOnce(null);
+    await record();
+    expect(mockRepo.create).toHaveBeenCalledTimes(2);
+    expect(mockRepo.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ step: 'second_payment', credits: 7000 }),
+      NOW
+    );
+  });
+
   it('skips an invoice that already has a reward', async () => {
     mockRepo.findByInvoiceId.mockResolvedValue({ id: 'r0' });
     await record();
