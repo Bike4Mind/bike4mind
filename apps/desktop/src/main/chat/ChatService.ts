@@ -61,6 +61,7 @@ import {
 import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import type { AppWorktree } from '@shared/worktreeRemoval';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
 import {
   REQUEST_DIRECTORY_TOOL_NAME,
@@ -85,6 +86,7 @@ import {
   branchCheckouts,
   branchExists,
   checkoutBranch,
+  containerDirectory,
   currentBranch,
   defaultBaseBranch,
   isGitDirectory,
@@ -1592,24 +1594,65 @@ export class ChatService {
     return inspection;
   }
 
-  listWorktrees(directory: string) {
-    return this.withWorkspaceBindings(async () =>
-      listAppWorktrees(directory, await this.deps.store.workspaceProjectsExcept(''))
-    );
+  /**
+   * Holds while any workspace is being cut: ensureWorkspace runs outside the store lease and
+   * persists its project only afterwards, so a fresh checkout is briefly ownerless.
+   */
+  private orphanOptions(titles?: ReadonlyMap<ChatProject, string>) {
+    return {
+      ...(titles ? { titles } : {}),
+      hold: () => (this.preparing.size > 0 ? 'A workspace is being prepared' : null),
+    };
+  }
+
+  private async orphanContext() {
+    const owners = await this.deps.store.workspaceOwnersExcept('');
+    return {
+      projects: owners.map(owner => owner.project),
+      titles: new Map(owners.map(owner => [owner.project, owner.title] as const)),
+    };
+  }
+
+  /** A repository the user has already opened here, by project or recent folder; never an arbitrary path. */
+  async isKnownRepository(directory: string, recentFolders: readonly string[]): Promise<boolean> {
+    const containerOf = async (path: string) => {
+      try {
+        return await realpath(await containerDirectory(path));
+      } catch {
+        return null;
+      }
+    };
+    const wanted = await containerOf(directory);
+    if (!wanted) return false;
+    const owners = await this.deps.store.workspaceOwnersExcept('');
+    for (const known of [...owners.map(owner => owner.project.directory), ...recentFolders]) {
+      if ((await containerOf(known)) === wanted) return true;
+    }
+    return false;
+  }
+
+  async listWorktrees(directory: string): Promise<AppWorktree[]> {
+    const listed = await this.withWorkspaceBindings(async () => {
+      const { projects, titles } = await this.orphanContext();
+      return listAppWorktrees(directory, projects, this.orphanOptions(titles));
+    });
+    // preservedRef is internal to the removal path.
+    return listed.map(({ preservedRef: _preservedRef, ...item }) => item);
   }
 
   /** Named paths, or every safe orphan when none are given; each is re-inspected as it is removed. */
   removeWorktrees(directory: string, paths?: readonly string[]) {
     return this.withWorkspaceBindings(async () => {
-      const projects = await this.deps.store.workspaceProjectsExcept('');
-      if (!paths) return sweepSafeOrphans(directory, projects);
+      const { projects, titles } = await this.orphanContext();
+      const options = this.orphanOptions(titles);
+      if (!paths) return sweepSafeOrphans(directory, projects, options);
       const results = [];
-      for (const path of paths) results.push(await removeOrphanWorktree(directory, path, projects));
+      for (const path of paths) results.push(await removeOrphanWorktree(directory, path, projects, options));
       return results;
     });
   }
 
-  /** Only a path that is currently listed for this repository is handed to the file manager. */
+  /** Only a path currently listed for this repository, so always under the app root, is handed to the file manager. */
   async revealWorktree(directory: string, path: string, reveal: (path: string) => void): Promise<boolean> {
     if (!(await this.listWorktrees(directory)).some(item => item.path === path)) return false;
     reveal(path);

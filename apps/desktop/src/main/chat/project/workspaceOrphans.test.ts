@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ChatProject } from '@shared/chat';
 import { git } from './git';
-import { appWorktreeRoot, listAppWorktrees } from './workspace';
+import { SessionStore } from '../SessionStore';
+import { appWorktreeRoot, listAppWorktrees, removeOrphanWorktree } from './workspace';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -69,19 +70,41 @@ describe('listAppWorktrees', () => {
     });
   });
 
-  it('reports the owning project, including archived and shared local children', async () => {
+  it('names the owning conversation, for archived and shared local-child projects alike', async () => {
     const directory = await repo();
-    const direct = await addWorktree(directory, 'direct');
-    const child = await addWorktree(directory, 'child');
-    const nested = join(child.path, 'nested');
-    await mkdir(nested);
-    const owners = [
-      projectFor(directory, direct.path, { name: 'archived', workspaceBranch: direct.branch }),
-      projectFor(nested, nested, { name: 'local-child' }),
-    ];
-    const listed = await listAppWorktrees(directory, owners);
-    expect(byName(listed, 'direct')).toMatchObject({ safe: false, state: 'owned', owner: 'archived' });
-    expect(byName(listed, 'child')).toMatchObject({ safe: false, state: 'owned', owner: 'local-child' });
+    const archived = await addWorktree(directory, 'direct');
+    const parent = await addWorktree(directory, 'child');
+    const sessions = await mkdtemp(join(tmpdir(), 'b4m-orphan-sessions-'));
+    roots.push(sessions);
+    const store = new SessionStore(sessions, 'test-model');
+    const first = await store.create('test-model', {
+      title: 'Fix the login bug',
+      project: projectFor(directory, archived.path, { workspaceBranch: archived.branch }),
+    });
+    await store.create('test-model', {
+      title: 'Local child',
+      project: projectFor(directory, parent.path, { workspaceBranch: parent.branch }),
+    });
+    await store.setArchived(first.id, true);
+    const owners = await store.workspaceOwnersExcept('');
+    const listed = await listAppWorktrees(
+      directory,
+      owners.map(owner => owner.project),
+      { titles: new Map(owners.map(owner => [owner.project, owner.title])) }
+    );
+    expect(byName(listed, 'direct')).toMatchObject({ safe: false, state: 'owned', owner: 'Fix the login bug' });
+    expect(byName(listed, 'child')).toMatchObject({ safe: false, state: 'owned', owner: 'Local child' });
+  });
+
+  it('holds every checkout while a workspace is being prepared', async () => {
+    const directory = await repo();
+    await addWorktree(directory, 'fresh');
+    const listed = await listAppWorktrees(directory, [], { hold: () => 'A workspace is being prepared' });
+    expect(listed[0]).toMatchObject({ safe: false, reason: 'A workspace is being prepared' });
+    expect(
+      await removeOrphanWorktree(directory, listed[0].path, [], { hold: () => 'A workspace is being prepared' })
+    ).toMatchObject({ status: 'skipped' });
+    expect(await removeOrphanWorktree(directory, listed[0].path, [])).toMatchObject({ status: 'removed' });
   });
 
   it('never lists a worktree outside the app root, and marks a foreign branch unsafe', async () => {
@@ -95,13 +118,13 @@ describe('listAppWorktrees', () => {
     expect(listed[0]).toMatchObject({ safe: false, state: 'foreign' });
   });
 
-  it('prunes a hand-deleted folder', async () => {
+  it('does not list a hand-deleted folder and leaves the registry alone', async () => {
     const directory = await repo();
     const gone = await addWorktree(directory, 'gone');
     await addWorktree(directory, 'kept');
     await rm(gone.path, { recursive: true, force: true });
     const listed = await listAppWorktrees(directory, []);
     expect(listed.map(item => item.path.split('/').pop())).toEqual(['kept']);
-    expect((await git(directory, ['worktree', 'list', '--porcelain'])).includes('gone')).toBe(false);
+    expect((await git(directory, ['worktree', 'list', '--porcelain'])).includes('gone')).toBe(true);
   });
 });

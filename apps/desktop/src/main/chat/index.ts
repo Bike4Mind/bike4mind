@@ -911,19 +911,34 @@ export function registerChat(
     if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
     return service.inspectSessionWorktreeRemoval(sessionId);
   });
-  ipcMain.handle(IPC_CHANNELS.chatListWorktrees, (_event, directory: unknown) => {
+  // Only a repository the user already has a conversation or recent folder for is ever touched.
+  const knownRepository = async (directory: string) => {
+    const recent = await recentFolders.list();
+    if (
+      !(await service.isKnownRepository(
+        directory,
+        recent.map(folder => folder.path)
+      ))
+    ) {
+      throw new Error('Unknown project directory');
+    }
+  };
+  ipcMain.handle(IPC_CHANNELS.chatListWorktrees, async (_event, directory: unknown) => {
     if (typeof directory !== 'string') throw new Error('Invalid project directory');
+    await knownRepository(directory);
     return service.listWorktrees(directory);
   });
-  ipcMain.handle(IPC_CHANNELS.chatRemoveWorktrees, (_event, directory: unknown, paths: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.chatRemoveWorktrees, async (_event, directory: unknown, paths: unknown) => {
     if (typeof directory !== 'string') throw new Error('Invalid project directory');
     if (paths !== undefined && (!Array.isArray(paths) || !paths.every(path => typeof path === 'string'))) {
       throw new Error('Invalid worktree list');
     }
+    await knownRepository(directory);
     return service.removeWorktrees(directory, paths);
   });
-  ipcMain.handle(IPC_CHANNELS.chatRevealWorktree, (_event, directory: unknown, path: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.chatRevealWorktree, async (_event, directory: unknown, path: unknown) => {
     if (typeof directory !== 'string' || typeof path !== 'string') throw new Error('Invalid worktree');
+    await knownRepository(directory);
     return service.revealWorktree(directory, path, listed => shell.showItemInFolder(listed));
   });
   ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {

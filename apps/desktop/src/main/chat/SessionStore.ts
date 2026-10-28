@@ -497,6 +497,11 @@ export class SessionStore {
 
   /** Only workspace bindings cross account scopes; conversation contents stay private. */
   async workspaceProjectsExcept(sessionId: string): Promise<ChatProject[]> {
+    return (await this.workspaceOwnersExcept(sessionId)).map(owner => owner.project);
+  }
+
+  /** The same bindings, each with the title of the conversation that holds it. */
+  async workspaceOwnersExcept(sessionId: string): Promise<{ project: ChatProject; title: string }[]> {
     const currentDirectory = await this.directoryFor(false);
     if (!currentDirectory) throw new Error('No conversation scope is available');
     const entries = await readdir(this.baseDirectory, { withFileTypes: true });
@@ -507,8 +512,8 @@ export class SessionStore {
         .filter(entry => entry.isDirectory())
         .map(entry => join(this.baseDirectory, assertScopeKey(entry.name))),
     ];
-    const projects: ChatProject[] = [];
-    const schema = z.object({ project: z.unknown().optional() });
+    const projects: { project: ChatProject; title: string }[] = [];
+    const schema = z.object({ project: z.unknown().optional(), title: z.string().optional() });
     for (const directory of directories) {
       for (const name of await readdir(directory)) {
         if (!name.endsWith('.json')) continue;
@@ -517,7 +522,7 @@ export class SessionStore {
         if (record.project == null) continue;
         const project = normalizeProject(record.project);
         if (!project) throw new Error('Cannot verify all conversation workspaces');
-        projects.push(project);
+        projects.push({ project, title: record.title?.trim() || UNTITLED });
       }
     }
     return projects;
