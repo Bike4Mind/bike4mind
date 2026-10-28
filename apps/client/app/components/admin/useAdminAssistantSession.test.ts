@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
+import { AxiosError, type AxiosResponse } from 'axios';
 import { ADMIN_ASSISTANT_SURFACE } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
@@ -52,11 +53,38 @@ describe('useAdminAssistantSession', () => {
 
   it('replaces a saved session that no longer exists', async () => {
     localStorage.setItem(STORAGE_KEY, 'gone');
-    h.get.mockRejectedValue(new Error('404'));
+    h.get.mockRejectedValue(new AxiosError('gone', '404', undefined, undefined, { status: 404 } as AxiosResponse));
 
     const { result } = renderHook(() => useAdminAssistantSession(true));
 
     await waitFor(() => expect(result.current).toBe('new-session'));
+    expect(h.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the saved session on a transient fetch error', async () => {
+    localStorage.setItem(STORAGE_KEY, 'saved');
+    h.get.mockRejectedValue(new AxiosError('boom', '500', undefined, undefined, { status: 500 } as AxiosResponse));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useAdminAssistantSession(true));
+
+    await waitFor(() => expect(result.current).toBe('saved'));
+    expect(h.post).not.toHaveBeenCalled();
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('saved');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('keeps the saved session on a network error', async () => {
+    localStorage.setItem(STORAGE_KEY, 'saved');
+    h.get.mockRejectedValue(new Error('Network Error'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useAdminAssistantSession(true));
+
+    await waitFor(() => expect(result.current).toBe('saved'));
+    expect(h.post).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('does nothing when not enabled', async () => {
