@@ -12,6 +12,8 @@ export type FitVerdict = SizeFitLevel | 'unknown';
 export interface ModelFit {
   verdict: FitVerdict;
   detail: string;
+  /** The probe could not read the GPU, so the verdict counts system RAM only. */
+  gpuUnread?: true;
 }
 
 export const FIT_LABELS: Record<FitVerdict, string> = {
@@ -70,9 +72,14 @@ const contextLabel = (tokens: number) => (tokens >= 1024 ? `${Math.round(tokens 
 export function rateDownload(sizeBytes: number, reading: MachineReading, trainedContext: number | null): ModelFit {
   if ('unknown' in reading) return { verdict: 'unknown', detail: `${reading.unknown}.` };
   if (!(sizeBytes > 0)) return { verdict: 'unknown', detail: 'The download size is unknown.' };
+  const rated = rateOnHardware(sizeBytes, reading.hardware, trainedContext);
+  return reading.hardware.confidence === 'low' ? { ...rated, gpuUnread: true } : rated;
+}
+
+function rateOnHardware(sizeBytes: number, hardware: HardwareProfile, trainedContext: number | null): ModelFit {
   const known = trainedContext !== null && trainedContext > 0;
   const context = ollamaNumCtx(known ? trainedContext : Infinity);
-  const fit = estimateFitFromSize(sizeBytes, reading.hardware, context);
+  const fit = estimateFitFromSize(sizeBytes, hardware, context);
   const need = `about ${formatBytes(fit.needBytes)} before context memory, at ${known ? '' : 'up to '}the ${contextLabel(context)} context the CLI requests`;
   const budget = `the ${formatBytes(fit.budgetBytes)} a model can use ${fit.cpuOnly ? 'in RAM' : 'in GPU memory'} here`;
   const rough = 'Rough estimate from the file size';

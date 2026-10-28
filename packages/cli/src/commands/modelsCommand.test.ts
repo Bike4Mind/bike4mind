@@ -953,6 +953,18 @@ describe('models pull fit check', () => {
     expect(h.runtime.pull).not.toHaveBeenCalled();
   });
 
+  it('says a refusal counts RAM only when the GPU could not be read', async () => {
+    const h = harness({
+      hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }),
+      machine: async () => ({ hardware: { ...cpuMachine(64), confidence: 'low' } }),
+      answers: [true],
+    });
+    await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).rejects.toThrow(
+      'Nothing was downloaded: this build is rated too large from system RAM alone, since the GPU could not be read. If this machine has a GPU that can hold it, re-run with --force to download it anyway.'
+    );
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
   it('pulls a too-large build with --force after the usual prompt', async () => {
     const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }), answers: [true] });
     expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M`, force: true }, h.deps)).toBe(0);

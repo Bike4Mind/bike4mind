@@ -401,6 +401,19 @@ describe('model tools', () => {
       expect(runtime.pull).not.toHaveBeenCalled();
     });
 
+    it('says a refusal counts RAM only when the GPU could not be read', async () => {
+      const { call, runtime } = await setup({
+        hub: big(),
+        elicit: accept,
+        machine: async () => ({ hardware: { ...CPU_64, confidence: 'low' } }),
+      });
+      const { data } = await call('models_pull', { ref: REPO });
+      expect(data.status).toBe('too-large');
+      expect(data.message).toContain('too large from system RAM alone, since the GPU could not be read');
+      expect(data.message).toContain('call again with force: true');
+      expect(runtime.pull).not.toHaveBeenCalled();
+    });
+
     it('still asks the user when force is passed for a too-large model', async () => {
       const { call, runtime, prompts } = await setup({ hub: big(), elicit: accept });
       const { data } = await call('models_pull', { ref: REPO, force: true });

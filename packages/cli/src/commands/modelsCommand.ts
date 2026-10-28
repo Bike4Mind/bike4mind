@@ -361,6 +361,11 @@ async function requireFit(plan: PullPlan, deps: ModelsDeps, opts: ModelsOptions)
   const fit = await abortable(fitForPlan(plan, deps.machine), deps.signal);
   deps.log(`Fit:      ${FIT_LABELS[fit.verdict]}. ${fit.detail}`);
   if (fit.verdict !== 'too-large' || opts.force) return;
+  if (fit.gpuUnread) {
+    throw new Error(
+      'Nothing was downloaded: this build is rated too large from system RAM alone, since the GPU could not be read. If this machine has a GPU that can hold it, re-run with --force to download it anyway.'
+    );
+  }
   const smaller =
     plan.kind === 'ollama' ? 'Pick a smaller tag' : `Pick a smaller quant from: b4m models show ${plan.id}`;
   throw new Error(
