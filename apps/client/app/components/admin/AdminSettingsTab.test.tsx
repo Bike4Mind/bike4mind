@@ -236,10 +236,15 @@ describe('AdminSettingsTab recommended models setting', () => {
 });
 
 describe('AdminSettingsTab Turnstile notice', () => {
-  it.each(['true', 'false'])('passes enabled for a saved turnstileEnabled of %s', saved => {
+  it.each([
+    ['true', 'true'],
+    ['false', 'false'],
+    [true, 'true'],
+    [false, 'false'],
+  ])('passes enabled for a saved turnstileEnabled of %j', (saved, expected) => {
     serverSettings = [{ settingName: 'turnstileEnabled', settingValue: saved }];
     renderTab(usersTab);
-    expect(screen.getByTestId('admin-turnstile-notice').getAttribute('data-enabled')).toBe(saved);
+    expect(screen.getByTestId('admin-turnstile-notice').getAttribute('data-enabled')).toBe(expected);
   });
 });
 

@@ -527,7 +527,7 @@ const AdminSettingsTab: React.FC = () => {
         {category === 'AI' && <AdminGenerationModelsSetting />}
 
         {category === 'Users' && (
-          <AdminTurnstileStatusNotice enabled={settingValueByName.get('turnstileEnabled') === 'true'} />
+          <AdminTurnstileStatusNotice enabled={String(settingValueByName.get('turnstileEnabled')) === 'true'} />
         )}
 
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
