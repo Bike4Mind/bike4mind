@@ -30,6 +30,8 @@ export interface ISkillScanFinding {
   message: string;
   excerpt?: string;
   source: 'rules' | 'classifier';
+  /** Supporting file the finding is in; absent for the SKILL.md fields. */
+  file?: string;
 }
 
 /** Machine-generated from the body + allowedTools, never from the author's description. */
@@ -42,6 +44,12 @@ export interface ISkillHonestSummary {
   mismatchNote?: string;
 }
 
+/** A UTF-8 text file shipped beside SKILL.md, at a path under `scripts/` or `references/` (utils/skillFiles.ts). */
+export interface ISkillFile {
+  path: string;
+  content: string;
+}
+
 /** The skill fields a version freezes. */
 export interface ISkillSnapshot {
   name: string;
@@ -51,6 +59,8 @@ export interface ISkillSnapshot {
   allowedTools?: string[];
   claudeCodeAllowedTools?: string[];
   disableModelInvocation?: boolean;
+  /** Sorted by path; absent when the skill has none. */
+  files?: ISkillFile[];
 }
 
 export interface ISkillListing {

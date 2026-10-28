@@ -51,6 +51,7 @@ import {
 import MarketCard from './MarketCard';
 import {
   BodyBlock,
+  SupportingFiles,
   HonestSummaryPanel,
   MismatchAlert,
   StarInput,
@@ -581,6 +582,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 <BodyBlock body={version.snapshot.body} testId="market-listing-body" />
               </Box>
             ) : null}
+            <SupportingFiles files={version?.snapshot.files} />
 
             {listing.tags.length ? (
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>

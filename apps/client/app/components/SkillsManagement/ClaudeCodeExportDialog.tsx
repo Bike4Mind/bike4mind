@@ -17,7 +17,7 @@ import {
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import { toast } from 'sonner';
-import { toAbsoluteUrl } from '@bike4mind/common';
+import { toAbsoluteUrl, type ISkillFile } from '@bike4mind/common';
 import {
   b4mOnlyHints,
   buildClaudeCodeInstallCommand,
@@ -29,7 +29,7 @@ import ClaudeCodeMarketplaceTab, { type ClaudeCodeMarketplaceTabProps } from './
 
 export interface ClaudeCodeExportDialogProps {
   onClose: () => void;
-  skill: SkillMdSkill & { allowedTools?: string[] };
+  skill: SkillMdSkill & { allowedTools?: string[]; files?: ISkillFile[] };
   /** App path of the skill or listing page, stamped into the file as its source. */
   sourcePath: string;
   version?: number;
@@ -96,6 +96,12 @@ const ClaudeCodeExportDialog: FC<ClaudeCodeExportDialogProps> = ({
               </span>
             ) : null}
           </Stack>
+        </Alert>
+      ) : null}
+      {skill.files?.length ? (
+        <Alert color="warning" variant="soft" data-testid="skill-claude-code-files-not-included">
+          Only SKILL.md is written here; its {skill.files.length} supporting file(s) are not.
+          {marketplace ? ' Install it from the Team marketplace tab to get them.' : ''}
         </Alert>
       ) : null}
       {thirdParty ? (

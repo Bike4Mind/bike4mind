@@ -226,7 +226,7 @@ export async function listMyListings(
     listings.map(l =>
       SkillListingVersion.find({ listingId: String(l._id) })
         .sort({ version: -1 })
-        .select('-snapshot.body')
+        .select('-snapshot.body -snapshot.files')
         .limit(5)
     )
   );

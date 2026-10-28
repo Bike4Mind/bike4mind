@@ -67,6 +67,12 @@ describe('ClaudeCodeExportDialog', () => {
     expect(screen.queryByTestId('skill-claude-code-b4m-only')).not.toBeInTheDocument();
     expect(screen.queryByText(/third-party skill/)).not.toBeInTheDocument();
     expect(screen.queryByTestId('skill-claude-code-import-hint')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('skill-claude-code-files-not-included')).not.toBeInTheDocument();
+  });
+
+  it('warns that supporting files are not exported', () => {
+    renderDialog({ skill: { ...skill, files: [{ path: 'scripts/run.py', content: 'x' }] } });
+    expect(screen.getByTestId('skill-claude-code-files-not-included')).toHaveTextContent('1 supporting file');
   });
 
   it('warns about Bike4Mind-only tools and agents, third-party text, and a missing import', () => {

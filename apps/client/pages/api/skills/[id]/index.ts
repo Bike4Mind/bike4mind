@@ -11,6 +11,7 @@ import {
   validateSkillBody,
   validateSkillArgumentHint,
   validateSkillAllowedTools,
+  validateSkillFiles,
   validateSkillClaudeCodeAllowedTools,
 } from '@server/utils/skillValidation';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
@@ -66,6 +67,7 @@ const handler = baseApi()
     if (body.disableModelInvocation !== undefined) {
       patch.disableModelInvocation = Boolean(body.disableModelInvocation);
     }
+    if (body.files !== undefined) patch.files = validateSkillFiles(body.files) ?? [];
 
     const scanMode = globalSkillScanFor(skill, patch, { id: req.user!.id, isAdmin: req.user!.isAdmin });
     if (scanMode !== 'none') {
