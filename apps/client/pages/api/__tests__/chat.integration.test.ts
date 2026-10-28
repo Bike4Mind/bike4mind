@@ -582,6 +582,16 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(mockInvoke).not.toHaveBeenCalled();
     });
 
+    it('429s every request when the resolved limit is 0, without touching the bucket', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockResolveUserRateLimitPerMin.mockResolvedValue(0);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
     it('skips enforcement entirely for an unlimited (admin/dev) caller', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       mockResolveUserRateLimitPerMin.mockResolvedValue(Infinity);

@@ -1,6 +1,7 @@
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
@@ -47,7 +48,7 @@ const RequestSchema = z.object({
 const handler = baseApi()
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 200 : 60,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 200 : 60),
       windowMs: 60 * 1000,
     })
   )

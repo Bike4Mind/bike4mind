@@ -22,6 +22,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';
@@ -143,7 +144,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
     // the chat endpoints (3 req/min vs 10) because individual calls are
     // 10-100x more expensive.
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 30 : 3,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 30 : 3),
       windowMs: 60 * 1000,
     })
   )

@@ -153,7 +153,7 @@ export const apiKeyAuditRowToEntry = (row: UserApiKeyAuditRow, subject: Activity
 // --- Merged keyset paging ---
 
 /** Same (occurredAt, _id) keyset as the AdminAuditLog list, on a store keyed by createdAt. */
-const securityCursorClauses = (cursor: AuditLogCursor | undefined): Record<string, unknown>[] =>
+export const createdAtCursorClauses = (cursor: AuditLogCursor | undefined): Record<string, unknown>[] =>
   cursor
     ? [
         { createdAt: { $lte: cursor.occurredAt } },
@@ -173,7 +173,7 @@ const compareNewestFirst = (a: AuditEntry, b: AuditEntry): number => {
   return a.id < b.id ? 1 : -1;
 };
 
-const buildActorDirectory = async (actorIds: string[]): Promise<ActorDirectory> => {
+export const buildActorDirectory = async (actorIds: string[]): Promise<ActorDirectory> => {
   const directory: ActorDirectory = new Map();
   await Promise.all(
     [...new Set(actorIds)].map(async id => {
@@ -193,7 +193,7 @@ const fetchSecurityEntries = async (
   subject: ActivitySubject,
   page: { limit: number; cursor?: AuditLogCursor }
 ): Promise<AuditEntry[]> => {
-  const cursorClauses = securityCursorClauses(page.cursor);
+  const cursorClauses = createdAtCursorClauses(page.cursor);
   const [authRows, apiKeyRows] = await Promise.all([
     UserAuthAuditLogModel.find({ $and: [{ userId: subject.id }, ...cursorClauses] })
       .sort({ createdAt: -1, _id: -1 })

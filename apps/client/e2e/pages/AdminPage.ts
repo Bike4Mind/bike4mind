@@ -1,4 +1,4 @@
-import { type Locator, expect } from '@playwright/test';
+import { type Locator, type Response, expect } from '@playwright/test';
 import { BasePage } from './BasePage';
 import { TIMEOUTS } from '../constants';
 
@@ -65,9 +65,17 @@ export class AdminPage extends BasePage {
   async navigateToUsersTab() {
     await this.expandUserOps();
     await this.page.getByTestId('admin-users-tab-btn').filter({ visible: true }).first().click();
-    await expect(this.page.getByTestId('admin-search-users-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
-    await this.waitForLoaderToDisappear('admin-users-loading-indicator');
-    await expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION });
+    await expect(this.page.getByTestId('admin-users-search-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await this.waitForUsersLoaded();
+  }
+
+  /** The users table renders skeleton rows while a page is fetching. */
+  private async waitForUsersLoaded() {
+    await expect(this.page.getByTestId('admin-table-skeleton-row')).toHaveCount(0, { timeout: TIMEOUTS.ACTION });
+  }
+
+  private isUsersListResponse(resp: Response) {
+    return resp.url().includes('/api/admin/users?') && resp.request().method() === 'GET' && resp.ok();
   }
 
   async navigateToOrganizationsTab() {
@@ -89,67 +97,44 @@ export class AdminPage extends BasePage {
   // --- User Search ---
 
   async searchUser(query: string) {
-    const searchInput = this.page.getByTestId('admin-search-users-input').getByRole('textbox');
+    const searchInput = this.page.getByTestId('admin-users-search-input');
     await searchInput.clear();
     await searchInput.fill(query);
     await this.waitForResponseOrUI(
-      resp => resp.url().includes('/api/users') && resp.request().method() === 'GET' && resp.ok(),
-      () => expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION })
+      resp => this.isUsersListResponse(resp) && resp.url().includes('search='),
+      () => this.waitForUsersLoaded()
     );
-
-    await this.waitForLoaderToDisappear('admin-users-loading-indicator');
+    await this.waitForUsersLoaded();
   }
 
   async isUserVisible(name: string): Promise<boolean> {
-    return await this.page
-      .getByTestId(`user-name-${name}`)
+    return await this.getUserRow(name)
       .isVisible()
       .catch(() => false);
   }
 
   async waitForUserVisible(name: string) {
-    await expect(this.page.getByTestId(`user-name-${name}`)).toBeVisible({ timeout: TIMEOUTS.ACTION });
+    await expect(this.getUserRow(name)).toBeVisible({ timeout: TIMEOUTS.ACTION });
   }
 
   // --- Sort ---
 
-  async setSortBy(option: 'name' | 'createdAt') {
-    const testId = option === 'name' ? 'sort-option-name' : 'sort-option-created-at';
-    // Dropdown options can be detached by React re-renders. Retry: re-open the dropdown.
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        // The floating AI chat can re-open and overlay the sort controls, intercepting pointer
-        // events (same guard as toggleSortOrder). Re-close each attempt in case it reopened.
-        await this.closeFloatingChat();
-        // Bound the click so a stuck dropdown-open (unbounded stability check) fails fast into
-        // the retry rather than hanging; keeping it inside the try lets a throw retry too.
-        await this.page.getByTestId('admin-sort-by-select').click({ timeout: TIMEOUTS.ELEMENT_STATE });
-        await this.page.getByTestId(testId).click({ timeout: TIMEOUTS.ELEMENT_STATE });
-        break;
-      } catch {
-        if (attempt === 3) throw new Error(`Failed to select sort option "${option}" after retries`);
-        await this.page.keyboard.press('Escape');
-      }
-    }
-    await this.waitForLoaderToDisappear('admin-users-loading-indicator');
-    await expect(this.page.getByTestId('admin-sort-by-listbox')).toBeHidden({ timeout: TIMEOUTS.ELEMENT_STATE });
-  }
-
-  async toggleSortOrder() {
-    // The floating AI chat can re-open and overlay the sort controls,
-    // intercepting pointer events - close it before clicking.
+  /** Click a sortable column header; each click flips the direction. */
+  async sortByColumn(columnId: 'user' | 'signedUp' | 'lastActive' | 'credits') {
+    // The floating AI chat can re-open and overlay the table header, intercepting pointer events.
     await this.closeFloatingChat();
-    await this.page.getByTestId('admin-sort-order-btn').click();
+    await this.page.getByTestId(`admin-table-sort-${columnId}-btn`).click();
     await this.waitForResponseOrUI(
-      resp => resp.url().includes('/api/users') && resp.request().method() === 'GET' && resp.ok(),
-      () => expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION })
+      resp => this.isUsersListResponse(resp),
+      () => this.waitForUsersLoaded()
     );
+    await this.waitForUsersLoaded();
   }
 
   // --- Create User ---
 
   async openCreateUserModal() {
-    await this.page.getByTestId('admin-create-user-btn').click();
+    await this.page.getByTestId('admin-users-create-btn').click();
     await expect(this.page.getByTestId('create-user-username-input')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
@@ -175,25 +160,20 @@ export class AdminPage extends BasePage {
 
   // --- User Row Actions ---
 
-  /** Get the user row card containing the given user name */
-  private getUserRow(name: string): Locator {
-    return this.page.getByTestId('admin-user-card').filter({ has: this.page.getByTestId(`user-name-${name}`) });
+  /** The users table row whose text contains the given name or email. */
+  getUserRow(text: string): Locator {
+    return this.page.locator('tr[data-testid^="admin-users-row-"]').filter({ hasText: text });
   }
 
   /**
-   * Row buttons are activated from the keyboard: at 1280x720 the Users page header (signups chart,
-   * filters) leaves the scrolling list almost no height, so the bottom pager covers the row and a
-   * pointer click never lands.
+   * Opens the /admin/users/$userId profile page by activating the row from the keyboard: at 1280x720
+   * the Users page header (signups chart, filters) leaves the scrolling list almost no height, so the
+   * bottom pager covers the row and a pointer click never lands.
    */
-  private async activateRowButton(name: string, testId: string) {
-    const button = this.getUserRow(name).getByTestId(testId);
-    await button.focus();
-    await button.press('Enter');
-  }
-
-  async clickUserAdminButton(name: string) {
-    await this.activateRowButton(name, 'admin-user-admin-btn');
-    // Navigates to the /admin/users/$userId profile page
+  async openUserProfile(name: string) {
+    const row = this.getUserRow(name);
+    await row.focus();
+    await row.press('Enter');
     await expect(this.page.getByTestId('user-profile-view')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
@@ -204,8 +184,8 @@ export class AdminPage extends BasePage {
   }
 
   async clickUserProfileButton(name: string) {
-    await this.activateRowButton(name, 'admin-user-profile-btn');
-    // Wait for AdminProfileModal to open
+    await this.openUserProfile(name);
+    await this.page.getByTestId('admin-user-profile-btn').click();
     await expect(this.page.getByTestId('admin-profile-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
@@ -213,7 +193,7 @@ export class AdminPage extends BasePage {
 
   /** Open the target user's profile, then pick "Log in as user" from the More menu. */
   async clickLoginAs(name: string) {
-    await this.clickUserAdminButton(name);
+    await this.openUserProfile(name);
     await this.clickProfileMenuItem('loginAs');
   }
 

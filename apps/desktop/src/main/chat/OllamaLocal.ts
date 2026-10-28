@@ -1,5 +1,6 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
+import type { FetchLike } from '@bike4mind/local-models';
 import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
 import {
   AUTO_LOCAL_CONTEXT,
@@ -22,12 +23,15 @@ import {
   type LocalModelFootprint,
   type OllamaMessage,
 } from './localContext';
+import { ServerCredentialsError } from '../modelServers/errors';
 import type { CompletionStreamEvent } from './streamEvents';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 
 export const OLLAMA_RUNTIME_ID = 'ollama';
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const TIMEOUT_MS = 1_000;
+/** A server across a network answers short calls slower than the daemon on this computer. */
+const REMOTE_TIMEOUT_MS = 8_000;
 /** A busy daemon can take seconds to answer /api/show; a turn waits for it rather than failing. */
 const TURN_INSPECT_TIMEOUT_MS = 10_000;
 const INSPECT_RETRY_MS = 5_000;
@@ -54,8 +58,10 @@ const showSchema = z.object({
   ...remoteFields,
 });
 
-async function ollamaError(response: Response): Promise<Error> {
-  const message = await httpError(response);
+async function ollamaError(response: Response, server?: RemoteOllama): Promise<Error> {
+  if (server && (response.status === 401 || response.status === 403))
+    return new ServerCredentialsError(server.label, server.hasCredentials());
+  const message = await httpError(response, server?.label ?? 'Ollama');
   // Ollama answers "model '...' not found" once the model is deleted, e.g. from the Models screen.
   if (response.status === 404 && /model .* not found/i.test(message))
     return new Error('This model was removed from Ollama. Pick another model.');
@@ -183,33 +189,62 @@ const GROWTH_HINTS: Record<Exclude<ContextGrowth, { tokens: number }>['reason'],
 };
 const SLOWER_HINT = ' Part of the model now runs from system memory, so replies will be slower.';
 
+/** A saved Ollama server on another machine; see main/modelServers. */
+export interface RemoteOllama {
+  runtimeId: string;
+  baseUrl: string;
+  label: string;
+  /** Adds the server's credentials and applies its transport rules; see createServerFetch. */
+  fetch: FetchLike;
+  hasCredentials(): boolean;
+}
+
 export class OllamaLocal {
   private listed: ChatModelOption[] = [];
+  private readonly runtimeId: string;
 
   /**
    * Main passes Electron's net.fetch: Node's fetch gives up after five minutes without response
    * headers, and Ollama sends none until prefill ends, which takes that long for a CPU-only model.
    * Only chat uses it: Chromium allows 6 sockets per host and each open stream holds one, so the
    * short calls stay on Node's fetch, which a full pool cannot starve.
+   *
+   * With `server`, every call goes to that server through its own fetch instead, and its models are
+   * keyed by its runtime id. Sizing measures this computer, so a server is not given one.
    */
   constructor(
     private readonly chatFetch: ChatFetch = (url, init) => globalThis.fetch(url, init),
-    private readonly sizing?: LocalContextSizing
-  ) {}
+    private readonly sizing?: LocalContextSizing,
+    private readonly server?: RemoteOllama
+  ) {
+    this.runtimeId = server?.runtimeId ?? OLLAMA_RUNTIME_ID;
+  }
 
   async models(): Promise<ChatModelOption[]> {
-    let rows: TagRow[];
     try {
-      rows = await this.tags();
+      return await this.listModels();
     } catch (err) {
       // A daemon that is not running has no models; a slow or failing one keeps its last list.
       if (refused(err)) this.listed = [];
       return this.listed;
     }
+  }
+
+  /** `models`, except a failed `/api/tags` rejects, so a caller can tell a server that is down from one with no models. */
+  async listModels(): Promise<ChatModelOption[]> {
+    const rows = await this.tags();
     this.listed = (await Promise.all(rows.map(row => this.model(row.name)))).filter(
       (model): model is ChatModelOption => model !== null
     );
     return this.listed;
+  }
+
+  private key(name: string): string {
+    return this.server ? `${this.runtimeId}\n${name}` : name;
+  }
+
+  private chatPost(init: RequestInit): Promise<Response> {
+    return this.server ? this.server.fetch(`${this.server.baseUrl}/api/chat`, init) : this.chatFetch(CHAT_URL, init);
   }
 
   /**
@@ -219,7 +254,7 @@ export class OllamaLocal {
   async contextTokens(modelId: string, signal?: AbortSignal): Promise<number> {
     const known = contextByModel.get(modelId);
     if (known !== undefined) return known;
-    const name = ollamaModelName(modelId);
+    const name = ollamaModelName(modelId, this.runtimeId);
     return this.resolveContext(modelId, showSchema.parse(await this.json('/api/show', { name }, signal)));
   }
 
@@ -249,13 +284,13 @@ export class OllamaLocal {
     /** Called when Auto changed this model's context in a way the user should hear about. */
     onNotice?: (message: string) => void
   ): Promise<void> {
-    const model = ollamaModelName(request.model);
+    const model = ollamaModelName(request.model, this.runtimeId);
     const inspection = showSchema.parse(await this.json('/api/show', { name: model }, signal, TURN_INSPECT_TIMEOUT_MS));
     // A localhost daemon can proxy cloud models, including aliases without a cloud suffix.
     // Inspect again before sending private messages, even when discovery was cached.
     if (usesRemoteModel(inspection)) throw new Error('Cloud-backed Ollama models cannot be used as local models.');
     if (!inspection.capabilities.includes('completion')) throw new Error('This Ollama model cannot answer chat.');
-    knownInspections.set(model, inspection);
+    knownInspections.set(this.key(model), inspection);
     let numCtx = await this.resolveContext(request.model, inspection);
     const canThink = inspection.capabilities.includes('thinking');
     const prefilled = !canThink && opensThinkBlock(inspection.template);
@@ -277,7 +312,7 @@ export class OllamaLocal {
     const post = (fitted: OllamaMessage[]) => {
       // Another conversation may have grown the model, or a load failure lowered it, since this turn began.
       numCtx = contextByModel.get(request.model) ?? numCtx;
-      return this.chatFetch(CHAT_URL, {
+      return this.chatPost({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         signal,
@@ -354,7 +389,7 @@ export class OllamaLocal {
       response = await send(sent);
       measured = await refusedSize(response);
     }
-    if (!response.ok || !response.body) throw await ollamaError(response);
+    if (!response.ok || !response.body) throw await ollamaError(response, this.server);
     if (left > 0) onTrimmed?.(left);
     // Recorded now, not only on the done frame, so a reply stopped early still makes the next turn compact.
     if (whole !== undefined) onEvent({ type: 'content', usage: { inputTokens: whole } });
@@ -379,7 +414,7 @@ export class OllamaLocal {
           `${model} ended its reply without writing anything. Send the message again or pick a larger model.`
         );
       const again = await send(sent);
-      if (!again.ok || !again.body) throw await ollamaError(again);
+      if (!again.ok || !again.body) throw await ollamaError(again, this.server);
       body = again.body;
     }
   }
@@ -395,7 +430,7 @@ export class OllamaLocal {
     const setting = await this.setting();
     const sizing = setting.mode === 'auto' ? this.sizing : undefined;
     const footprint = sizing
-      ? await sizing.footprint(await this.facts(ollamaModelName(modelId), inspection))
+      ? await sizing.footprint(await this.facts(ollamaModelName(modelId, this.runtimeId), inspection))
       : UNMEASURED;
     if (generation !== sizingGeneration) return this.resolveContext(modelId, inspection);
     const raced = contextByModel.get(modelId);
@@ -435,8 +470,8 @@ export class OllamaLocal {
    * undefined when it cannot grow. ChatService asks before compacting a conversation near its window.
    */
   async growFor(modelId: string, tokens: number): Promise<number | undefined> {
-    const name = ollamaModelName(modelId);
-    const inspection = knownInspections.get(name) ?? showSchema.parse(await this.json('/api/show', { name }));
+    const name = ollamaModelName(modelId, this.runtimeId);
+    const inspection = knownInspections.get(this.key(name)) ?? showSchema.parse(await this.json('/api/show', { name }));
     const current = await this.resolveContext(modelId, inspection);
     return (await this.grow(modelId, inspection, tokens, undefined, current)).tokens;
   }
@@ -457,7 +492,7 @@ export class OllamaLocal {
       return { hint: larger ? ' Settings can give local models a larger context.' : '' };
     }
     const footprint = this.sizing
-      ? await this.sizing.footprint(await this.facts(ollamaModelName(modelId), inspection))
+      ? await this.sizing.footprint(await this.facts(ollamaModelName(modelId, this.runtimeId), inspection))
       : UNMEASURED;
     // Settings changed while this was measured: the new choice decides the size.
     if (generation !== sizingGeneration) {
@@ -476,8 +511,8 @@ export class OllamaLocal {
   }
 
   private async facts(name: string, inspection: Inspection): Promise<LocalModelFacts> {
-    if (!tagFacts.has(name)) await this.tags().catch(() => null);
-    return { name, modelInfo: inspection.model_info ?? undefined, ...tagFacts.get(name) };
+    if (!tagFacts.has(this.key(name))) await this.tags().catch(() => null);
+    return { name, modelInfo: inspection.model_info ?? undefined, ...tagFacts.get(this.key(name)) };
   }
 
   /** One `/api/tags` per refresh; a changed digest is a different model under the same name. */
@@ -485,13 +520,14 @@ export class OllamaLocal {
     const { models } = tagsSchema.parse(await this.json('/api/tags'));
     const local = models.filter(row => !usesRemoteModel(row));
     for (const row of local) {
-      const known = tagFacts.get(row.name);
+      const key = this.key(row.name);
+      const known = tagFacts.get(key);
       if (known && known.digest !== row.digest) {
-        forgetLocalContext(localModelId(OLLAMA_RUNTIME_ID, row.name));
-        knownInspections.delete(row.name);
-        inspectRetries.delete(row.name);
+        forgetLocalContext(localModelId(this.runtimeId, row.name));
+        knownInspections.delete(key);
+        inspectRetries.delete(key);
       }
-      tagFacts.set(row.name, {
+      tagFacts.set(key, {
         ...(row.size !== undefined && row.size > 0 ? { sizeBytes: row.size } : {}),
         ...(row.digest ? { digest: row.digest } : {}),
       });
@@ -504,25 +540,26 @@ export class OllamaLocal {
    * or unreachable, the last answer for this digest, or undefined when there is none yet.
    */
   private async chatInspection(name: string): Promise<Inspection | null | undefined> {
-    const retry = inspectRetries.get(name);
-    if (retry && Date.now() < retry.at) return knownInspections.get(name);
+    const key = this.key(name);
+    const retry = inspectRetries.get(key);
+    if (retry && Date.now() < retry.at) return knownInspections.get(key);
     let body: unknown;
     try {
       body = await this.json('/api/show', { name });
     } catch (err) {
       if (!unanswered(err)) return null;
       const delay = retry ? Math.min(retry.delay * 2, INSPECT_RETRY_MAX_MS) : INSPECT_RETRY_MS;
-      inspectRetries.set(name, { at: Date.now() + delay, delay });
-      return knownInspections.get(name);
+      inspectRetries.set(key, { at: Date.now() + delay, delay });
+      return knownInspections.get(key);
     }
-    inspectRetries.delete(name);
+    inspectRetries.delete(key);
     const show = showSchema.safeParse(body);
     // Embedding-only models cannot answer /api/chat; an invalid answer is not a plain-text capability.
     if (!show.success || usesRemoteModel(show.data) || !show.data.capabilities.includes('completion')) {
-      knownInspections.delete(name);
+      knownInspections.delete(key);
       return null;
     }
-    knownInspections.set(name, show.data);
+    knownInspections.set(key, show.data);
     return show.data;
   }
 
@@ -532,14 +569,14 @@ export class OllamaLocal {
     // Not inspected yet: listed with the capability flags absent, which chat reads as tools on.
     const known = inspection ?? { capabilities: [] };
     const capabilities = inspection?.capabilities;
-    const id = localModelId(OLLAMA_RUNTIME_ID, name);
+    const id = localModelId(this.runtimeId, name);
     // Advertised from what is known now; the context is settled on the model's first request.
     const footprint = this.sizing ? this.sizing.cachedFootprint(await this.facts(name, known)) : UNMEASURED;
     const contextWindow = contextByModel.get(id) ?? (await this.sized(known, footprint));
     return {
       id,
       name,
-      backend: localBackend(OLLAMA_RUNTIME_ID),
+      backend: localBackend(this.runtimeId),
       ...(capabilities
         ? { supportsTools: capabilities.includes('tools'), supportsVision: capabilities.includes('vision') }
         : {}),
@@ -553,14 +590,16 @@ export class OllamaLocal {
     };
   }
 
-  private async json(path: string, body?: unknown, signal?: AbortSignal, timeoutMs = TIMEOUT_MS): Promise<unknown> {
-    const response = await globalThis.fetch(`${OLLAMA_URL}${path}`, {
+  private async json(path: string, body?: unknown, signal?: AbortSignal, timeoutMs?: number): Promise<unknown> {
+    const deadline = AbortSignal.timeout(timeoutMs ?? (this.server ? REMOTE_TIMEOUT_MS : TIMEOUT_MS));
+    const fetchJson = this.server?.fetch ?? globalThis.fetch;
+    const response = await fetchJson(`${this.server?.baseUrl ?? OLLAMA_URL}${path}`, {
       method: body ? 'POST' : 'GET',
       headers: body ? { 'content-type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
     });
-    if (!response.ok) throw await ollamaError(response);
+    if (!response.ok) throw await ollamaError(response, this.server);
     return response.json();
   }
 }
@@ -732,11 +771,11 @@ function tokenCount(value: unknown): number | undefined {
     : undefined;
 }
 
-async function httpError(response: Response): Promise<string> {
+async function httpError(response: Response, label: string): Promise<string> {
   const body: unknown = await response.json().catch(() => null);
   const detail =
     body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : '';
-  return `Ollama returned HTTP ${response.status}${detail ? `: ${detail}` : '.'}`;
+  return `${label} returned HTTP ${response.status}${detail ? `: ${detail}` : '.'}`;
 }
 
 // 500 with one of these is the runner failing to load at this size; 503 and the rest are not a size problem.
@@ -755,9 +794,9 @@ async function refusedSize(response: Response): Promise<number | undefined> {
   return response.status === 400 ? overflowTokens(await response.clone().text()) : undefined;
 }
 
-function ollamaModelName(modelId: string): string {
+function ollamaModelName(modelId: string, runtimeId: string): string {
   const parsed = parseLocalModelId(modelId);
-  if (parsed?.runtimeId !== OLLAMA_RUNTIME_ID) throw new Error('Invalid local model id.');
+  if (parsed?.runtimeId !== runtimeId) throw new Error('Invalid local model id.');
   return parsed.model;
 }
 
@@ -769,6 +808,7 @@ let sizingGeneration = 0;
 const failedLoads = new Set<string>();
 /** The num_ctx each model last answered at, which a failed larger load falls back to. */
 const loadedByModel = new Map<string, number>();
+/** These three are keyed by `key()`, so two servers with the same model name keep apart. */
 const tagFacts = new Map<string, { sizeBytes?: number; digest?: string }>();
 /** The last /api/show answer per model, kept so a slow daemon does not drop the model or its tools. */
 const knownInspections = new Map<string, Inspection>();
