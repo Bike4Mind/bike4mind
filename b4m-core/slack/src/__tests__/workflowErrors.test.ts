@@ -85,6 +85,16 @@ describe('categorizeError', () => {
     expect(result.category).toBe(WorkflowErrorCategory.INTERNAL_ERROR);
     expect(result.userMessage).toBe('An unexpected system error occurred.');
   });
+
+  it.each([['boom'], [null], [undefined]])(
+    'should categorize non-Error value %j as INTERNAL_ERROR with a fallback message',
+    value => {
+      const result = categorizeError(value);
+      expect(result.category).toBe(WorkflowErrorCategory.INTERNAL_ERROR);
+      expect(result.message).toBe('Unknown error');
+      expect(result.userMessage).toBe('An unexpected system error occurred.');
+    }
+  );
 });
 
 describe('withRetry', () => {
