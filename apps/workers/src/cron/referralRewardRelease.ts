@@ -16,5 +16,7 @@ import { Resource } from 'sst';
 
 export async function handler(): Promise<ReleaseSubscriptionRewardsResult> {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
-  return releaseDueSubscriptionRewards();
+  const result = await releaseDueSubscriptionRewards();
+  if (result.failed > 0) throw new Error(`Failed to release ${result.failed} referral reward(s)`);
+  return result;
 }
