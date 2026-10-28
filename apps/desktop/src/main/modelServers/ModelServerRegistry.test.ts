@@ -395,15 +395,13 @@ describe('ModelServerRegistry', () => {
 
   it('sizes llama-server context from /props once the probe has identified it', async () => {
     const asked: string[] = [];
-    const fetchFor =
-      (): FetchLike =>
-      async input => {
-        const path = new URL(String(input)).pathname;
-        asked.push(path);
-        if (path === '/v1/models') return json({ data: [{ id: 'm', owned_by: 'llamacpp' }] });
-        if (path === '/props') return json({ build_info: 'b1', default_generation_settings: { n_ctx: 8192 } });
-        return json({ error: 'not found' }, 404);
-      };
+    const fetchFor = (): FetchLike => async input => {
+      const path = new URL(String(input)).pathname;
+      asked.push(path);
+      if (path === '/v1/models') return json({ data: [{ id: 'm', owned_by: 'llamacpp' }] });
+      if (path === '/props') return json({ build_info: 'b1', default_generation_settings: { n_ctx: 8192 } });
+      return json({ error: 'not found' }, 404);
+    };
     const { registry: servers } = registry({ fetchFor } as unknown as ReturnType<typeof fakeOllama>);
     await servers.add({
       address: 'http://192.168.1.20:8080',
