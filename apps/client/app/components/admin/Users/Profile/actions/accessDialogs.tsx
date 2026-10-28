@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { Button, Chip, ChipDelete, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useGetUserTags } from '@client/app/hooks/data/user';
+import { useAdminUserTagsUpdate } from './useAdminUserTagsUpdate';
 import ProductAccess from '../../ProductAccess';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, SegmentedControl, useUndoToast } from '../../../shared';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
@@ -95,7 +97,9 @@ export const ChangeRoleDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
 
 /** Free-form tags only: Role and Product access own the managed tags and are left as they are. */
 export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
-  const update = useAdminUserUpdate(user.id);
+  const update = useAdminUserTagsUpdate(user.id);
+  const suggestions = useGetUserTags();
+  const suggestionsId = useId();
   const showUndo = useUndoToast();
   const tags = user.tags ?? [];
   const managed = tags.filter(isManagedTag);
@@ -117,9 +121,9 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
   };
 
   const handleConfirm = async () => {
-    await update({ tags: nextTags });
+    await update({ before: tags, tags: nextTags });
     onClose();
-    showUndo({ message: 'Tags updated', onUndo: () => update({ tags }), onViewAudit: onAudit });
+    showUndo({ message: 'Tags updated', onUndo: () => update({ before: nextTags, tags }), onViewAudit: onAudit });
   };
 
   return (
@@ -135,7 +139,7 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
       onConfirm={handleConfirm}
       data-testid="manage-tags-dialog"
     >
-      <Stack direction="row" gap={0.75} flexWrap="wrap" data-testid="manage-tags-dialog-list">
+      <Stack direction="row" gap={0.75} flexWrap="wrap" data-testid="user-tags-editor">
         {custom.length === 0 && (
           <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
             No tags yet.
@@ -173,8 +177,22 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
               }
             }}
             sx={{ flex: 1 }}
-            slotProps={{ input: { 'data-testid': 'manage-tags-dialog-input' } }}
+            slotProps={{
+              input: {
+                list: suggestionsId,
+                maxLength: 6500,
+                'data-testid': 'manage-tags-dialog-input',
+                'aria-label': 'Add tags',
+              },
+            }}
           />
+          <datalist id={suggestionsId} data-testid="user-tags-suggestions">
+            {(suggestions.data ?? [])
+              .filter(tag => !isManagedTag(tag))
+              .map(tag => (
+                <option key={tag} value={tag} />
+              ))}
+          </datalist>
           <Button
             variant="outlined"
             color="neutral"
