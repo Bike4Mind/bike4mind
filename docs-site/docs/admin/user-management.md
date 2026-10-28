@@ -86,6 +86,8 @@ Click **Filter** to add a filter chip. Each chip shows its current value; click 
 | Organization | One or more organizations, or **No organization** |
 | Tags | One or more tags, including **Admin** for super admins |
 
+The **Signed up** column shows the first provider linked to the account, or Email when none is linked. The **Sign-in method** filter matches any linked provider, and Email matches only accounts with no linked provider. An account created with an email code that later linked Google shows as Google, and appears under the Google filter but not Email.
+
 Filters are applied on the server, so they cover every user, not just the current page. Changing a filter returns to page 1.
 
 ## Grouping by email domain
