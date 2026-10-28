@@ -720,6 +720,25 @@ describe('ModelHubService fit', () => {
     expect(runtime.inspect).toHaveBeenCalledTimes(2);
   });
 
+  it('reads only a few installed models from Ollama at once', async () => {
+    const { service, runtime } = harness();
+    runtime.list.mockResolvedValue(Array.from({ length: 10 }, (_, index) => installed({ name: `m${index}:latest` })));
+    let active = 0;
+    let peak = 0;
+    runtime.inspect.mockImplementation(async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 1));
+      active--;
+      throw new LocalRuntimeError('show timed out', 'ollama');
+    });
+
+    const result = await service.installed();
+    expect(result.ok && result.models).toHaveLength(10);
+    expect(runtime.inspect).toHaveBeenCalledTimes(10);
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+
   it('falls back to the file size when Ollama cannot describe a model, and reads it again next time', async () => {
     const { service, runtime } = harness();
     runtime.list.mockResolvedValue([installed(), installed({ name: 'mystery:latest', sizeBytes: null })]);
@@ -1557,6 +1576,23 @@ describe('ModelHubService curated Hugging Face pulls', () => {
     again.pulls[0].resolve();
     await expect(removed).resolves.toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
     expect(again.runtime.remove).toHaveBeenCalledWith(IQ3_REF);
+  });
+
+  it('shows and rechecks the build under the tag Hugging Face verified, not the one its quant label implies', async () => {
+    const verified = `${IQ3_REF}-imat`;
+    const { service, hub, runtime, pulls } = gsqHarness({ verified });
+    hub.ollamaLayers.mockResolvedValue(reviewedLayers(IQ3));
+    runtime.inspect.mockRejectedValue(new LocalRuntimeError('show timed out', 'ollama'));
+    const result = service.pull(gsqRequest);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].resolve();
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
+
+    const row = (await service.curated()).entries.find(entry => entry.id === GSQ.id)?.builds[0];
+    expect(row?.ollamaRef).toBe(verified);
+    runtime.inspect.mockClear();
+    await service.checkCurated(GSQ.id, IQ3.id);
+    expect(runtime.inspect).toHaveBeenCalledWith(verified, expect.anything());
   });
 
   it.each([

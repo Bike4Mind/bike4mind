@@ -211,6 +211,8 @@ function pause(ms: number, signal: AbortSignal): Promise<boolean> {
   });
 }
 
+// Pre-release suffixes are dropped on purpose (0.32.12-rc1 meets a 0.32.12 floor); a dev build
+// reporting 0.0.0 is blocked, which is the safe side.
 const versionParts = (text: string) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(text.trim())?.slice(1).map(Number);
 
 /** Why this Ollama cannot download the build; one with a minimum is blocked while Ollama reports no version. */
@@ -223,6 +225,22 @@ function ollamaBlocked(build: HubBuild, version: string | null): string | null {
   if (!have) return `${needs}, and Ollama did not report its version`;
   const differs = have.findIndex((part, index) => part !== want[index]);
   return differs !== -1 && have[differs] < want[differs] ? needs : null;
+}
+
+/** Cold-cache /api/show reads in flight at once, so a long installed list does not swamp a busy daemon. */
+const INSPECT_CONCURRENCY = 4;
+
+async function mapLimited<T, R>(items: readonly T[], limit: number, map: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await map(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 const smallestBuild = (entry: CuratedEntryView) => Math.min(...entry.builds.map(build => build.sizeBytes));
@@ -443,6 +461,8 @@ export class ModelHubService {
   readonly #checkBackoffMs: readonly number[];
   /** Curated pulls Ollama could not describe, by lowercased ref, with whether the tag was there before. */
   readonly #unverified = new Map<string, boolean | null>();
+  /** The hf.co ref each curated Hugging Face build was last pulled under, by entry and build id. */
+  readonly #pulledRefs = new Map<string, string>();
   /** Installed models' layer shapes, keyed by name, modified time and size so a re-pulled tag is read again. */
   readonly #archs = new Map<
     string,
@@ -624,7 +644,7 @@ export class ModelHubService {
     const picked = this.#reviewed(entryId, buildId);
     if (!picked) return { ok: false, error: hubError('not-found', 'That model is not on the list.') };
     const { build } = picked;
-    const ref = libraryOf(build)?.ref ?? `hf.co/${build.hf?.repo ?? ''}:${build.quant.label}`;
+    const ref = libraryOf(build)?.ref ?? this.#hfRef(entryId, build);
     const hadTag = this.#unverified.get(ref.toLowerCase()) ?? null;
     const error = await this.#checkInstalled(build, ref, hadTag, new AbortController().signal);
     this.#deps.onInstalledChanged();
@@ -635,6 +655,11 @@ export class ModelHubService {
   async #hasTag(ref: string): Promise<boolean | null> {
     const models = await this.#deps.runtime.list().catch(() => null);
     return models && models.some(model => model.name.toLowerCase() === ref.toLowerCase());
+  }
+
+  /** verifyOllamaRef's tag when this build was pulled this session, else the tag its quant label implies. */
+  #hfRef(entryId: string, build: HubBuild): string {
+    return this.#pulledRefs.get(`${entryId}\0${build.id}`) ?? `hf.co/${build.hf?.repo ?? ''}:${build.quant.label}`;
   }
 
   #curatedBuild(entry: HubEntry, build: HubBuild, sizing: Sizing, version: string | null) {
@@ -660,7 +685,7 @@ export class ModelHubService {
       pullBuildId: hubBuildId(file.path),
       quant: build.quant.label,
       sizeBytes: file.sizeBytes + (pinsOf(build)?.projectorBytes ?? 0),
-      ollamaRef: `hf.co/${repo}:${build.quant.label}`,
+      ollamaRef: this.#hfRef(entry.id, build),
       fit,
       blockedReason,
     } satisfies CuratedBuildView;
@@ -789,7 +814,7 @@ export class ModelHubService {
       const loadedNames = new Set(loaded.map(entry => entry.name));
       const sizing = await this.#sizing();
       const keep = new Set<string>();
-      const fits = await Promise.all(models.map(model => this.#installedFit(model, sizing, keep)));
+      const fits = await mapLimited(models, INSPECT_CONCURRENCY, model => this.#installedFit(model, sizing, keep));
       for (const key of this.#archs.keys()) if (!keep.has(key)) this.#archs.delete(key);
       return {
         ok: true,
@@ -900,6 +925,7 @@ export class ModelHubService {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       return this.#fail(key, entry, pullEofError(error, ref) ?? toModelHubError(error));
     }
+    if (curated && !libraryOf(curated.build)) this.#pulledRefs.set(`${curated.entry.id}\0${curated.build.id}`, ref);
     const installed = curated ? await this.#checkInstalled(curated.build, ref, hadTag, controller.signal) : null;
     this.#deps.onInstalledChanged();
     if (installed) return refuse(installed);
