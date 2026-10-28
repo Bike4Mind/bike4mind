@@ -40,6 +40,11 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   }),
 }));
 
+const { logoutMutate } = vi.hoisted(() => ({ logoutMutate: vi.fn() }));
+vi.mock('@client/app/hooks/data/user', () => ({
+  useUserLogout: () => ({ mutate: logoutMutate, isPending: false }),
+}));
+
 // A stub modal: surfaces the inline error and lets a test submit a code.
 vi.mock('@client/app/components/common/MFAModal', () => ({
   default: ({
@@ -153,6 +158,41 @@ describe('MFAEnforcementWrapper - dismissed verification prompt', () => {
 
     fireEvent.click(continueButton);
     await waitFor(() => expect(mfaSetupCalls()).toBe(2));
+  });
+});
+
+describe('MFAEnforcementWrapper - a session stuck at the verification prompt', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    get.mockResolvedValue({ data: { enabled: false } });
+    // Setup waits on the "Confirm it's you" prompt the user never completes.
+    post.mockReturnValue(new Promise(() => {}));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('offers a sign-out, so the user can sign in fresh and skip the prompt', async () => {
+    renderWrapper();
+
+    const signOut = await screen.findByTestId('mfa-enforcement-sign-out-btn');
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+
+    fireEvent.click(signOut);
+    expect(logoutMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the user when the sign-out fails, instead of leaving them on the screen silently', async () => {
+    logoutMutate.mockImplementation((_vars: unknown, options?: { onError?: (e: unknown) => void }) =>
+      options?.onError?.(new Error('Network Error'))
+    );
+    renderWrapper();
+
+    fireEvent.click(await screen.findByTestId('mfa-enforcement-sign-out-btn'));
+
+    expect(toastError).toHaveBeenCalledWith("Couldn't sign out. Please try again.");
   });
 });
 

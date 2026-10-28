@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -41,7 +42,7 @@ const OPTI_RAPID_SYSTEM_PROMPT =
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 200 : 50,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 200 : 50),
       windowMs: 60 * 1000,
     })
   )

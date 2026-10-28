@@ -326,6 +326,11 @@ export function fitMarginBytes(hw: HardwareProfile): number {
   return FIT_CONSTANTS.marginBytes.discrete * splitDevices(hw);
 }
 
+/** Whether models run from system RAM on this machine: no GPU, or a discrete GPU of unknown memory. */
+export function isCpuOnly(hw: HardwareProfile): boolean {
+  return memoryBudgets(hw).cpuOnly;
+}
+
 export function contextTarget(arch: ModelArch, mode: FitMode, contextCap?: number): number {
   const modeTarget = mode === 'embeddings' ? EMBEDDINGS_CONTEXT : MODE_CONTEXT_TARGETS[mode];
   return Math.min(modeTarget, arch.contextMax, contextCap ?? Infinity);

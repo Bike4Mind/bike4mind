@@ -12,6 +12,7 @@
  */
 
 import {
+  disposableDomainRefreshCron,
   modelDiscoveryCronEnabled,
   modelDiscoveryFunction,
   modelDiscoveryStalenessFunction,
@@ -871,6 +872,57 @@ if (isMonitoredStage) {
       Severity: 'High',
     },
   });
+
+  /**
+   * Alarm: disposable email domain list refresh failing two days running
+   *
+   * A failing source keeps its previous entries, so one bad day is tolerable; two means the
+   * signup gate is reading lists that are going stale.
+   *
+   * Metric emitted by: apps/workers/src/cron/disposableDomainRefresh.ts
+   * Namespace: Lumina5/DisposableDomains / SourceFailures
+   * MUST STAY IN SYNC with that handler's namespace, metric name and dimensions.
+   */
+  if (disposableDomainRefreshCron) {
+    new aws.cloudwatch.MetricAlarm('disposableDomainRefreshFailures', {
+      name: `${$app.name}-${$app.stage}-disposable-domain-refresh-failures`,
+      alarmDescription: 'Disposable email domain list refresh failed on two consecutive days',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      metricName: 'SourceFailures',
+      namespace: 'Lumina5/DisposableDomains',
+      period: 86400, // 1 day, the run cadence
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { Stage: $app.stage },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SignupProtection',
+        Severity: 'Medium',
+      },
+    });
+
+    // A timeout, OOM or init crash never reaches the handler's emit, so SourceFailures stays silent.
+    new aws.cloudwatch.MetricAlarm('disposableDomainRefreshLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-disposable-domain-refresh-lambda-errors`,
+      alarmDescription: 'Disposable email domain list refresh Lambda errored on two consecutive days',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 86400, // 1 day, the run cadence
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: disposableDomainRefreshCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'SignupProtection',
+        Severity: 'Medium',
+      },
+    });
+  }
 
   /**
    * Alarm: Model Discovery no successful run (dead-man's switch)

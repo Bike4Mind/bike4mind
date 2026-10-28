@@ -519,6 +519,50 @@ describe('UserApiKeysTab - Bob scopes', () => {
   });
 });
 
+describe('UserApiKeysTab - skills:write', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+    h.hasOptiAccess = false;
+    h.createMutate.mockClear();
+  });
+
+  const mintScopes = (preset?: 'readwrite' | 'full') => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+    if (preset) fireEvent.click(screen.getByTestId(`api-key-preset-${preset}`).querySelector('button')!);
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'Skills key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+    return (h.createMutate.mock.calls[0][0] as { scopes: ApiKeyScope[] }).scopes;
+  };
+
+  it('keeps skills:write out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('keeps skills:write out of Read & write, despite its suffix', () => {
+    const readwrite = mintScopes('readwrite');
+    // A write scope proves the preset click took effect.
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('offers skills:write with Full access', () => {
+    expect(mintScopes('full')).toContain(ApiKeyScope.SKILLS_WRITE);
+  });
+
+  it('keeps skills:review out of the default Read-only selection', () => {
+    expect(mintScopes()).not.toContain(ApiKeyScope.SKILLS_REVIEW);
+  });
+
+  it('keeps skills:review out of Read & write', () => {
+    const readwrite = mintScopes('readwrite');
+    expect(readwrite).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
+    expect(readwrite).not.toContain(ApiKeyScope.SKILLS_REVIEW);
+  });
+});
+
 describe('UserApiKeysTab - API key trust gate', () => {
   const blocked = { canCreate: false, message: 'Verify your account to create API keys.' };
 
