@@ -169,3 +169,77 @@ export function convertMessagesToOpenAIFormat(
 ): OpenAIFormattedMessage[] {
   return messages.flatMap(msg => convertMessageToOpenAIFormat(msg, options));
 }
+
+function isOpenAIToolMessage(msg: IMessage): msg is IMessage & { tool_call_id: string } {
+  return (msg.role as string) === 'tool' && typeof (msg as { tool_call_id?: unknown }).tool_call_id === 'string';
+}
+
+function parseToolArguments(raw: string): MessageContentToolUse['input'] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as MessageContentToolUse['input'])
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function toolCallsToCanonical(msg: IMessage & { tool_calls: OpenAIToolCall[] }): IMessage {
+  // reasoning_content is DeepSeek-private, and the Bedrock adapter forwards message objects
+  // into its request body nearly as-is, so it must not survive the trip to another provider.
+  const {
+    tool_calls: toolCalls,
+    content,
+    reasoning_content: _reasoningContent,
+    ...rest
+  } = msg as typeof msg & { reasoning_content?: unknown };
+  const text = typeof content === 'string' && content.trim() ? [{ type: 'text' as const, text: content }] : [];
+  const toolUses: MessageContentToolUse[] = toolCalls.map(call => ({
+    type: 'tool_use',
+    id: call.id,
+    name: call.function.name,
+    input: parseToolArguments(call.function.arguments),
+  }));
+  return { ...rest, content: [...text, ...toolUses] } as IMessage;
+}
+
+/**
+ * The inverse of convertMessagesToOpenAIFormat for tool history: rewrites OpenAI-shape
+ * assistant `tool_calls` and `role: 'tool'` messages into canonical tool_use / tool_result
+ * blocks, folding each run of consecutive tool messages into one user message.
+ *
+ * OpenAI-compatible backends push their tool rounds onto the caller's array in their own
+ * shape, and ChatCompletionProcess hands that same array to the fallback hop. Canonical is
+ * the one shape every backend accepts (the OpenAI family converts it back on the way out),
+ * so normalizing before a hop to another backend lets a turn cross providers mid tool loop.
+ *
+ * Returns the input array itself when it holds no OpenAI-shape tool history, and keeps
+ * every untouched message by reference so per-message cache anchors survive.
+ */
+export function convertOpenAIToolHistoryToCanonical(messages: IMessage[]): IMessage[] {
+  if (!messages.some(msg => hasToolCalls(msg) || isOpenAIToolMessage(msg))) return messages;
+
+  const result: IMessage[] = [];
+  let pendingResults: MessageContentToolResult[] = [];
+  const flushResults = () => {
+    if (pendingResults.length === 0) return;
+    result.push({ role: 'user', content: pendingResults } as IMessage);
+    pendingResults = [];
+  };
+
+  for (const msg of messages) {
+    if (isOpenAIToolMessage(msg)) {
+      pendingResults.push({
+        type: 'tool_result',
+        tool_use_id: msg.tool_call_id,
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+      });
+      continue;
+    }
+    flushResults();
+    result.push(hasToolCalls(msg) ? toolCallsToCanonical(msg) : msg);
+  }
+  flushResults();
+  return result;
+}

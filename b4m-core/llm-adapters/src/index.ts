@@ -662,3 +662,4 @@ export * from './staleReferences';
 export * from './modelSunsetMetrics';
 export * from './thinkingParams';
 export * from './toolPairingUtils';
+export { convertOpenAIToolHistoryToCanonical } from './messageFormatConverter';
