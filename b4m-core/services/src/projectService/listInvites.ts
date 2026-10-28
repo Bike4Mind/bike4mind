@@ -1,4 +1,3 @@
-import { MongoAbility } from '@casl/ability';
 import { IInviteModelAdapter, IProjectRepository, IUserDocument, InviteType } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -17,7 +16,6 @@ interface ListProjectInvitesAdapters {
     projects: IProjectRepository;
     invites: Pick<IInviteModelAdapter, 'searchInvites'>;
   };
-  ability?: MongoAbility;
 }
 
 export const listInvites = async (
