@@ -57,6 +57,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.throttle_tier.changed': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
   'user.impersonation.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
 
@@ -64,6 +65,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not info: the same entry carries an admin's change to another user's email, password, tags and ban state.
   'user.profile.updated': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.note.created': { category: 'support', severity: 'info', write: 'strict' },
+  'user.note.edited': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.note.deleted': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.note.restored': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.tags.updated': { category: 'account', severity: 'notice', write: 'strict' },
 
   'org.seats.changed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -75,6 +81,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.group_member.unassigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
@@ -110,6 +117,27 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'abuse.bulk.revoke_sessions': { category: 'identity', severity: 'notice', write: 'strict' },
   'abuse.bulk.clawback': { category: 'credits', severity: 'notice', write: 'strict' },
   'abuse.bulk.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // Users-list bulk actions (apps/client/pages/api/admin/users/bulk/*): one strict entry per changed
+  // user, written in that user's transaction, plus a bestEffort summary per batch.
+  'user.bulk.executed': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.bulk.suspended': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.bulk.restricted': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.bulk.credits_adjusted': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
+  'user.bulk.api_keys_revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.bulk.tagged': { category: 'account', severity: 'info', write: 'strict' },
+  'user.bulk.contained': { category: 'access', severity: 'critical', write: 'strict' },
+  // An undo that reverses a deduction adds credits, so it is held to the same grant thresholds.
+  'user.bulk.undone': {
+    category: 'account',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
@@ -160,6 +188,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.api_key.restored': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.api_key.rotated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.api_keys.revoked_all': { category: 'access', severity: 'notice', write: 'strict' },
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
   // Handler coverage: liveops, sre and queues

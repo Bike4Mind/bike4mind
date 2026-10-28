@@ -101,9 +101,25 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/voice/sessions/{id}/end',
   },
+  enhanceAgentField: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/enhance-field',
+  },
   executeTool: {
     method: 'POST',
     path: '/api/ai/v1/tools',
+  },
+  generateAgentAvatar: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-avatar',
+  },
+  generateAgentDescription: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-description',
+  },
+  generateAgentSystemPrompt: {
+    method: 'POST',
+    path: '/api/v1/agents/{id}/generate-system-prompt',
   },
   generateImage: {
     method: 'POST',

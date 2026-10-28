@@ -89,3 +89,66 @@ export const UpdateAgentRequestSchema = z
   })
   .strict();
 export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
+
+/** Strict, so the SPA route's camelCase `imageModel` is a 422 rather than silently ignored. */
+export const GenerateAgentAvatarRequestSchema = z
+  .object({
+    image_model: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'An image model id. Omit to use the deployment image model. An unknown or non-image model is rejected with a 400.'
+      ),
+  })
+  .strict();
+export type GenerateAgentAvatarRequest = z.infer<typeof GenerateAgentAvatarRequestSchema>;
+
+export const GenerateAgentAvatarResponseSchema = z.object({
+  portrait_url: z
+    .string()
+    .describe(
+      'URL of the generated portrait: a signed storage URL valid for one hour, or the provider temporary URL if storage failed.'
+    ),
+  generation_prompt: z.string().describe('The visual prompt the portrait was generated from.'),
+});
+export type GenerateAgentAvatarResponse = z.infer<typeof GenerateAgentAvatarResponseSchema>;
+
+export const GenerateAgentDescriptionResponseSchema = z.object({
+  description: z.string().describe('The generated description. It is returned, not saved to the agent.'),
+});
+export type GenerateAgentDescriptionResponse = z.infer<typeof GenerateAgentDescriptionResponseSchema>;
+
+export const GenerateAgentSystemPromptResponseSchema = z.object({
+  system_prompt: z.string().describe('The generated system prompt, already saved to the agent.'),
+});
+export type GenerateAgentSystemPromptResponse = z.infer<typeof GenerateAgentSystemPromptResponseSchema>;
+
+/** `field_name` is a plain string: a name the assistant does not know is enhanced with a generic style guide. */
+export const EnhanceAgentFieldRequestSchema = z
+  .object({
+    field_name: z
+      .string()
+      .min(1)
+      .max(100)
+      .describe('The personality field being enhanced, for example `quirk` or `coreValues`. At most 100 characters.'),
+    current_value: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2000)
+      .describe('The text to enhance. It stays the basis of the result. At most 2000 characters.'),
+    agent_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe("Overrides the agent's stored name in the prompt. At most 200 characters."),
+  })
+  .strict();
+export type EnhanceAgentFieldRequest = z.infer<typeof EnhanceAgentFieldRequestSchema>;
+
+export const EnhanceAgentFieldResponseSchema = z.object({
+  enhanced_value: z.string().describe('The enhanced text. It is returned, not saved to the agent.'),
+});
+export type EnhanceAgentFieldResponse = z.infer<typeof EnhanceAgentFieldResponseSchema>;

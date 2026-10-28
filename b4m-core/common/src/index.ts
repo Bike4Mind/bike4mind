@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './adminUserNotes';
 export * from './signupGrant';
 export * from './apiErrorCodes';
 export * from './groupTypes';
@@ -185,6 +186,7 @@ export * from './embeddingRateLimitHeaders';
 export { default as dayjs } from './utils/dayjsConfig';
 export * from './slackManifestTemplate';
 export * from './surfaces';
+export * from './adminAssistant';
 export * from './retry';
 export * from './memoryContext';
 export * from './zipEntry';

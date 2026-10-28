@@ -27,9 +27,9 @@
 
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, adminSettingsRepository } from '@bike4mind/database';
 import {
   SreAgentConfigSchema,
@@ -61,10 +61,8 @@ const DISPATCH_REASON_MESSAGES: Record<string, string> = {
   'already-dispatched': 'Fingerprint dispatched within the last hour (dedup cache). Try again later.',
 };
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
     const { id } = req.query as Record<string, string>;
     if (typeof id !== 'string' || !isValidObjectId(id)) {
       throw new NotFoundError('Invalid tracking ID');

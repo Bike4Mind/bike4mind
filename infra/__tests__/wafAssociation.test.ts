@@ -93,6 +93,7 @@ async function loadWaf(stage: string, enableWaf = 'true') {
     },
     sns: { Topic: resources.resource, TopicSubscription: resources.resource, getTopicOutput: resources.topicLookup },
     lambda: { Permission: resources.resource },
+    ssm: { Parameter: resources.resource },
     sqs: { Queue: resources.resource, QueuePolicy: resources.resource },
   });
   vi.stubGlobal('sst', { Linkable: resources.resource, aws: { Function: resources.resource } });
@@ -100,6 +101,8 @@ async function loadWaf(stage: string, enableWaf = 'true') {
 }
 
 const createdNames = () => resources.resource.mock.calls.map(([name]) => name);
+/** Created by waf.ts on every monitored stage, independent of the WAF alert delivery resources. */
+const NON_WAF_NAMES = new Set(['waf-us-east-1', 'WafWebAclArn', 'AlarmSlackMention']);
 
 describe('production WAF wiring', () => {
   it('looks the ACL up by name and creates only the alert delivery resources', async () => {
@@ -199,7 +202,7 @@ describe('non-production WAF wiring with an external ACL', () => {
       { actions: ['wafv2:GetLoggingConfiguration'], resources: [waf.wafWebAcl?.arn] },
     ]);
     expect(resources.topicLookup).not.toHaveBeenCalled();
-    expect(createdNames().filter(n => n !== 'waf-us-east-1' && n !== 'WafWebAclArn')).toEqual([]);
+    expect(createdNames().filter(n => !NON_WAF_NAMES.has(String(n)))).toEqual([]);
   });
 });
 
@@ -277,6 +280,6 @@ describe('external logging destination', () => {
     ]);
     expect(resources.lookup).not.toHaveBeenCalled();
     expect(resources.loggingRead).not.toHaveBeenCalled();
-    expect(createdNames()).toEqual([]);
+    expect(createdNames().filter(n => !NON_WAF_NAMES.has(String(n)))).toEqual([]);
   });
 });

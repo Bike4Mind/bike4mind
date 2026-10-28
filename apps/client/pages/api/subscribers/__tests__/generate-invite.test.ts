@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const h = vi.hoisted(() => ({
+  guard: null as null | ((req: unknown, res: unknown, next: () => void) => void),
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findSubscriber: vi.fn(),
   markInviteGenerated: vi.fn(),
@@ -13,12 +14,18 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
+  baseApi: () => {
+    const chain: Record<string, unknown> = {};
+    chain.use = (fn: unknown) => {
+      h.guard = fn as typeof h.guard;
+      return chain;
+    };
+    chain.post = (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
       h.handler = fn;
-      return {};
-    },
-  }),
+      return chain;
+    };
+    return chain;
+  },
 }));
 vi.mock('@bike4mind/database', () => ({
   subscriberRepository: { findById: h.findSubscriber, markInviteGenerated: h.markInviteGenerated },
@@ -84,5 +91,31 @@ describe('POST /api/subscribers/generate-invite - admin audit', () => {
     expect(h.audit).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(201);
     expect(res._getJSONData()).toEqual(expect.objectContaining({ emailSent: false, inviteCode: 'CODE-123' }));
+  });
+});
+
+describe('POST /api/subscribers/generate-invite - delegated permission', () => {
+  const guard = (user: Record<string, unknown>) => {
+    const next = vi.fn();
+    h.guard!({ method: 'POST', user }, {}, next);
+    return next;
+  };
+
+  it('allows a delegate holding credits:adjust without isAdmin', () => {
+    expect(guard({ isAdmin: false, adminPermissions: ['credits:adjust'] })).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a delegate holding a different permission', () => {
+    expect(() => guard({ isAdmin: false, adminPermissions: ['support:read'] })).toThrow(
+      'Missing permission: credits:adjust'
+    );
+  });
+
+  it('rejects a non-admin with no permissions', () => {
+    expect(() => guard({ isAdmin: false })).toThrow();
+  });
+
+  it('allows a full admin', () => {
+    expect(guard({ isAdmin: true })).toHaveBeenCalledOnce();
   });
 });

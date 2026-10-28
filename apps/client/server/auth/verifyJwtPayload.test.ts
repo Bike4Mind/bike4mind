@@ -8,9 +8,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  */
 
 const mockFindById = vi.hoisted(() => vi.fn());
+const mockFindSession = vi.hoisted(() => vi.fn());
 const mockAssertAccountStateUsable = vi.hoisted(() => vi.fn());
 
-vi.mock('@bike4mind/database', () => ({ User: { findById: mockFindById } }));
+vi.mock('@bike4mind/database', () => ({
+  User: { findById: mockFindById },
+  authSessionRepository: { findBySid: mockFindSession },
+}));
 vi.mock('@bike4mind/services', () => ({
   isTokenVersionCurrent: (payloadVersion?: number, userVersion?: number) =>
     (payloadVersion ?? 0) === (userVersion ?? 0),
@@ -25,6 +29,14 @@ import { verifyJwtPayload } from './verifyJwtPayload';
 describe('verifyJwtPayload', () => {
   beforeEach(() => {
     mockFindById.mockReset();
+    mockFindSession
+      .mockReset()
+      .mockResolvedValue({
+        userId: 'customer-1',
+        impersonatedBy: 'admin-9',
+        expiresAt: new Date(Date.now() + 60_000),
+        impersonationExpiresAt: new Date(Date.now() + 60_000),
+      });
     mockAssertAccountStateUsable.mockReset();
   });
 
@@ -32,7 +44,7 @@ describe('verifyJwtPayload', () => {
     mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0, isSystem: false });
     const done = vi.fn();
 
-    await verifyJwtPayload({ id: 'customer-1', tokenVersion: 0, impersonatedBy: 'admin-9' }, done);
+    await verifyJwtPayload({ id: 'customer-1', sid: 'support-sid', tokenVersion: 0, impersonatedBy: 'admin-9' }, done);
 
     expect(done).toHaveBeenCalledWith(null, expect.objectContaining({ impersonatedBy: 'admin-9' }));
   });
@@ -45,6 +57,26 @@ describe('verifyJwtPayload', () => {
 
     const [, user] = done.mock.calls[0];
     expect((user as { impersonatedBy?: string }).impersonatedBy).toBeUndefined();
+    expect(mockFindSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { impersonationExpiresAt: new Date(0) },
+    { revokedAt: new Date() },
+    { impersonatedBy: 'different-admin' },
+    { userId: 'different-user' },
+  ])('rejects an expired, revoked or mismatched support session: %o', async override => {
+    mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0 });
+    mockFindSession.mockResolvedValue({
+      userId: 'customer-1',
+      impersonatedBy: 'admin-9',
+      expiresAt: new Date(Date.now() + 60_000),
+      impersonationExpiresAt: new Date(Date.now() + 60_000),
+      ...override,
+    });
+    const done = vi.fn();
+    await verifyJwtPayload({ id: 'customer-1', sid: 'sid', impersonatedBy: 'admin-9' }, done);
+    expect(done).toHaveBeenCalledWith(null, false);
   });
 
   it('exposes the token exp (seconds) as accessTokenExpiresAt in milliseconds', async () => {

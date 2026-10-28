@@ -28,6 +28,12 @@ The tabs above the table are built-in views. Each one clears the filters and app
 
 Each tab shows its count. If you set filters by hand that match a view exactly, that view's tab is highlighted.
 
+### Saved views
+
+To keep a combination of filters, sort, page size and grouping, click **Save view** and give it a name. The view appears as its own tab after the built-in ones and is stored on the server, so it follows you to any device. Tick **Share with all admins** to show it to every admin; only you can change or delete it.
+
+Each saved tab you own has a **...** menu with **Rename**, **Share with all admins** (or **Make personal**) and **Delete**. Opening a saved view always starts at page 1. You can keep up to 50 views.
+
 ## Columns
 
 | Column | Details |
@@ -46,7 +52,27 @@ Click a row to open the user's [profile page](#user-profile-page). The row's **.
 
 ### Selecting rows
 
-Use the checkboxes to select rows for the bulk abuse response. Shift-click selects a range, and `x` toggles the focused row. Changing a filter, the view, or the search clears the selection; moving between pages keeps it.
+Use the checkboxes to select rows. Shift-click selects a range, and `x` toggles the focused row. Changing a filter, the view, or the search clears the selection; moving between pages keeps it. Once every row on the page is selected, **Select all N matching** extends the selection to every user that matches the current filters.
+
+### Bulk actions
+
+While rows are selected, a bar under the table offers these actions (on a narrow screen they sit in one **Actions** menu):
+
+| Action | Effect |
+|--------|--------|
+| **Suspend** | Blocks sign-in, ends live sessions and disables their API keys |
+| **Restrict** | Turns off AI features; users can still sign in and reach their data |
+| **Adjust credits** | Sets, adds or removes credits; every change is written to the credit ledger |
+| **Revoke API keys** | Disables every active API key the users own |
+| **Add tag** | Adds a tag to users who do not have it yet |
+| **Contain** | Suspends the users, sets their credits to 0 and revokes their API keys, together for each user. Optionally also blocks new signups from their email domains |
+
+Each action opens a dialog with a dry run: how many users will change, who is excluded (you and other admins are never included), and how many API keys and credits are affected. A reason is required and is recorded in the audit log for every user.
+
+- A batch is limited to 500 users. If more match, narrow the filters first.
+- **Block email domains** (Contain only) adds the users' email domains to the blocked email domains setting before any user is changed. The dry run lists every domain it would block and the ones already blocked. Well-known public mail domains such as gmail.com are skipped, but the list is not exhaustive, so check the domains before you confirm. It needs permission to edit admin settings.
+- If the matching users change between the dry run and the confirm, nothing is applied and the dialog shows the new count to confirm again.
+- After a bulk action, an **Undo** button is shown for 30 seconds. It restores the whole batch and unblocks the email domains the batch added (domains that were already blocked stay blocked). Sessions that were ended stay ended.
 
 ### Recent activity
 
@@ -69,6 +95,29 @@ The page has three tabs. The selected tab is kept in the URL as `?tab=activity` 
 Unsaved edits are kept when you switch tabs. If you try to leave the page with unsaved edits (another link, the browser Back button, or closing the tab), you are asked to confirm, and the in-app prompt lists the fields that would be discarded.
 
 Old links of the form `/admin?userId=<userId>` redirect to the user's profile page. An unknown or malformed user id shows **User not found**; any other loading error shows a retry button.
+
+## Internal notes and profile tags
+
+On a user's profile, **Overview > Internal notes** stores plain-text support context.
+Reading requires `support:read`; adding, editing, and deleting require
+`users:moderate`. Full administrators have both permissions. Notes show their
+original author and time, and **View history** shows attributed revisions.
+Deletion hides a note while retaining its history; the Undo notification restores
+it. Legacy inline notes remain visible but read-only. Impersonated sessions cannot
+write notes.
+
+In **Access > Tags > Edit**, add or remove free-form tags with suggestions from
+existing tags. Saving requires `settings:manage`. Tags are limited to 100 distinct
+values of 1 to 64 characters. Role and product-access grants use their dedicated
+actions and cannot be changed through the free-form tag editor. Successful saves
+refresh the user list and tag filters. Activity and Admin log record note actions
+without note bodies, and tag actions with before/after values.
+
+If the notes card is missing, check the signed-in administrator's `support:read`
+permission. Use **Reload notes** or **Reload history** after a read failure. A stale
+note version or tag snapshot is rejected: reload the profile and reapply the change
+to the current state. If a tag is too long or duplicates another tag, correct it
+before saving.
 
 ## Filtering
 
