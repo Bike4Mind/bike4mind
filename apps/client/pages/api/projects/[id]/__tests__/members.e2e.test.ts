@@ -150,22 +150,36 @@ describe("DELETE /api/projects/[id]/members - the owner's grant on a departing m
     } as never);
     return file;
   };
-  const ownerCanRead = async (owner: { id: string }, fileId: string) =>
-    !!(await fabFileRepository.shareable.findAccessibleById({ id: owner.id, groups: [] } as never, fileId));
+  const canRead = async (user: { id: string }, fileId: string) =>
+    !!(await fabFileRepository.shareable.findAccessibleById({ id: user.id, groups: [] } as never, fileId));
 
   it.each([
     ['leaves', (member: { id: string }) => member, {}],
     ['is removed by the owner', (_member: { id: string }, owner: { id: string }) => owner, 'remove'],
   ] as const)("the owner loses access to the member's file when the member %s", async (_label, actorOf, mode) => {
     const { owner, member, projectId } = await seed();
+    // A second member, so the cascade writes the same file twice in one transaction: once for the
+    // owner's grant, then for theirs.
+    const stayer = await User.create({
+      name: 'Stayer',
+      username: `stayer-${Math.random().toString(36).slice(2, 10)}`,
+      password: null,
+      hasUsablePassword: false,
+    });
+    await Project.updateOne(
+      { _id: projectId },
+      { $push: { users: { userId: stayer.id, permissions: [Permission.read, Permission.update] } } }
+    );
     const file = await addOwnFileAsMember(member, projectId);
-    expect(await ownerCanRead(owner, file.id)).toBe(true);
+    expect(await canRead(owner, file.id)).toBe(true);
+    expect(await canRead(stayer, file.id)).toBe(true);
 
     const { req, res } = request(actorOf(member, owner), projectId, mode === 'remove' ? { userId: member.id } : {});
     await deleteHandler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(await ownerCanRead(owner, file.id)).toBe(false);
+    expect(await canRead(owner, file.id)).toBe(false);
+    expect(await canRead(stayer, file.id)).toBe(false);
     expect((await Project.findById(projectId))?.fileIds).toEqual([]);
   });
 });
