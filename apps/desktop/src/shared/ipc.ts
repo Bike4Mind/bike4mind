@@ -9,6 +9,7 @@ import type {
   CookieImportState,
 } from './browserCookies';
 import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   ModelServerAddInput,
@@ -274,6 +275,8 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  capabilitiesGetState: 'capabilities:get-state',
+  capabilitiesRevoke: 'capabilities:revoke',
   /**
    * Import from Claude, Settings only. No channel takes a path: folders and export files are
    * picked through native dialogs in main, and the importer only ever reads them.
@@ -997,6 +1000,10 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+  };
+  capabilities: {
+    getState(): Promise<CapabilityLedgerState>;
+    revoke(grantId: string): Promise<CapabilityLedgerState>;
   };
   claudeImport: {
     getState(): Promise<ClaudeImportState>;

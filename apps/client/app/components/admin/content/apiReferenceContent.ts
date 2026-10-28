@@ -218,9 +218,9 @@ still hand-written.
 Custom AI agents with configurable personas, system prompts, and tool access.
 
 **Required API-key scope:** \`agents:read\` (or \`agents:write\`) to list and read,
-\`agents:write\` to create, update, and delete.
+\`agents:write\` to create, update, delete, and run the authoring assistants.
 
-#### List, Get, Create, Update, and Delete Agents
+#### List, Get, Create, Update, Delete, and Author Agents
 
 \`\`\`
 GET    /api/v1/agents
@@ -228,11 +228,16 @@ GET    /api/v1/agents/[id]
 POST   /api/v1/agents
 PATCH  /api/v1/agents/[id]
 DELETE /api/v1/agents/[id]
+POST   /api/v1/agents/[id]/generate-avatar
+POST   /api/v1/agents/[id]/generate-description
+POST   /api/v1/agents/[id]/generate-system-prompt
+POST   /api/v1/agents/[id]/enhance-field
 \`\`\`
 
 > **These endpoints are generated from their contracts.** The full request/response
 > reference lives in the [generated API docs](/api/v1/docs) under \`listAgents\`,
-> \`getAgent\`, \`createAgent\`, \`updateAgent\`, and \`deleteAgent\`.
+> \`getAgent\`, \`createAgent\`, \`updateAgent\`, \`deleteAgent\`, \`generateAgentAvatar\`,
+> \`generateAgentDescription\`, \`generateAgentSystemPrompt\`, and \`enhanceAgentField\`.
 
 #### List Agents (existing app route)
 
@@ -253,10 +258,6 @@ DELETE /api/v1/agents/[id]
 | GET | /api/agents/[id] | Get agent details |
 | PUT | /api/agents/[id] | Update agent |
 | DELETE | /api/agents/[id] | Delete agent |
-| POST | /api/agents/[id]/generate-avatar | AI-generate agent avatar |
-| POST | /api/agents/[id]/generate-description | AI-generate agent description |
-| POST | /api/agents/[id]/generate-system-prompt | AI-generate system prompt |
-| POST | /api/agents/[id]/enhance-field | AI-enhance a specific field |
 | POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
 | POST | /api/agents/create-from-context | Create agent from conversation context |
 

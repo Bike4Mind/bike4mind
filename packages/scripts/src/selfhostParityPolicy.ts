@@ -281,7 +281,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:agentProactiveMessageQueueDLQ',
     '1990fa893bed28bef2523e156f10d9e0a787552590a76489415b59814359c2a9'
   ),
-  gap('queue:infra/queues.ts:bobRunQueue', 'afde480b559f88564cbc4a7e9c2b6d8ccb09c1021086ee263a22a28329a4d694', [
+  gap('queue:infra/queues.ts:bobRunQueue', '70c0dfc95c5e790acd6fb03c457b43189942120d69bd9e39ff5345d315c4803b', [
     'cloudwatch:PutMetricData',
     'execute-api:ManageConnections',
   ]),
@@ -649,7 +649,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    '2cfe1879f740c9535d520227a2891ead024a1bcb51ac1438380286e10cc8d8ee'
+    '6066a79188816238482fa1a91f2da527bdd8017cdd3fb815fe2b4002ff234a93',
+    ['ssm:GetParameter']
   ),
   broker(
     'queue:infra/youngAccountSpendAlertDeadLetter.ts:youngAccountSpendAlertDlq',
@@ -961,7 +962,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '0134b180dc4d296c9c16d225b728aa16db37828008a76c3fb71a946057fc7f3c'
+    '368f2fda89a530ff780c20f48f90b0b10fbbc8a1a05a195f9cc195b61804e9df',
+    ['ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
@@ -969,15 +971,17 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
-    'c99a32479bb9e43c1b583b6abbcc96ce355305de79bff143d0b276ffc8e90cc7'
+    'e049191c0ab4767b337b43790f36eb45df8e11dfb8fbf0043e8d5249583168e5',
+    ['ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    'cc0b27017c70d79b8f89f6851f0949bd1b5a3158a78a1e518396d1abc2df847b',
-    ['lambda:InvokeFunction']
+    '49907efa33b805b563e7f36381353886fc10ddd1beb74721772e36c1d24e14a8',
+    ['lambda:InvokeFunction', 'ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    '4582eff167e27ee198757bdbe3f86d7191f3c5a922552e0df9f3b7822494d393'
+    'c39161f23c01b940505e3caa92cd7ef982273ad081f5d91b83756b93ad8279c6',
+    ['ssm:GetParameter']
   ),
 ];

@@ -20,11 +20,11 @@ function makeEvent(...payloads: unknown[]): SNSEvent {
   } as unknown as SNSEvent;
 }
 
-/** Fallback text plus the serialized blocks, so assertions cover everything posted. */
+/** Fallback text plus the serialized blocks and attachments, so assertions cover everything posted. */
 function postedText(callIndex = 0): string {
   const [, init] = mockFetch.mock.calls[callIndex];
   const body = JSON.parse(init.body as string);
-  return `${body.text}\n${JSON.stringify(body.blocks)}`;
+  return `${body.text}\n${JSON.stringify(body.blocks)}\n${JSON.stringify(body.attachments)}`;
 }
 
 const noTasksAlarm = {
@@ -100,6 +100,13 @@ describe('serviceHealthAlarmToSlack handler', () => {
     expect(text).toContain('failed to start');
     expect(text).toContain('CannotPullContainerError');
     expect(text).not.toContain('Task failed to start');
+  });
+
+  it('renders the service name literally in the header and escaped in the fallback text', async () => {
+    await handler(makeEvent({ ...taskFailedToStart, detail: { ...taskFailedToStart.detail, group: 'svc<a&b>' } }));
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.blocks[0].text.text).toContain('svc<a&b>');
+    expect(body.text).toContain('svc&lt;a&amp;b&gt;');
   });
 
   it('falls back to stoppedReason when no container reported one', async () => {

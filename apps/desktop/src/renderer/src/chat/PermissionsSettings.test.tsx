@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { PermissionsState } from '@shared/permissions';
+import type { CapabilityLedgerState } from '@shared/capabilities';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 
@@ -46,6 +47,34 @@ const state: PermissionsState = {
       note: 'This project is not trusted, so its allow rules are ignored; its ask and deny rules apply.',
       rules: [{ rule: 'Bash(curl:*)', list: 'allow' }],
       additionalDirectories: [],
+    },
+  ],
+};
+
+const ledger: CapabilityLedgerState = {
+  grants: [
+    {
+      id: 'g1',
+      subject: { kind: 'session', sessionId: 'session-one' },
+      capability: 'browser-origin',
+      scope: { kind: 'browser-origin', value: 'https://example.com', access: 'act' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      source: 'approval',
+    },
+  ],
+  audit: [
+    {
+      sequence: 0,
+      type: 'grant',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      grant: {
+        id: 'g1',
+        subject: { kind: 'session', sessionId: 'session-one' },
+        capability: 'browser-origin',
+        scope: { kind: 'browser-origin', value: 'https://example.com', access: 'act' },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        source: 'approval',
+      },
     },
   ],
 };
@@ -112,6 +141,60 @@ describe('PermissionsSettings collapsing', () => {
         </CssVarsProvider>
       )
     );
+  });
+
+  it('shows grants and audit events and revokes from the active grant', async () => {
+    const revoke = vi
+      .fn()
+      .mockResolvedValue({ ...ledger, grants: [{ ...ledger.grants[0], revokedAt: '2026-01-02T00:00:00.000Z' }] });
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: { getState: async () => state },
+      capabilities: { getState: async () => ledger, revoke },
+    };
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings state={state} onState={() => {}} />
+        </CssVarsProvider>
+      );
+    });
+    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-testid="capability-audit-row"]')).toHaveLength(1);
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]')?.click();
+    });
+    expect(revoke).toHaveBeenCalledWith('g1');
+    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(0);
+  });
+
+  it('renders only the most recent 200 audit events', async () => {
+    const audit = Array.from({ length: 250 }, (_, index) => ({
+      sequence: 249 - index,
+      type: 'revoke' as const,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      grantId: `audit-${String(249 - index).padStart(3, '0')}`,
+    }));
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      capabilities: { getState: async () => ({ grants: [], audit }) },
+    };
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings state={state} onState={() => {}} />
+        </CssVarsProvider>
+      );
+    });
+    const rows = host.querySelectorAll('[data-testid="capability-audit-row"]');
+    expect(rows).toHaveLength(200);
+    expect(rows[0].textContent).toContain('audit-24');
+    expect(rows[199].textContent).toContain('audit-05');
+    expect(host.textContent).toContain('200 recent audit events');
   });
 
   afterEach(() => {
@@ -284,5 +367,197 @@ describe('usePermissions recovery', () => {
       act(() => root.unmount());
       host.remove();
     }
+  });
+});
+
+describe('PermissionsSettings ledger synchronization', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const ruleLedger: CapabilityLedgerState = {
+    ...ledger,
+    grants: [
+      {
+        ...ledger.grants[0],
+        subject: { kind: 'desktop-user' },
+        capability: 'tool',
+        scope: { kind: 'permission-rule', value: state.user[0].rule },
+        source: 'permission-rule',
+      },
+    ],
+  };
+  const revokedLedger: CapabilityLedgerState = {
+    ...ruleLedger,
+    grants: [{ ...ruleLedger.grants[0], revokedAt: '2026-01-02T00:00:00.000Z' }],
+  };
+
+  function ConnectedSettings() {
+    const [value, setValue, error, retry] = usePermissions();
+    return <PermissionsSettings state={value} onState={setValue} loadError={error} onRetry={retry} />;
+  }
+
+  beforeEach(() => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  const render = () =>
+    act(async () => {
+      root.render(
+        <CssVarsProvider>
+          <ConnectedSettings />
+        </CssVarsProvider>
+      );
+    });
+
+  it('refreshes permission rules after revoke so the next save cannot restore the revoked allow', async () => {
+    const nextState = { ...state, user: state.user.slice(1) };
+    const getState = vi.fn().mockResolvedValueOnce(state).mockResolvedValue(nextState);
+    const setRules = vi.fn().mockResolvedValue({ ok: true, state: { ...nextState, user: [] } });
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: { getState, setRules },
+      capabilities: { getState: async () => ruleLedger, revoke: async () => revokedLedger },
+    };
+    await render();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]')?.click());
+    expect(host.querySelectorAll('[data-testid="permissions-rule-row"]')).toHaveLength(1);
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-remove-btn"]')?.click()
+    );
+    expect(setRules).toHaveBeenCalledWith({ kind: 'user' }, { allow: [], ask: [], deny: [] });
+  });
+
+  it('refreshes ledger grants after a permission rule save', async () => {
+    const getLedger = vi.fn().mockResolvedValue(ruleLedger);
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: {
+        getState: async () => state,
+        setRules: async () => ({ ok: true, state: { ...state, user: state.user.slice(1) } }),
+      },
+      capabilities: { getState: getLedger },
+    };
+    await render();
+    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(1);
+    const callsBeforeSave = getLedger.mock.calls.length;
+    getLedger.mockResolvedValue(revokedLedger);
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-remove-btn"]')?.click()
+    );
+    expect(getLedger.mock.calls.length).toBeGreaterThan(callsBeforeSave);
+    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(0);
+  });
+
+  it('blocks another revoke and rule edits while revocation is pending', async () => {
+    let finish: ((value: CapabilityLedgerState) => void) | undefined;
+    const revoke = vi.fn().mockImplementation(
+      () =>
+        new Promise<CapabilityLedgerState>(resolve => {
+          finish = resolve;
+        })
+    );
+    const setRules = vi.fn();
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: { getState: async () => state, setRules },
+      capabilities: { getState: async () => ruleLedger, revoke },
+    };
+    await render();
+    const button = host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]');
+    await act(async () => button?.click());
+    expect(host.querySelector('fieldset')?.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('[data-testid="permissions-reload-btn"]')?.disabled).toBe(true);
+    await act(async () => {
+      button?.click();
+      host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-remove-btn"]')?.click();
+    });
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(setRules).not.toHaveBeenCalled();
+    await act(async () => finish?.(revokedLedger));
+    expect(host.querySelector('fieldset')?.disabled).toBe(false);
+  });
+
+  it('locks stale rules after a successful revoke until a failed permissions refresh can be retried', async () => {
+    const nextState = { ...state, user: state.user.slice(1) };
+    const getState = vi
+      .fn()
+      .mockResolvedValueOnce(state)
+      .mockRejectedValueOnce(new Error('read failed'))
+      .mockResolvedValue(nextState);
+    const setRules = vi.fn();
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: { getState, setRules },
+      capabilities: { getState: async () => ruleLedger, revoke: async () => revokedLedger },
+    };
+    await render();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]')?.click());
+    expect(host.querySelector('fieldset')?.disabled).toBe(true);
+    expect(host.textContent).toContain('read failed');
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-remove-btn"]')?.click()
+    );
+    expect(setRules).not.toHaveBeenCalled();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="permissions-reload-btn"]')?.click());
+    expect(host.querySelector('fieldset')?.disabled).toBe(false);
+    expect(host.querySelectorAll('[data-testid="permissions-rule-row"]')).toHaveLength(1);
+  });
+
+  it('reloads rules when revocation rejects after removing the underlying allow', async () => {
+    const nextState = { ...state, user: state.user.slice(1) };
+    const getState = vi.fn().mockResolvedValueOnce(state).mockResolvedValue(nextState);
+    const setRules = vi.fn().mockResolvedValue({ ok: true, state: { ...nextState, user: [] } });
+    const revoke = vi.fn().mockRejectedValue(new Error('audit write failed'));
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: { getState, setRules },
+      capabilities: { getState: async () => ruleLedger, revoke },
+    };
+    await render();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]')?.click());
+    expect(revoke).toHaveBeenCalledWith('g1');
+    expect(getState).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain('Could not revoke capability: Error: audit write failed');
+    expect(host.querySelectorAll('[data-testid="permissions-rule-row"]')).toHaveLength(1);
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-remove-btn"]')?.click()
+    );
+    expect(setRules).toHaveBeenCalledWith({ kind: 'user' }, { allow: [], ask: [], deny: [] });
+  });
+
+  it('keeps the panel but locks edits when both revocation and the rules refresh reject', async () => {
+    const nextState = { ...state, user: state.user.slice(1) };
+    const getState = vi
+      .fn()
+      .mockResolvedValueOnce(state)
+      .mockRejectedValueOnce(new Error('read failed'))
+      .mockResolvedValue(nextState);
+    const setRules = vi.fn();
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: { getState, setRules },
+      capabilities: {
+        getState: async () => ruleLedger,
+        revoke: async () => {
+          throw new Error('audit write failed');
+        },
+      },
+    };
+    await render();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="capability-revoke-btn"]')?.click());
+    expect(host.textContent).toContain('Could not reload permission rules: Error: read failed');
+    expect(host.querySelector('fieldset')?.disabled).toBe(true);
+    expect(host.querySelector('[data-testid="permissions-stale-banner"]')).not.toBeNull();
+    expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(1);
+    expect(setRules).not.toHaveBeenCalled();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="permissions-reload-btn"]')?.click());
+    expect(host.querySelectorAll('[data-testid="permissions-rule-row"]')).toHaveLength(1);
+    expect(host.querySelector('fieldset')?.disabled).toBe(false);
   });
 });
