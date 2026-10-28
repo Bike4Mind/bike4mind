@@ -1,6 +1,6 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { subscriberRepository, registrationInviteRepository, withTransaction } from '@bike4mind/database';
 import { generateCode } from '@server/managers/regInviteManager';
 import { RegInviteStatusType, requireEnv } from '@bike4mind/common';
@@ -21,12 +21,8 @@ const generateInviteSchema = z.object({
   expiresAt: z.string().optional(),
 });
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler<{}, unknown, z.infer<typeof generateInviteSchema>>(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const validatedData = generateInviteSchema.parse(req.body);
     const {
       subscriberId,
