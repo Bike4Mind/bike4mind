@@ -41,7 +41,7 @@ export function isTurnstileSecretConfigured(secret: string | undefined): secret 
  * the strict checks and every token is rejected.
  * See https://developers.cloudflare.com/turnstile/troubleshooting/testing/
  */
-export const TURNSTILE_TEST_SECRETS: ReadonlySet<string> = new Set([
+const TURNSTILE_TEST_SECRETS: ReadonlySet<string> = new Set([
   '1x0000000000000000000000000000000AA',
   '2x0000000000000000000000000000000AA',
   '3x0000000000000000000000000000000AA',

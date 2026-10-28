@@ -35,7 +35,6 @@ const mockIsE2EEnabled = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
   isE2EEnabled: () => mockIsE2EEnabled(),
-  isProduction: () => false,
 }));
 
 const mockTryReserveSlot = vi.fn();

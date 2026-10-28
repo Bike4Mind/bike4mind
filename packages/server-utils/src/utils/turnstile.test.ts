@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   isTurnstileSecretConfigured,
   isTurnstileTestSecret,
-  TURNSTILE_TEST_SECRETS,
   verifyTurnstile,
 } from './turnstile';
 
@@ -157,9 +156,15 @@ describe('verifyTurnstile with a Cloudflare test secret', () => {
   });
 });
 
+const TEST_SECRETS = [
+  '1x0000000000000000000000000000000AA',
+  '2x0000000000000000000000000000000AA',
+  '3x0000000000000000000000000000000AA',
+];
+
 describe('isTurnstileTestSecret', () => {
   it('matches each published test secret exactly, ignoring surrounding whitespace', () => {
-    for (const secret of TURNSTILE_TEST_SECRETS) expect(isTurnstileTestSecret(` ${secret} `)).toBe(true);
+    for (const secret of TEST_SECRETS) expect(isTurnstileTestSecret(` ${secret} `)).toBe(true);
   });
 
   it.each([
