@@ -17,7 +17,13 @@ import {
   QuestMasterPlan,
   applySharedShareableRules,
 } from '@bike4mind/database';
-import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
+import {
+  InvitePermission,
+  IUserDocument,
+  Permission,
+  hasAdminPermission,
+  hasDeveloperUserTag,
+} from '@bike4mind/common';
 import { SecretRotation } from '@bike4mind/database/infra';
 import { Subscription } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
@@ -48,18 +54,20 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow('update', AdminSettings);
       allow('delete', AdminSettings);
 
-      allow('create', ModalModel);
-      allow('update', ModalModel);
-      allow('delete', ModalModel);
-      allow('manage', ModalModel); // Full management permissions for modal tool
-      allow('manage', 'Modal'); // Allow the modal-tool API to check this permission
-
       allow('read', Organization);
       allow('update', Organization);
       allow('delete', Organization);
 
       allow('read', UserActivityCounter);
       allow('update', UserActivityCounter);
+    }
+
+    if (hasAdminPermission(user, 'settings:manage')) {
+      allow('create', ModalModel);
+      allow('update', ModalModel);
+      allow('delete', ModalModel);
+      allow('manage', ModalModel); // Full management permissions for modal tool
+      allow('manage', 'Modal'); // Allow the modal-tool API to check this permission
     }
 
     allow('read', UserActivityCounter, ownDocumentPermission);
