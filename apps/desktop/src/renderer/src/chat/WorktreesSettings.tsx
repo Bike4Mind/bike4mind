@@ -66,7 +66,7 @@ function WorktreeRow({
         </Typography>
         <Typography level="body-xs" textColor="text.tertiary" data-testid="worktrees-owner-label">
           {worktree.owner ? `Used by ${worktree.owner}` : 'No conversation uses it'}
-          {worktree.lastCommit ? ` - last commit ${worktree.lastCommit}` : ''}
+          {worktree.lastCommit ? ` - last commit ${formatCommitDate(worktree.lastCommit)}` : ''}
         </Typography>
         {orphan && !worktree.safe && worktree.reason && (
           <Typography level="body-xs" color="warning" data-testid="worktrees-reason-label">
@@ -95,13 +95,18 @@ function WorktreeRow({
               onClick={() => void onReveal(directory, worktree.path)}
               data-testid="worktrees-reveal-btn"
             >
-              Reveal in Finder
+              Show in folder
             </Button>
           )}
         </Stack>
       )}
     </Stack>
   );
+}
+
+function formatCommitDate(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
 }
 
 export function WorktreesView({ state }: { state: WorktreesState }) {
