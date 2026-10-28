@@ -425,10 +425,16 @@ describe('charge.refunded - inviter reward', () => {
     expect(reverseReward).toHaveBeenCalledWith(expect.objectContaining({ amountCaptured: 3000 }));
   });
 
-  it('leaves the reward alone when the charge has no payment intent or no refund objects', async () => {
+  it('leaves the reward alone when the charge has no payment intent', async () => {
     await deliver(refundedCharge({ payment_intent: null }));
-    await deliver(refundedCharge({ refunds: { data: [] } }));
     expect(reverseReward).not.toHaveBeenCalled();
+  });
+
+  it('still hands the refund to the inviter reward when the charge carries no refund list', async () => {
+    await deliver(refundedCharge({ refunds: undefined }));
+    await deliver(refundedCharge({ refunds: { data: [] } }));
+    expect(reverseReward).toHaveBeenCalledTimes(2);
+    expect(reverseReward).toHaveBeenCalledWith({ paymentIntentId: 'pi_1', amountRefunded: 1500, amountCaptured: 3000 });
   });
 });
 
