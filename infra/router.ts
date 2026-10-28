@@ -155,6 +155,9 @@ export const originVerifySecret = new random.RandomPassword('OriginVerifySecret'
 const originVerifyInjection = $interpolate`
   // Drops a viewer-forged copy. AWS docs show computed cloudfront-viewer-* headers already present here,
   // so this may also drop the real JA4: remove it before adding JA4 to the origin request policy.
+  // JA4 never reaches the origin today: SST's Router uses the managed AllViewerExceptHostHeader policy,
+  // which omits it, and a custom policy cannot both drop Host (the function URL origin needs that) and
+  // add CloudFront headers. Until that changes, signupMeta.ja4 is always null.
   delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;

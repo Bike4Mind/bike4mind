@@ -9,7 +9,7 @@
  */
 
 import { buildDevWafRuleJson, getDevWafMeta, parseWafBlockedIps } from './wafPolicy';
-import { resolveExternalWafAssociation, resolveWafLogDestination } from './wafAssociation';
+import { resolveExternalWafAssociation, resolveWafLabelForwarding, resolveWafLogDestination } from './wafAssociation';
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
@@ -165,6 +165,12 @@ const externalWebAcl = externalWaf
 
 /** ARN of the WebACL attached to the CDN: the looked-up one when WAF_WEB_ACL_NAME is set, the stage-owned one otherwise. */
 export const wafWebAcl = externalWebAcl ?? wafStageWebAcl;
+
+/** Read by infra/web.ts to set WAF_LABEL_FORWARDING on the server function. */
+export const wafLabelForwarding = resolveWafLabelForwarding({
+  attachedAcl: externalWebAcl ? 'external' : wafStageWebAcl ? 'stage' : 'none',
+  labelForwarding: process.env.WAF_LABEL_FORWARDING,
+});
 const wafWebAclArnValue = wafWebAcl?.arn;
 
 // Read the external owner's configuration without taking ownership of it.
