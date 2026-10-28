@@ -52,6 +52,9 @@ const queryResult = (overrides: Record<string, unknown>) => ({
   ...overrides,
 });
 
+// The search debounce times itself with Date.now(), which these tests freeze.
+const elapseSearchDebounce = () => vi.setSystemTime(Date.now() + 1000);
+
 describe('ModelLogsTab', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -234,7 +237,10 @@ describe('ModelLogsTab', () => {
 
     await userEvent.type(screen.getByTestId('model-logs-search-input'), 'x');
     expect(fakeAdminRouter.search).toEqual({ tab: 'model-logs' });
-    expect(mocks.useModelLogs).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'x', page: 1 }));
+    elapseSearchDebounce();
+    await waitFor(() =>
+      expect(mocks.useModelLogs).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'x', page: 1 }))
+    );
   });
 
   it('renders a card from the summary fields alone', () => {
@@ -343,6 +349,10 @@ describe('ModelLogsTab', () => {
 
       const search = screen.getByTestId('model-logs-search-input');
       await userEvent.type(search, 'sonnet');
+      elapseSearchDebounce();
+      await waitFor(() =>
+        expect(mocks.useModelLogs).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'sonnet' }))
+      );
 
       expect(search).toHaveValue('sonnet');
       expect(search).toHaveFocus();

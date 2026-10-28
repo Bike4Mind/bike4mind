@@ -24,6 +24,7 @@ import InfoIcon from '@mui/icons-material/Info';
 import { DateFilterComponent } from './Analytics/filters/DateFilterComponent';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useModelLogDetail, useModelLogs, ModelLogSummary } from '@client/app/hooks/useModelLogs';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { ErrorState } from './shared';
 import {
   MODEL_LOGS_MODEL_OPTIONS,
@@ -151,13 +152,13 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   const [view, updateView] = useModelLogsView();
   const { page: currentPage, limit: itemsPerPage, startDate, endDate } = view;
   const modelFilter = view.model ?? ALL_MODELS;
-  const [searchQuery, setSearchQuery] = useState('');
+  const { value: searchQuery, debouncedValue: debouncedSearch, setValue: setSearchQuery } = useDebounceValue('');
 
   const modelLogsQuery = useModelLogs({
     startDate,
     endDate,
     model: view.model,
-    search: searchQuery || undefined,
+    search: debouncedSearch || undefined,
     page: currentPage,
     limit: itemsPerPage,
   });
