@@ -211,7 +211,7 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough to saveGeneratedAsset -> the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Synchronous pre-persist moderation, not the stored-moderationStatus gate. ---
-  'apps/client/pages/api/agents/[id]/generate-avatar.ts':
+  'apps/client/server/agents/authoring/generateAgentAvatar.ts':
     'freshly generated avatar is moderated synchronously via moderateImageOrThrow/RekognitionImageModerationService before upload+mint (throws ImageModerationBlockedError first); not a stored-moderationStatus read path since no FabFile/moderationStatus exists yet',
 
   // --- Caller already gates before handing bytes to this module. ---
