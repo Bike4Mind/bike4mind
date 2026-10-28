@@ -215,3 +215,25 @@ describe('self-host resource manifest coverage', () => {
     expect(stale, `exempted but no longer read anywhere: ${stale.join(', ')}`).toEqual([]);
   });
 });
+
+// readOptionalSecret swallows the shim's "not registered" throw, so a missing manifest entry
+// silently disables the feature instead of failing loudly.
+describe('self-host secret manifest coverage', () => {
+  const optionalSecretNames = (): string[] => {
+    const content = readFileSync(join(REPO_ROOT, 'packages/server-utils/src/utils/config.ts'), 'utf8');
+    return [...content.matchAll(/readOptionalSecret\(\s*'([A-Z][A-Z0-9_]*)'/g)].map(m => m[1]);
+  };
+
+  it('finds readOptionalSecret references at all', () => {
+    const names = optionalSecretNames();
+    expect(names.length).toBeGreaterThanOrEqual(3);
+    expect(names).toContain('OAUTH_RSA_PRIVATE_KEY');
+  });
+
+  it('registers every secret Config reads through readOptionalSecret', () => {
+    const missing = optionalSecretNames().filter(
+      name => (DEFAULT_MANIFEST as Record<string, { kind: string }>)[name]?.kind !== 'secret'
+    );
+    expect(missing, `readOptionalSecret names absent from the manifest: ${missing.join(', ')}`).toEqual([]);
+  });
+});

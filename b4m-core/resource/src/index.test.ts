@@ -74,6 +74,11 @@ describe('createResource — self-host Resource shim', () => {
     expect(Resource.SLACK_WEBHOOK_URL.value).toBeUndefined();
   });
 
+  test('default manifest resolves the optional TURNSTILE_SECRET_KEY from env and degrades to undefined when unset', () => {
+    expect(createResource({ TURNSTILE_SECRET_KEY: 'x' }).TURNSTILE_SECRET_KEY.value).toBe('x');
+    expect(createResource({}).TURNSTILE_SECRET_KEY.value).toBeUndefined();
+  });
+
   test('SCREAMING_SNAKE secret names with digits map to the identical env var', () => {
     // Regression: `B4M_ANALYTICS_ENABLED` / `E2E_CLEANUP_SECRET` must NOT become
     // `B4_M_ANALYTICS_ENABLED` / `E2_E_CLEANUP_SECRET` - the real secret keeps its name.
