@@ -197,6 +197,7 @@ function retryDelay(signal: AbortSignal): Promise<void> {
  * Rejects with a TurnstileError once retries are spent, or a TurnstileCancelledError if the user cancels.
  * Concurrent calls run one at a time, since each card makes everything else on the page inert, and a
  * Cancel also dismisses any call queued behind it: the user declined the check, not just one card.
+ * Each dismissed caller rejects on its own, so a caller that queued several calls sees one cancel per call.
  */
 export async function getTurnstileToken(siteKey: string, action: string): Promise<string> {
   const turnstile = await loadTurnstileWithRetry();
@@ -233,10 +234,7 @@ async function solveChallenge(turnstile: TurnstileApi, siteKey: string, action: 
   // Focus sentinels also catch Tab leaving the cross-origin iframe, whose key events do not bubble.
   const startSentinel = document.createElement('span');
   const endSentinel = document.createElement('span');
-  for (const sentinel of [startSentinel, endSentinel]) {
-    sentinel.tabIndex = -1;
-    sentinel.setAttribute('aria-hidden', 'true');
-  }
+  for (const sentinel of [startSentinel, endSentinel]) sentinel.tabIndex = -1;
   // Turnstile renders into a closed shadow root, so its iframe can't be queried or focused directly.
   // Parking focus on startSentinel instead lets the browser's own Tab step into the widget next.
   let parkingFocus = false;

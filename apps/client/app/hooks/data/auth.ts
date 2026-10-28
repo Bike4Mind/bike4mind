@@ -126,7 +126,7 @@ async function solveTurnstileIfRequired(
     return await getTurnstileToken(config.turnstileSiteKey, action);
   } catch (error) {
     if (error instanceof TurnstileCancelledError) {
-      throw new Error('Verification cancelled. Submit again when you are ready.');
+      throw new Error('Verification cancelled. Try again when you are ready.');
     }
     reportTurnstileFailure(action, error);
     throw new Error('Could not complete the verification check. Please refresh and try again.');
