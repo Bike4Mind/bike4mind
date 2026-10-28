@@ -122,6 +122,10 @@ export function normalizeServerName(name: string): string {
  */
 export class ModelServerStore {
   private document: StoreDocument | null = null;
+  /** Entries without a string id: kept on disk, never listed. */
+  private orphans: unknown[] = [];
+  /** The file came from a newer Desktop; nothing is written back. */
+  private readOnly = false;
   /** Decrypted secrets by server id; the only copy when encryption is unavailable. */
   private readonly secrets = new Map<string, string>();
 
@@ -152,6 +156,7 @@ export class ModelServerStore {
     credential: ModelServerCredentialInput
   ): Promise<ModelServerRecord> {
     const document = await this.load();
+    this.assertWritable();
     if (document.servers.length >= MAX_MODEL_SERVERS) {
       throw new Error(`You can add at most ${MAX_MODEL_SERVERS} model servers.`);
     }
@@ -184,6 +189,7 @@ export class ModelServerStore {
     }
   ): Promise<ModelServerRecord> {
     const document = await this.load();
+    this.assertWritable();
     const stored = document.servers.find(server => server.id === id);
     if (!stored) throw new Error('That model server is no longer saved.');
     if (patch.name !== undefined) stored.name = this.checkName(document, patch.name, id);
@@ -200,6 +206,7 @@ export class ModelServerStore {
 
   async setModels(id: string, names: readonly string[]): Promise<void> {
     const document = await this.load();
+    if (this.readOnly) return;
     const stored = document.servers.find(server => server.id === id);
     const next = [...new Set(names)].slice(0, MAX_LISTED_MODELS);
     if (!stored || sameList(stored.models ?? [], next)) return;
@@ -209,6 +216,7 @@ export class ModelServerStore {
 
   async remove(id: string): Promise<void> {
     const document = await this.load();
+    this.assertWritable();
     const before = document.servers.length;
     document.servers = document.servers.filter(server => server.id !== id);
     this.secrets.delete(id);
@@ -271,8 +279,15 @@ export class ModelServerStore {
       if (raw) {
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         // Records this version cannot read (a later kind, transport or auth) are carried through untouched.
-        const servers = Array.isArray(parsed.servers) ? parsed.servers.filter(hasId) : [];
-        document = { ...parsed, version: 1, servers };
+        const all: unknown[] = Array.isArray(parsed.servers) ? parsed.servers : [];
+        this.orphans = all.filter(value => !hasId(value));
+        document = { ...parsed, version: 1, servers: all.filter(hasId) };
+        if (typeof parsed.version === 'number' && parsed.version > 1) {
+          this.readOnly = true;
+          this.logger.warn(
+            `MODEL SERVERS: server list is version ${parsed.version}, newer than this Desktop reads; using it read-only`
+          );
+        }
       }
     } catch (err) {
       this.logger.warn(
@@ -285,7 +300,13 @@ export class ModelServerStore {
 
   private async persist(document: StoreDocument): Promise<void> {
     this.document = document;
-    await this.file.write(JSON.stringify(document, null, 2));
+    await this.file.write(JSON.stringify({ ...document, servers: [...document.servers, ...this.orphans] }, null, 2));
+  }
+
+  private assertWritable(): void {
+    if (this.readOnly) {
+      throw new Error('The saved server list was written by a newer Desktop. Update Desktop to change it.');
+    }
   }
 }
 

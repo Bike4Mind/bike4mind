@@ -139,6 +139,35 @@ describe('ModelServerStore', () => {
     expect(written.servers[2].kind).toBe('vllm');
   });
 
+  it('keeps a record without a string id when it rewrites the file', async () => {
+    const orphan = { name: 'companion', kind: 'companion' };
+    const file = memoryFile(
+      JSON.stringify({ version: 1, servers: [{ ...base, id: 'aaaaaaaaaaaa', auth: { type: 'none' } }, orphan] })
+    );
+    const store = new ModelServerStore(cipher(), file, logger);
+    await store.update('aaaaaaaaaaaa', { access: 'manage' });
+    const written = JSON.parse(file.contents!);
+    expect(written.servers).toHaveLength(2);
+    expect(written.servers).toContainEqual(orphan);
+  });
+
+  it('uses a file from a newer version read-only and never rewrites it', async () => {
+    const original = JSON.stringify({
+      version: 2,
+      servers: [{ ...base, id: 'aaaaaaaaaaaa', auth: { type: 'none' } }],
+    });
+    const file = memoryFile(original);
+    const warn = vi.fn();
+    const store = new ModelServerStore(cipher(), file, { debug: vi.fn(), warn });
+    expect((await store.list()).map(server => server.id)).toEqual(['aaaaaaaaaaaa']);
+    await expect(store.update('aaaaaaaaaaaa', { access: 'manage' })).rejects.toThrow(/newer Desktop/);
+    await expect(store.add({ ...base, name: 'other' }, { type: 'none' })).rejects.toThrow(/newer Desktop/);
+    await expect(store.remove('aaaaaaaaaaaa')).rejects.toThrow(/newer Desktop/);
+    await store.setModels('aaaaaaaaaaaa', ['m1']);
+    expect(file.contents).toBe(original);
+    expect(warn.mock.calls.flat().join('\n')).toMatch(/version 2/);
+  });
+
   it('refuses a duplicate name, including the name of this computer', async () => {
     const store = new ModelServerStore(cipher(), memoryFile(), logger);
     await store.add(base, { type: 'none' });
