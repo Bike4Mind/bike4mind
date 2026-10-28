@@ -131,7 +131,7 @@ describe('set_session_pull_request', () => {
   it('refuses without a PR monitor', async () => {
     await expect(
       setSessionPullRequest.run({ pull_request: REF.url }, { roots: [], signal: new AbortController().signal })
-    ).rejects.toThrow('This conversation has no pull request panel.');
+    ).rejects.toThrow('The PR bar can only be changed in a conversation the user is in.');
   });
 
   it('is offered only to a Code session with a user present', () => {

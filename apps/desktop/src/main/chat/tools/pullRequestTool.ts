@@ -45,7 +45,7 @@ export const setSessionPullRequest: ToolDefinition = {
 
   async run(input, context) {
     const pullRequests = context.pullRequests;
-    if (!pullRequests) throw new Error('This conversation has no pull request panel.');
+    if (!pullRequests) throw new Error('The PR bar can only be changed in a conversation the user is in.');
     const target = typeof input.pull_request === 'string' ? input.pull_request.trim() : '';
     const clear = input.clear === true;
     if (clear && target) throw new Error('Pass either pull_request or clear, not both.');

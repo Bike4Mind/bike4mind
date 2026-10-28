@@ -3699,7 +3699,9 @@ export class ChatService {
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
           ...(this.deps.mcp ? { mcp: this.deps.mcp } : {}),
-          ...(pullRequests
+          // Not on `ask` alone: an undeclared tool still resolves by name, and with no user present
+          // nobody can have asked for the change.
+          ...(pullRequests && ask
             ? {
                 pullRequests: {
                   bind: (target: string) => pullRequests.bindForAgent(sessionId, target),
