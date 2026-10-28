@@ -154,6 +154,27 @@ describe('listAdminUsers', () => {
     expect(withKey.totalUsers).toBe(1);
     expect(withoutKey.users.map(user => user.username).sort()).toEqual(['dead', 'none']);
   });
+
+  it('selects the same key holders on the list, export and domain groups in DocumentDB mode', async () => {
+    const live = await seedUser('live');
+    const dead = await seedUser('dead');
+    await seedKey(String(live._id), 'k1', ApiKeyStatus.ACTIVE);
+    await seedKey(String(dead._id), 'k2', ApiKeyStatus.DISABLED);
+    // The domain groups read hints createdAt indexes on both collections; autoIndex may not have built them.
+    await Promise.all([User.createIndexes(), UserApiKey.createIndexes()]);
+    vi.stubEnv('USE_DOCUMENTDB_COMPATIBILITY', 'true');
+    try {
+      const list = await listAdminUsers({ ...params, hasApiKey: 'yes' }, viewer, { logError }, NOW);
+      const exported = await exportAdminUsers({ hasApiKey: 'yes' }, NOW);
+      const grouped = await adminUsersDomainGroups({ hasApiKey: 'yes' }, NOW);
+
+      expect(list.users.map(user => user.username)).toEqual(['live']);
+      expect(exported.users.map(user => user.username)).toEqual(['live']);
+      expect(grouped.groups.flatMap(group => group.userIds)).toEqual([String(live._id)]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe('exportAdminUsers', () => {
