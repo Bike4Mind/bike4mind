@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
+import { AdminUserTagsSchema } from '@bike4mind/common';
 import { Button, Chip, ChipDelete, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useGetUserTags } from '@client/app/hooks/data/user';
+import { useAdminUserTagsUpdate } from './useAdminUserTagsUpdate';
 import ProductAccess from '../../ProductAccess';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, SegmentedControl, useUndoToast } from '../../../shared';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
@@ -95,31 +98,44 @@ export const ChangeRoleDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
 
 /** Free-form tags only: Role and Product access own the managed tags and are left as they are. */
 export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
-  const update = useAdminUserUpdate(user.id);
+  const update = useAdminUserTagsUpdate(user.id);
+  const suggestions = useGetUserTags();
+  const suggestionsId = useId();
   const showUndo = useUndoToast();
-  const tags = user.tags ?? [];
+  const [tags] = useState(() => user.tags ?? []);
   const managed = tags.filter(isManagedTag);
   const [custom, setCustom] = useState<string[]>(() => tags.filter(tag => !isManagedTag(tag)));
   const [input, setInput] = useState('');
   const nextTags = [...managed, ...custom];
   const diff = diffTags(tags, nextTags);
   const unchanged = diff.added.length === 0 && diff.removed.length === 0;
+  const validTags = AdminUserTagsSchema.safeParse(nextTags).success;
 
   const addFromInput = () => {
+    const seen = new Set(custom.map(tag => tag.toLowerCase()));
     const fresh = input
       .split(',')
       .map(tag => tag.trim())
-      .filter(
-        tag => tag && !isManagedTag(tag) && !custom.some(existing => existing.toLowerCase() === tag.toLowerCase())
-      );
+      .filter(tag => {
+        const normalized = tag.toLowerCase();
+        if (!tag || isManagedTag(tag) || seen.has(normalized)) return false;
+        seen.add(normalized);
+        return true;
+      });
     if (fresh.length > 0) setCustom(previous => [...previous, ...fresh]);
     setInput('');
   };
 
   const handleConfirm = async () => {
-    await update({ tags: nextTags });
+    const savedTags = await update({ before: tags, tags: nextTags });
     onClose();
-    showUndo({ message: 'Tags updated', onUndo: () => update({ tags }), onViewAudit: onAudit });
+    showUndo({
+      message: 'Tags updated',
+      onUndo: async () => {
+        await update({ before: savedTags, tags });
+      },
+      onViewAudit: onAudit,
+    });
   };
 
   return (
@@ -131,11 +147,17 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
       reasonPresets={ADMIN_REASON_PRESETS.accountTags}
       reasonAudited={false}
       confirmLabel="Save tags"
-      blockedReason={unchanged ? 'Add or remove a tag first.' : null}
+      blockedReason={
+        unchanged
+          ? 'Add or remove a tag first.'
+          : !validTags
+            ? 'Use up to 100 distinct tags of 1 to 64 characters.'
+            : null
+      }
       onConfirm={handleConfirm}
       data-testid="manage-tags-dialog"
     >
-      <Stack direction="row" gap={0.75} flexWrap="wrap" data-testid="manage-tags-dialog-list">
+      <Stack direction="row" gap={0.75} flexWrap="wrap" data-testid="user-tags-editor">
         {custom.length === 0 && (
           <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
             No tags yet.
@@ -173,8 +195,22 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
               }
             }}
             sx={{ flex: 1 }}
-            slotProps={{ input: { 'data-testid': 'manage-tags-dialog-input' } }}
+            slotProps={{
+              input: {
+                list: suggestionsId,
+                maxLength: 6500,
+                'data-testid': 'manage-tags-dialog-input',
+                'aria-label': 'Add tags',
+              },
+            }}
           />
+          <datalist id={suggestionsId} data-testid="user-tags-suggestions">
+            {(suggestions.data ?? [])
+              .filter(tag => !isManagedTag(tag))
+              .map(tag => (
+                <option key={tag} value={tag} />
+              ))}
+          </datalist>
           <Button
             variant="outlined"
             color="neutral"
