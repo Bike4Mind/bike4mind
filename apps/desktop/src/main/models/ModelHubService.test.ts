@@ -150,6 +150,21 @@ describe('ModelHubService pulls', () => {
     expect(installedChanged).not.toHaveBeenCalled();
   });
 
+  it('reports a cancel during the Ollama check as a cancel, not as Ollama being down', async () => {
+    const { service, runtime, pulls } = harness();
+    let release: (health: { ok: boolean; version: string | null; error: string | null }) => void = () => undefined;
+    runtime.health.mockImplementationOnce(() => new Promise(resolve => (release = resolve)));
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(runtime.health).toHaveBeenCalledTimes(1));
+
+    service.cancel(pullKey(request.repo, request.buildId));
+    release({ ok: false, version: null, error: 'timed out' });
+
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+    expect(service.pulls()).toEqual([]);
+    expect(pulls).toHaveLength(0);
+  });
+
   it('refuses a second pull of the same build while one runs', async () => {
     const { service, runtime, pulls } = harness();
     const first = service.pull(request);
