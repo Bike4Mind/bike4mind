@@ -583,6 +583,22 @@ describe('video job end to end with the test provider', () => {
     expect(settleCreditHold).not.toHaveBeenCalled();
   });
 
+  it('fails a job queued before its model was retired without submitting it', async () => {
+    const submit = vi.fn<VideoProvider['submit']>();
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const queued = t.jobOf(created);
+    queued.payload.request = { ...queued.payload.request, model: 'veo-3.1-fast-generate-preview' };
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({
+      state: 'failed',
+      attempts: 0,
+      error: { code: 'provider_error', message: expect.stringMatching(/retired.*gemini-omni-1\.1-flash/) },
+    });
+    expect(submit).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
   it('a non-definitive submit error is an unknown outcome: orphaned_submit', async () => {
     const t = setup({
       providers: createVideoProviderRegistry([

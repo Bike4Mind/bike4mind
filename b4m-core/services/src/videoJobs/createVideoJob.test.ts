@@ -127,6 +127,19 @@ describe('createVideoJob', () => {
     });
   });
 
+  it('rejects a retired model with a 422 naming its replacement, even when an admin re-enabled it', async () => {
+    const model = 'veo-3.1-fast-generate-preview';
+    const { deps, repository } = makeDeps({
+      getSettings: async () => ({ enforceCredits: true, videoGeneration: { enabledModels: { [model]: true } } }),
+    });
+    const result = await createVideoJob({ user, request: { ...validRequest, model }, source: 'api' }, deps);
+    expect(result).toMatchObject({ ok: false, status: 422, code: 'model_unavailable' });
+    expect(!result.ok && result.message).toMatch(/retired.*use gemini-omni-1\.1-flash/);
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(repository.jobs.size).toBe(0);
+  });
+
   it('rejects a model whose provider is not registered', async () => {
     const { deps } = makeDeps({ providers: createVideoProviderRegistry([]) });
     expect(await createVideoJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({

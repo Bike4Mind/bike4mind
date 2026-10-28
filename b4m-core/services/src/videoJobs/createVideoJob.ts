@@ -2,6 +2,7 @@ import {
   estimateVideoCostCredits,
   getVideoModelCapabilities,
   isVideoModelEnabled,
+  retiredVideoModelMessage,
   validateAgainstCapabilities,
   VideoGenerationRequestSchema,
   videoInputRef,
@@ -37,6 +38,8 @@ export async function createVideoJob(
   }
   const request = parsed.data;
   const caps = getVideoModelCapabilities(request.model);
+  const retired = retiredVideoModelMessage(request.model);
+  if (retired) return { ok: false, status: 422, code: 'model_unavailable', message: retired };
   if (!deps.providers.get(caps.provider)) {
     return {
       ok: false,
