@@ -37,6 +37,7 @@ import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PublicIcon from '@mui/icons-material/Public';
+import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
 import { useSettingsFromServer, useUpdateSettings } from '@client/app/hooks/data/settings';
 import debounce from 'lodash/debounce';
@@ -706,7 +707,46 @@ const SystemPromptRow = memo<SystemPromptRowProps>(
   ({ file, isGlobal, isAdmin, isToggling, isDeleting, isDisabled, onToggle, onView, onDelete, onToggleGlobal }) => {
     const { data: fileInfo, isLoading } = useGetFabFile(file.fileId);
 
-    if (!fileInfo || isLoading) return null;
+    if (isLoading) return null;
+    // A deleted file, or one no longer shared with this user, still sits in systemFiles and is
+    // reported missing on every turn; this row is the only place it can be removed from.
+    if (!fileInfo) {
+      return (
+        <ListItem
+          data-testid="system-prompt-unavailable-row"
+          sx={theme => ({
+            ...cardSurfaceSx(theme),
+            display: 'flex',
+            width: '100%',
+            alignItems: 'center',
+            gap: '20px',
+            p: '20px',
+          })}
+        >
+          <WarningAmberRounded color="warning" sx={{ fontSize: 32 }} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ fontSize: { xs: '14px', sm: '16px' }, color: 'text.primary' }}>
+              Unavailable file
+            </Typography>
+            <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+              It was deleted or is no longer shared with you, so it is not sent with your messages.
+            </Typography>
+          </Box>
+          <Button
+            variant="outlined"
+            color="danger"
+            size="sm"
+            startDecorator={<DeleteOutline />}
+            loading={isDeleting}
+            disabled={isDisabled}
+            onClick={onDelete}
+            data-testid="system-prompt-unavailable-remove-btn"
+          >
+            Remove
+          </Button>
+        </ListItem>
+      );
+    }
 
     return (
       <ListItem
