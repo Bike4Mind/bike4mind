@@ -242,7 +242,7 @@ async function postEvent(
       // reaches the receiver and is almost always a misconfigured OVERWATCH_INGEST_URL (scheme,
       // host, or trailing-slash redirect). Log it so the misconfig is diagnosable instead of every
       // emit silently dropping. Status only, never the key or body.
-      console.warn('[b4m-analytics] ingest URL returned a redirect — check OVERWATCH_INGEST_URL', {
+      console.warn('[b4m-analytics] ingest URL returned a redirect \u2014 check OVERWATCH_INGEST_URL', {
         status: res.status,
         productId,
       });
