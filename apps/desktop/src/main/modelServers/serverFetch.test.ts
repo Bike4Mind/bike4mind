@@ -1,6 +1,6 @@
 import http, { type IncomingHttpHeaders } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServerFetch, ServerRedirectError, ServerTransportError, type ServerFetchDeps } from './serverFetch';
 
 const TOKEN = 'tok-secret-zz';
@@ -142,6 +142,20 @@ describe('createServerFetch', () => {
     expect(lookups).toBe(2);
     expect(second).toBeInstanceOf(ServerTransportError);
     expect(target.seen).toHaveLength(1);
+  });
+
+  it('destroys the response and fails clearly on a status fetch cannot represent', async () => {
+    let closed = false;
+    const target = await serve((_req, res) => {
+      res.on('close', () => (closed = true));
+      res.writeHead(999);
+      res.write('partial');
+    });
+    const fetch = createServerFetch(endpoint(target.origin));
+    const error = await failure(fetch(`${target.origin}/api/version`));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toBe('gpu box answered with an invalid HTTP status (999).');
+    await vi.waitFor(() => expect(closed).toBe(true));
   });
 
   it('rejects a refused connection like fetch does, without the credential in the error', async () => {

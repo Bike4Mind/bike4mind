@@ -100,6 +100,10 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
     });
 
     const status = response.statusCode ?? 0;
+    if (status < 200 || status > 599) {
+      response.destroy();
+      throw new TypeError(`${endpoint.label} answered with an invalid HTTP status (${status}).`);
+    }
     if (REDIRECTS.has(status)) {
       response.resume();
       const location = response.headers.location;
