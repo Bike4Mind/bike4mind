@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   validateToolList,
   validateMaxIterations,
@@ -8,7 +8,11 @@ import {
   validateAgentUpdate,
   AgentValidationError,
 } from './agentValidation';
-import { IAgent } from '@bike4mind/common';
+import { ChatModels, IAgent, IUserDocument } from '@bike4mind/common';
+import { ServiceUnavailableError } from '@bike4mind/common';
+
+const { getCallerModelList } = vi.hoisted(() => ({ getCallerModelList: vi.fn() }));
+vi.mock('@server/utils/callerModelList', () => ({ getCallerModelList }));
 
 describe('validateToolList', () => {
   it('returns undefined for an undefined input (field is optional)', () => {
@@ -169,7 +173,19 @@ describe('validateDefaultVariables', () => {
 });
 
 describe('validateAgentUpdate', () => {
+  const user = { id: 'user-1' } as IUserDocument;
   const tooMany = Array.from({ length: 101 }, (_, i) => `tool-${i}`);
+
+  beforeEach(() => {
+    getCallerModelList.mockReset();
+    getCallerModelList.mockResolvedValue({
+      models: [
+        { id: 'gpt-6-astra', type: 'text' },
+        { id: 'catalog-image-model', type: 'image' },
+      ],
+      supersededModels: [],
+    });
+  });
 
   it.each<[string, Record<string, unknown>]>([
     ['preferredModel', { preferredModel: 'not-a-model' }],
@@ -186,24 +202,112 @@ describe('validateAgentUpdate', () => {
     ['defaultVariables', { defaultVariables: { k: 5 } }],
     ['exclusiveMcpServers', { exclusiveMcpServers: 'not-an-array' }],
     ['fallbackModels', { fallbackModels: tooMany }],
-  ])('rejects an invalid %s', (_, body) => {
-    expect(() => validateAgentUpdate(body as Partial<IAgent>)).toThrow(AgentValidationError);
+  ])('rejects an invalid %s', async (_, body) => {
+    await expect(validateAgentUpdate(body as Partial<IAgent>, user)).rejects.toThrow(AgentValidationError);
   });
 
-  it('normalizes fields in place to the validators output', () => {
+  it('normalizes fields in place to the validators output', async () => {
     const body: Partial<IAgent> = { triggerWords: ['@Helper', '@helper'] };
-    validateAgentUpdate(body);
+    await validateAgentUpdate(body, user);
     expect(body).toStrictEqual({ triggerWords: ['@helper'] });
   });
 
-  it('leaves absent fields absent', () => {
+  it('leaves absent fields absent', async () => {
     const body: Partial<IAgent> = {};
-    validateAgentUpdate(body);
+    await validateAgentUpdate(body, user);
     expect(Object.keys(body)).toEqual([]);
   });
 
-  it('names a tool-list field by its label', () => {
+  it('names a tool-list field by its label', async () => {
     const label = (field: string) => (field === 'allowedTools' ? 'allowed_tools' : field);
-    expect(() => validateAgentUpdate({ allowedTools: tooMany }, label)).toThrow(/^allowed_tools may contain/);
+    await expect(validateAgentUpdate({ allowedTools: tooMany }, user, label)).rejects.toThrow(
+      /^allowed_tools may contain/
+    );
+  });
+
+  describe('model catalog', () => {
+    it('accepts a catalog-only chat model the static enum lacks', async () => {
+      await expect(
+        validateAgentUpdate({ preferredModel: 'gpt-6-astra' } as Partial<IAgent>, user)
+      ).resolves.toBeUndefined();
+      expect(getCallerModelList).toHaveBeenCalledWith(user, expect.anything());
+    });
+
+    it('accepts a catalog-only image model the static enum lacks', async () => {
+      await expect(
+        validateAgentUpdate({ preferredImageModel: 'catalog-image-model' } as Partial<IAgent>, user)
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects an id that is in neither the enum nor the catalog', async () => {
+      await expect(validateAgentUpdate({ preferredModel: 'gpt-9-nope' } as Partial<IAgent>, user)).rejects.toThrow(
+        /^Invalid model: gpt-9-nope$/
+      );
+      await expect(validateAgentUpdate({ preferredImageModel: 'img-nope' } as Partial<IAgent>, user)).rejects.toThrow(
+        /^Invalid image model: img-nope$/
+      );
+    });
+
+    it('rejects a catalog chat model used as an image model, and an image model used as a chat model', async () => {
+      await expect(
+        validateAgentUpdate({ preferredImageModel: 'gpt-6-astra' } as Partial<IAgent>, user)
+      ).rejects.toThrow(/^Invalid image model: gpt-6-astra$/);
+      await expect(
+        validateAgentUpdate({ preferredModel: 'catalog-image-model' } as Partial<IAgent>, user)
+      ).rejects.toThrow(/^Invalid model: catalog-image-model$/);
+    });
+
+    it('passes the request logger to the catalog lookup', async () => {
+      const logger = { log: vi.fn() };
+      await validateAgentUpdate({ preferredModel: 'gpt-6-astra' } as Partial<IAgent>, user, undefined, logger);
+      expect(getCallerModelList).toHaveBeenCalledWith(user, logger);
+    });
+
+    it('skips the catalog lookup when the static enum already knows the model', async () => {
+      await validateAgentUpdate({ preferredModel: ChatModels.CLAUDE_4_SONNET } as Partial<IAgent>, user);
+      expect(getCallerModelList).not.toHaveBeenCalled();
+    });
+
+    it('rethrows a failure from the catalog lookup', async () => {
+      getCallerModelList.mockRejectedValue(new Error('down'));
+      await expect(validateAgentUpdate({ preferredModel: 'gpt-6-astra' } as Partial<IAgent>, user)).rejects.toThrow(
+        'down'
+      );
+    });
+
+    it('looks the catalog up once for an enum chat model plus a catalog-only image model', async () => {
+      await validateAgentUpdate(
+        { preferredModel: ChatModels.CLAUDE_4_SONNET, preferredImageModel: 'catalog-image-model' } as Partial<IAgent>,
+        user
+      );
+      expect(getCallerModelList).toHaveBeenCalledTimes(1);
+      await expect(
+        validateAgentUpdate(
+          { preferredModel: ChatModels.CLAUDE_4_SONNET, preferredImageModel: 'img-nope' } as Partial<IAgent>,
+          user
+        )
+      ).rejects.toThrow(/^Invalid image model: img-nope$/);
+    });
+
+    it('rejects a field the cheap checks fail without a catalog lookup', async () => {
+      await expect(
+        validateAgentUpdate({ temperature: 5, preferredModel: 'gpt-6-astra' } as Partial<IAgent>, user)
+      ).rejects.toThrow(/^Temperature must be between 0 and 2$/);
+      expect(getCallerModelList).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-string model id as a bad request without a catalog lookup', async () => {
+      await expect(validateAgentUpdate({ preferredModel: {} } as unknown as Partial<IAgent>, user)).rejects.toThrow(
+        AgentValidationError
+      );
+      expect(getCallerModelList).not.toHaveBeenCalled();
+    });
+
+    it('reports an empty catalog as unavailable rather than blaming the model', async () => {
+      getCallerModelList.mockResolvedValue({ models: [], supersededModels: [] });
+      await expect(validateAgentUpdate({ preferredModel: 'gpt-6-astra' } as Partial<IAgent>, user)).rejects.toThrow(
+        ServiceUnavailableError
+      );
+    });
   });
 });

@@ -10,11 +10,13 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { signupProtection } from '@server/auth/signupProtection';
 
 async function unlockFromOrgInvite(userId: string, inviteId?: string) {
   return userService.unlockSignupGrant(userId, 'org_invite', {
     db: {
       users: userRepository,
+      signupProtection,
       adminSettings: adminSettingsRepository,
       creditTransactions: creditTransactionRepository,
       creditLots: creditLotRepository,

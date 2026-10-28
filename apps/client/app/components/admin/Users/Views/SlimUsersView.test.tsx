@@ -122,6 +122,22 @@ describe('SlimUsersContainer', () => {
 });
 
 describe('SlimUsersContainer selection', () => {
+  it.each([false, true])('selects the focused row with x on mobile=%s, not its inputs', mobile => {
+    mockIsMobile.mockReturnValue(mobile);
+    const selection = { selectedIds: new Set<string>(), onToggle: vi.fn(), onTogglePage: vi.fn() };
+    render(<SlimUsersContainer users={users} selection={selection} />, { wrapper: TestWrapper });
+    const row = screen.getAllByTestId('admin-user-card')[0];
+    expect(row).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(row, { key: 'x', ctrlKey: true });
+    fireEvent.keyDown(screen.getAllByTestId('admin-user-select-checkbox')[0], { key: 'x' });
+    expect(selection.onToggle).not.toHaveBeenCalled();
+    fireEvent.keyDown(row, { key: 'x' });
+    expect(selection.onToggle).toHaveBeenCalledExactlyOnceWith(users[0].id);
+    // Caps Lock reports an uppercase key without Shift.
+    fireEvent.keyDown(row, { key: 'X' });
+    expect(selection.onToggle).toHaveBeenCalledTimes(2);
+  });
+
   const makeSelection = (selectedIds: string[] = []) => ({
     selectedIds: new Set(selectedIds),
     onToggle: vi.fn(),

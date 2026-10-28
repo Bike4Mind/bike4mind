@@ -26,14 +26,18 @@ afterEach(() => {
 function makeTree(): {
   dir: string;
   v1Dir: string;
+  infraDir: string;
   allowlist: string;
   apiKeyAllowlist: string;
   unmeteredAllowlist: string;
+  functionUrlAllowlist: string;
 } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-test-'));
   sandboxes.push(dir);
   const v1Dir = path.join(dir, 'apps', 'client', 'pages', 'api', 'v1');
   fs.mkdirSync(v1Dir, { recursive: true });
+  const infraDir = path.join(dir, 'infra');
+  fs.mkdirSync(infraDir, { recursive: true });
   const allowlist = path.join(dir, 'scripts', 'contract-gate-allowlist.txt');
   fs.mkdirSync(path.dirname(allowlist), { recursive: true });
   fs.writeFileSync(allowlist, '# header-only\n', 'utf8');
@@ -41,7 +45,9 @@ function makeTree(): {
   fs.writeFileSync(apiKeyAllowlist, '# header-only\n', 'utf8');
   const unmeteredAllowlist = path.join(dir, 'scripts', 'unmetered-llm-route-allowlist.txt');
   fs.writeFileSync(unmeteredAllowlist, '# header-only\n', 'utf8');
-  return { dir, v1Dir, allowlist, apiKeyAllowlist, unmeteredAllowlist };
+  const functionUrlAllowlist = path.join(dir, 'scripts', 'contract-gate-function-url-allowlist.txt');
+  fs.writeFileSync(functionUrlAllowlist, '# header-only\n', 'utf8');
+  return { dir, v1Dir, infraDir, allowlist, apiKeyAllowlist, unmeteredAllowlist, functionUrlAllowlist };
 }
 
 // Writes a handler relative to pages/api (not pages/api/v1); returns its repo-relative path.
@@ -61,6 +67,28 @@ function writeHandler(v1Dir: string, rel: string, content: string): string {
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, content, 'utf8');
   return path.join('apps', 'client', 'pages', 'api', 'v1', rel);
+}
+
+// Writes a Lambda handler relative to apps/workers/src; returns its repo-relative path.
+function writeWorker(dir: string, rel: string, content: string): string {
+  const repoRel = path.join('apps', 'workers', 'src', rel);
+  const full = path.join(dir, repoRel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content, 'utf8');
+  return repoRel;
+}
+
+// Writes an SST declaration relative to infra/; returns its repo-relative path.
+function writeInfra(dir: string, rel: string, content: string): string {
+  const repoRel = path.join('infra', rel);
+  const full = path.join(dir, repoRel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content, 'utf8');
+  return repoRel;
+}
+
+function fnDeclaration(handler: string, url: string): string {
+  return `export const lambda = new sst.aws.Function('Lambda', {\n  handler: '${handler}',\n  url: ${url},\n});\n`;
 }
 
 // Any v1 file without nextRouteForContract is a violator -- predicate is presence-only.
@@ -466,6 +494,196 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain('::error::');
     });
   });
+
+  describe('function-url contract scan', () => {
+    const RAW_WORKER_HANDLER = `export const handler = async () => ({ statusCode: 200, body: '' });\n`;
+    const ROUTED_WORKER = `import { defineLambdaRoute } from './defineLambdaRoute';\nexport const handler = defineLambdaRoute(contract, async () => ({ statusCode: 200, body: {} }));\n`;
+    // Nested objects and a template path: the scanner's brace matching has to survive both.
+    const ROUTER_URL = '{ router: { instance: router, path: `${routePrefix}/api/ai/v1/tools` } }';
+
+    it('flags a url: true Function whose handler is not built on defineLambdaRoute', () => {
+      const { dir } = makeTree();
+      const handler = writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'raw.ts', fnDeclaration('apps/workers/src/raw.handler', 'true'));
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(handler);
+      expect(r.stdout).toContain('::error::');
+    });
+
+    it('flags a url: { router } Function whose handler is not built on defineLambdaRoute', () => {
+      const { dir } = makeTree();
+      const handler = writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'router.ts', fnDeclaration('apps/workers/src/raw.handler', ROUTER_URL));
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(handler);
+    });
+
+    // Acceptance criterion: the one Function URL that exists today passes with no allowlist entry.
+    it('passes the CliToolHandler shape: a thin wrapper importing the routed module', () => {
+      const { dir } = makeTree();
+      writeInfra(dir, 'cli.ts', fnDeclaration('apps/workers/src/cli/tools.handler.handler', ROUTER_URL));
+      writeWorker(dir, 'cli/tools.handler.ts', `import { run } from './tools';\nexport const handler = run;\n`);
+      writeWorker(dir, 'cli/tools.ts', ROUTED_WORKER);
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('OK');
+    });
+
+    it('passes a handler that calls defineLambdaRoute directly', () => {
+      const { dir } = makeTree();
+      writeWorker(dir, 'direct.ts', ROUTED_WORKER);
+      writeInfra(dir, 'direct.ts', fnDeclaration('apps/workers/src/direct.handler', 'true'));
+      expect(runGuard(dir).status).toBe(0);
+    });
+
+    it('does not scan a Function that declares no url', () => {
+      const { dir } = makeTree();
+      writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeInfra(
+        dir,
+        'plain.ts',
+        `export const lambda = new sst.aws.Function('Lambda', {\n  handler: 'apps/workers/src/raw.handler',\n});\n`
+      );
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('OK');
+    });
+
+    it('flags a handler that imports only a helper from the adapter', () => {
+      const { dir } = makeTree();
+      const handler = writeWorker(
+        dir,
+        'cli/helper.ts',
+        `import { internalErrorResult } from '@workers/cli/defineLambdaRoute';\nexport const handler = () => internalErrorResult('x');\n`
+      );
+      writeWorker(
+        dir,
+        'cli/defineLambdaRoute.ts',
+        `export function defineLambdaRoute(c: unknown, f: unknown) { return f; }\n`
+      );
+      writeInfra(dir, 'helper.ts', fnDeclaration('apps/workers/src/cli/helper.handler', 'true'));
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(handler);
+    });
+
+    it('lists every violating handler, one per file', () => {
+      const { dir } = makeTree();
+      const a = writeWorker(dir, 'a.ts', RAW_WORKER_HANDLER);
+      const b = writeWorker(dir, 'b.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'a.ts', fnDeclaration('apps/workers/src/a.handler', 'true'));
+      writeInfra(dir, 'b.ts', fnDeclaration('apps/workers/src/b.handler', 'true'));
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(a);
+      expect(r.stdout).toContain(b);
+    });
+
+    it('checks every Function in one infra file, not only the first', () => {
+      const { dir } = makeTree();
+      const handler = writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeWorker(dir, 'direct.ts', ROUTED_WORKER);
+      writeInfra(
+        dir,
+        'two.ts',
+        fnDeclaration('apps/workers/src/direct.handler', 'true') +
+          fnDeclaration('apps/workers/src/raw.handler', 'true').replace('lambda', 'second')
+      );
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(handler);
+    });
+
+    it('refuses to report clean when a url Function has a computed handler', () => {
+      const { dir } = makeTree();
+      writeInfra(
+        dir,
+        'computed.ts',
+        `export const lambda = new sst.aws.Function('Lambda', {\n  handler: pickHandler(),\n  url: true,\n});\n`
+      );
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('Could not scan infra');
+      expect(r.stdout + r.stderr).toContain('::error::');
+      expect(r.stdout).not.toContain('OK: No contract-gate violations.');
+    });
+
+    // Node exits 1 for a throw or a load error, which must not read as "violations: none".
+    it.each([
+      ['throws at load', `throw new Error('boom');\n`],
+      ['has a syntax error', `const = ;\n`],
+    ])('refuses to report clean when the helper %s', (_label, helper) => {
+      const { dir } = makeTree();
+      fs.copyFileSync(GUARD, path.join(dir, 'scripts', 'check-contract-gate.sh'));
+      fs.writeFileSync(path.join(dir, 'scripts', 'check-function-url-contracts.mjs'), helper, 'utf8');
+      writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'raw.ts', fnDeclaration('apps/workers/src/raw.handler', 'true'));
+      const r = spawnSync(BASH, [path.join(dir, 'scripts', 'check-contract-gate.sh')], { cwd: dir, encoding: 'utf8' });
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('Function URL contract scan failed');
+      expect(r.stdout).not.toContain('OK: No contract-gate violations.');
+    });
+
+    it('exits 1 when infra/ is missing', () => {
+      const { dir } = makeTree();
+      fs.rmSync(path.join(dir, 'infra'), { recursive: true });
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('Infra directory not found');
+    });
+
+    it('exits 1 when the function-url allowlist file is missing', () => {
+      const { dir, functionUrlAllowlist } = makeTree();
+      fs.rmSync(functionUrlAllowlist);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toMatch(/ERROR.*Allowlist not found/);
+    });
+
+    it('passes a reason-annotated allowlisted handler', () => {
+      const { dir, functionUrlAllowlist } = makeTree();
+      const handler = writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'raw.ts', fnDeclaration('apps/workers/src/raw.handler', 'true'));
+      fs.writeFileSync(functionUrlAllowlist, `# header\n${handler}  # legacy, owns auth itself\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('OK');
+    });
+
+    it('reports a stale function-url entry as INFO and exits 0', () => {
+      const { dir, functionUrlAllowlist } = makeTree();
+      const handler = writeWorker(dir, 'raw.ts', ROUTED_WORKER);
+      writeInfra(dir, 'raw.ts', fnDeclaration('apps/workers/src/raw.handler', 'true'));
+      fs.writeFileSync(functionUrlAllowlist, `# header\n${handler}  # ported\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('INFO');
+      expect(r.stdout).toContain(handler);
+    });
+
+    it('fails when an allowlist entry names a file that no longer exists', () => {
+      const { dir, functionUrlAllowlist } = makeTree();
+      const gone = path.join('apps', 'workers', 'src', 'deleted.ts');
+      fs.writeFileSync(functionUrlAllowlist, `# header\n${gone}  # removed\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('no longer exist');
+      expect(r.stdout).toContain(gone);
+    });
+
+    it('fails on an allowlist entry with no reason', () => {
+      const { dir, functionUrlAllowlist } = makeTree();
+      const handler = writeWorker(dir, 'raw.ts', RAW_WORKER_HANDLER);
+      writeInfra(dir, 'raw.ts', fnDeclaration('apps/workers/src/raw.handler', 'true'));
+      fs.writeFileSync(functionUrlAllowlist, `# header\n${handler}\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain("needs a trailing '# reason'");
+    });
+  });
+
   describe('unmetered LLM ratchet', () => {
     const UNMETERED_LLM = `
 const handler = baseApi({ requiredScopes: ['ai:generate'] }).post(async (req, res) => {

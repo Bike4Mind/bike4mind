@@ -73,6 +73,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.AgentExecutions]: 'agent-executions',
   [AdminTab.PublishedPages]: 'published-pages',
   [AdminTab.PartnerSignupRules]: 'partner-signup-rules',
+  [AdminTab.SignupDomainHolds]: 'signup-domain-holds',
   [AdminTab.EmbedKeys]: 'embed-keys',
   [AdminTab.ModelLifecycle]: 'model-lifecycle',
   [AdminTab.PrReport]: 'pr-report',

@@ -1,6 +1,8 @@
 import { VERIFIED_SLACK_IDENTITY_FILTER, canonicalizeEmail } from '@bike4mind/common';
 import {
+  ADMIN_PERMISSIONS,
   AuthStrategy,
+  PENDING_FREE_CREDITS_TAG,
   CollectionType,
   IAuthProviders,
   ISecurityQuestion,
@@ -8,6 +10,9 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  ISignupRiskScore,
+  SIGNUP_RISK_REVIEW_STATES,
+  SIGNUP_RISK_SIGNALS,
   UserModerationStatus,
   MFA_MAX_FAILED_ATTEMPTS,
   MFA_LOCKOUT_DURATION_MS,
@@ -233,7 +238,7 @@ const ModerationHitSchema = new Schema(
   {
     at: { type: Date, required: true },
     categories: { type: [String], default: [] },
-    source: { type: String, enum: ['openai', 'bedrock'], required: true },
+    source: { type: String, enum: ['openai', 'bedrock', 'provider'], required: true },
     questId: { type: String, required: false },
   },
   { _id: false }
@@ -281,7 +286,19 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   /** Merge tags into one user's tags (idempotent via $addToSet). No-op on an empty list. */
   async addTagsToUser(userId: string, tags: string[]): Promise<void> {
     if (tags.length === 0) return;
+    // Legacy accounts can store null; $addToSet requires an array. The guard preserves concurrent tag additions.
+    await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
     await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
+  }
+
+  async clearPendingFreeCreditGrant(userId: string): Promise<IUserDocument | null> {
+    await this.model.updateOne({ _id: userId, tags: null }, { $set: { tags: [] } });
+    const user = await this.model.findOneAndUpdate(
+      { _id: userId },
+      { $pull: { tags: PENDING_FREE_CREDITS_TAG }, $set: { pendingCreditGrant: null } },
+      { new: true }
+    );
+    return user?.toJSON() ?? null;
   }
 
   async pullSystemFilesForUsers(userIds: string[], fileIds: string[]): Promise<void> {
@@ -844,6 +861,46 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
+    const settled = ['approved', 'banned'];
+    await this.model.updateOne({ _id: userId }, [
+      {
+        $set: {
+          riskScore: {
+            score: riskScore.score,
+            // $literal: a reason that happened to start with '$' would otherwise read as a field path.
+            signals: { $literal: riskScore.signals },
+            computedAt: riskScore.computedAt,
+            reviewState: {
+              $cond: [
+                { $in: [{ $ifNull: ['$riskScore.reviewState', 'none'] }, settled] },
+                '$riskScore.reviewState',
+                riskScore.reviewState,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+  }
+
+  async findRiskScoringCandidateIds(since: Date, options: { afterId?: string; limit: number }): Promise<string[]> {
+    const rows = await this.model
+      .find(
+        {
+          createdAt: { $gte: since },
+          'riskScore.reviewState': { $nin: ['approved', 'banned'] },
+          ...(options.afterId ? { _id: { $gt: new mongoose.Types.ObjectId(options.afterId) } } : {}),
+        },
+        { _id: 1 }
+      )
+      .sort({ _id: 1 })
+      .limit(options.limit)
+      .lean<{ _id: mongoose.Types.ObjectId }[]>()
+      .exec();
+    return rows.map(row => row._id.toString());
+  }
+
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores the
    * appeal text so admins can review it alongside the user's escalation state. Returns the
@@ -899,6 +956,25 @@ const SignupMetaSchema = new Schema(
   { _id: false }
 );
 
+const RiskScoreSchema = new Schema(
+  {
+    score: { type: Number, required: true },
+    signals: [
+      new Schema(
+        {
+          signal: { type: String, required: true, enum: [...SIGNUP_RISK_SIGNALS] },
+          points: { type: Number, required: true },
+          reason: { type: String, required: true },
+        },
+        { _id: false }
+      ),
+    ],
+    computedAt: { type: Date, required: true },
+    reviewState: { type: String, required: true, enum: [...SIGNUP_RISK_REVIEW_STATES] },
+  },
+  { _id: false }
+);
+
 export const UserSchema = new Schema<IUserDocument, IUserModel>(
   {
     username: { type: String, required: true, unique: true },
@@ -915,6 +991,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     hasUsablePassword: { type: Boolean, default: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
+    adminPermissions: { type: [String], enum: ADMIN_PERMISSIONS, default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
     planStorageLimit: { type: Number },
@@ -1186,6 +1263,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
     // Written once at signup - see IUser.signupMeta.
     signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
+    // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
+    riskScore: { type: RiskScoreSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },
     firstValueAt: { type: Date, required: false },
   },
@@ -1232,6 +1311,9 @@ UserSchema.pre('save', function (next) {
   }
   next();
 });
+
+// Stripe-customer resolution for business metrics.
+UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
 
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({

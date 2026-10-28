@@ -15,6 +15,7 @@
 import SeedStagedSignupSettings from './20260921235967_seed-staged-signup-settings';
 import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup-activity-index';
 import EnsureUserSignupGrantOrgIndex from './20260921235968_ensure-user-signup-grant-org-index';
+import RedropShareTokenScalarIndex from './20260921235975_redrop-share-token-scalar-index';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
@@ -103,6 +104,8 @@ import NormalizeQuestMasterVocabularies from './20260827074044_normalize-questma
 // EnsureQuestStatusUpdatedAtIndex migration above, which merged into main first.
 import SplitChunkStallMarkersOffNotes from './20260828000000_split-chunk-stall-markers-off-notes';
 import EnsureQuestRetrievalIndex from './20260902000000_ensure-quest-retrieval-index';
+// Run before the deferred OAuth backfill: its operator gate must not block this index build.
+import EnsureQuestModelLogsPaginationIndex from './20260921235938_ensure-quest-model-logs-pagination-index';
 // Renamed from 20260902000000 to 20260903000000 to resolve an id collision with the
 // EnsureQuestRetrievalIndex migration above, which merged into main first.
 import EnsureScopedSettingSettingNameIndex from './20260903000000_ensure-scopedsetting-settingname-index';
@@ -239,6 +242,8 @@ import ClearSuspensionMirroredIsModerated from './20260921235945_clear-suspensio
 import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import RestoreLegacyXlsMimeType from './20260921235946_restore-legacy-xls-mime-type';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -252,9 +257,12 @@ import { premiumMigrations } from './premium.generated';
 import type { MigrationFile } from '@bike4mind/database';
 export type { MigrationFile };
 
+import EnsureBusinessMetricStateTtl from './20260921235899_ensure-business-metric-state-ttl';
+
 // 3. Reference the imported variable here:
 const coreMigrations: MigrationFile[] = [
   EnsureAccountCreationIndexes,
+  EnsureBusinessMetricStateTtl,
   AddMementosToUsers,
   DemoToPaid,
   CreateAndPopulateQuests,
@@ -336,6 +344,7 @@ const coreMigrations: MigrationFile[] = [
   NormalizeQuestMasterVocabularies,
   SplitChunkStallMarkersOffNotes,
   EnsureQuestRetrievalIndex,
+  EnsureQuestModelLogsPaginationIndex,
   EnsureScopedSettingSettingNameIndex,
   EncryptIdentityProviderSecrets,
   BackfillLakeMemoryEnabledFromLedger,
@@ -395,6 +404,7 @@ const coreMigrations: MigrationFile[] = [
   SetLiveopsTriageConfigAuditLogRetention,
   FoldOrganizationManagerIntoAdminUserIds,
   BackfillFreeCreditClaimEmail,
+  RestoreLegacyXlsMimeType,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureAdminAuditLogReadIndexes,
@@ -414,6 +424,7 @@ const coreMigrations: MigrationFile[] = [
   SeedStagedSignupSettings,
   EnsureQuestSignupActivityIndex,
   EnsureUserSignupGrantOrgIndex,
+  RedropShareTokenScalarIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

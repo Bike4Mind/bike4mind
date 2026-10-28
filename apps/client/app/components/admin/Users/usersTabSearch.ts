@@ -30,6 +30,8 @@ export const DEFAULT_USERS_PARAMS: IGetUsersParams = {
   tags: [],
   groupBy: undefined,
   recentSignups: undefined,
+  createdFrom: undefined,
+  createdTo: undefined,
 };
 
 export const USERS_PAGE_PARAM = 'page';
@@ -53,6 +55,8 @@ const USERS_VIEW_PARAMS = [
   USERS_TAGS_PARAM,
   'groupBy',
   'recentSignups',
+  'createdFrom',
+  'createdTo',
 ] as const;
 
 export const USERS_TAB_PARAMS = [...USERS_VIEW_PARAMS, USERS_USER_ID_PARAM] as const;
@@ -67,16 +71,34 @@ export type UsersSearch = {
   [USERS_USER_ID_PARAM]?: string;
   groupBy?: 'emailDomain';
   recentSignups?: 'hour';
+  createdFrom?: string;
+  createdTo?: string;
 };
 
 type UsersView = Pick<
   IGetUsersParams,
-  'page' | 'limit' | 'sortField' | 'sortOrder' | 'orgSearch' | 'tags' | 'groupBy' | 'recentSignups'
+  | 'page'
+  | 'limit'
+  | 'sortField'
+  | 'sortOrder'
+  | 'orgSearch'
+  | 'tags'
+  | 'groupBy'
+  | 'recentSignups'
+  | 'createdFrom'
+  | 'createdTo'
 >;
 
 const parseLimit = (value: unknown): number | undefined => {
   const limit = toNumber(value);
   return PAGE_LIMIT_OPTIONS.includes(limit) ? limit : undefined;
+};
+
+// Only a full ISO instant, normalized, so a link cannot smuggle a free-form date string to the API.
+export const parseInstant = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return undefined;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? undefined : new Date(time).toISOString();
 };
 
 // The id is interpolated into `/api/users/<id>`, so only an ObjectId may come in from a link.
@@ -105,6 +127,8 @@ export const USERS_SEARCH_PARSERS: {
   [USERS_USER_ID_PARAM]: parseUserId,
   groupBy: oneOf(['emailDomain'] as const),
   recentSignups: oneOf(['hour'] as const),
+  createdFrom: parseInstant,
+  createdTo: parseInstant,
 };
 
 /**
@@ -123,6 +147,8 @@ export function usersViewFromSearch(search: Record<string, unknown>): UsersView 
     tags: parseStringList(search[USERS_TAGS_PARAM]),
     groupBy: USERS_SEARCH_PARSERS.groupBy(search.groupBy),
     recentSignups: USERS_SEARCH_PARSERS.recentSignups(search.recentSignups),
+    createdFrom: parseInstant(search.createdFrom),
+    createdTo: parseInstant(search.createdTo),
   };
   if (Object.values(parsed).every(value => value === undefined)) return undefined;
   return {
@@ -134,6 +160,8 @@ export function usersViewFromSearch(search: Record<string, unknown>): UsersView 
     tags: parsed.tags ?? DEFAULT_USERS_PARAMS.tags,
     groupBy: parsed.groupBy,
     recentSignups: parsed.recentSignups,
+    createdFrom: parsed.createdFrom,
+    createdTo: parsed.createdTo,
   };
 }
 
@@ -165,6 +193,8 @@ export function usersViewToSearch(params: IGetUsersParams): Omit<UsersSearch, ty
     [USERS_TAGS_PARAM]: parseStringList(params.tags),
     groupBy: params.groupBy,
     recentSignups: params.recentSignups,
+    createdFrom: parseInstant(params.createdFrom),
+    createdTo: parseInstant(params.createdTo),
   };
 }
 
@@ -178,6 +208,8 @@ export function isSameUsersView(a: IGetUsersParams, b: IGetUsersParams): boolean
     sameList(a.orgSearch, b.orgSearch) &&
     sameList(a.tags, b.tags) &&
     a.groupBy === b.groupBy &&
-    a.recentSignups === b.recentSignups
+    a.recentSignups === b.recentSignups &&
+    a.createdFrom === b.createdFrom &&
+    a.createdTo === b.createdTo
   );
 }

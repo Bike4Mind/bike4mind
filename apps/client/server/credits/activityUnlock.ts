@@ -7,11 +7,13 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { signupProtection } from '@server/auth/signupProtection';
 
 export async function unlockSignupGrantFromActivity(userId: string) {
   return userService.unlockSignupGrant(userId, 'activity', {
     db: {
       users: userRepository,
+      signupProtection,
       adminSettings: adminSettingsRepository,
       creditTransactions: creditTransactionRepository,
       creditLots: creditLotRepository,

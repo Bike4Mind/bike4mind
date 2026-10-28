@@ -22,6 +22,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
+import { Logger } from '@bike4mind/observability';
 
 const {
   mockCheckFreeTierDailySpendCap,
@@ -37,6 +38,7 @@ const {
   mockResolveUserRateLimitPerMin,
   mockOrgFindAccessibleById,
   mockSystemPromptText,
+  mockTerminalError,
   mockCreateSession,
   mockFindByIdAndUpdate,
   mockDeleteSession,
@@ -68,6 +70,7 @@ const {
   // What process() leaves on itself, rather than on the quest: the disclosed text is never
   // persisted. Holds a value only for the tests that opt in.
   mockSystemPromptText: { value: undefined as unknown },
+  mockTerminalError: { value: undefined as Error | undefined },
   // The wait=true deadline's settle and credit-refund edges (see the over-budget describe).
   mockSettleIfUnfinished: vi.fn(),
   // The persisted row the deadline path decides the recovery from; null falls back to the
@@ -166,6 +169,9 @@ vi.mock('@bike4mind/services/llm', async orig => {
   // The wait=true path constructs this directly; the async-path tests never reach it.
   class MockChatCompletionProcess {
     pipelinePhases = undefined;
+    get terminalError() {
+      return mockTerminalError.value;
+    }
     get systemPromptText() {
       return mockSystemPromptText.value;
     }
@@ -608,6 +614,29 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect((mockInvoke.mock.calls[0][0] as { body: { historyCount?: number } }).body.historyCount).toBe(10);
+    });
+  });
+
+  describe('output-budget minimum', () => {
+    it.each(['max_tokens', 'maxTokens', 'maxOutputTokens'])(
+      'rejects a tiny %s with 422 before any quest is created',
+      async field => {
+        validateWithScopes([ApiKeyScope.AI_CHAT]);
+        const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', [field]: 8 } });
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(422);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['max_tokens', 'maxTokens', 'maxOutputTokens'])('forwards a %s at the minimum (2xx)', async field => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', [field]: 16 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(
+        (mockInvoke.mock.calls[0][0] as { body: { params: { max_tokens?: number } } }).body.params.max_tokens
+      ).toBe(16);
     });
   });
 
@@ -1305,6 +1334,49 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', promptMode: 'nonsense' } });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(422);
+  });
+
+  describe('output-budget exhaustion on wait: true', () => {
+    let requestLogger: Logger;
+    // Models ChatCompletionProcess: the quest is settled as an error and the failure is left on
+    // the instance rather than thrown.
+    const processExhaustingBudget = () =>
+      mockProcess.mockImplementation(async () => {
+        mockTerminalError.value = new Error('output budget was exhausted');
+      });
+    beforeEach(() => {
+      // req.logger is the global instance (logging middleware), so spy there.
+      requestLogger = Logger.resetMetadata();
+      vi.spyOn(requestLogger, 'error').mockImplementation(() => {});
+      vi.spyOn(requestLogger, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      mockTerminalError.value = undefined;
+      vi.restoreAllMocks();
+    });
+
+    it('answers 422 output_budget_exhausted when the caller set max_tokens', async () => {
+      processExhaustingBudget();
+      const { req, res } = fire({
+        body: { message: 'hello', sessionId: 'sess-1', wait: true, model: 'deepseek-flash', max_tokens: 256 },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'output_budget_exhausted', quest_id: expect.any(String) });
+    });
+
+    it('answers 502 when the server chose the budget', async () => {
+      processExhaustingBudget();
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(502);
+      const body = res._getJSONData();
+      expect(body).toMatchObject({ quest_id: expect.any(String) });
+      expect(body).not.toHaveProperty('errorCode');
+      // The 502 is an expected, classified failure: logged at warn so it does not trip the error alert.
+      expect(requestLogger.error).not.toHaveBeenCalled();
+      expect(requestLogger.warn).toHaveBeenCalled();
+    });
   });
 
   describe('credit-exhaustion classifier', () => {

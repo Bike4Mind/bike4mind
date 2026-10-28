@@ -8,6 +8,7 @@ export * from './BlockedIPModel';
 export * from './CcBridgeDeviceModel';
 export * from './CcBridgePairingTokenModel';
 export * from './DeviceAuthorizationModel';
+export * from './DisposableDomainModel';
 export * from './IdentityProviderModel';
 export * from './networkMetaFields';
 export * from './signupFingerprintClusters';
@@ -33,3 +34,6 @@ export * from './UserModel';
 export * from './UserUsagePatternSignalsModel';
 export * from './VoiceIdModel';
 export * from './WsConnectTicketModel';
+export * from './GithubUnlockClaimModel';
+
+export * from './SignupProtectionModel';

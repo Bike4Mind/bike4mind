@@ -9,6 +9,18 @@ describe('serializeError', () => {
     expect((result as { stack?: string }).stack).toContain('boom');
   });
 
+  it('flattens the cause chain, leading with the cause code', () => {
+    const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    expect(serializeError(new TypeError('fetch failed', { cause }))).toMatchObject({
+      message: 'fetch failed',
+      cause: 'ECONNRESET: read ECONNRESET',
+    });
+  });
+
+  it('omits cause when the Error has none', () => {
+    expect(serializeError(new Error('boom'))).not.toHaveProperty('cause');
+  });
+
   it('includes a string code when present on the Error', () => {
     const err = Object.assign(new Error('nope'), { code: 'ECONNRESET' });
     expect(serializeError(err)).toMatchObject({ code: 'ECONNRESET' });

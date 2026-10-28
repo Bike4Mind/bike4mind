@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Box, Card, Chip, Divider, Stack, Switch, Typography } from '@mui/joy';
+import { Box, Chip, Divider, Stack, Switch, Typography } from '@mui/joy';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import MusicNoteIcon from '@mui/icons-material/MusicNote';
 import VideocamIcon from '@mui/icons-material/Videocam';
@@ -18,6 +18,8 @@ import {
 } from '@bike4mind/common';
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
+import { useSettingsDraft } from './SettingsDraftProvider';
+import { SettingsSection } from './shared/SettingsSection';
 
 // Shared by both settings: per-model overrides of the catalog's defaultEnabled.
 type GenerationModelSettings = { enabledModels: Record<string, boolean> };
@@ -73,12 +75,21 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
   const updateSettings = useUpdateSettings();
   const { getSettingObject, authedSettingsLoaded } = useAdminSettings();
   // getSettingObject does not validate; malformed stored data falls back to catalog defaults.
-  const settings = useMemo(() => {
+  const storedSettings = useMemo(() => {
     const parsed = schema.safeParse(getSettingObject(settingKey, EMPTY_SETTINGS));
     return parsed.success ? parsed.data : EMPTY_SETTINGS;
   }, [getSettingObject, schema, settingKey]);
+  const draft = useSettingsDraft(settingKey, storedSettings, {
+    name: title,
+    save: value => updateSettings.mutateAsync({ key: settingKey, value }),
+  });
+  const settings = draft.staged ? draft.value : storedSettings;
 
   const handleToggle = (id: ModalityTypes[M]['id'], enabled: boolean) => {
+    if (draft.staged) {
+      draft.setValue({ enabledModels: { ...settings.enabledModels, [id]: enabled } });
+      return;
+    }
     updateSettings.mutate(
       { key: settingKey, value: { enabledModels: { ...settings.enabledModels, [id]: enabled } } },
       {
@@ -126,7 +137,7 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
               <Switch
                 checked={isEnabled(id, settings)}
                 // Until the stored value loads, a toggle would save over every other override with defaults.
-                disabled={!authedSettingsLoaded || updateSettings.isPending}
+                disabled={!authedSettingsLoaded || updateSettings.isPending || draft.pending}
                 onChange={event => handleToggle(id, event.target.checked)}
                 slotProps={{ input: { 'aria-label': `Enable ${displayName}` } }}
                 data-testid={`${testId}-${id}-switch`}
@@ -140,7 +151,7 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
 }
 
 export const AdminGenerationModelsSetting: React.FC = () => (
-  <Card variant="outlined" sx={{ mb: 2, p: 3 }} data-testid="admin-generation-models-card">
+  <SettingsSection data-testid="admin-generation-models-card">
     <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
       <AutoAwesomeIcon sx={{ mr: 1, color: 'primary.plainColor' }} />
       <Typography level="h4">Generation Models</Typography>
@@ -152,5 +163,5 @@ export const AdminGenerationModelsSetting: React.FC = () => (
       <GenerationModelsSection section={VIDEO_MODALITY} />
       <GenerationModelsSection section={MUSIC_MODALITY} />
     </Stack>
-  </Card>
+  </SettingsSection>
 );

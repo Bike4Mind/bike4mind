@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { embedCors } from './embedCors';
 import type { Request, Response } from 'express';
@@ -33,5 +33,20 @@ describe('embedCors', () => {
     const { res, next } = run('POST');
     expect(res.getHeader('Access-Control-Allow-Origin')).toBeUndefined();
     expect(next).toHaveBeenCalledOnce();
+  });
+
+  describe('on the Next server Lambda', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('leaves Allow-Origin to the function URL but keeps the rest of the CORS headers', () => {
+      vi.stubEnv('AWS_LAMBDA_FUNCTION_NAME', 'frontend-server');
+      const { res, next } = run('POST', { origin: 'https://example.com' });
+      expect(res.getHeader('Access-Control-Allow-Origin')).toBeUndefined();
+      expect(res.getHeader('Vary')).toBe('Origin');
+      expect(res.getHeader('Access-Control-Allow-Methods')).toBe('POST, OPTIONS');
+      expect(next).toHaveBeenCalledOnce();
+    });
   });
 });

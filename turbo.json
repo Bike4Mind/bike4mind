@@ -20,6 +20,7 @@
         "pages/api/premium-*/**",
         "server/premium-generated/**",
         "../../infra/premium-generated/**",
+        "../../packages/server-utils/src/premium-generated/**",
         "../../packages/scripts/migrate/migrations/premium.generated.ts"
       ]
     },
@@ -160,11 +161,26 @@
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
     },
+    // server-utils reads src/premium-generated/ (written by @bike4mind/client's codegen and
+    // gitignored, so outside $TURBO_DEFAULT$): same cross-package edge as @bike4mind/scripts.
+    "@bike4mind/server-utils#typecheck": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
+    },
+    "@bike4mind/server-utils#typecheck:native": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
+    },
+    "@bike4mind/server-utils#typecheck:fast": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
+    },
     // The wiring tests read app, infra and self-host files outside this package.
     "@bike4mind/server-utils#test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
+        "src/premium-generated/**",
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",

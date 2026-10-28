@@ -905,6 +905,8 @@ export interface ChatModelOption {
    * THINKING_OFF_SETTING (off).
    */
   thinkingToggle?: boolean;
+  /** A `thinkingToggle` model whose template always thinks, so the switch shows Off as unavailable. */
+  thinkingAlwaysOn?: boolean;
   /** Local models can remain useful without tool-call support. */
   supportsTools?: boolean;
 }

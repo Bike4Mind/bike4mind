@@ -5,7 +5,7 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { execSync } from 'child_process';
 import net from 'net';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { SeatbeltRuntime } from './SeatbeltRuntime.js';
@@ -240,6 +240,54 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
       expect(existsSync(testFile)).toBe(false);
     } finally {
       rmSync(testFile, { force: true });
+      cleanupWrapped(wrapped.cleanupPaths);
+    }
+  });
+
+  it('lets commands write to /dev/null, /dev/stderr, /dev/fd and $TMPDIR, and git commit in a temp repo', () => {
+    const repo = mkdtempSync(path.join(os.tmpdir(), 'b4m-seatbelt-git-'));
+    execSync('git init -q', { cwd: repo });
+    const wrapped = runtime.wrapCommand({
+      command: [
+        'echo null > /dev/null',
+        'echo stderr > /dev/stderr',
+        'echo fd > /dev/fd/2',
+        'rm "$(mktemp)"',
+        `GIT_CONFIG_GLOBAL=/dev/null git -C "${repo}" -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m t`,
+        'echo ok',
+      ].join(' && '),
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: false,
+    });
+
+    try {
+      const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' });
+      expect(output.trim()).toBe('ok');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      cleanupWrapped(wrapped.cleanupPaths);
+    }
+  });
+
+  it('cannot write through /dev/fd to a file it only holds open for reading', () => {
+    const target = path.join(OUTSIDE_DIR, 'read-only-fd.txt');
+    writeFileSync(target, 'original');
+    const wrapped = runtime.wrapCommand({
+      command: 'echo injected > /dev/fd/4',
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled: false,
+    });
+
+    try {
+      // "Permission denied" (EACCES), not "Bad file descriptor": the fd did reach the sandbox.
+      expect(() =>
+        execSync(`exec 4< "${target}"; ${wrapped.commandString}`, { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' })
+      ).toThrow(/Permission denied/);
+      expect(readFileSync(target, 'utf-8')).toBe('original');
+    } finally {
+      rmSync(target, { force: true });
       cleanupWrapped(wrapped.cleanupPaths);
     }
   });

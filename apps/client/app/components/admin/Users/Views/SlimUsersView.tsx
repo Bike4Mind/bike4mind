@@ -13,6 +13,8 @@ import MFAStatusBadge from '../MFAStatusBadge';
 import UserIdChip from '../UserIdChip';
 import { computeStoragePercent } from './storageUtils';
 import { formatAccountAge, formatAccountCreatedTitle } from '../formatAccountAge';
+import { adminFocus } from '../../shared/adminStyles';
+import { isAdminShortcutEvent } from '../../shared/adminKeyboard';
 
 /** Row checkboxes for the bulk abuse response; omitted, the list renders without them. */
 export type UserSelection = {
@@ -49,6 +51,21 @@ const COLUMN_WIDTHS = {
 } as const;
 
 const ELLIPSIS_SX = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
+
+const selectionKeyDown = (event: React.KeyboardEvent, userId: string, selection?: UserSelection) => {
+  if (
+    !selection ||
+    event.target !== event.currentTarget ||
+    event.key.toLowerCase() !== 'x' ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    !isAdminShortcutEvent(event.nativeEvent)
+  )
+    return;
+  event.preventDefault();
+  selection.onToggle(userId);
+};
 
 const StorageCell: React.FC<{ user: AdminUserListItem }> = ({ user }) => {
   const storageLimitBytes = storageLimitToBytes(user.storageLimit);
@@ -209,7 +226,12 @@ const SlimUsersView: React.FC<Omit<SlimUsersViewProps, 'index'>> = ({ user, sele
   <Box
     role="row"
     data-testid="admin-user-card"
+    tabIndex={selection ? 0 : undefined}
+    aria-selected={selection ? selection.selectedIds.has(user.id) : undefined}
+    aria-keyshortcuts={selection ? 'x' : undefined}
+    onKeyDown={event => selectionKeyDown(event, user.id, selection)}
     sx={{
+      ...adminFocus,
       ...ROW_SX,
       minHeight: 56,
       '&:last-of-type': { borderBottom: 0 },
@@ -298,6 +320,9 @@ const SlimUserCardMobile: React.FC<SlimUsersViewProps> = ({ user, index, selecti
   <Card
     variant="outlined"
     data-testid="admin-user-card"
+    tabIndex={selection ? 0 : undefined}
+    aria-keyshortcuts={selection ? 'x' : undefined}
+    onKeyDown={event => selectionKeyDown(event, user.id, selection)}
     sx={{ mb: 1, width: '100%', bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 1, gap: 1 }}
   >
     <Stack direction="row" spacing={1} alignItems="flex-start" justifyContent="space-between">
