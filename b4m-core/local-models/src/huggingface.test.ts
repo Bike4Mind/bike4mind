@@ -354,6 +354,53 @@ describe('HuggingFaceHub rate limit backoff', () => {
   });
 });
 
+describe('HuggingFaceHub install guard', () => {
+  const file = (path: string, url?: string) => ({
+    path,
+    sizeBytes: 1,
+    sha256: null,
+    url: url ?? hubResolveUrl('a/b', 'main', path),
+  });
+
+  it.each(['pytorch_model.bin', 'model.pt', 'model.pth', 'model.ckpt', 'model.safetensors', 'sub/model.gguf.bin', 'x'])(
+    'refuses to download %s before any request',
+    async path => {
+      const server = await serve({});
+      const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+      const error = await caught(
+        hub.download(file(path, `${server.baseUrl}/a/b/resolve/main/${path}`), '/nonexistent/x')
+      );
+      expect(error).toBeInstanceOf(LocalRuntimeError);
+      expect(error.message).toContain('Only .gguf files can be installed');
+      expect(server.requests).toEqual([]);
+    }
+  );
+
+  it('refuses a .gguf name whose resolve URL points at another kind of file', async () => {
+    const hub = new HuggingFaceHub();
+    const error = await caught(
+      hub.download(file('model.gguf', hubResolveUrl('a/b', 'main', 'model.bin')), '/nonexistent/x')
+    );
+    expect(error.message).toContain('Only .gguf files can be installed');
+  });
+
+  it('refuses to verify an Ollama ref for a build that holds a non-GGUF file', async () => {
+    const hub = new HuggingFaceHub();
+    const build = {
+      id: 'model',
+      quant: 'Q4_K_M',
+      files: [{ ...file('model.bin'), sha256: 'a'.repeat(64) }],
+      sizeBytes: 1,
+      split: false,
+      complete: true,
+      ollamaRef: null,
+      ollamaRefIssue: null,
+    };
+    const error = await caught(hub.verifyOllamaRef({ id: 'a/b', builds: [build] }, build));
+    expect(error).toBeInstanceOf(LocalRuntimeError);
+  });
+});
+
 describe('HuggingFaceHub.getModel', () => {
   it('pins the commit and lists each quant with its size, sha256, resolve URL and Ollama ref', async () => {
     const server = await serve(repoRoutes('Qwen/Qwen2.5-0.5B-Instruct-GGUF', qwenSha, qwenInfo, qwenTree));

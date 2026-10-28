@@ -428,6 +428,19 @@ function hubEndpoint(endpoint: string): string {
   return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
 }
 
+/**
+ * Install-side guard: only `.gguf` files are fetched. Pickle formats (`.bin`, `.pt`, `.pth`, `.ckpt`) can run code
+ * when loaded, and safetensors installs are not supported.
+ */
+export function assertGgufFile(path: string): void {
+  const name = path.replace(/^.*\//, '');
+  if (!/\.gguf$/i.test(name))
+    throw new LocalRuntimeError(
+      `Only .gguf files can be installed; refusing ${JSON.stringify(name.slice(0, 100))}`,
+      'huggingface'
+    );
+}
+
 function assertRepoId(repo: string): void {
   if (!isHubRepoId(repo))
     throw new LocalRuntimeError('Invalid Hugging Face repo id; expected owner/name', 'huggingface');
@@ -775,6 +788,7 @@ export class HuggingFaceHub {
     options: { signal?: AbortSignal } = {}
   ): Promise<string | null> {
     assertRepoId(detail.id);
+    for (const file of build.files) assertGgufFile(file.path);
     const sha256 = build.files[0]?.sha256;
     if (build.split || !build.complete || !sha256 || !ollamaAcceptsRepo(detail.id)) return null;
     const plan = (tagPlans.get(detail.builds) ?? planOllamaTags(detail.builds)).get(build.id);
@@ -800,6 +814,8 @@ export class HuggingFaceHub {
    * redirects to. An existing `destination` is never overwritten: it is verified, or `ModelFileConflictError`.
    */
   async download(file: HubGgufFile, destination: string, options: DownloadOptions = {}): Promise<DownloadResult> {
+    assertGgufFile(file.path);
+    assertGgufFile(URL.canParse(file.url) ? new URL(file.url).pathname : file.url);
     const origin = new URL(this.endpoint).origin;
     const resolved = file.url.startsWith(`${this.endpoint}/`)
       ? /^\/([^/]+\/[^/]+)\/resolve\/([^/]+)\//.exec(file.url.slice(this.endpoint.length))
