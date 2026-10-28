@@ -293,10 +293,19 @@ async function confirmDownload(question: string, deps: ModelsDeps, opts: ModelsO
 async function pullWithProgress(target: RuntimeTarget, ref: string, deps: ModelsDeps): Promise<PullResult> {
   let lastStatus = '';
   let lastDraw = 0;
+  let sawBytes = false;
   try {
     await target.runtime.pull(ref, {
       signal: deps.signal,
       onProgress: ({ status, completedBytes, totalBytes }) => {
+        // Bytes in the first counted frame were already on the runtime: a resumed partial or a shared layer.
+        if (!sawBytes && totalBytes) {
+          sawBytes = true;
+          if (completedBytes > 0) {
+            if (deps.isTTY) deps.progress.end();
+            deps.log(`Already downloaded: ${formatBytes(completedBytes)}; pulling the rest.`);
+          }
+        }
         const text = clean(status);
         if (!deps.isTTY) {
           if (text !== lastStatus) deps.log(text);
