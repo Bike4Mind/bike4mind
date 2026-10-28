@@ -321,7 +321,7 @@ To make this possible, `RevenueSnapshot` (6.4) also stores per day:
 
 ### 6.1 Subscription mirror fields
 
-Add to `Subscription`, written by the existing `customer.subscription.updated` / `deleted` worker from the payload it already receives:
+Add to `Subscription`, written through one projection helper (for example `stripeMirrorFields(subscription)`) from the Stripe subscription each path already holds. The row is created on `invoice.payment_succeeded`, not by the updated handler, so every write path must call it: the three create paths in `apps/workers/src/lib/userSubscriptions/serverUtils.ts` (user create, org create, and `flipAdminGrantToStripe` when a comp turns paid), the `customer.subscription.updated` worker, and the `customer.subscription.deleted` handler (inline in `pages/api/stripe/webhook.ts`). The updated worker alone is not enough: it skips a missing row, and Stripe does not order the creation-time `updated` before `invoice.payment_succeeded`, so a new subscription would carry no `unitAmount` until its next update.
 
 - `unitAmount` (minor units)
 - `currency`
