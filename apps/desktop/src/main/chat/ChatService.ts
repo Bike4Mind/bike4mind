@@ -289,6 +289,7 @@ interface MidTurnArrival {
   message: ChatMessage;
   /** The queue entry it came from, for the event that clears its row. Absent on a notice. */
   queuedId?: string;
+  queuedEntries?: ChatQueuedMessage[];
 }
 
 /** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
@@ -2419,6 +2420,7 @@ export class ChatService {
     let usage: ChatUsage | undefined = resume?.usage;
     let toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
+    let segmentSettled = false;
     let previousRound: string | null = null;
     let stalled = 0;
     let roundsSincePlanUpdate = 0;
@@ -2978,17 +2980,29 @@ export class ChatService {
         // that is about to end; a turn that stops instead sends the queue as a turn of its own.
         const arrivals = controller.signal.aborted ? [] : await this.takeArrivals(sessionId, session.model);
         if (arrivals.length > 0) {
-          await settleSegment();
-          for (const arrival of arrivals) {
-            const updated = await this.deps.store.appendMessage(sessionId, arrival.message);
-            if (updated) session = updated;
-            if (arrival.queuedId) this.deps.queue?.sent(sessionId, arrival.queuedId, arrival.message);
-            else this.emit({ type: 'message', sessionId, message: arrival.message });
+          const unaccepted = [...arrivals];
+          try {
+            await settleSegment();
+            segmentSettled = true;
+            for (const arrival of arrivals) {
+              const updated = await this.deps.store.appendMessage(sessionId, arrival.message);
+              if (updated) session = updated;
+              unaccepted.shift();
+              if (arrival.queuedId) this.deps.queue?.sent(sessionId, arrival.queuedId, arrival.message);
+              else this.emit({ type: 'message', sessionId, message: arrival.message });
+            }
+          } catch (error) {
+            this.restoreArrivals(
+              sessionId,
+              unaccepted.flatMap(arrival => arrival.queuedEntries ?? [])
+            );
+            throw error;
           }
           // The rest of the turn is a new reply under the new messages. The resumed message, if
           // any, was just written back whole, so nothing more carries over from it.
           resume = undefined;
           replyId = randomUUID();
+          segmentSettled = false;
           content = '';
           toolCalls = [];
           produced = [];
@@ -3047,7 +3061,7 @@ export class ChatService {
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
-      await this.settleReply(sessionId, !!resume, historyScope, {
+      await this.settleReply(sessionId, !!resume || segmentSettled, historyScope, {
         id: replyId,
         role: 'assistant',
         content,
@@ -3252,31 +3266,42 @@ export class ChatService {
       else runs.push([entry]);
     }
 
-    for (const run of runs) {
-      const [head] = run;
-      const attachments = await this.resolveAttachments(
-        sessionId,
-        run.flatMap(entry => entry.attachments ?? [])
-      );
-      const notes = [...run.flatMap(entry => entry.notes ?? []), head.relay ? RELAY_MID_TURN_NOTE : MID_TURN_NOTE];
-      arrivals.push({
-        queuedId: head.id,
-        message: {
-          id: randomUUID(),
-          role: 'user',
-          content: run
-            .map(entry => entry.text.trim())
-            .filter(Boolean)
-            .join('\n'),
-          createdAt,
-          ...(head.relay ? { system: true, relay: head.relay } : {}),
-          ...(attachments.length > 0 ? { attachments } : {}),
-          notes,
-        },
-      });
+    try {
+      for (const run of runs) {
+        const [head] = run;
+        const attachments = await this.resolveAttachments(
+          sessionId,
+          run.flatMap(entry => entry.attachments ?? [])
+        );
+        const notes = [...run.flatMap(entry => entry.notes ?? []), head.relay ? RELAY_MID_TURN_NOTE : MID_TURN_NOTE];
+        arrivals.push({
+          queuedId: head.id,
+          queuedEntries: run,
+          message: {
+            id: randomUUID(),
+            role: 'user',
+            content: run
+              .map(entry => entry.text.trim())
+              .filter(Boolean)
+              .join('\n'),
+            createdAt,
+            ...(head.relay ? { system: true, relay: head.relay } : {}),
+            ...(attachments.length > 0 ? { attachments } : {}),
+            notes,
+          },
+        });
+      }
+    } catch (error) {
+      this.restoreArrivals(sessionId, taken);
+      throw error;
     }
     if (taken.some(entry => !entry.relay)) this.wake?.attended(sessionId);
     return arrivals;
+  }
+
+  /** Keep unaccepted entries available to the failed-turn handback and relay stranding. */
+  private restoreArrivals(sessionId: string, entries: readonly ChatQueuedMessage[]): void {
+    for (const entry of [...entries].reverse()) this.deps.queue?.restore(sessionId, entry);
   }
 
   /**
