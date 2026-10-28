@@ -62,6 +62,23 @@ describe('SessionStore', () => {
     expect((await store.get(id))?.title).toBe('Tidy imports');
   });
 
+  it("keeps a session's write record beside it, out of the listing, until it is removed", async () => {
+    const created = await store.create();
+    const writes = { files: [['/repo/a.sh', 1]], trees: [], hooks: [], overflowed: false } satisfies Parameters<
+      SessionStore['saveSessionWrites']
+    >[1];
+    expect(await store.loadSessionWrites(created.id)).toBeNull();
+    await store.saveSessionWrites(created.id, writes);
+
+    const relaunched = new SessionStore(directory, MODEL);
+    expect(await relaunched.loadSessionWrites(created.id)).toEqual(writes);
+    expect((await relaunched.list()).map(session => session.id)).toEqual([created.id]);
+
+    await relaunched.deleteSessionWrites(created.id);
+    expect(await relaunched.loadSessionWrites(created.id)).toBeNull();
+    await expect(store.saveSessionWrites('../escape', writes)).rejects.toThrow('invalid session id');
+  });
+
   it('returns null for a session that does not exist rather than throwing', async () => {
     expect(await store.get('deadbeef')).toBeNull();
   });

@@ -13,6 +13,7 @@ import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import { realpathNearest, resolveWithinRootsPhysically } from './paths';
+import { inPlaceWrites } from './shellWrites';
 
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
@@ -54,12 +55,14 @@ export interface ShellScan {
    * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
    */
   contained: boolean;
-  /** Files the script writes by redirect, `tee`, or as a `cp`/`mv`/`install`/`ln` destination. */
+  /** Files the script writes by redirect, `tee`, a copy or download destination, or in place (see shellWrites). */
   writes: string[];
+  /** Folders whose contents the script may rewrite, such as an archive's extraction folder. */
+  writtenTrees: string[];
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
-const COPIES = new Set(['cp', 'mv', 'install', 'ln']);
+const COPIES = new Set(['cp', 'mv', 'install', 'ln', 'rsync', 'scp']);
 // The short flag may close a cluster (`-fsSLo`, `-qO`); curl's `-O` names no path, so case matters.
 const DOWNLOAD_OUTPUT: Record<string, { long: string; short: RegExp }> = {
   curl: { long: '--output', short: /^-[a-zA-Z]*?o(.*)$/ },
@@ -252,6 +255,16 @@ function globPrefix(text: string): string | null {
 // ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
 // a full per-wrapper option table if that matters.
 const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+
+/** The command a wrapper (`sudo`, `env X=1`, `timeout 5`) runs, with the wrapper's own words dropped. */
+function withoutWrappers(tokens: readonly string[]): string[] {
+  let start = 0;
+  while (start < tokens.length && WRAPPERS.has(basename(unquote(tokens[start])))) {
+    start++;
+    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
+  }
+  return tokens.slice(start);
+}
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
 export function requiresExactShellRule(command: string): boolean {
@@ -959,6 +972,7 @@ export async function scanShell(
     let setsEnvironment = false;
     const writtenCommands = new Set<number>();
     const writes = new Set<string>();
+    const writtenTrees = new Set<string>();
     let contained = true;
 
     const noteEnvFile = (raw: string): void => {
@@ -999,7 +1013,11 @@ export async function scanShell(
       const tokens = node.children.some(child => child?.type === 'command_name') ? words(node) : [];
       if (tokens.length === 0) return;
       const [program, ...rest] = tokens;
-      noteWrites(program, rest);
+      const [wrapped, ...wrappedRest] = withoutWrappers(tokens);
+      if (wrapped !== undefined) noteWrites(wrapped, wrappedRest);
+      const inPlace = await inPlaceWrites(withoutWrappers(tokens.map(unquote)), node, state.cwd);
+      for (const file of inPlace.files) noteWrite(file);
+      for (const tree of inPlace.trees) noteWrite(tree, writtenTrees);
 
       if (CHANGES_DIRECTORY.has(program)) {
         await changeDirectory(program, rest);
@@ -1086,14 +1104,14 @@ export async function scanShell(
       state.cwd = next;
     };
 
-    const noteWrite = (raw: string): void => {
+    const noteWrite = (raw: string, into = writes): void => {
       const text = expandHome(unquote(raw));
-      if (text && !isDynamic(text) && !HARMLESS_REDIRECT_TARGETS.has(text)) writes.add(resolve(state.cwd, text));
+      if (text && !isDynamic(text) && !HARMLESS_REDIRECT_TARGETS.has(text)) into.add(resolve(state.cwd, text));
     };
 
     const noteWrites = (program: string, rest: string[]): void => {
       const operands = rest.filter(arg => !arg.startsWith('-'));
-      if (program === 'tee') operands.forEach(noteWrite);
+      if (program === 'tee') for (const operand of operands) noteWrite(operand);
       for (const [index, arg] of rest.entries()) {
         const output = DOWNLOAD_OUTPUT[program];
         const value = !output
@@ -1123,6 +1141,11 @@ export async function scanShell(
       if (target === undefined) return;
       noteWrite(target);
       for (const source of operands) if (source !== target) noteWrite(join(unquote(target), basename(unquote(source))));
+      const recursive =
+        program === 'rsync' ||
+        ((program === 'cp' || program === 'scp') &&
+          rest.some(arg => /^-[a-zA-Z]*[rRa]/.test(arg) || arg === '--recursive' || arg === '--archive'));
+      if (recursive) noteWrite(target, writtenTrees);
     };
 
     const redirect = async (node: Node): Promise<void> => {
@@ -1198,6 +1221,7 @@ export async function scanShell(
       sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
       contained: contained && commands.length > 0,
       writes: [...writes],
+      writtenTrees: [...writtenTrees],
     };
   } finally {
     tree.delete();

@@ -1,10 +1,11 @@
 import { stat } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { directoryOptionValues } from './bashArity';
 import { parseBash } from './bashParser';
 import { isWithin, physicalTarget } from './paths';
 import { expandHome, unquote, words } from './shellScan';
+import { repositoryRoot } from './shellWrites';
 import type { ToolContext } from './types';
 
 const MAX_FILES_PER_SESSION = 200;
@@ -14,61 +15,176 @@ const MAX_PENDING = 100;
 interface SessionWrites {
   /** Physical path -> a number that changes on every write. */
   files: Map<string, number>;
+  /** Folders whose contents a command may have rewritten (an archive extracted, `git checkout -- dir`), the same way. */
+  trees: Map<string, number>;
   /** Repositories whose `.git` or `.husky` folder was written, so git there can run new hooks. */
   hooks: Map<string, number>;
   /** Some writes were forgotten, so any script run asks. */
   overflowed: boolean;
 }
 
+/** A session's writes as kept on disk. */
+export interface StoredSessionWrites {
+  files: [string, number][];
+  trees: [string, number][];
+  hooks: [string, number][];
+  overflowed: boolean;
+}
+
+/** Where each session's writes are kept, so a resumed session still asks. See SessionStore. */
+export interface SessionWritesStore {
+  loadSessionWrites(sessionId: string): Promise<unknown>;
+  saveSessionWrites(sessionId: string, writes: StoredSessionWrites): Promise<void>;
+  deleteSessionWrites(sessionId: string): Promise<void>;
+}
+
 /**
  * Files each session wrote, through the write tools or a shell command. Auto mode asks before a
  * command runs one of them (see shellTools' shellApproval), so a script is never written and run
- * unseen. Forgotten when the session is deleted (ChatService), kept across archive. In memory
- * only, so an app restart forgets them.
+ * unseen. Forgotten when the session is deleted (ChatService), kept across archive and, once a
+ * store is set, across restarts.
  */
 const bySession = new Map<string, SessionWrites>();
 const evicted = new Set<string>();
 /** Shell prompts that would run git over written hooks, by prompt key, cleared once one runs. */
 const pendingHooks = new Map<string, { sessionId: string; hooks: [string, number][] }>();
-let writes = 0;
+// From the clock, so a generation kept on disk by an earlier run never recurs and revives an "always".
+let writes = Date.now();
+let store: SessionWritesStore | null = null;
+/** Each session's disk reads and writes, in order. */
+const queues = new Map<string, Promise<unknown>>();
+const loading = new Map<string, Promise<SessionWrites | null>>();
 
-export async function recordSessionWrite(context: ToolContext, target: string): Promise<void> {
-  const id = context.sessionId;
-  if (!id) return;
-  const physical = await physicalTarget(target).catch(() => resolve(target));
-  const record = bySession.get(id) ?? { files: new Map(), hooks: new Map(), overflowed: evicted.has(id) };
-  const generation = ++writes;
-  record.files.delete(physical);
-  record.files.set(physical, generation);
-  if (record.files.size > MAX_FILES_PER_SESSION) {
-    record.files.delete(record.files.keys().next().value as string);
-    record.overflowed = true;
-  }
-  const repository = /^(.*?)[\\/]\.(git|husky)([\\/]|$)/.exec(physical)?.[1];
-  if (repository !== undefined) record.hooks.set((await repositoryRoot(repository)) || '/', generation);
-  // The user's own git config applies in every repository.
-  if (/[\\/](\.gitconfig|\.config[\\/]git[\\/]config)$/.test(physical)) record.hooks.set('/', generation);
-  bySession.delete(id);
-  bySession.set(id, record);
+export function keepSessionWritesIn(target: SessionWritesStore | null): void {
+  store = target;
+}
+
+function enqueue<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+  const result = (queues.get(sessionId) ?? Promise.resolve()).then(work);
+  const tail = result.catch(() => undefined);
+  queues.set(sessionId, tail);
+  void tail.then(() => {
+    if (queues.get(sessionId) === tail) queues.delete(sessionId);
+  });
+  return result;
+}
+
+function entries(value: unknown): [string, number][] | null {
+  if (!Array.isArray(value)) return null;
+  const valid = value.every(entry => Array.isArray(entry) && typeof entry[0] === 'string' && Number.isFinite(entry[1]));
+  return valid ? (value as [string, number][]) : null;
+}
+
+/** A stored record that does not read back cleanly counts as overflowed, so every script run asks. */
+function fromStored(value: unknown): SessionWrites | null {
+  if (value === null || value === undefined) return null;
+  const stored = (typeof value === 'object' ? value : {}) as Partial<Record<keyof StoredSessionWrites, unknown>>;
+  const files = entries(stored.files);
+  const trees = entries(stored.trees ?? []);
+  const hooks = entries(stored.hooks);
+  const record: SessionWrites = {
+    files: new Map(files ?? []),
+    trees: new Map(trees ?? []),
+    hooks: new Map(hooks ?? []),
+    overflowed: stored.overflowed === true || !files || !trees || !hooks,
+  };
+  for (const map of [record.files, record.trees, record.hooks])
+    for (const value of map.values()) writes = Math.max(writes, value);
+  return record;
+}
+
+function remember(sessionId: string, record: SessionWrites): SessionWrites {
+  bySession.delete(sessionId);
+  bySession.set(sessionId, record);
   if (bySession.size > MAX_SESSIONS) {
     const oldest = bySession.keys().next().value as string;
     bySession.delete(oldest);
-    evicted.add(oldest);
+    // With a store the record is read back on next use; without one it is gone.
+    if (!store) evicted.add(oldest);
   }
+  return record;
 }
 
-/** `git config` run from a subfolder is recorded as `<subfolder>/.git/config`; git means the enclosing repository. */
-async function repositoryRoot(directory: string): Promise<string> {
-  for (let current = directory; ; current = dirname(current)) {
-    if (await stat(join(current, '.git')).catch(() => null)) return current;
-    if (dirname(current) === current) return directory;
+/** The session's record, read from the store when it is not in memory. Undefined when it wrote nothing. */
+async function sessionRecord(sessionId: string): Promise<SessionWrites | undefined> {
+  const cached = bySession.get(sessionId);
+  if (cached || !store) return cached;
+  const from = store;
+  let pending = loading.get(sessionId);
+  if (!pending) {
+    pending = enqueue(sessionId, async () => {
+      try {
+        return fromStored(await from.loadSessionWrites(sessionId));
+      } catch {
+        return { files: new Map(), trees: new Map(), hooks: new Map(), overflowed: true };
+      }
+    }).finally(() => loading.delete(sessionId));
+    loading.set(sessionId, pending);
   }
+  const loaded = await pending;
+  return bySession.get(sessionId) ?? (loaded ? remember(sessionId, loaded) : undefined);
 }
 
-export function forgetSessionWrites(sessionId: string): void {
+function save(sessionId: string, record: SessionWrites): Promise<void> {
+  const to = store;
+  if (!to) return Promise.resolve();
+  return enqueue(sessionId, () =>
+    to.saveSessionWrites(sessionId, {
+      files: [...record.files],
+      trees: [...record.trees],
+      hooks: [...record.hooks],
+      overflowed: record.overflowed,
+    })
+  ).catch(() => undefined);
+}
+
+async function recordWrite(context: ToolContext, target: string, kind: 'files' | 'trees'): Promise<void> {
+  const id = context.sessionId;
+  if (!id) return;
+  const physical = await physicalTarget(target).catch(() => resolve(target));
+  const record = remember(
+    id,
+    (await sessionRecord(id)) ?? {
+      files: new Map(),
+      trees: new Map(),
+      hooks: new Map(),
+      overflowed: evicted.has(id),
+    }
+  );
+  const generation = ++writes;
+  const paths = record[kind];
+  paths.delete(physical);
+  paths.set(physical, generation);
+  if (paths.size > MAX_FILES_PER_SESSION) {
+    paths.delete(paths.keys().next().value as string);
+    record.overflowed = true;
+  }
+  const repository = /^(.*?)[\\/]\.(git|husky)([\\/]|$)/.exec(physical)?.[1];
+  // `git config` from a subfolder is recorded as `<subfolder>/.git/config`; git means the enclosing repository.
+  if (repository !== undefined) record.hooks.set((await repositoryRoot(repository)) || '/', generation);
+  // The user's own git config applies in every repository.
+  if (/[\\/](\.gitconfig|\.config[\\/]git[\\/]config)$/.test(physical)) record.hooks.set('/', generation);
+  // An archive extracted over a repository can bring its own `.git/hooks`.
+  if (kind === 'trees' && (await stat(join(physical, '.git')).catch(() => null)))
+    record.hooks.set(physical, generation);
+  await save(id, record);
+}
+
+export function recordSessionWrite(context: ToolContext, target: string): Promise<void> {
+  return recordWrite(context, target, 'files');
+}
+
+/** A folder whose contents a command may have rewritten, so any file under it counts as written. */
+export function recordSessionTreeWrite(context: ToolContext, target: string): Promise<void> {
+  return recordWrite(context, target, 'trees');
+}
+
+export async function forgetSessionWrites(sessionId: string): Promise<void> {
   bySession.delete(sessionId);
   evicted.delete(sessionId);
   for (const [key, pending] of pendingHooks) if (pending.sessionId === sessionId) pendingHooks.delete(key);
+  const from = store;
+  if (from) await enqueue(sessionId, () => from.deleteSessionWrites(sessionId)).catch(() => undefined);
 }
 
 /** Called when an approved shell command starts: the hooks it was asked about count as seen. */
@@ -77,9 +193,11 @@ export function shellCommandRan(context: ToolContext): void {
   if (!pending) return;
   pendingHooks.delete(context.approvedKey as string);
   const record = bySession.get(pending.sessionId);
+  if (!record) return;
   for (const [repository, generation] of pending.hooks) {
-    if (record?.hooks.get(repository) === generation) record.hooks.delete(repository);
+    if (record.hooks.get(repository) === generation) record.hooks.delete(repository);
   }
+  void save(pending.sessionId, record);
 }
 
 export function expectShellRun(key: string, sessionId: string, hooks: [string, number][]): void {
@@ -252,16 +370,26 @@ async function scanScripts(
   found: FoundRuns,
   hooks: Map<string, number>
 ): Promise<void> {
-  const record = sessionId ? (bySession.get(sessionId) ?? (evicted.has(sessionId) ? undefined : null)) : null;
+  const stored = sessionId ? await sessionRecord(sessionId) : undefined;
+  const record = stored ?? (sessionId && evicted.has(sessionId) ? undefined : null);
   if (record === null) return;
   const written = record?.files ?? new Map<string, number>();
+  const trees = record?.trees ?? new Map<string, number>();
   const overflowed = record?.overflowed ?? true;
-  if (written.size === 0 && !overflowed) return;
+  if (written.size === 0 && trees.size === 0 && !overflowed) return;
   const tree = await parseBash(command);
   // An unparsable command is already asked about by shellApproval.
   if (!tree) return;
 
   let cwd = startDirectory;
+
+  const treeGeneration = async (physical: string): Promise<number | undefined> => {
+    let newest: number | undefined;
+    for (const [tree, generation] of trees) {
+      if (isWithin(tree, physical) && generation > (newest ?? -Infinity)) newest = generation;
+    }
+    return newest !== undefined && (await stat(physical).catch(() => null))?.isFile() ? newest : undefined;
+  };
 
   // Also resolved from the starting folder, since a `cd` inside a subshell is not undone here.
   const consider = async (raw: string, directory: string, exact = false): Promise<void> => {
@@ -270,7 +398,9 @@ async function scanScripts(
     for (const base of new Set(exact ? [directory] : [directory, startDirectory])) {
       const physical = await physicalTarget(resolve(base, text)).catch(() => resolve(base, text));
       if (found.has(physical)) continue;
-      const generation = written.get(physical);
+      const own = written.get(physical);
+      const inTree = await treeGeneration(physical);
+      const generation = own === undefined ? inTree : Math.max(own, inTree ?? own);
       if (generation !== undefined) found.set(physical, { name: text, generation });
       else if (overflowed && (await stat(physical).catch(() => null))?.isFile()) {
         found.set(physical, { name: text, generation: '*' });

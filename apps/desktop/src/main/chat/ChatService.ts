@@ -1643,7 +1643,7 @@ export class ChatService {
     this.scopeVersions.delete(sessionId);
     await this.deps.background?.killSession(sessionId);
     // Only on delete: an archived conversation can be unarchived, and its scripts must still ask.
-    forgetSessionWrites(sessionId);
+    await forgetSessionWrites(sessionId);
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
