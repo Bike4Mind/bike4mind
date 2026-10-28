@@ -1,4 +1,4 @@
-import { getQuestErrorCode, type QuestErrorCode } from '@bike4mind/common';
+import { getQuestErrorCode } from '@bike4mind/common';
 
 export type ExpectedImageFailureKind = 'moderation_blocked' | 'provider_unavailable' | 'input_rejected';
 
@@ -54,17 +54,15 @@ export class ImageInputRejectedError extends ExpectedImageGenerationError {
   }
 }
 
-/** Billing refusals: the user already sees the remedy, so they are not incidents either. */
-const EXPECTED_QUEST_ERROR_CODES = new Set<QuestErrorCode>(['insufficient_credits', 'spend_cap_exceeded']);
-
 type FailureLogger = {
   warn: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
 };
 
 /**
- * The one place an image-generation caller reports a failure: expected failures and billing refusals
- * at warn, anything else at error (which pages). `context` is extra caller metadata (ids), never the prompt.
+ * The one place an image-generation caller reports a failure: expected failures and running out of
+ * credits at warn, anything else at error (which pages). `context` is extra caller metadata (ids),
+ * never the prompt.
  */
 export function logImageGenerationFailure(
   logger: FailureLogger,
@@ -76,9 +74,9 @@ export function logImageGenerationFailure(
     logger.warn(message, { ...context, kind: error.kind, ...error.logContext });
     return;
   }
-  const errorCode = getQuestErrorCode(error);
-  if (errorCode && EXPECTED_QUEST_ERROR_CODES.has(errorCode)) {
-    logger.warn(message, { ...context, errorCode });
+  // Out of credits is not an incident either: the user sees the message and the Add Credits CTA.
+  if (getQuestErrorCode(error) === 'insufficient_credits') {
+    logger.warn(message, { ...context, errorCode: 'insufficient_credits', detail: (error as Error).message });
     return;
   }
   if (context) {
