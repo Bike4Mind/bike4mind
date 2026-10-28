@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   ADMIN_LEDGER_KINDS,
   CREDIT_TRANSACTION_KIND,
+  adminLedgerFilterSchema,
+  adminLedgerQuerySchema,
+  isContiguousLedgerFilter,
   signedCredits,
   transactionTypesForKind,
 } from './adminUserCredits';
@@ -64,5 +67,29 @@ describe('signedCredits', () => {
 
   it('never returns negative zero for a zero amount on an add type', () => {
     expect(Object.is(signedCredits('generic_add', 0), 0)).toBe(true);
+  });
+});
+
+describe('ledger filter schemas', () => {
+  it('accepts model, source and an inclusive single-day range', () => {
+    expect(
+      adminLedgerQuerySchema.parse({ model: ' m1 ', source: 'cli', from: '2026-01-01', to: '2026-01-01', limit: '5' })
+    ).toEqual({ model: 'm1', source: 'cli', from: '2026-01-01', to: '2026-01-01', limit: 5 });
+  });
+
+  it('rejects an unknown source, a non-date and a start after the end, on both schemas', () => {
+    for (const schema of [adminLedgerFilterSchema, adminLedgerQuerySchema]) {
+      expect(schema.safeParse({ source: 'fax' }).success).toBe(false);
+      expect(schema.safeParse({ from: '2026-02-30' }).success).toBe(false);
+      expect(schema.safeParse({ from: '2026-02-02', to: '2026-02-01' }).success).toBe(false);
+    }
+  });
+
+  it('treats only a date range as keeping the ledger contiguous', () => {
+    expect(isContiguousLedgerFilter({})).toBe(true);
+    expect(isContiguousLedgerFilter({ from: '2026-01-01', to: '2026-01-31' })).toBe(true);
+    expect(isContiguousLedgerFilter({ kind: 'usage' })).toBe(false);
+    expect(isContiguousLedgerFilter({ model: 'm1' })).toBe(false);
+    expect(isContiguousLedgerFilter({ source: 'web' })).toBe(false);
   });
 });

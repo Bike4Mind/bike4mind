@@ -166,11 +166,29 @@ const ADMIN_ADJUSTMENT_FILTER = {
 /** Position of one ledger row in the {createdAt, _id} newest-first order. */
 export type LedgerCursorPosition = { createdAt: Date; id: string };
 
+/** Narrows findLedgerPage; every set field must match. */
+export type LedgerPageFilter = {
+  types?: CreditTransactionType[];
+  model?: string;
+  source?: string;
+  /** Inclusive lower bound on createdAt. */
+  createdFrom?: Date;
+  /** Exclusive upper bound on createdAt. */
+  createdBefore?: Date;
+};
+
+/** AI spend of one model or source over the trailing 7, 30 and 90 UTC days including today. */
+export type AiSpendBucket = { key: string | null; last7d: number; last30d: number; last90d: number };
+
 export type AiSpendSummary = {
   spent: { last24h: number; last7d: number; last30d: number };
   topModel30d: { model: string; credits: number } | null;
   /** Spend per UTC day with activity, 'YYYY-MM-DD' ascending; days with no spend are absent. */
   dailyCredits: Array<{ day: string; credits: number }>;
+  /** Largest 90-day spend first; a null key collects rows that recorded no model. */
+  byModel: AiSpendBucket[];
+  /** Largest 90-day spend first; a null key collects rows that recorded no source. */
+  bySource: AiSpendBucket[];
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -358,10 +376,19 @@ export class CreditTransactionRepository
   async findLedgerPage(
     ownerId: string,
     ownerType: CreditHolderType,
-    options: { types?: CreditTransactionType[]; after?: LedgerCursorPosition; limit: number }
+    options: LedgerPageFilter & { after?: LedgerCursorPosition; limit: number }
   ): Promise<ICreditTransactionDocument[]> {
     const query: Record<string, unknown> = { ownerId, ownerType };
     if (options.types && options.types.length > 0) query.type = { $in: options.types };
+    // model and source are residual filters on the owner index: an admin view of one user, so the scan is
+    // bounded by that user's ledger.
+    if (options.model) query.model = options.model;
+    if (options.source) query.source = options.source;
+    const createdAt: Record<string, Date> = {};
+    if (options.createdFrom) createdAt.$gte = options.createdFrom;
+    if (options.createdBefore) createdAt.$lt = options.createdBefore;
+    if (Object.keys(createdAt).length > 0) query.createdAt = createdAt;
+    // The cursor's own createdAt terms sit inside $or, so they AND with the range above.
     if (options.after) Object.assign(query, olderThan(options.after));
     return this.model.find(query).sort({ createdAt: -1, _id: -1 }).limit(options.limit).exec();
   }
@@ -407,11 +434,27 @@ export class CreditTransactionRepository
     const spendWithin = (from: Date) => ({
       $sum: { $cond: [{ $gte: ['$createdAt', from] }, { $abs: '$credits' }, 0] },
     });
+    // Day-aligned like `daily`, so a breakdown and the by-day chart total the same for one range.
+    const fromDays = (days: number) => new Date(dayStart.getTime() - (days - 1) * DAY_MS);
+    const breakdownBy = (field: '$model' | '$source') => [
+      {
+        $group: {
+          // A missing field groups as null.
+          _id: field,
+          last7d: spendWithin(fromDays(7)),
+          last30d: spendWithin(fromDays(30)),
+          last90d: spendWithin(fromDays(AI_SPEND_DAILY_WINDOW_DAYS)),
+        },
+      },
+      { $sort: { last90d: -1 as const, _id: 1 as const } },
+    ];
 
     const [result] = await this.model.aggregate<{
       totals: Array<{ last24h: number; last7d: number; last30d: number }>;
       byModel: Array<{ _id: string; credits: number }>;
       daily: Array<{ _id: string; credits: number }>;
+      byModel90d: Array<{ _id: string | null; last7d: number; last30d: number; last90d: number }>;
+      bySource90d: Array<{ _id: string | null; last7d: number; last30d: number; last90d: number }>;
     }>([
       {
         $match: {
@@ -448,9 +491,13 @@ export class CreditTransactionRepository
             },
             { $sort: { _id: 1 } },
           ],
+          byModel90d: breakdownBy('$model'),
+          bySource90d: breakdownBy('$source'),
         },
       },
     ]);
+    const toBuckets = (rows: Array<{ _id: string | null; last7d: number; last30d: number; last90d: number }> = []) =>
+      rows.map(({ _id, last7d, last30d, last90d }) => ({ key: _id, last7d, last30d, last90d }));
 
     const totals = result?.totals[0];
     const top = result?.byModel[0];
@@ -458,6 +505,8 @@ export class CreditTransactionRepository
       spent: { last24h: totals?.last24h ?? 0, last7d: totals?.last7d ?? 0, last30d: totals?.last30d ?? 0 },
       topModel30d: top ? { model: top._id, credits: top.credits } : null,
       dailyCredits: (result?.daily ?? []).map(({ _id, credits }) => ({ day: _id, credits })),
+      byModel: toBuckets(result?.byModel90d),
+      bySource: toBuckets(result?.bySource90d),
     };
   }
 

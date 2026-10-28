@@ -484,6 +484,29 @@ describe('admin ledger repository methods', () => {
       });
       expect(page.map(row => row.type)).toEqual(['purchase']);
     });
+
+    it('filters by model, source and a [from, before) createdAt range, also past a cursor', async () => {
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(1) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(2) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(3) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(4) });
+      await userRow({ model: 'm-b', source: 'cli', createdAt: at(2) });
+      await userRow({ model: 'm-a', source: 'web', createdAt: at(2) });
+
+      const filter = { model: 'm-a', source: 'cli', createdFrom: at(2), createdBefore: at(4) };
+      const page = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+        ...filter,
+        limit: 10,
+      });
+      expect(page.map(row => row.createdAt)).toEqual([at(3), at(2)]);
+
+      const next = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+        ...filter,
+        after: { createdAt: page[0].createdAt, id: page[0].id },
+        limit: 10,
+      });
+      expect(next.map(row => row.createdAt)).toEqual([at(2)]);
+    });
   });
 
   describe('sumSignedCreditsNewerThan', () => {
@@ -534,12 +557,38 @@ describe('admin ledger repository methods', () => {
       expect(summary.dailyCredits.map(d => d.day)).toEqual([...summary.dailyCredits.map(d => d.day)].sort());
     });
 
+    it('buckets spend by model and source over day-aligned 7/30/90 windows that match the daily series', async () => {
+      // Inside a rolling 7 x 24h window but before the first of the last 7 UTC days (June 9).
+      const june8Evening = new Date(Date.UTC(2026, 5, 8, 18));
+      await userRow({ credits: -10, model: 'm-a', source: 'web', createdAt: june8Evening });
+      await userRow({ credits: -5, model: 'm-a', source: 'web', createdAt: hoursAgo(1) });
+      await userRow({ credits: -20, model: 'm-b', source: 'cli', createdAt: hoursAgo(24 * 20) });
+      await userRow({ credits: -40, source: 'cli', createdAt: hoursAgo(24 * 60) });
+      await userRow({ credits: -80, model: 'm-a', createdAt: hoursAgo(24 * 100) });
+      await userRow({ type: 'purchase', credits: 500, model: 'm-a', createdAt: hoursAgo(1) });
+
+      const summary = await creditTransactionRepository.summarizeAiSpend(USER, CreditHolderType.User, now);
+      expect(summary.byModel).toEqual([
+        { key: null, last7d: 0, last30d: 0, last90d: 40 },
+        { key: 'm-b', last7d: 0, last30d: 20, last90d: 20 },
+        { key: 'm-a', last7d: 5, last30d: 15, last90d: 15 },
+      ]);
+      expect(summary.bySource).toEqual([
+        { key: 'cli', last7d: 0, last30d: 20, last90d: 60 },
+        { key: 'web', last7d: 5, last30d: 15, last90d: 15 },
+      ]);
+      const last7Days = summary.dailyCredits.filter(d => d.day >= '2026-06-09');
+      expect(last7Days.reduce((sum, d) => sum + d.credits, 0)).toBe(5);
+    });
+
     it('returns zeros and a null top model when there is no usage', async () => {
       const summary = await creditTransactionRepository.summarizeAiSpend(USER, CreditHolderType.User, now);
       expect(summary).toEqual({
         spent: { last24h: 0, last7d: 0, last30d: 0 },
         topModel30d: null,
         dailyCredits: [],
+        byModel: [],
+        bySource: [],
       });
     });
   });

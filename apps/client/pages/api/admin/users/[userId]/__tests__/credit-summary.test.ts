@@ -49,6 +49,11 @@ beforeEach(() => {
       { day: '2026-06-15', credits: 1 },
       { day: '2026-06-10', credits: 2 },
     ],
+    byModel: [
+      { key: 'm-a', last7d: 2, last30d: 3, last90d: 3 },
+      { key: null, last7d: 0, last30d: 0, last90d: 1 },
+    ],
+    bySource: [{ key: 'web', last7d: 2, last30d: 3, last90d: 4 }],
   });
   h.latestTopUp.mockResolvedValue(null);
 });
@@ -92,5 +97,17 @@ describe('GET /api/admin/users/[userId]/credit-summary', () => {
     const { res, promise } = run();
     await promise;
     expect(res._getJSONData().lastTopUp).toEqual({ at: '2026-06-01T00:00:00.000Z', credits: 250, type: 'purchase' });
+  });
+
+  it('passes the per-model and per-source spend buckets through, unknown model included', async () => {
+    const { res, promise } = run();
+    await promise;
+
+    const body = res._getJSONData();
+    expect(body.byModel).toEqual([
+      { key: 'm-a', last7d: 2, last30d: 3, last90d: 3 },
+      { key: null, last7d: 0, last30d: 0, last90d: 1 },
+    ]);
+    expect(body.bySource).toEqual([{ key: 'web', last7d: 2, last30d: 3, last90d: 4 }]);
   });
 });

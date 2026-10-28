@@ -14,9 +14,9 @@ import { respond } from '@server/utils/respond';
 /**
  * GET /api/admin/users/[userId]/credit-summary
  *
- * Balance, AI spend over rolling 24h/7d/30d, the 30-day top model, the last completed top-up and a
- * 90-day zero-filled daily spend series. Spend counts AI usage rows only (never transfers or
- * expiries), as magnitudes.
+ * Balance, AI spend over rolling 24h/7d/30d, the 30-day top model, the last completed top-up, a
+ * 90-day zero-filled daily spend series, and spend per model and per source over 7/30/90 UTC days.
+ * Spend counts AI usage rows only (never transfers or expiries), as magnitudes.
  */
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler(async (req, res) => {
@@ -43,6 +43,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
           ? { at: topUp.createdAt.toISOString(), credits: Math.abs(topUp.credits), type: topUp.type }
           : null,
       daily: zeroFilledDailySpend(spend.dailyCredits, now),
+      byModel: spend.byModel,
+      bySource: spend.bySource,
     });
   })
 );
