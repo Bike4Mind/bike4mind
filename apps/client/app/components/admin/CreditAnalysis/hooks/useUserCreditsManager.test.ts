@@ -68,7 +68,11 @@ describe('useUserCreditsManager', () => {
     );
     const { result } = renderHook(() => useUserCreditsManager());
 
-    await act(() => result.current.handleCreditAdjustment('u1', { kind: 'delta', delta: -50 }, 'penalty'));
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.handleCreditAdjustment('u1', { kind: 'delta', delta: -50 }, 'penalty');
+    });
+    expect(ok).toBe(false);
     expect(result.current.notification.message).toBe(reason);
     expect(result.current.notification.color).toBe('danger');
   });

@@ -31,7 +31,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
   });
 
   it('threads the typed reason through onCreditAdjustment when adding credits', async () => {
-    const onCreditAdjustment = vi.fn().mockResolvedValue(undefined);
+    const onCreditAdjustment = vi.fn().mockResolvedValue(true);
     render(
       <TestWrapper>
         <CreditAdjustmentModal
@@ -54,7 +54,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
 
   it('disables the actions while a request is in flight so a double click submits once', async () => {
     let finish: () => void = () => {};
-    const onCreditAdjustment = vi.fn(() => new Promise<void>(resolve => (finish = resolve)));
+    const onCreditAdjustment = vi.fn(() => new Promise<boolean>(resolve => (finish = () => resolve(true))));
     const onClose = vi.fn();
     render(
       <TestWrapper>
@@ -82,7 +82,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
   });
 
   it('blocks add and remove until the reason is at least 5 characters', () => {
-    const onCreditAdjustment = vi.fn().mockResolvedValue(undefined);
+    const onCreditAdjustment = vi.fn().mockResolvedValue(true);
     render(
       <TestWrapper>
         <CreditAdjustmentModal
@@ -109,7 +109,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
   });
 
   it('sends the trimmed reason on removal', async () => {
-    const onCreditAdjustment = vi.fn().mockResolvedValue(undefined);
+    const onCreditAdjustment = vi.fn().mockResolvedValue(true);
     render(
       <TestWrapper>
         <CreditAdjustmentModal
@@ -128,8 +128,31 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
     expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', { kind: 'delta', delta: -100 }, 'Refund reversal');
   });
 
+  it('stays open with the reason intact when the adjustment is rejected', async () => {
+    const onCreditAdjustment = vi.fn().mockResolvedValue(false);
+    const onClose = vi.fn();
+    render(
+      <TestWrapper>
+        <CreditAdjustmentModal
+          open
+          onClose={onClose}
+          selectedUser={selectedUser}
+          onCreditAdjustment={onCreditAdjustment}
+        />
+      </TestWrapper>
+    );
+
+    fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Refund reversal' } });
+    fireEvent.click(screen.getByTestId('credit-adjust-remove-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('credit-adjust-remove-btn')).toBeEnabled());
+    expect(onCreditAdjustment).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('credit-adjust-reason-input')).toHaveValue('Refund reversal');
+  });
+
   describe('set balance mode', () => {
-    const renderModal = (onCreditAdjustment = vi.fn().mockResolvedValue(undefined)) => {
+    const renderModal = (onCreditAdjustment = vi.fn().mockResolvedValue(true)) => {
       render(
         <TestWrapper>
           <CreditAdjustmentModal
@@ -175,6 +198,18 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
       expect(screen.getByTestId('credit-adjust-set-input')).toHaveValue(100);
       fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Abusive signup' } });
       expect(screen.getByTestId('credit-adjust-set-btn')).toBeDisabled();
+    });
+
+    // The server sets against the live balance, which may have moved since the list loaded.
+    it('allows setting the balance back to the list-load value once the admin enters it', async () => {
+      const onCreditAdjustment = renderModal();
+      fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Restore balance' } });
+      fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '100' } });
+      expect(screen.getByTestId('credit-adjust-set-preview')).toHaveTextContent('Same as the balance at list load');
+      fireEvent.click(screen.getByTestId('credit-adjust-set-btn'));
+
+      await waitFor(() => expect(onCreditAdjustment).toHaveBeenCalledTimes(1));
+      expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', { kind: 'set', balance: 100 }, 'Restore balance');
     });
   });
 

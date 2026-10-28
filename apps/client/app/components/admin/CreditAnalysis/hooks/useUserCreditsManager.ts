@@ -51,7 +51,8 @@ export function useUserCreditsManager(onRefresh?: () => void) {
 
   const users = allUsers.data?.users ?? [];
 
-  const handleCreditAdjustment = async (userId: string, change: CreditChange, note: string) => {
+  // Resolves false on failure (after the error toast) so the modal can stay open with the admin's input.
+  const handleCreditAdjustment = async (userId: string, change: CreditChange, note: string): Promise<boolean> => {
     try {
       const updated: { currentCredits?: unknown } | null = await updateUserCreditsMutation.mutateAsync({
         userId,
@@ -73,12 +74,14 @@ export function useUserCreditsManager(onRefresh?: () => void) {
         color: 'success',
       });
       handleRefresh();
+      return true;
     } catch (error) {
       setNotification({
         open: true,
         message: getServerErrorField(error) || 'Failed to update credits',
         color: 'danger',
       });
+      return false;
     }
   };
 

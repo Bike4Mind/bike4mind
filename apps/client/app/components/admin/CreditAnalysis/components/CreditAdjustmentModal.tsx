@@ -37,7 +37,8 @@ interface CreditAdjustmentModalProps {
   open: boolean;
   onClose: () => void;
   selectedUser: AdminUserListItem | null;
-  onCreditAdjustment: (userId: string, change: CreditChange, note: string) => Promise<void>;
+  /** Resolves false when the change was rejected; the modal then stays open. */
+  onCreditAdjustment: (userId: string, change: CreditChange, note: string) => Promise<boolean>;
 }
 
 type Mode = 'adjust' | 'set';
@@ -63,8 +64,14 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   const currentBalance = selectedUser?.currentCredits ?? 0;
   const targetBalance = targetOverride === undefined ? currentBalance : targetOverride;
   const setDelta = targetBalance === null ? 0 : targetBalance - currentBalance;
+  // The server sets against the live balance, so an edited target equal to the list-load snapshot is still
+  // submittable: it restores that value if the balance has moved since.
   const canSet =
-    isReasonValid && targetBalance !== null && Number.isInteger(targetBalance) && targetBalance >= 0 && setDelta !== 0;
+    isReasonValid &&
+    targetOverride !== undefined &&
+    targetBalance !== null &&
+    Number.isInteger(targetBalance) &&
+    targetBalance >= 0;
 
   const handleClose = () => {
     setMode('adjust');
@@ -79,9 +86,10 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
     if (!selectedUser || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await onCreditAdjustment(selectedUser.id, change, composeAdminReason(reason));
-      queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
-      handleClose();
+      if (await onCreditAdjustment(selectedUser.id, change, composeAdminReason(reason))) {
+        queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
+        handleClose();
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -150,10 +158,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                   />
                 </FormControl>
               ) : (
-                <FormControl
-                  sx={{ mb: 1 }}
-                  error={targetOverride !== undefined && targetBalance !== null && setDelta === 0}
-                >
+                <FormControl sx={{ mb: 1 }}>
                   <FormLabel>New balance</FormLabel>
                   <Input
                     type="number"
@@ -169,8 +174,8 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                     {targetBalance === null
                       ? 'Enter a balance.'
                       : setDelta === 0
-                        ? 'Already at this balance; nothing to change.'
-                        : `Change: ${setDelta > 0 ? '+' : ''}${setDelta.toLocaleString()} credits`}
+                        ? 'Same as the balance at list load; no change unless it has moved since.'
+                        : `Change from list load: ${setDelta > 0 ? '+' : ''}${setDelta.toLocaleString()} credits`}
                   </FormHelperText>
                 </FormControl>
               )}
