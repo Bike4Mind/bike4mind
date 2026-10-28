@@ -23,6 +23,21 @@ function wireModel(overrides: Record<string, unknown> = {}) {
 }
 
 describe('selectUsableModels', () => {
+  it('carries release metadata without guessing dates or changing catalog order', () => {
+    const models = selectUsableModels([
+      wireModel({ id: 'old', releaseDate: '2025-01-01' }),
+      wireModel({ id: 'new', releaseDate: '2026-01-01' }),
+      wireModel({ id: 'unknown', releaseDate: 123 }),
+      wireModel({ id: 'missing' }),
+    ]);
+    expect(models.map(model => [model.id, model.releaseDate])).toEqual([
+      ['old', '2025-01-01'],
+      ['new', '2026-01-01'],
+      ['unknown', undefined],
+      ['missing', undefined],
+    ]);
+  });
+
   it("carries the model's output ceiling from the catalog's max_tokens", () => {
     expect(selectUsableModels([wireModel({ max_tokens: 16_384 })])[0]).toMatchObject({ maxOutputTokens: 16_384 });
     expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('maxOutputTokens');

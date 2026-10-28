@@ -30,13 +30,35 @@ interface ModelGroup {
   models: ChatModelOption[];
 }
 
+function releaseTime(date: string | undefined): number {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return -Infinity;
+  const time = Date.parse(date);
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === date ? time : -Infinity;
+}
+
+function orderByProviderRelease(models: readonly ChatModelOption[]): ChatModelOption[] {
+  const providers = new Map<string | undefined, { model: ChatModelOption; release: number }[]>();
+  for (const model of models) {
+    if (isLocalModel(model.id)) continue;
+    const provider = providers.get(model.backend) ?? [];
+    provider.push({ model, release: releaseTime(model.releaseDate) });
+    providers.set(model.backend, provider);
+  }
+  // Stable sort keeps catalog order for ties and unknown dates, after dated releases.
+  const hosted = [...providers.values()].flatMap(provider =>
+    provider.sort((a, b) => b.release - a.release || 0).map(entry => entry.model)
+  );
+  let index = 0;
+  return models.map(model => (isLocalModel(model.id) ? model : hosted[index++]!));
+}
+
 /**
  * Hosted models first, then this computer's, then each saved server's in list order. Flat (one
  * unlabelled group) until a saved server contributes a model.
  */
 export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] {
   if (!models.some(model => model.server))
-    return models.length ? [{ key: 'all', label: null, models: [...models] }] : [];
+    return models.length ? [{ key: 'all', label: null, models: orderByProviderRelease(models) }] : [];
   const groups = new Map<string, ModelGroup>();
   const add = (key: string, label: string, model: ChatModelOption) => {
     const group = groups.get(key) ?? { key, label, models: [] };
@@ -47,7 +69,7 @@ export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] 
   for (const model of models.filter(model => isLocalModel(model.id) && !model.server))
     add(LOCAL_SERVER_ID, LOCAL_SERVER_NAME, model);
   for (const model of models) if (model.server) add(model.server.id, model.server.name, model);
-  return [...groups.values()];
+  return [...groups.values()].map(group => ({ ...group, models: orderByProviderRelease(group.models) }));
 }
 
 /** The first model row of the menu the filter box sits in - the one the query narrowed to. */

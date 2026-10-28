@@ -165,3 +165,59 @@ describe('ModelPicker server groups', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 });
+
+describe('ModelPicker release ordering', () => {
+  const models: ChatModelOption[] = [
+    { id: 'a-unknown', name: 'A unknown', backend: 'anthropic' },
+    { id: 'b-old', name: 'B old', backend: 'openai', releaseDate: '2024-01-01' },
+    { id: 'a-old', name: 'A old', backend: 'anthropic', releaseDate: '2025-01-01' },
+    { id: 'local:ollama:first', name: 'Local first', releaseDate: '2020-01-01' },
+    { id: 'a-new', name: 'A new', backend: 'anthropic', releaseDate: '2026-01-01' },
+    { id: 'b-new', name: 'B new', backend: 'openai', releaseDate: '2026-10-01' },
+    { id: 'a-tie', name: 'A tie', backend: 'anthropic', releaseDate: '2026-01-01' },
+    { id: 'a-invalid', name: 'A invalid', backend: 'anthropic', releaseDate: 'not-a-date' },
+    { id: 'a-impossible', name: 'A impossible', backend: 'anthropic', releaseDate: '2026-02-30' },
+    { id: 'local:ollama:second', name: 'Local second', releaseDate: '2026-10-01' },
+  ];
+  const expected = [
+    'a-new',
+    'a-tie',
+    'a-old',
+    'local:ollama:first',
+    'a-unknown',
+    'a-invalid',
+    'a-impossible',
+    'b-new',
+    'b-old',
+    'local:ollama:second',
+  ];
+
+  it('keeps provider order, sorts releases newest first and preserves ties, unknowns and local positions', () => {
+    const input = Object.freeze([...models]);
+    expect(groupByServer(input)[0].models.map(model => model.id)).toEqual(expected);
+    expect(input.map(model => model.id)).toEqual(models.map(model => model.id));
+    expect(groupByServer([])).toEqual([]);
+  });
+
+  it('keeps hosted and local server groups intact', () => {
+    const remote = { id: 'gpu', name: 'GPU' };
+    const remoteModel = { id: 'local:srv-gpu:first', name: 'Remote', server: remote };
+    const groups = groupByServer([...models, remoteModel]);
+    expect(groups.map(group => group.label)).toEqual(['Hosted', 'This computer', 'GPU']);
+    expect(groups[0].models.map(model => model.id)).toEqual(expected.filter(id => !id.startsWith('local:')));
+    expect(groups[1].models.map(model => model.id)).toEqual(['local:ollama:first', 'local:ollama:second']);
+    expect(groups[2].models).toEqual([remoteModel]);
+  });
+
+  it('renders sorted options and selects the newest filtered match with Enter', async () => {
+    const { onSelect } = mount(models);
+    expect(options().map(option => option.textContent)).toEqual(
+      expected.map(id => expect.stringContaining(models.find(model => model.id === id)!.name))
+    );
+    typeInto(filterBox(), 'a-');
+    expect(options()).toHaveLength(6);
+    expect(options()[0].textContent).toContain('A new');
+    await act(async () => key(filterBox(), 'Enter'));
+    expect(onSelect).toHaveBeenCalledWith('a-new');
+  });
+});
