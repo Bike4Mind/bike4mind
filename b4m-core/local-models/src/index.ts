@@ -41,6 +41,22 @@ export {
   RuntimeUnsupportedError,
 } from './errors';
 export { isAbliteratedModel } from './abliterated';
+export {
+  curatedLibrary,
+  curatedListing,
+  curatedOllamaBlocked,
+  curatedParamsLabel,
+  curatedPicks,
+  curatedPins,
+  curatedSource,
+  isCuratedListable,
+  isCuratedPullable,
+  isPermissiveEntry,
+  loadCuratedManifest,
+  type CuratedListing,
+  type CuratedSource,
+  type CuratedTierPick,
+} from './curated';
 export { archFromModelInfo, tensorStatsFromTensors } from './arch';
 export {
   DEFAULT_GGUF_MAX_ARRAY_LENGTH,

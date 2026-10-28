@@ -1,9 +1,8 @@
 import { HubManifestSchema, parseHubManifest, type HubBuild } from '@bike4mind/common';
-import { isAbliteratedModel } from '@bike4mind/local-models';
 import { describe, expect, it, vi } from 'vitest';
-import bundled from '../../../../../catalog/model-hub/curated-v2.json';
-import { loadCuratedManifest } from './loadCuratedManifest';
-import { ollamaBlocked } from './ModelHubService';
+import bundled from '../../../catalog/model-hub/curated-v2.json';
+import { isAbliteratedModel } from './abliterated';
+import { curatedOllamaBlocked, loadCuratedManifest } from './curated';
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const strict = () => HubManifestSchema.parse(bundled);
@@ -55,8 +54,8 @@ describe('the bundled curated list', () => {
     const drafted = strict().entries.flatMap(entry => entry.builds.filter(build => pins(build)?.draft));
     expect(drafted.length).toBeGreaterThan(0);
     for (const build of drafted) {
-      expect(ollamaBlocked(build, '0.24.0'), build.id).not.toBeNull();
-      expect(ollamaBlocked(build, '0.30.0'), build.id).toBeNull();
+      expect(curatedOllamaBlocked(build, '0.24.0'), build.id).not.toBeNull();
+      expect(curatedOllamaBlocked(build, '0.30.0'), build.id).toBeNull();
     }
   });
 

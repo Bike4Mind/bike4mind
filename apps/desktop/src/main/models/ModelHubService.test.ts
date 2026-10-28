@@ -6,6 +6,7 @@ import {
   LocalRuntimeError,
   ModelNotFoundError,
   RuntimeConnectionError,
+  loadCuratedManifest,
   type HardwareProfile,
   type HubGgufBuild,
   type HubModelDetail,
@@ -22,7 +23,6 @@ import type { HubBuild, HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
 import { describe, expect, it, vi } from 'vitest';
-import { loadCuratedManifest } from './loadCuratedManifest';
 import {
   ModelHubService,
   toModelHubError,

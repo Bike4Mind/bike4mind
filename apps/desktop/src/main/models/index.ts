@@ -1,10 +1,15 @@
 import { ipcMain } from 'electron';
-import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers, probeHardware } from '@bike4mind/local-models';
+import {
+  HuggingFaceHub,
+  OllamaRuntime,
+  loadCuratedManifest,
+  ollamaLibraryLayers,
+  probeHardware,
+} from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { ModelPull } from '@shared/models';
 import { localHardware } from '../chat/localContextSizing';
 import { appWindows } from '../windows';
-import { loadCuratedManifest } from './loadCuratedManifest';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
 
 const MAX_TEXT = 512;
