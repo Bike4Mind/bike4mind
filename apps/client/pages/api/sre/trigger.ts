@@ -6,9 +6,9 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { SreAgentConfigSchema, getConfiguredRepoSlugs, resolveFullConfig } from '@bike4mind/common';
 import { GitHubService } from '@server/services/githubService';
@@ -35,10 +35,8 @@ interface TriggerResultItem {
   labels?: string[];
 }
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
     const parsed = TriggerRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       throw new BadRequestError(`Invalid request: ${parsed.error.issues.map(i => i.message).join(', ')}`);

@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -27,16 +27,8 @@ const ExportRequestSchema = z.object({
   format: z.enum(['json', 'csv', 'markdown']).prefault('json'),
 });
 
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi()
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage', GET: 'settings:manage' } })
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const userId = req.user?.id;
     if (!userId) {
       throw new ForbiddenError('User ID not found');
@@ -146,8 +138,6 @@ const handler = baseApi()
   })
   .get(async (req, res) => {
     // GET handler to list recent exports for the current user
-    ensureAdmin(req.user?.isAdmin);
-
     const userId = req.user?.id;
     if (!userId) {
       throw new ForbiddenError('User ID not found');
