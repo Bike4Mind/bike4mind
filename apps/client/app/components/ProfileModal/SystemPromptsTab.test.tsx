@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IUser } from '@bike4mind/common';
+import { AxiosError, AxiosHeaders } from 'axios';
 
 const mocks = vi.hoisted(() => ({
   useGetFabFile: vi.fn(),
@@ -40,6 +41,15 @@ const user = {
   ],
 } as unknown as IUser;
 
+const httpError = (status: number) =>
+  new AxiosError('failed', String(status), undefined, undefined, {
+    status,
+    statusText: '',
+    data: {},
+    headers: {},
+    config: { headers: new AxiosHeaders() },
+  });
+
 const renderTab = () =>
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -55,7 +65,7 @@ describe('SystemPromptsTab - a pinned file that can no longer be loaded', () => 
     mocks.useGetFabFile.mockImplementation((id: string) =>
       id === 'live'
         ? { data: { id: 'live', fileName: 'style-guide.md', mimeType: 'text/markdown' }, isLoading: false }
-        : { data: undefined, isLoading: false, isError: true }
+        : { data: undefined, isLoading: false, error: httpError(404) }
     );
     mocks.updateUserToServer.mockImplementation(async (_id: string, patch: Partial<IUser>) => ({ ...user, ...patch }));
   });
@@ -81,8 +91,12 @@ describe('SystemPromptsTab - a pinned file that can no longer be loaded', () => 
     await waitFor(() => expect(screen.queryByTestId('system-prompt-unavailable-row')).toBeNull());
   });
 
-  it('shows nothing for a file that is still loading', () => {
-    mocks.useGetFabFile.mockReturnValue({ data: undefined, isLoading: true });
+  it.each([
+    ['still loading', { data: undefined, isLoading: true, error: null }],
+    ['failing with a 500', { data: undefined, isLoading: false, error: httpError(500) }],
+    ['unreachable (network error)', { data: undefined, isLoading: false, error: new AxiosError('Network Error') }],
+  ])('offers no Remove for a file that is %s', (_label, state) => {
+    mocks.useGetFabFile.mockReturnValue(state);
     renderTab();
 
     expect(screen.queryByTestId('system-prompt-unavailable-row')).toBeNull();

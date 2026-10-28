@@ -23,6 +23,7 @@ import {
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
 import { toast } from 'sonner';
+import { isAxiosError } from 'axios';
 import { useEffect, useState, useMemo, useCallback, memo, useRef } from 'react';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -705,12 +706,12 @@ interface SystemPromptRowProps {
 
 const SystemPromptRow = memo<SystemPromptRowProps>(
   ({ file, isGlobal, isAdmin, isToggling, isDeleting, isDisabled, onToggle, onView, onDelete, onToggleGlobal }) => {
-    const { data: fileInfo, isLoading } = useGetFabFile(file.fileId);
+    const { data: fileInfo, error } = useGetFabFile(file.fileId);
 
-    if (isLoading) return null;
     // A deleted file, or one no longer shared with this user, still sits in systemFiles and is
-    // reported missing on every turn; this row is the only place it can be removed from.
-    if (!fileInfo) {
+    // reported missing on every turn; this row is the only place it can be removed from. Only a 404
+    // proves that: a network error or 5xx must not offer to unpin a file that is fine.
+    if (isAxiosError(error) && error.response?.status === 404) {
       return (
         <ListItem
           data-testid="system-prompt-unavailable-row"
@@ -747,6 +748,7 @@ const SystemPromptRow = memo<SystemPromptRowProps>(
         </ListItem>
       );
     }
+    if (!fileInfo) return null;
 
     return (
       <ListItem
