@@ -62,7 +62,7 @@ const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
 const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: false });
-const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
+const WaitlistTab = dynamic(() => import('./WaitlistTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
@@ -183,7 +183,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.Dependencies && <DependenciesTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ApiCookbook}>{activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}</TabPanel>
-          <TabPanel value={AdminTab.Waitlist}>{activeTab === AdminTab.Waitlist && <SubscribersTab />}</TabPanel>
+          <TabPanel value={AdminTab.Waitlist}>{activeTab === AdminTab.Waitlist && <WaitlistTab />}</TabPanel>
           <TabPanel value={AdminTab.SignupDomainHolds} sx={{ padding: 0 }}>
             {activeTab === AdminTab.SignupDomainHolds && <SignupDomainHoldsTab />}
           </TabPanel>

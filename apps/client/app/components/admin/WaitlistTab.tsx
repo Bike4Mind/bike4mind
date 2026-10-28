@@ -11,9 +11,6 @@ import {
   Stack,
   Table,
   Typography,
-  Modal,
-  ModalDialog,
-  ModalClose,
   FormControl,
   FormLabel,
   Textarea,
@@ -34,13 +31,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
-import SendIcon from '@mui/icons-material/Send';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CloseIcon from '@mui/icons-material/Close';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useAdminNotifications } from './AdminPage';
 import { useShallow } from 'zustand/react/shallow';
+import { toast } from 'sonner';
+import { ActionDialog } from './shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 
 const SOURCE_LABELS: Record<SubscriberSource, string> = {
   subscribe_page: 'Waitlist page',
@@ -87,7 +86,7 @@ const useGenerateSubscriberInvite = () => {
   });
 };
 
-interface GenerateInviteModalProps {
+interface GenerateInviteDialogProps {
   open: boolean;
   onClose: () => void;
   subscriber: {
@@ -98,32 +97,34 @@ interface GenerateInviteModalProps {
   } | null;
 }
 
-const GenerateInviteModal = ({ open, onClose, subscriber }: GenerateInviteModalProps) => {
+const GenerateInviteDialog = ({ open, onClose, subscriber }: GenerateInviteDialogProps) => {
   const [startingCredits, setStartingCredits] = useState(500);
   const [startingStorage, setStartingStorage] = useState(1000);
   const [emailBody, setEmailBody] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
   const [inviteIssued, setInviteIssued] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const generateInvite = useGenerateSubscriberInvite();
 
-  const handleSubmit = async () => {
-    if (!subscriber) return;
-
-    setIsGenerating(true);
+  const resetAndClose = () => {
+    onClose();
+    setInviteIssued(false);
     setError(null);
-    setSuccess(null);
+    setEmailBody('');
+  };
 
-    try {
-      const defaultEmailBody = `Hi ${subscriber.firstName},
+  // The invite endpoint does not take a reason yet, so it is collected but not sent (reasonAudited={false}).
+  const handleConfirm = async () => {
+    if (!subscriber) return;
+    setError(null);
+
+    const defaultEmailBody = `Hi ${subscriber.firstName},
 
 Thank you for your interest${APP_NAME ? ` in ${APP_NAME}` : ''}! We're excited to welcome you to our platform.
 
 Your account has been set up with:
-• ${startingCredits.toLocaleString()} credits to get you started
-• ${startingStorage} MB of storage space
+\u2022 ${startingCredits.toLocaleString()} credits to get you started
+\u2022 ${startingStorage} MB of storage space
 
 Use your invite code below to complete your registration and start exploring our AI-powered tools.
 
@@ -131,6 +132,7 @@ Welcome aboard!
 
 The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
 
+    try {
       const result = await generateInvite.mutateAsync({
         subscriberId: subscriber.id,
         email: subscriber.email,
@@ -141,119 +143,87 @@ The${APP_NAME ? ` ${APP_NAME}` : ''} Team`;
         emailBody: emailBody || defaultEmailBody,
       });
 
-      // Leave the modal open so the admin can copy the code from the message.
+      // Leave the dialog open so the admin can copy the code from the message.
       if (result?.emailSent === false) {
         setInviteIssued(true);
         setError(result.message);
         return;
       }
 
-      setSuccess(`Invite code generated and sent to ${subscriber.email}!`);
-
-      setTimeout(() => {
-        onClose();
-        setSuccess(null);
-      }, 2000);
+      toast.success(`Invite code generated and sent to ${subscriber.email}`);
+      resetAndClose();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to generate invite';
       const apiMessage = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
       setError(apiMessage || message);
-    } finally {
-      setIsGenerating(false);
+      throw err;
     }
   };
-
-  const handleClose = () => {
-    onClose();
-    setInviteIssued(false);
-    setError(null);
-    setSuccess(null);
-    setEmailBody('');
-  };
-
-  const isMobile = useIsMobile();
 
   if (!subscriber) return null;
 
   return (
-    <Modal open={open} onClose={handleClose}>
-      <ModalDialog
-        size="lg"
-        layout={isMobile ? 'fullscreen' : 'center'}
-        sx={!isMobile ? { maxWidth: 600, width: '90vw' } : undefined}
-      >
-        <ModalClose />
-        <Typography level="h4" mb={2}>
-          Generate Invite Code
-        </Typography>
-
-        <Typography level="body-md" mb={2}>
-          For:{' '}
+    <ActionDialog
+      open={open}
+      onClose={resetAndClose}
+      title="Generate invite code"
+      description={
+        <>
+          For{' '}
           <strong>
             {subscriber.firstName} {subscriber.lastName}
           </strong>{' '}
-          ({subscriber.email})
+          ({subscriber.email}). The invite code is emailed to them.
+        </>
+      }
+      reasonPresets={ADMIN_REASON_PRESETS.waitlistInvite}
+      reasonAudited={false}
+      confirmLabel="Generate and send invite"
+      pending={generateInvite.isPending}
+      blockedReason={inviteIssued ? 'The invite code was generated. Close this dialog when you are done.' : null}
+      onConfirm={handleConfirm}
+      data-testid="waitlist-invite-dialog"
+    >
+      <Box sx={{ display: 'flex', gap: 2 }}>
+        <FormControl sx={{ flex: 1 }}>
+          <FormLabel>Starting credits</FormLabel>
+          <Input
+            type="number"
+            value={startingCredits}
+            onChange={e => setStartingCredits(parseInt(e.target.value) || 0)}
+            endDecorator="credits"
+            slotProps={{ input: { min: 0, step: 100 } }}
+          />
+        </FormControl>
+
+        <FormControl sx={{ flex: 1 }}>
+          <FormLabel>Starting storage</FormLabel>
+          <Input
+            type="number"
+            value={startingStorage}
+            onChange={e => setStartingStorage(parseInt(e.target.value) || 0)}
+            endDecorator="MB"
+            slotProps={{ input: { min: 0, step: 100 } }}
+          />
+        </FormControl>
+      </Box>
+
+      <FormControl>
+        <FormLabel>Email message (optional)</FormLabel>
+        <Textarea
+          minRows={6}
+          maxRows={10}
+          placeholder="Leave blank to use the default welcome message..."
+          value={emailBody}
+          onChange={e => setEmailBody(e.target.value)}
+        />
+        <Typography level="body-xs" sx={{ mt: 1, opacity: 0.7 }}>
+          If left blank, a default welcome message will be used with the credit and storage information.
         </Typography>
+      </FormControl>
 
-        <Stack spacing={3}>
-          <Box sx={{ display: 'flex', gap: 2 }}>
-            <FormControl sx={{ flex: 1 }}>
-              <FormLabel>Starting Credits (Tokens)</FormLabel>
-              <Input
-                type="number"
-                value={startingCredits}
-                onChange={e => setStartingCredits(parseInt(e.target.value) || 0)}
-                endDecorator="credits"
-                slotProps={{ input: { min: 0, step: 100 } }}
-              />
-            </FormControl>
-
-            <FormControl sx={{ flex: 1 }}>
-              <FormLabel>Starting Storage</FormLabel>
-              <Input
-                type="number"
-                value={startingStorage}
-                onChange={e => setStartingStorage(parseInt(e.target.value) || 0)}
-                endDecorator="MB"
-                slotProps={{ input: { min: 0, step: 100 } }}
-              />
-            </FormControl>
-          </Box>
-
-          <FormControl>
-            <FormLabel>Email Message (Optional)</FormLabel>
-            <Textarea
-              minRows={8}
-              maxRows={12}
-              placeholder="Leave blank to use default welcome message..."
-              value={emailBody}
-              onChange={e => setEmailBody(e.target.value)}
-            />
-            <Typography level="body-xs" sx={{ mt: 1, opacity: 0.7 }}>
-              If left blank, a default welcome message will be used with the credit and storage information.
-            </Typography>
-          </FormControl>
-
-          {error && <Alert color="danger">{error}</Alert>}
-
-          {success && <Alert color="success">{success}</Alert>}
-
-          <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
-            <Button variant="outlined" onClick={handleClose} disabled={isGenerating}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              loading={isGenerating}
-              startDecorator={<SendIcon />}
-              disabled={isGenerating || inviteIssued}
-            >
-              Generate & Send Invite
-            </Button>
-          </Box>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+      {error && <Alert color="danger">{error}</Alert>}
+    </ActionDialog>
   );
 };
 
@@ -328,7 +298,7 @@ const PaginationControls = ({
   );
 };
 
-const SubscribersTab = () => {
+const WaitlistTab = () => {
   const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -391,7 +361,7 @@ const SubscribersTab = () => {
               <Typography level="body-md" sx={{ color: isDarkMode ? 'warning.300' : 'warning.700' }}>
                 There {waitingSubscribers.data.count === 1 ? 'is' : 'are'}{' '}
                 <strong>{waitingSubscribers.data.count}</strong>{' '}
-                {waitingSubscribers.data.count === 1 ? 'subscriber' : 'subscribers'} waiting for invite codes.
+                {waitingSubscribers.data.count === 1 ? 'person' : 'people'} on the waitlist waiting for an invite.
               </Typography>
             </Alert>
           )}
@@ -401,9 +371,9 @@ const SubscribersTab = () => {
           <Stack spacing={1}>
             <Stack direction="row" alignItems="center" spacing={1}>
               <Typography level="body-sm" color="neutral">
-                Manage subscriber requests and generate invite codes with custom credits and storage allocations
+                Manage waitlist requests and generate invite codes with custom credits and storage allocations
               </Typography>
-              <ContextHelpButton helpId="admin/subscribers" tooltipText="Subscribers Help" />
+              <ContextHelpButton helpId="admin/waitlist" tooltipText="Waitlist Help" />
             </Stack>
             <Stack
               direction={{ xs: 'column', sm: 'row' }}
@@ -412,7 +382,7 @@ const SubscribersTab = () => {
               spacing={{ xs: 2, sm: 0 }}
             >
               <Input
-                placeholder="Search subscribers..."
+                placeholder="Search the waitlist..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 sx={{ minWidth: { xs: 0, sm: 450 }, width: { xs: '100%', sm: 'auto' } }}
@@ -553,7 +523,7 @@ const SubscribersTab = () => {
         />
       </Stack>
 
-      <GenerateInviteModal
+      <GenerateInviteDialog
         open={inviteModalOpen}
         onClose={() => setInviteModalOpen(false)}
         subscriber={selectedSubscriber}
@@ -562,4 +532,4 @@ const SubscribersTab = () => {
   );
 };
 
-export default SubscribersTab;
+export default WaitlistTab;

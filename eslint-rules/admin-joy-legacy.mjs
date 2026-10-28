@@ -85,7 +85,7 @@ const componentsByFile = {
   'SlackMetrics/SlackMetricsTab.tsx': ['Card'],
   'SlackWorkspacesTab.tsx': ['Card', 'Modal', 'Table'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
-  'SubscribersTab.tsx': ['Table', 'Modal', 'Card'],
+  'WaitlistTab.tsx': ['Table', 'Card'],
   'Subscriptions/components/SubscriptionFilters.tsx': ['Card'],
   'Subscriptions/components/SubscriptionStatsCards.tsx': ['Card'],
   'Subscriptions/components/SubscriptionTable.tsx': ['Table', 'Card'],

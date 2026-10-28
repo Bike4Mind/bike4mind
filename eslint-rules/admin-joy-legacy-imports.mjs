@@ -86,7 +86,7 @@ export default {
   'SlackMetrics/SlackMetricsTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'SlackWorkspacesTab.tsx': [[2, '533bd942dfb864f5']],
   'SreAgentTab.tsx': [[11, '5feea0e0c55f7cf4']],
-  'SubscribersTab.tsx': [[6, '77053e9dc3021c33']],
+  'WaitlistTab.tsx': [[6, '58d2e911d62ace4f']],
   'Subscriptions/components/SubscriptionFilters.tsx': [[1, '323cc6405f31fd61']],
   'Subscriptions/components/SubscriptionStatsCards.tsx': [[1, '24280e39e8732b9a']],
   'Subscriptions/components/SubscriptionTable.tsx': [[1, 'c8df02d9c7ba1ab2']],
