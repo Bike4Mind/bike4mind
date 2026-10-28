@@ -13,6 +13,7 @@ describe('resolveAdminAssistantTools', () => {
       availableToolNames: allAdminTools,
     });
 
+    expect(plan.open).toBe(true);
     expect(plan.enable).toHaveLength(ADMIN_ASSISTANT_TOOL_NAMES.length + 1);
     expect(plan.enable).toEqual(expect.arrayContaining([...ADMIN_ASSISTANT_TOOL_NAMES, 'navigate_view']));
     expect(plan.deny).toEqual([]);
@@ -25,6 +26,7 @@ describe('resolveAdminAssistantTools', () => {
       availableToolNames: new Set(['admin_get_user']),
     });
 
+    expect(plan.open).toBe(true);
     expect(plan.enable).toEqual(['admin_get_user', 'navigate_view']);
     expect(plan.deny).toEqual([]);
   });
@@ -36,6 +38,7 @@ describe('resolveAdminAssistantTools', () => {
       availableToolNames: allAdminTools,
     });
 
+    expect(plan.open).toBe(false);
     expect(plan.enable).toEqual([]);
     expect(plan.deny).toEqual([...ADMIN_ASSISTANT_TOOL_NAMES]);
   });
@@ -43,6 +46,7 @@ describe('resolveAdminAssistantTools', () => {
   it('denies every admin tool for an admin in a normal session', () => {
     const plan = resolveAdminAssistantTools({ surface: null, isAdmin: true, availableToolNames: allAdminTools });
 
+    expect(plan.open).toBe(false);
     expect(plan.enable).toEqual([]);
     expect(plan.deny).toEqual([...ADMIN_ASSISTANT_TOOL_NAMES]);
   });
@@ -50,6 +54,7 @@ describe('resolveAdminAssistantTools', () => {
   it('treats a missing isAdmin as closed', () => {
     const plan = resolveAdminAssistantTools({ surface: 'admin-assistant', availableToolNames: allAdminTools });
 
+    expect(plan.open).toBe(false);
     expect(plan.enable).toEqual([]);
     expect(plan.deny).toEqual([...ADMIN_ASSISTANT_TOOL_NAMES]);
   });

@@ -2300,7 +2300,7 @@ export class ChatCompletionProcess {
         isAdmin: this.user.isAdmin,
         availableToolNames: new Set(Object.keys(externalTools ?? {})),
       });
-      const adminAssistantGateOpen = adminAssistantPlan.enable.length > 0;
+      const adminAssistantGateOpen = adminAssistantPlan.open;
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
       const deniedTools = resolveDeniedTools(

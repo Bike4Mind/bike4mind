@@ -384,6 +384,19 @@ describe('ChatCompletionProcess admin assistant gate', () => {
     offersNoAdminTool(turn);
   });
 
+  it('admin-assistant session, admin, one admin tool in session.disabledTools: that tool is withheld, the others offered', async () => {
+    const turn = await runTurn({
+      isAdmin: true,
+      surface: 'admin-assistant',
+      session: { disabledTools: ['admin_get_usage_signals'] },
+      externalTools: allAdminExternalTools(),
+    });
+
+    const offeredAdminTools = turn.offeredToolNames.filter(name => ADMIN_NAMES.includes(name));
+    expect(offeredAdminTools).not.toContain('admin_get_usage_signals');
+    expect(offeredAdminTools).toEqual(expect.arrayContaining(ADMIN_NAMES.filter(n => n !== 'admin_get_usage_signals')));
+  });
+
   it('gate never persists admin names', async () => {
     const turns = [
       await runTurn({ isAdmin: true, surface: 'admin-assistant', externalTools: allAdminExternalTools() }),

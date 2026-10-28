@@ -1,6 +1,6 @@
 import { ADMIN_ASSISTANT_TOOL_NAMES, isAdminAssistantGateOpen } from '@bike4mind/common';
 
-export type AdminAssistantToolPlan = { enable: string[]; deny: string[] };
+export type AdminAssistantToolPlan = { open: boolean; enable: string[]; deny: string[] };
 
 /**
  * Per-turn admin assistant tool plan. Open (admin surface + server-loaded isAdmin === true):
@@ -15,8 +15,8 @@ export function resolveAdminAssistantTools(input: {
   availableToolNames: ReadonlySet<string>;
 }): AdminAssistantToolPlan {
   if (!isAdminAssistantGateOpen({ surface: input.surface }, { isAdmin: input.isAdmin })) {
-    return { enable: [], deny: [...ADMIN_ASSISTANT_TOOL_NAMES] };
+    return { open: false, enable: [], deny: [...ADMIN_ASSISTANT_TOOL_NAMES] };
   }
   const available = ADMIN_ASSISTANT_TOOL_NAMES.filter(name => input.availableToolNames.has(name));
-  return { enable: [...available, 'navigate_view'], deny: [] };
+  return { open: true, enable: [...available, 'navigate_view'], deny: [] };
 }
