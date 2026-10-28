@@ -3544,7 +3544,7 @@ export class ChatCompletionProcess {
             // An OpenAI key swaps the analysis model; restricted users keep their own.
             apiKeys: shadowSettings ? undefined : apiKeyTable,
           },
-          edit_file: this.shadowSubstitution ? { model: runModel } : undefined,
+          edit_file: shadowSettings ? { model: runModel } : undefined,
           image_generation: imageConfig,
           edit_image: imageConfig,
           audio_generation: audioConfig,
