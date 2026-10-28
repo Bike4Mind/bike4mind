@@ -268,6 +268,51 @@ describe('ModelServerRegistry', () => {
     expect((error as Error).message).toContain('gpu box');
   });
 
+  it('names the server and marks it down when a Node http socket drops mid-reply', async () => {
+    const fake = fakeOllama();
+    const dropped = Object.assign(new Error('aborted'), { code: 'ECONNRESET' });
+    const fetchFor = (endpoint: ServerEndpoint): FetchLike => {
+      const inner = fake.fetchFor(endpoint);
+      return async (input, init) => {
+        if (new URL(String(input)).pathname !== '/api/chat') return inner(input, init);
+        const encoder = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(`${JSON.stringify({ message: { content: 'par' }, done: false })}\n`));
+            controller.error(dropped);
+          },
+        });
+        return new Response(body, { status: 200 });
+      };
+    };
+    const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
+    const servers = new ModelServerRegistry({
+      store,
+      logger: { debug: () => undefined, warn: () => undefined },
+      fetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+      resolve: async () => [],
+    });
+    await servers.add({
+      address: 'http://127.0.0.2:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    const [, saved] = await servers.views();
+    const error = await servers
+      .chatFor(`srv-${saved.id}`)!
+      .stream(
+        { model: `local:srv-${saved.id}:qwen2.5:0.5b`, messages: [{ role: 'user', content: 'hi' }] },
+        () => undefined
+      )
+      .catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ServerUnreachableError);
+    expect((error as Error).message).toMatch(/gpu box.*connection dropped/);
+    expect((await servers.views())[1].health.state).toBe('unreachable');
+  });
+
   it('returns no chat client for this computer or a hosted model', () => {
     const { registry: servers } = registry(fakeOllama());
     expect(servers.chatFor('ollama')).toBeNull();
