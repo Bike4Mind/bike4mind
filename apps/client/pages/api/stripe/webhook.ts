@@ -8,7 +8,13 @@ import {
   realtimeConnectionRepository,
 } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { CreditHolderType, CreditPurchaseEvents, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  CreditPurchaseEvents,
+  CreditPurchaseStatus,
+  escapeSlackLine,
+  isPlaceholderValue,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
@@ -443,7 +449,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
               const org = await organizationRepository.findByStripeCustomerId(customerId);
               if (org) {
                 await postMessageToSlack(
-                  `⚠️ *Stripe Dispute (Subscription/Org)* — dispute ${dispute.id}\n*Organization:* ${org.name} (${org.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Admin action required.`
+                  `⚠️ *Stripe Dispute (Subscription/Org)* \u2014 dispute ${dispute.id}\n*Organization:* ${escapeSlackLine(org.name)} (${org.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Admin action required.`
                 );
                 req.logger.warn(`Dispute ${dispute.id} linked to org ${org.id}, manual review needed`);
                 break;
@@ -463,7 +469,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         });
 
         await postMessageToSlack(
-          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.`
+          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${escapeSlackLine(user.name || user.email || '')} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.`
         );
         req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
       } else {
@@ -512,7 +518,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         await userRepository.update({ id: user.id, disputePending: false });
 
         await postMessageToSlack(
-          `✅ *Stripe Dispute Won* — dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\nAccount dispute flag cleared.`
+          `✅ *Stripe Dispute Won* \u2014 dispute ${dispute.id}\n*User:* ${escapeSlackLine(user.name || user.email || '')} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\nAccount dispute flag cleared.`
         );
         req.logger.info(`Cleared disputePending for user ${user.id} after winning dispute ${dispute.id}`);
       } else {
@@ -587,7 +593,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           });
 
           await postMessageToSlack(
-            `ℹ️ *Stripe Refund* — refund ${refund.id}\n*User:* ${user.name || user.email} (${user.id})\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${creditsToClawback} (${Math.round(refundRatio * 100)}% of purchase)`
+            `ℹ️ *Stripe Refund* \u2014 refund ${refund.id}\n*User:* ${escapeSlackLine(user.name || user.email || '')} (${user.id})\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${creditsToClawback} (${Math.round(refundRatio * 100)}% of purchase)`
           );
         } catch (err: unknown) {
           if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {

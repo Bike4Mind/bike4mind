@@ -26,6 +26,7 @@ import { SlackClient } from '@bike4mind/slack';
 import type { KnownBlock, Block } from '@slack/web-api';
 import type { GitHubService } from '@server/services/githubService';
 import type { SecopsTriageConfig, SecopsTriageScanSource } from '@bike4mind/common';
+import { escapeSlackText } from '@bike4mind/common';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -760,7 +761,7 @@ function buildSlackSummaryBlocks(
     blocks.push({ type: 'divider' });
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `*🤖 AI Health Assessment*\n${healthAssessment}` },
+      text: { type: 'mrkdwn', text: `*🤖 AI Health Assessment*\n${escapeSlackText(healthAssessment)}` },
     });
   }
 
