@@ -103,6 +103,39 @@ describe('DeepSeek tool history on a fallback hop to Anthropic', () => {
     expect(request.thinking).toBeUndefined();
   });
 
+  it('keeps thinking off for the later tool rounds of the hop model', async () => {
+    // Round 1 runs without thinking, so its tool_use goes back with no thinking block either;
+    // re-enabling thinking on round 2 would draw the same 400.
+    const history = convertOpenAIToolHistoryToCanonical(await deepSeekHistoryAfterMidLoopFailure());
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: [{ type: 'tool_use', id: 't3', name: 'search', input: { q: 'c' } }],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      })
+      .mockResolvedValue({
+        content: [{ type: 'text', text: 'done' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const anthropic = new AnthropicBackend('test-key', logger as never);
+    (anthropic as unknown as { _api: unknown })._api = { messages: { create } };
+
+    await anthropic.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      history,
+      { stream: false, tools: searchTools(), thinking: { enabled: true, budget_tokens: 2048 } } as never,
+      async () => {}
+    );
+
+    expect(create).toHaveBeenCalledTimes(2);
+    for (const [request] of create.mock.calls as unknown as Array<[Record<string, unknown>]>) {
+      expect(request.thinking).toBeUndefined();
+    }
+  });
+
   it('keeps thinking on for a history that does not continue a tool turn', async () => {
     const request = await anthropicCapturing().send([{ role: 'user', content: 'hi' }] as IMessage[], {
       thinking: { enabled: true, budget_tokens: 2048 },

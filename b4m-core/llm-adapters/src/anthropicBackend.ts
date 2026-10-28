@@ -1307,12 +1307,19 @@ export class AnthropicBackend implements ICompletionBackend {
     // `currentModelInfo` is resolved above, where max_tokens needs it too.
     // A history handed in mid tool turn by a fallback hop off another provider carries no signed
     // thinking block, and the API rejects thinking on a tool turn whose assistant message does not
-    // open with one. Only the first round is checked: later rounds replay this adapter's own blocks.
-    const continuesForeignToolTurn = toolCallCount === 0 && continuesToolTurnWithoutThinking(filteredMessages);
-    if (continuesForeignToolTurn && currentModelInfo?.can_think) {
-      this.logger.warn('[AnthropicBackend] Thinking skipped: history continues a tool turn with no thinking block', {
-        model,
-      });
+    // open with one. Checked on the first round only, then carried: a round run without thinking
+    // pushes no thinking block either, but an own round where adaptive thinking chose not to think
+    // must keep thinking on.
+    const continuesForeignToolTurn =
+      options._internal?.thinkingSuppressed === true ||
+      (toolCallCount === 0 && continuesToolTurnWithoutThinking(filteredMessages));
+    if (continuesForeignToolTurn && !options._internal?.thinkingSuppressed) {
+      options = { ...options, _internal: { ...options._internal, thinkingSuppressed: true } };
+      if (currentModelInfo?.can_think) {
+        this.logger.warn('[AnthropicBackend] Thinking skipped: history continues a tool turn with no thinking block', {
+          model,
+        });
+      }
     }
     if (currentModelInfo?.can_think && !continuesForeignToolTurn) {
       // questMaster / thinking are Anthropic-specific extras layered onto the generic
