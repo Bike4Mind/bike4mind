@@ -280,6 +280,10 @@ type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 const MID_TURN_NOTE =
   'The user sent this while you were still working. Answer or act on it now, then carry on with the task unless it changes what they want.';
 
+/** Rides with a relay that reached a running turn; the relay's own framing says whose words they are. */
+const RELAY_MID_TURN_NOTE =
+  'This message from another conversation arrived while you were still working. Weigh it now, then carry on with the task unless it changes what you should do.';
+
 /** Something that reached a running turn between rounds; see takeArrivals. */
 interface MidTurnArrival {
   message: ChatMessage;
@@ -3181,37 +3185,44 @@ export class ChatService {
 
   /**
    * What reached a running turn since its last request, taken for the next one: whatever the
-   * user typed ahead, and any background-exit notice. Two map lookups and nothing else when
-   * neither is waiting, which is every round of almost every turn.
+   * user typed ahead, messages relayed from other sessions, and any background-exit notice. Two
+   * map lookups and nothing else when none is waiting, which is every round of almost every turn.
    *
-   * Only the user's own typed entries ride along. A relay stays a turn of its own: it is
-   * another agent's words, framed and hop-counted per turn, and folding it into this one would
-   * spend this turn's relay budget and blur whose turn it is. An auto-fix entry stays one too,
-   * because it switches on its own tool guard. A `/skill` invocation waits as well: its body is a
-   * new set of instructions, expanded when its turn starts. So does a message whose image the
-   * model cannot read, so it is refused and handed back exactly as before.
+   * A relay stays a message of its own, framed and stored exactly as it would be as its own turn.
+   * The turn goes on at the deeper of its own hop depth and the relay's, with the fresh send
+   * budget the relay's own turn would have started with, so a chain between sessions is bounded
+   * the same whether a message arrives here or after the turn. An auto-fix entry waits for a turn
+   * of its own, because it switches on its own tool guard. A typed `/skill` invocation waits as
+   * well: its body is a new set of instructions, expanded when its turn starts. So does a message
+   * whose image the model cannot read, so it is refused and handed back exactly as before.
    *
-   * The notice goes before the user's message, so their words are the last thing the model reads.
+   * The notice goes first, then the queue in its own order, so the last thing the model reads is
+   * the newest message.
    */
   private async takeArrivals(sessionId: string, model: string): Promise<MidTurnArrival[]> {
     const queue = this.deps.queue;
     const queued = queue?.list(sessionId) ?? [];
     // "Send now" already has it in hand and is about to interrupt this turn.
     if (this.promoted.has(sessionId)) return [];
-    const typed = queued.filter(
+    const eligible = queued.filter(
       entry =>
-        !entry.relay &&
         !entry.automatic &&
-        !(this.deps.skills && parseSkillInvocation(entry.text.trim())) &&
+        !(this.deps.skills && !entry.relay && parseSkillInvocation(entry.text.trim())) &&
         !this.refuseUnreadableImages(model, entry.attachments ?? [])
     );
-    if (typed.length === 0 && !this.wake?.has(sessionId)) return [];
+    if (eligible.length === 0 && !this.wake?.has(sessionId)) return [];
 
     // Taken before any await, so a cancel or a "send now" racing this finds nothing to act on.
-    const taken = queue ? typed.flatMap(entry => queue.take(sessionId, entry.id) ?? []) : [];
+    const taken = queue ? eligible.flatMap(entry => queue.take(sessionId, entry.id) ?? []) : [];
     const notice = this.wake?.take(sessionId) ?? null;
     const arrivals: MidTurnArrival[] = [];
     const createdAt = new Date().toISOString();
+
+    const relayHops = taken.flatMap(entry => (entry.relay ? [entry.relay.hops] : []));
+    if (relayHops.length > 0) {
+      const hops = Math.max(this.turnRelay.get(sessionId)?.hops ?? 0, ...relayHops);
+      this.turnRelay.set(sessionId, { hops, sends: 0 });
+    }
 
     if (notice) {
       const automatic: ChatAutomaticOrigin = {
@@ -3232,28 +3243,39 @@ export class ChatService {
       });
     }
 
-    if (taken.length > 0) {
+    // Typed entries next to each other go as one message, as they always have; a relay between
+    // them splits the run so each side keeps its place.
+    const runs: ChatQueuedMessage[][] = [];
+    for (const entry of taken) {
+      const last = runs[runs.length - 1];
+      if (!entry.relay && last && !last[0].relay) last.push(entry);
+      else runs.push([entry]);
+    }
+
+    for (const run of runs) {
+      const [head] = run;
       const attachments = await this.resolveAttachments(
         sessionId,
-        taken.flatMap(entry => entry.attachments ?? [])
+        run.flatMap(entry => entry.attachments ?? [])
       );
-      const notes = [...taken.flatMap(entry => entry.notes ?? []), MID_TURN_NOTE];
+      const notes = [...run.flatMap(entry => entry.notes ?? []), head.relay ? RELAY_MID_TURN_NOTE : MID_TURN_NOTE];
       arrivals.push({
-        queuedId: taken[0].id,
+        queuedId: head.id,
         message: {
           id: randomUUID(),
           role: 'user',
-          content: taken
+          content: run
             .map(entry => entry.text.trim())
             .filter(Boolean)
             .join('\n'),
           createdAt,
+          ...(head.relay ? { system: true, relay: head.relay } : {}),
           ...(attachments.length > 0 ? { attachments } : {}),
           notes,
         },
       });
-      this.wake?.attended(sessionId);
     }
+    if (taken.some(entry => !entry.relay)) this.wake?.attended(sessionId);
     return arrivals;
   }
 

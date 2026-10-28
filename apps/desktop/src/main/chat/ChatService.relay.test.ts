@@ -206,6 +206,69 @@ describe('ChatService session_send', () => {
     expect(refused[0]?.error).toMatch(/may send 2 messages/);
   });
 
+  describe('delivered into a running turn', () => {
+    const askForTool = (stream: PassThrough, id: string) => {
+      stream.write(frame({ type: 'tool_use', tools: [{ id, name: 'no_such_tool', arguments: '{}' }] }));
+      stream.write(frame('[DONE]'));
+    };
+    const streamCarrying = (text: string) =>
+      streams.findIndex((_, index) => JSON.stringify(messagesOf(index).at(-1) ?? '').includes(text));
+
+    it('holds a mid-turn relay to the same hop limit as a turn of its own', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Target');
+      const other = await codeSession('Other');
+
+      await service.send(target.id, 'a long task');
+      await awaitStream(0);
+      queue.enqueueRelay(target.id, 'pass this on', { fromSessionId: sender.id, fromTitle: 'Sender', hops: 3 });
+      askForTool(streams[0], 'step-1');
+
+      await awaitStream(1);
+      expect(streamCarrying('pass this on')).toBe(1);
+      requestSend(streams[1], other.id, 'passing it on', 'send-capped');
+
+      await vi.waitUntil(() => settledCalls('session_send').length === 1, { timeout: 5000, interval: 5 });
+      expect(settledCalls('session_send')[0]?.status).toBe('error');
+      expect(settledCalls('session_send')[0]?.error).toMatch(/3 hops from the user/);
+      expect(queue.list(other.id)).toHaveLength(0);
+      expect((await store.get(other.id))?.messages ?? []).toHaveLength(0);
+    });
+
+    it('carries the turn on at the relay depth with the send budget its own turn would start with', async () => {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Target');
+      const other = await codeSession('Other');
+
+      await service.send(target.id, 'a long task');
+      await awaitStream(0);
+      // Both of this turn's sends spent at hop 0, then a relay at hop 1 arrives behind them.
+      streams[0].write(
+        frame({
+          type: 'tool_use',
+          tools: ['first', 'second'].map(message => ({
+            id: `spend-${message}`,
+            name: 'session_send',
+            arguments: JSON.stringify({ session_id: other.id, message }),
+          })),
+        })
+      );
+      queue.enqueueRelay(target.id, 'one more thing', { fromSessionId: sender.id, fromTitle: 'Sender', hops: 1 });
+      streams[0].write(frame('[DONE]'));
+
+      await vi.waitUntil(() => streamCarrying('one more thing') >= 0, { timeout: 5000, interval: 5 });
+      requestSend(streams[streamCarrying('one more thing')], other.id, 'third', 'send-after-relay');
+
+      await vi.waitUntil(() => settledCalls('session_send').length === 3, { timeout: 5000, interval: 5 });
+      expect(settledCalls('session_send').every(call => call?.status === 'done')).toBe(true);
+      // Other is still answering the first, so the rest wait in its queue with the depth they carry.
+      expect(queue.list(other.id).map(entry => [entry.text, entry.relay?.hops])).toEqual([
+        ['second', 1],
+        ['third', 2],
+      ]);
+    });
+  });
+
   it('runs the message straight away in a session that is idle', async () => {
     const sender = await codeSession('Sender');
     const target = await codeSession('Target');
@@ -260,7 +323,7 @@ describe('ChatService session_send', () => {
 
     await vi.waitUntil(() => settledCalls('session_send').length === 1, { timeout: 5000, interval: 5 });
     expect(settledCalls('session_send')[0]?.status).toBe('done');
-    expect(settledCalls('session_send')[0]?.preview).toMatch(/runs as its next turn/);
+    expect(settledCalls('session_send')[0]?.preview).toMatch(/once its current step finishes/);
     expect(queue.list(target.id)).toHaveLength(1);
     expect(queue.list(target.id)[0]?.relay).toMatchObject({ fromTitle: 'Sender', hops: 1 });
 
