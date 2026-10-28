@@ -56,8 +56,9 @@ describe('ReplyMarkdown', () => {
     });
 
     it('draws an empty fence as an empty block, not the word undefined', () => {
-      const html = render('"\n\n```\n```\n\n```\n```');
+      const html = render('```\n```\n\n```ts\n```');
       expect(html.match(/data-testid="chat-markdown-code-block"/g)).toHaveLength(2);
+      expect(html).toContain('data-language="ts"');
       expect(html).not.toContain('undefined');
     });
 
