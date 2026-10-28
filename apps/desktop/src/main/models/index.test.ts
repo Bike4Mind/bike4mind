@@ -25,6 +25,8 @@ const { registerModels } = await import('./index');
 function setup() {
   let saved: ((id: string) => void) | null = null;
   const servers = {
+    // Not used by registerModels; here so a send after a recheck would show up as a second call.
+    check: vi.fn(async () => []),
     hubServer: vi.fn(() => null),
     onServerSaved: vi.fn((listener: (id: string) => void) => {
       saved = listener;
@@ -43,10 +45,12 @@ beforeEach(() => {
 });
 
 describe('registerModels', () => {
-  it('announces a changed server once, right away, with its id', () => {
+  it('announces a changed server once, right away, with its id', async () => {
     const { deps } = setup();
     deps.onInstalledChanged('srv1');
+    expect(send.mock.calls).toEqual([[IPC_CHANNELS.modelsInstalledChanged, 'srv1']]);
     deps.onInstalledChanged('local');
+    await new Promise(resolve => setTimeout(resolve, 50));
     expect(send.mock.calls).toEqual([
       [IPC_CHANNELS.modelsInstalledChanged, 'srv1'],
       [IPC_CHANNELS.modelsInstalledChanged, 'local'],

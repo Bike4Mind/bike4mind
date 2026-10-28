@@ -291,8 +291,8 @@ export class ModelServerRegistry {
     const lists = await Promise.all(
       [...this.entries.values()].map(async entry => {
         const server = { id: entry.record.id, name: entry.record.name };
-        // A check already running (say, after a pull) decides whether the server is back.
-        await this.checking.get(entry);
+        // A check already running (say, after a pull) decides whether a server shown as down is back.
+        if (entry.health.state !== 'online') await this.checking.get(entry)?.catch(() => undefined);
         // A picker refresh retries a server that was down, without hammering one that keeps failing.
         if (entry.health.state !== 'online' && entry.health.state !== 'unknown' && this.stale(entry)) {
           await this.checkEntry(entry);

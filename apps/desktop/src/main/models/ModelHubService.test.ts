@@ -555,6 +555,7 @@ describe('ModelHubService saved servers', () => {
     const local = harness();
     const runtimes = { a: harness().runtime, b: harness().runtime };
     const saved = new Set(['a', 'b']);
+    const chatOnly = new Set<string>();
     for (const [id, runtime] of Object.entries(runtimes)) {
       runtime.health.mockImplementation(async () =>
         saved.has(id)
@@ -567,7 +568,7 @@ describe('ModelHubService saved servers', () => {
       runtime: local.runtime,
       server: id =>
         saved.has(id) && (id === 'a' || id === 'b')
-          ? { name: `box ${id}`, management: 'allowed', runtime: runtimes[id] }
+          ? { name: `box ${id}`, management: chatOnly.has(id) ? 'chat-only' : 'allowed', runtime: runtimes[id] }
           : null,
       hub: local.hub,
       onPullsChanged: () => {},
@@ -575,7 +576,7 @@ describe('ModelHubService saved servers', () => {
       keepAwake,
       progressIntervalMs: 0,
     });
-    return { service, runtimes, saved, keepAwake, hub: local.hub };
+    return { service, runtimes, saved, chatOnly, keepAwake, hub: local.hub };
   }
 
   it('does not wake the computer again while dispose stops several server pulls', async () => {
@@ -591,18 +592,30 @@ describe('ModelHubService saved servers', () => {
     expect(keepAwake.mock.calls).toEqual([[true], [false]]);
   });
 
-  it('says the server was removed when that happens while a pull is still being checked', async () => {
-    const { service, saved, hub } = servers();
-    let release = () => {};
-    hub.getModel.mockImplementationOnce(() => new Promise(resolve => (release = () => resolve(detail()))));
-    const result = service.pull({ ...request, serverId: 'a' });
-    await vi.waitFor(() => expect(service.pulls()).toHaveLength(1));
+  it.each([
+    ['removed', 'not-found'],
+    ['set to Chat only', 'not-allowed'],
+    ['cancelled', 'cancelled'],
+  ] as const)(
+    'stops without contacting the server when the pull is %s while the repo is still being read',
+    async (cause, kind) => {
+      const { service, saved, chatOnly, runtimes, hub } = servers();
+      let release = () => {};
+      hub.getModel.mockImplementationOnce(() => new Promise(resolve => (release = () => resolve(detail()))));
+      const result = service.pull({ ...request, serverId: 'a' });
+      await vi.waitFor(() => expect(service.pulls()).toHaveLength(1));
+      runtimes.a.health.mockClear();
 
-    saved.delete('a');
-    service.serverChanged('a');
-    release();
+      if (cause === 'removed') saved.delete('a');
+      if (cause === 'set to Chat only') chatOnly.add('a');
+      if (cause === 'cancelled') service.cancel(service.pulls()[0].key);
+      else service.serverChanged('a');
+      release();
 
-    expect(await result).toMatchObject({ ok: false, error: { kind: 'not-found' }, listed: false });
-    expect(service.pulls()).toEqual([]);
-  });
+      expect(await result).toMatchObject({ ok: false, error: { kind }, listed: false });
+      expect(service.pulls()).toEqual([]);
+      expect(runtimes.a.health).not.toHaveBeenCalled();
+      expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    }
+  );
 });

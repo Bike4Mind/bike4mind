@@ -32,7 +32,11 @@ type Handler = (path: string, credentials: Record<string, string> | null) => Res
 
 /** An Ollama that answers on every origin; `down` and `wantToken` change how it answers. */
 function fakeOllama(models = ['qwen2.5:0.5b']) {
-  const state = { down: new Set<string>(), wantToken: null as string | null };
+  const state = {
+    down: new Set<string>(),
+    wantToken: null as string | null,
+    versionGate: null as Promise<void> | null,
+  };
   const calls: { origin: string; path: string; credentials: Record<string, string> | null }[] = [];
   const handler: Handler = (path, credentials) => {
     if (state.wantToken && credentials?.authorization !== `Bearer ${state.wantToken}`)
@@ -51,6 +55,7 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
       const credentials = endpoint.credentialHeaders();
       calls.push({ origin: url.origin, path: url.pathname, credentials });
       if (state.down.has(url.origin)) throw new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+      if (url.pathname === '/api/version') await state.versionGate;
       return handler(url.pathname, credentials);
     };
   return { state, calls, fetchFor };
@@ -204,6 +209,28 @@ describe('ModelServerRegistry', () => {
     expect(model).toMatchObject({ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } });
     expect(model.unavailable).toMatch(/gpu box is unreachable/);
     expect((await servers.views())[1].health.state).toBe('unreachable');
+  });
+
+  it('lists an online server without waiting on a slow health check of it', async () => {
+    const fake = fakeOllama();
+    const { registry: servers } = registry(fake);
+    await servers.add({
+      address: 'http://127.0.0.2:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    let release: () => void = () => {};
+    fake.state.versionGate = new Promise(resolve => (release = resolve));
+    const checking = servers.check();
+    const listed = await Promise.race([
+      servers.models(),
+      new Promise(resolve => setTimeout(() => resolve('waited for the check'), 200)),
+    ]);
+    release();
+    await checking;
+    expect(listed).toMatchObject([{ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } }]);
   });
 
   it('sends the saved credential only through its own server fetch', async () => {

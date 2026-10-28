@@ -786,6 +786,39 @@ describe('ModelsScreen servers', () => {
     expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
   });
 
+  it('re-checks a server shown as down when a resumed pull to it finishes', async () => {
+    await mount();
+    await pickServer('gpu');
+    const pull: ModelPull = {
+      key: `gpu/${REPO}#q`,
+      serverId: 'gpu',
+      serverName: 'gpu box',
+      repo: REPO,
+      buildId: 'q',
+      quant: 'Q4_K_M',
+      ref: `hf.co/${REPO}:Q4_K_M`,
+      phase: 'paused',
+      completedBytes: 100_000_000,
+      totalBytes: 400_000_000,
+      expectedBytes: 400_000_000,
+      error: { kind: 'connection-lost', message: 'Paused: lost the connection to gpu box.' },
+    };
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX, { reachable: false, version: null, error: 'refused' });
+    act(() => pushPulls([pull]));
+    await flush();
+    expect(q('models-runtime-status')?.dataset.state).toBe('down');
+
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX);
+    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
+    act(() => pushPulls([{ ...pull, phase: 'downloading', error: null }]));
+    act(() => pushPulls([]));
+    act(() => pushInstalled('gpu'));
+    await flush();
+    await flush();
+    expect(q('models-runtime-status')?.dataset.state).toBe('running');
+    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
+  });
+
   it('keeps the newer models list when an older request answers last', async () => {
     await mount();
     await pickServer('gpu');

@@ -22,13 +22,18 @@ export function useModelHub(serverId: string): ModelHubState {
   // Only the latest request of each kind may set state; an older one resolving later is dropped.
   const statusSeq = useRef(0);
   const installedSeq = useRef(0);
+  const shownStatus = useRef<ModelRuntimeStatus | null>(null);
+  const showStatus = useCallback((next: ModelRuntimeStatus | null) => {
+    shownStatus.current = next;
+    setStatus(next);
+  }, []);
 
   const refresh = useCallback(async () => {
     const mine = ++statusSeq.current;
     const mineInstalled = ++installedSeq.current;
     const nextStatus = await window.b4m.models.getStatus(serverId);
     if (mine !== statusSeq.current) return;
-    setStatus(nextStatus);
+    showStatus(nextStatus);
     const nextInstalled: InstalledModelsResult = nextStatus.reachable
       ? await window.b4m.models.listInstalled(serverId)
       : {
@@ -36,9 +41,8 @@ export function useModelHub(serverId: string): ModelHubState {
           error: { kind: 'runtime-unavailable', message: nextStatus.error ?? 'Ollama is not running.' },
         };
     if (mineInstalled === installedSeq.current) setInstalled(nextInstalled);
-  }, [serverId]);
+  }, [serverId, showStatus]);
 
-  // A pull or removal just finished on this server, which was reachable for it: no status check first.
   const reloadInstalled = useCallback(async () => {
     const mine = ++installedSeq.current;
     const next = await window.b4m.models.listInstalled(serverId);
@@ -61,19 +65,23 @@ export function useModelHub(serverId: string): ModelHubState {
   );
 
   useEffect(() => {
-    setStatus(null);
+    showStatus(null);
     setInstalled(null);
     void refresh();
     void window.b4m.models.listPulls().then(takePulls);
     const offPulls = window.b4m.models.onPullsChanged(takePulls);
     const offInstalled = window.b4m.models.onInstalledChanged(changed => {
-      if (changed === serverId) void reloadInstalled();
+      if (changed !== serverId) return;
+      // A pull or removal just finished there, so the server answered; a status shown as down is stale.
+      const shown = shownStatus.current;
+      if (shown?.serverId === serverId && shown.reachable) void reloadInstalled();
+      else void refresh();
     });
     return () => {
       offPulls();
       offInstalled();
     };
-  }, [serverId, refresh, reloadInstalled, takePulls]);
+  }, [serverId, refresh, reloadInstalled, takePulls, showStatus]);
 
   // A check that missed a busy daemon reads as down, and nothing else would check again until a click.
   useEffect(() => {
