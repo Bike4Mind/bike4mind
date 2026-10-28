@@ -131,7 +131,6 @@ import { OllamaLocal } from './OllamaLocal';
 import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
-import type { CapabilitySubject } from '@shared/capabilities';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
@@ -181,12 +180,7 @@ import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimit
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import { alwaysOverridesTaint, spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
-import {
-  DESKTOP_PROJECT_RULES_LABEL,
-  DESKTOP_USER_RULES_LABEL,
-  type PermissionScopeKey,
-  type PermissionService,
-} from './permissions/PermissionService';
+import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
 import { summarizeToolInput, type ApprovalLog } from './permissions/ApprovalLog';
 import { resolveSubject } from './permissions/resolveSubject';
@@ -424,7 +418,7 @@ export interface ChatServiceDeps {
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
-  capabilities?: Pick<CapabilityLedger, 'grant' | 'use' | 'revokeMatching' | 'findActive'>;
+  capabilities?: Pick<CapabilityLedger, 'grant' | 'revokeMatching'>;
   /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
   approvalLog?: Pick<ApprovalLog, 'append'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
@@ -1419,20 +1413,25 @@ export class ChatService {
   async removeContextDirectory(
     sessionId: string,
     directory: string,
-    auditCapability = true
+    auditCapability = true,
+    expectedScope = this.deps.store.scopeKey()
   ): Promise<ChatSessionSummary | null> {
+    const scopeKey = this.deps.store.scopeKey() ?? 'local';
     const normalizedDirectory = resolve(directory);
-    const updated = await this.deps.store.removeContextDirectory(sessionId, normalizedDirectory);
+    const updated = await this.deps.store.removeContextDirectory(sessionId, normalizedDirectory, expectedScope);
     if (updated) {
       this.bumpScope(sessionId);
       if (auditCapability)
-        await this.deps.capabilities?.revokeMatching(
-          grant =>
-            grant.subject.kind === 'session' &&
-            grant.subject.sessionId === sessionId &&
-            grant.scope.kind === 'path' &&
-            grant.scope.value === normalizedDirectory
-        );
+        await this.deps.capabilities
+          ?.revokeMatching(
+            grant =>
+              grant.subject.kind === 'session' &&
+              grant.subject.sessionId === sessionId &&
+              grant.subject.scopeKey === scopeKey &&
+              grant.scope.kind === 'path' &&
+              grant.scope.value === normalizedDirectory
+          )
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder revocation: ${String(error)}`));
     }
     return updated;
   }
@@ -1623,11 +1622,17 @@ export class ChatService {
     historyScope = this.deps.history?.scopeKey() ?? null
   ): Promise<void> {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
+    const scopeKey = this.deps.store.scopeKey() ?? 'local';
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     this.stop(sessionId);
     await this.deps.capabilities
-      ?.revokeMatching(grant => grant.subject.kind === 'session' && grant.subject.sessionId === sessionId)
+      ?.revokeMatching(
+        grant =>
+          grant.subject.kind === 'session' &&
+          grant.subject.sessionId === sessionId &&
+          grant.subject.scopeKey === scopeKey
+      )
       .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit session deletion: ${String(error)}`));
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
@@ -3592,19 +3597,6 @@ export class ChatService {
         // Carried by every row built from `call` from here on, the settled one included.
         if (gated.approval) call.approval = gated.approval;
 
-        if (this.deps.capabilities) {
-          const capabilities = this.deps.capabilities;
-          await this.authorizingGrant(sessionId, call.approval?.decidedBy, context.approvedKey, scope.permissions)
-            .then(grantId =>
-              capabilities.use(
-                capabilityFor(call.name, context.approvedKey),
-                capabilityScope(call.name, context.approvedKey),
-                grantId
-              )
-            )
-            .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit use: ${String(error)}`));
-        }
-
         startedAt = Date.now();
         this.emit({ type: 'tool-start', sessionId, messageId, call });
 
@@ -4881,7 +4873,7 @@ export class ChatService {
     if (answer.decision === 'always' && this.deps.capabilities) {
       await this.deps.capabilities
         .grant({
-          subject: { kind: 'session', sessionId },
+          subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
           capability: capabilityFor(call.name, prompt.key),
           scope: capabilityScope(call.name, prompt.key),
           approvalKey: prompt.key,
@@ -4938,42 +4930,6 @@ export class ChatService {
       approval: approvalRecord('allowed', decidedBy, card),
       mode,
     };
-  }
-
-  /** The ledger grant that let a call through, when one is identifiable. */
-  private async authorizingGrant(
-    sessionId: string,
-    decidedBy: ChatApprovalDecidedBy | undefined,
-    approvedKey: string | undefined,
-    permissionScope: PermissionScopeKey | undefined
-  ): Promise<string | undefined> {
-    const capabilities = this.deps.capabilities;
-    if (!capabilities || !decidedBy) return undefined;
-    if (decidedBy.kind === 'rule') {
-      // Only desktop rules have grants; a Claude Code settings rule with the same text is not one.
-      const project = permissionScope?.project ? resolve(permissionScope.project) : null;
-      const subjectFits =
-        decidedBy.source === DESKTOP_USER_RULES_LABEL
-          ? (subject: CapabilitySubject) => subject.kind === 'desktop-user'
-          : decidedBy.source === DESKTOP_PROJECT_RULES_LABEL && project
-            ? (subject: CapabilitySubject) => subject.kind === 'project' && subject.directory === project
-            : null;
-      if (!subjectFits) return undefined;
-      const grant = await capabilities.findActive(
-        grant =>
-          subjectFits(grant.subject) && grant.scope.kind === 'permission-rule' && grant.scope.value === decidedBy.rule
-      );
-      return grant?.id;
-    }
-    const standing =
-      decidedBy.kind === 'chat-allowance' || (decidedBy.kind === 'user' && decidedBy.answer === 'always');
-    if (!standing || !approvedKey) return undefined;
-    // A shell call covered by patterns another key allowed has no grant of its own to name.
-    const grant = await capabilities.findActive(
-      grant =>
-        grant.subject.kind === 'session' && grant.subject.sessionId === sessionId && grant.approvalKey === approvedKey
-    );
-    return grant?.id;
   }
 
   /**
@@ -5204,6 +5160,8 @@ export class ChatService {
     sessionId: string,
     directory: string
   ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
+    const expectedScope = this.deps.store.scopeKey();
+    const scopeKey = expectedScope ?? 'local';
     const real = await realpath(directory).catch(() => null);
     const kind = real ? await stat(real).catch(() => null) : null;
     if (real !== directory || !kind?.isDirectory()) return { ok: false };
@@ -5211,13 +5169,13 @@ export class ChatService {
     if (!session) return { ok: false };
     const updated =
       session.mode === 'code' && session.project
-        ? await this.deps.store.addContextDirectory(sessionId, directory)
-        : await this.deps.store.addGrantedDirectory(sessionId, directory);
+        ? await this.deps.store.addContextDirectory(sessionId, directory, expectedScope)
+        : await this.deps.store.addGrantedDirectory(sessionId, directory, expectedScope);
     if (!updated) return { ok: false };
     this.bumpScope(sessionId);
     await this.deps.capabilities
       ?.grant({
-        subject: { kind: 'session', sessionId },
+        subject: { kind: 'session', sessionId, scopeKey },
         capability: 'files',
         scope: { kind: 'path', value: directory },
         source: 'approval',

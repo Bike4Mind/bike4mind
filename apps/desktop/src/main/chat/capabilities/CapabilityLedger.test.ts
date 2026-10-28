@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +7,7 @@ import { SessionStore } from '../SessionStore';
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return { ...actual, appendFile: vi.fn(actual.appendFile), rename: vi.fn(actual.rename) };
 });
 
 const directories: string[] = [];
@@ -215,9 +215,9 @@ describe('CapabilityLedger', () => {
   it('recovers after a failed persistence attempt without advancing the audit sequence', async () => {
     const { path, store } = await makeLedger();
     await store.use('credits', { kind: 'tool', value: 'first' });
-    await mkdir(`${path}.tmp`);
+    vi.mocked(appendFile).mockRejectedValueOnce(new Error('disk full'));
     await expect(store.use('credits', { kind: 'tool', value: 'failed' })).rejects.toThrow();
-    await rm(`${path}.tmp`, { recursive: true });
+
     await store.use('credits', { kind: 'tool', value: 'second' });
     const audit = (await new CapabilityLedger(path).state()).audit;
     expect(audit.map(event => event.sequence)).toEqual([1, 0]);
@@ -240,13 +240,13 @@ describe('CapabilityLedger', () => {
 
   it('writes a whole migration in one append', async () => {
     const { path, store } = await makeLedger();
-    vi.mocked(rename).mockClear();
+    vi.mocked(appendFile).mockClear();
     await store.migrate({
       roots: ['/tmp/a', '/tmp/b', '/tmp/a'],
       trustedProjects: ['/tmp/project'],
       permissions: { user: { allow: ['Read', 'Edit'], ask: [], deny: [] }, projects: {} },
     });
-    expect(vi.mocked(rename)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(appendFile)).toHaveBeenCalledTimes(1);
     const { audit } = await new CapabilityLedger(path).state();
     expect([...audit].reverse().map(event => event.sequence)).toEqual([0, 1, 2, 3, 4]);
   });
@@ -330,22 +330,159 @@ describe('CapabilityLedger', () => {
     expect((await new CapabilityLedger(path).state()).grants).toHaveLength(3);
   });
 
-  it('fails closed on corrupt persisted data', async () => {
+  it('quarantines corrupt persisted data and resumes recording', async () => {
     const { path } = await makeLedger();
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await writeFile(path, '{bad', 'utf8');
-    await expect(new CapabilityLedger(path).state()).rejects.toThrow();
-    expect(await readFile(path, 'utf8')).toBe('{bad');
+    const store = new CapabilityLedger(path);
+    expect((await store.state()).audit).toEqual([]);
+    const files = await readdir(join(path, '..'));
+    const quarantine = files.find(file => file.includes('.corrupt-'));
+    expect(quarantine).toBeDefined();
+    expect(await readFile(join(path, '..', quarantine!), 'utf8')).toBe('{bad');
+    expect(diagnostic).toHaveBeenCalled();
+    await store.use('credits', { kind: 'tool', value: 'resumed' });
+    expect((await new CapabilityLedger(path).state()).audit).toHaveLength(1);
+    diagnostic.mockRestore();
   });
 
-  it('rejects an audit log whose sequence is not append order', async () => {
+  it('quarantines out-of-order JSONL sequences instead of permanently rejecting', async () => {
     const { path, store } = await makeLedger();
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await store.use('credits', { kind: 'tool', value: 'generate_image' });
-    const persisted = JSON.parse(await readFile(path, 'utf8')) as {
-      version: number;
-      events: Array<{ sequence: number }>;
+    const persisted = JSON.parse((await readFile(path, 'utf8')).trim()) as { sequence: number };
+    persisted.sequence = 4;
+    await writeFile(path, JSON.stringify(persisted) + '\n', 'utf8');
+    expect((await new CapabilityLedger(path).state()).audit).toEqual([]);
+    expect(diagnostic).toHaveBeenCalled();
+    diagnostic.mockRestore();
+  });
+
+  it('atomically converts legacy v1 JSON, retaining grants, revokes and migration guards', async () => {
+    const { path, store } = await makeLedger();
+    const migration = {
+      roots: ['/tmp/a'],
+      trustedProjects: [],
+      permissions: { user: { allow: [], ask: [], deny: [] }, projects: {} },
     };
-    persisted.events[0].sequence = 4;
-    await writeFile(path, JSON.stringify(persisted), 'utf8');
-    await expect(new CapabilityLedger(path).state()).rejects.toThrow();
+    await store.migrate(migration);
+    await store.revoke((await store.state()).grants[0].id);
+    const events = (await store.state()).audit.reverse();
+    await writeFile(path, JSON.stringify({ version: 1, events }, null, 2), 'utf8');
+    vi.mocked(rename).mockClear();
+    const restarted = new CapabilityLedger(path);
+    expect((await restarted.state()).grants[0].revokedAt).toBeDefined();
+    expect(vi.mocked(rename)).toHaveBeenCalledTimes(1);
+    await restarted.migrate(migration);
+    // Desktop root migration may re-add after real consent is restored; this
+    // v1 migration key must still prevent replaying its old snapshot.
+    expect((await restarted.state()).grants).toHaveLength(1);
+    expect((await readFile(path, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
+  it('preserves the legacy source and retries if atomic conversion fails', async () => {
+    const { path, store } = await makeLedger();
+    await store.use('tool', { kind: 'tool', value: 'legacy' });
+    const legacy = JSON.stringify({ version: 1, events: (await store.state()).audit });
+    await writeFile(path, legacy);
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(rename).mockRejectedValueOnce(new Error('temporarily unavailable'));
+    const restarted = new CapabilityLedger(path);
+    await expect(restarted.state()).rejects.toThrow('temporarily unavailable');
+    expect(await readFile(path, 'utf8')).toBe(legacy);
+    expect((await restarted.state()).audit).toHaveLength(1);
+    diagnostic.mockRestore();
+  });
+
+  it('repairs a complete final record missing its newline before appending', async () => {
+    const { path, store } = await makeLedger();
+    await store.use('tool', { kind: 'tool', value: 'first' });
+    await writeFile(path, (await readFile(path, 'utf8')).trimEnd());
+    await new CapabilityLedger(path).use('tool', { kind: 'tool', value: 'second' });
+    expect((await new CapabilityLedger(path).state()).audit.map(event => event.sequence)).toEqual([1, 0]);
+  });
+
+  it('preserves a partially written journal for diagnosis and resumes after append failure', async () => {
+    const { path, store } = await makeLedger();
+    await store.use('tool', { kind: 'tool', value: 'first' });
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const filesystem = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(appendFile).mockImplementationOnce(async file => {
+      await filesystem.appendFile(file, '{partial');
+      throw new Error('disk full');
+    });
+    await expect(store.use('tool', { kind: 'tool', value: 'failed' })).rejects.toThrow('disk full');
+    await store.use('tool', { kind: 'tool', value: 'resumed' });
+    expect((await store.state()).audit.map(event => event.sequence)).toEqual([0]);
+    const files = await readdir(join(path, '..'));
+    const quarantine = files.find(file => file.includes('.corrupt-'));
+    expect(await readFile(join(path, '..', quarantine!), 'utf8')).toContain('{partial');
+    expect(diagnostic).toHaveBeenCalled();
+    diagnostic.mockRestore();
+  });
+
+  it('keeps append writes constant-sized and exposes only the 200 most recent events', async () => {
+    const { path, store } = await makeLedger();
+    vi.mocked(appendFile).mockClear();
+    await Promise.all(Array.from({ length: 250 }, () => store.use('tool', { kind: 'tool', value: 'example' })));
+    const writes = vi.mocked(appendFile).mock.calls.map(call => String(call[1]));
+    expect(writes).toHaveLength(250);
+    expect(writes.every(write => write.trim().split('\n').length === 1)).toBe(true);
+    for (const state of [await store.state(), await new CapabilityLedger(path).state()]) {
+      expect(state.audit).toHaveLength(200);
+      expect(state.audit[0].sequence).toBe(249);
+      expect(state.audit.at(-1)?.sequence).toBe(50);
+    }
+  });
+
+  it('retries unreadable storage after the filesystem recovers', async () => {
+    const { path } = await makeLedger();
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await writeFile(join(path, '..', 'not-directory'), 'x');
+    const blockedPath = join(path, '..', 'not-directory', 'ledger');
+    const store = new CapabilityLedger(blockedPath);
+    await expect(store.state()).rejects.toThrow();
+    await rm(join(path, '..', 'not-directory'));
+    await store.use('tool', { kind: 'tool', value: 'recovered' });
+    expect((await store.state()).audit).toHaveLength(1);
+    expect(diagnostic).toHaveBeenCalled();
+    diagnostic.mockRestore();
+  });
+
+  it('records no revoke when enforcement reports no authority removed', async () => {
+    const { store } = await makeLedger();
+    const grant = await store.grant({
+      subject: { kind: 'desktop-user' },
+      capability: 'files',
+      scope: { kind: 'path', value: '/tmp/a' },
+      source: 'folder-picker',
+    });
+    await expect(store.revoke(grant.id, () => false)).rejects.toThrow('Access was not removed');
+    expect((await store.state()).grants[0].revokedAt).toBeUndefined();
+    expect((await store.state()).audit).toHaveLength(1);
+  });
+
+  it('isolates session grants, migration history and audit by account scope', async () => {
+    const { store } = await makeLedger();
+    const input = {
+      subject: { kind: 'session', sessionId: 'shared-id', scopeKey: 'account-a' } as const,
+      capability: 'files' as const,
+      scope: { kind: 'path', value: '/tmp/a' } as const,
+      source: 'approval' as const,
+    };
+    const first = await store.grant(input);
+    const second = await store.grant({ ...input, subject: { ...input.subject, scopeKey: 'account-b' } });
+    await store.use('files', input.scope, first.id);
+    await store.use('files', input.scope, second.id);
+    expect((await store.state('account-a')).grants.map(grant => grant.id)).toEqual([first.id]);
+    expect((await store.state('account-a')).audit).toHaveLength(2);
+    expect((await store.state(null)).grants).toEqual([]);
+    expect((await store.state(null)).audit).toEqual([]);
+    const enforcement = vi.fn(() => true);
+    await expect(store.revoke(first.id, enforcement, 'account-b')).rejects.toThrow('another account');
+    expect(enforcement).not.toHaveBeenCalled();
+    await store.revoke(first.id, enforcement, 'account-a');
+    expect((await store.state('account-a')).grants[0].revokedAt).toBeDefined();
+    expect((await store.state('account-b')).grants[0].revokedAt).toBeUndefined();
   });
 });

@@ -1,7 +1,11 @@
+export const CAPABILITY_AUDIT_LIMIT = 200;
+
 export type Capability = 'files' | 'tool' | 'browser-origin' | 'credits' | 'imported-identity' | 'project-trust';
 
 export type CapabilitySubject =
-  { kind: 'desktop-user' } | { kind: 'project'; directory: string } | { kind: 'session'; sessionId: string };
+  | { kind: 'desktop-user' }
+  | { kind: 'project'; directory: string }
+  | { kind: 'session'; sessionId: string; scopeKey?: string };
 
 export type CapabilityScope =
   | { kind: 'path'; value: string }

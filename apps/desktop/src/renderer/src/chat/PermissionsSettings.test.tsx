@@ -170,6 +170,33 @@ describe('PermissionsSettings collapsing', () => {
     expect(host.querySelectorAll('[data-testid="capability-grant-row"]')).toHaveLength(0);
   });
 
+  it('renders only the most recent 200 audit events', async () => {
+    const audit = Array.from({ length: 250 }, (_, index) => ({
+      sequence: 249 - index,
+      type: 'revoke' as const,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      grantId: `audit-${String(249 - index).padStart(3, '0')}`,
+    }));
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      capabilities: { getState: async () => ({ grants: [], audit }) },
+    };
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings state={state} onState={() => {}} />
+        </CssVarsProvider>
+      );
+    });
+    const rows = host.querySelectorAll('[data-testid="capability-audit-row"]');
+    expect(rows).toHaveLength(200);
+    expect(rows[0].textContent).toContain('audit-24');
+    expect(rows[199].textContent).toContain('audit-05');
+    expect(host.textContent).toContain('200 recent audit events');
+  });
+
   afterEach(() => {
     act(() => root.unmount());
     host.remove();

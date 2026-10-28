@@ -183,12 +183,17 @@ export class ApprovalGate {
     return null;
   }
 
-  revoke(sessionId: string, key: string): void {
+  revoke(sessionId: string, key: string): boolean {
     const keys = this.standing.get(sessionId);
-    if (!keys) return;
-    keys.delete(key);
-    for (const stored of keys.keys()) if (stored.startsWith(`${key}#`)) keys.delete(stored);
-    this.standingShell.get(sessionId)?.delete(key);
+    if (!keys) return false;
+    let removed = keys.delete(key);
+    for (const stored of keys.keys()) {
+      if (stored.startsWith(`${key}#`)) {
+        keys.delete(stored);
+        removed = true;
+      }
+    }
+    return (this.standingShell.get(sessionId)?.delete(key) ?? false) || removed;
   }
 
   /**

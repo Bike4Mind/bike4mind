@@ -176,9 +176,35 @@ describe('ApprovalGate', () => {
     const first = ask(gate, 'session-a');
     gate.resolve(first.approvalId(), { decision: 'always' });
     await first.answer;
-    gate.revoke('session-a', 'bash:rm');
+    expect(gate.revoke('session-a', 'bash:rm')).toBe(true);
+    expect(gate.revoke('session-a', 'bash:rm')).toBe(false);
+    expect(gate.revoke('missing-session', 'bash:rm')).toBe(false);
     expect(gate.isStanding('session-a', 'bash:rm')).toBeNull();
     expect(gate.isStanding('session-b', 'bash:rm')).toBeNull();
+  });
+
+  it('reports removal of option-specific approvals and leaves unrelated keys intact', async () => {
+    const gate = new ApprovalGate();
+    const controller = new AbortController();
+    for (const [key, optionId] of [
+      ['browser-script:https://example.com', 'signed-in'],
+      ['unrelated', 'run'],
+    ]) {
+      await gate.request(
+        'session-a',
+        key,
+        controller.signal,
+        id => {
+          gate.resolve(id, { decision: 'always', optionId });
+        },
+        { rememberable: [optionId] }
+      );
+    }
+    expect(gate.isStanding('session-a', 'browser-script:https://example.com', ['signed-in'])).not.toBeNull();
+    expect(gate.revoke('session-a', 'browser-script:https://example.com')).toBe(true);
+    expect(gate.isStanding('session-a', 'browser-script:https://example.com', ['signed-in'])).toBeNull();
+    expect(gate.isStanding('session-a', 'unrelated', ['run'])).not.toBeNull();
+    expect(gate.revoke('session-a', 'browser-script:https://example.com')).toBe(false);
   });
 
   describe('always allow by prefix', () => {

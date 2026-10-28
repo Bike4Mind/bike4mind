@@ -234,7 +234,7 @@ describe('PermissionService', () => {
   it('revokes one user allow, keeping the other lists and the compiled rules current', async () => {
     await service.setRules({ kind: 'user' }, { allow: ['Bash(ls:*)', 'Bash(pwd)'], ask: ['Bash(ls:*)'], deny: [] });
     expect((await decide(bash('pwd'))).decision).toBe('allow');
-    await service.revokeAllow({ kind: 'user' }, 'Bash(pwd)');
+    expect(await service.revokeAllow({ kind: 'user' }, 'Bash(pwd)')).toBe(true);
     expect((await decide(bash('pwd'))).decision).toBeNull();
     expect((await service.state()).user).toEqual([
       { rule: 'Bash(ls:*)', list: 'allow' },
@@ -245,14 +245,14 @@ describe('PermissionService', () => {
   it("revokes a project allow only from that project's rules", async () => {
     await service.setRules({ kind: 'user' }, { allow: ['Bash(pwd)'], ask: [], deny: [] });
     await service.setRules({ kind: 'project', directory: project }, { allow: ['Bash(pwd)'], ask: [], deny: [] });
-    await service.revokeAllow({ kind: 'project', directory: project }, 'Bash(pwd)');
+    expect(await service.revokeAllow({ kind: 'project', directory: project }, 'Bash(pwd)')).toBe(true);
     const stored = await new PermissionRuleStore(join(userData, 'permission-rules.json')).read();
     expect(stored.user.allow).toEqual(['Bash(pwd)']);
     expect(stored.projects[project]?.allow ?? []).toEqual([]);
   });
 
   it('leaves a project with no stored rules unchanged when revoking from it', async () => {
-    await service.revokeAllow({ kind: 'project', directory: project }, 'Bash(pwd)');
+    expect(await service.revokeAllow({ kind: 'project', directory: project }, 'Bash(pwd)')).toBe(false);
     const stored = await new PermissionRuleStore(join(userData, 'permission-rules.json')).read();
     expect(stored.projects[project]?.allow ?? []).toEqual([]);
   });

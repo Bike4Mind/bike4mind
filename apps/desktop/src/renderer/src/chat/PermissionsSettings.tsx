@@ -11,6 +11,7 @@ import Stack from '@mui/joy/Stack';
 import Switch from '@mui/joy/Switch';
 import Typography from '@mui/joy/Typography';
 import type { RecentFolder } from '@shared/chat';
+import { CAPABILITY_AUDIT_LIMIT } from '@shared/capabilities';
 import type {
   CapabilityAuditEvent,
   CapabilityGrant,
@@ -565,6 +566,7 @@ function CapabilityLedgerView({
 }) {
   const [open, setOpen] = useState(true);
   const active = state?.grants.filter(grant => !grant.revokedAt) ?? [];
+  const recentAudit = state?.audit.slice(0, CAPABILITY_AUDIT_LIMIT) ?? [];
   return (
     <Stack spacing={1} data-testid="capability-ledger">
       <Stack direction="row" spacing={1} alignItems="center">
@@ -576,7 +578,7 @@ function CapabilityLedgerView({
         />
         <Typography level="title-sm">Capability ledger</Typography>
         <Typography level="body-xs" textColor="text.tertiary">
-          {active.length} active, {state?.audit.length ?? 0} audit events
+          {active.length} active, {recentAudit.length} recent audit events
         </Typography>
       </Stack>
       <Typography level="body-xs" textColor="text.tertiary">
@@ -612,7 +614,7 @@ function CapabilityLedgerView({
             </Sheet>
           ))}
           <Typography level="title-sm">Audit log</Typography>
-          {state.audit.map(event => (
+          {recentAudit.map(event => (
             <Stack key={event.sequence} direction="row" spacing={1} data-testid="capability-audit-row">
               <Typography level="body-xs" textColor="text.tertiary" sx={{ minWidth: 150 }}>
                 {new Date(event.timestamp).toLocaleString()}

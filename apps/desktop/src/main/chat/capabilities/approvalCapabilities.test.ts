@@ -61,11 +61,11 @@ describe('approval capabilities', () => {
 
   describe('enforceRevocation', () => {
     const targets = () => ({
-      approvals: { revoke: vi.fn() },
-      removeSessionDirectory: vi.fn().mockResolvedValue(undefined),
-      revokeRoot: vi.fn().mockResolvedValue(undefined),
-      untrustProject: vi.fn().mockResolvedValue(undefined),
-      revokeAllow: vi.fn().mockResolvedValue(undefined),
+      approvals: { revoke: vi.fn().mockReturnValue(true) },
+      removeSessionDirectory: vi.fn().mockResolvedValue(true),
+      revokeRoot: vi.fn().mockResolvedValue(true),
+      untrustProject: vi.fn().mockResolvedValue(true),
+      revokeAllow: vi.fn().mockResolvedValue(true),
     });
     const grant = (fields: Pick<CapabilityGrant, 'subject' | 'capability' | 'scope'> & Partial<CapabilityGrant>) => ({
       id: 'grant',
@@ -138,6 +138,33 @@ describe('approval capabilities', () => {
       expect(t.removeSessionDirectory).not.toHaveBeenCalled();
       expect(t.revokeAllow).not.toHaveBeenCalled();
     });
+
+    it.each(['removeSessionDirectory', 'revokeRoot', 'untrustProject', 'revokeAllow'] as const)(
+      'reports no removal from %s without inventing a successful revoke',
+      async target => {
+        const t = targets();
+        t[target].mockResolvedValue(false);
+        const fields: Record<typeof target, Pick<CapabilityGrant, 'subject' | 'capability' | 'scope'>> = {
+          removeSessionDirectory: {
+            subject: { kind: 'session', sessionId: 'missing' },
+            capability: 'files',
+            scope: { kind: 'path', value: '/a' },
+          },
+          revokeRoot: { subject: { kind: 'desktop-user' }, capability: 'files', scope: { kind: 'path', value: '/a' } },
+          untrustProject: {
+            subject: { kind: 'project', directory: '/a' },
+            capability: 'project-trust',
+            scope: { kind: 'project', value: '/a' },
+          },
+          revokeAllow: {
+            subject: { kind: 'desktop-user' },
+            capability: 'tool',
+            scope: { kind: 'permission-rule', value: 'Bash(ls:*)' },
+          },
+        };
+        expect(await enforceRevocation(grant(fields[target]), t)).toBe(false);
+      }
+    );
 
     it('propagates an enforcement failure so the ledger does not record the revoke', async () => {
       const t = targets();

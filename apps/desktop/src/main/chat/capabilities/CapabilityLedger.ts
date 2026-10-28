@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
+import { CAPABILITY_AUDIT_LIMIT } from '@shared/capabilities';
 import type {
   Capability,
   CapabilityAuditEvent,
@@ -15,7 +18,7 @@ import type { PermissionRuleLists } from '@shared/permissions';
 const subjectSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('desktop-user') }),
   z.object({ kind: z.literal('project'), directory: z.string() }),
-  z.object({ kind: z.literal('session'), sessionId: z.string() }),
+  z.object({ kind: z.literal('session'), sessionId: z.string(), scopeKey: z.string().optional() }),
 ]);
 const scopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('path'), value: z.string() }),
@@ -83,7 +86,8 @@ type GrantInput = {
   migrationKey?: string;
 };
 
-interface MigrationInput {
+type MigrationInput = {
+  scopeKey?: string;
   sessions?: readonly {
     id: string;
     grantedDirectories?: readonly string[];
@@ -92,11 +96,14 @@ interface MigrationInput {
   roots: readonly string[];
   trustedProjects: readonly string[];
   permissions: { user: PermissionRuleLists; projects: Record<string, PermissionRuleLists> };
-}
+};
 
 export class CapabilityLedger {
-  private events: CapabilityAuditEvent[] | null = null;
-  private loading: Promise<CapabilityAuditEvent[]> | null = null;
+  private readonly grants = new Map<string, CapabilityGrant>();
+  private readonly migrationKeys = new Set<string>();
+  private recent: CapabilityAuditEvent[] = [];
+  private sequence = 0;
+  private loaded = false;
   private writing: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -104,23 +111,30 @@ export class CapabilityLedger {
     private readonly now: () => Date = () => new Date()
   ) {}
 
-  state(): Promise<CapabilityLedgerState> {
-    return this.serialize(() => this.currentState());
+  state(scopeKey?: string | null): Promise<CapabilityLedgerState> {
+    return this.serialize(async () => {
+      const state = await this.currentState();
+      if (scopeKey === undefined) return state;
+      const visible = (grant: CapabilityGrant) =>
+        grant.subject.kind !== 'session' || (scopeKey !== null && grant.subject.scopeKey === scopeKey);
+      const grantIds = new Set(state.grants.filter(visible).map(grant => grant.id));
+      return {
+        grants: state.grants.filter(visible),
+        audit: state.audit.filter(event => {
+          if (event.type === 'grant') return visible(event.grant);
+          return event.grantId !== undefined && grantIds.has(event.grantId);
+        }),
+      };
+    });
   }
 
   private async currentState(): Promise<CapabilityLedgerState> {
-    const events = await this.read();
-    const grants = new Map<string, CapabilityGrant>();
-    for (const event of events) {
-      if (event.type === 'grant') grants.set(event.grant.id, { ...event.grant });
-      else if (event.type === 'revoke') {
-        const grant = grants.get(event.grantId);
-        if (grant) grant.revokedAt = event.timestamp;
-      }
-    }
+    await this.read();
     return {
-      grants: [...grants.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-      audit: [...events].reverse(),
+      grants: [...this.grants.values()]
+        .map(grant => ({ ...grant }))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      audit: [...this.recent].reverse(),
     };
   }
 
@@ -175,12 +189,19 @@ export class CapabilityLedger {
 
   async revoke(
     grantId: string,
-    enforce?: (grant: CapabilityGrant) => Promise<void> | void
+    enforce?: (grant: CapabilityGrant) => Promise<boolean | void> | boolean | void,
+    scopeKey?: string | null
   ): Promise<CapabilityGrant | null> {
     return this.serialize(async () => {
       const grant = (await this.currentState()).grants.find(entry => entry.id === grantId && !entry.revokedAt);
       if (!grant) return null;
-      await enforce?.(grant);
+      if (
+        grant.subject.kind === 'session' &&
+        scopeKey !== undefined &&
+        (scopeKey === null || grant.subject.scopeKey !== scopeKey)
+      )
+        throw new Error('This grant belongs to another account');
+      if ((await enforce?.(grant)) === false) throw new Error('Access was not removed; the grant is still active');
       await this.append({ type: 'revoke', timestamp: this.now().toISOString(), grantId });
       return grant;
     });
@@ -201,9 +222,8 @@ export class CapabilityLedger {
   }
 
   private async migrateCurrent(input: MigrationInput): Promise<void> {
-    const existing = new Set(
-      (await this.read()).flatMap(event => (event.type === 'grant' && event.migrationKey ? [event.migrationKey] : []))
-    );
+    await this.read();
+    const existing = new Set(this.migrationKeys);
     const additions: Array<Parameters<CapabilityLedger['grant']>[0]> = [];
     const history = (await this.currentState()).grants;
     const active = history.filter(grant => !grant.revokedAt);
@@ -221,11 +241,11 @@ export class CapabilityLedger {
       for (const directory of [...(session.grantedDirectories ?? []), ...(session.project?.contextDirectories ?? [])]) {
         const value = resolve(directory);
         additions.push({
-          subject: { kind: 'session', sessionId: session.id },
+          subject: { kind: 'session', sessionId: session.id, ...(input.scopeKey ? { scopeKey: input.scopeKey } : {}) },
           capability: 'files',
           scope: { kind: 'path', value },
           source: 'migration',
-          migrationKey: `session-path:${session.id}:${value}`,
+          migrationKey: `session-path:${input.scopeKey ?? ''}:${session.id}:${value}`,
         });
       }
     }
@@ -268,25 +288,79 @@ export class CapabilityLedger {
     await this.append(...added);
   }
 
-  private async read(): Promise<CapabilityAuditEvent[]> {
-    if (this.events) return this.events;
-    this.loading ??= this.load();
+  private async read(): Promise<void> {
+    if (this.loaded) return;
     try {
-      return await this.loading;
-    } finally {
-      this.loading = null;
+      await this.load();
+      this.loaded = true;
+    } catch (error) {
+      this.reset();
+      console.error('[CapabilityLedger] Could not read audit storage; a later operation will retry', error);
+      throw error;
     }
   }
 
-  private async load(): Promise<CapabilityAuditEvent[]> {
-    try {
-      const parsed = fileSchema.parse(JSON.parse(await readFile(this.filePath, 'utf8')));
-      this.events = parsed.events as CapabilityAuditEvent[];
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-      this.events = [];
+  private reset(): void {
+    this.grants.clear();
+    this.migrationKeys.clear();
+    this.recent = [];
+    this.sequence = 0;
+  }
+
+  private apply(event: CapabilityAuditEvent): void {
+    if (event.type === 'grant') {
+      this.grants.set(event.grant.id, { ...event.grant });
+      if (event.migrationKey) this.migrationKeys.add(event.migrationKey);
+    } else if (event.type === 'revoke') {
+      const grant = this.grants.get(event.grantId);
+      if (grant) grant.revokedAt = event.timestamp;
     }
-    return this.events;
+    this.recent.push(event);
+    if (this.recent.length > CAPABILITY_AUDIT_LIMIT) this.recent.shift();
+    this.sequence = event.sequence + 1;
+  }
+
+  private async load(): Promise<void> {
+    const stream = createReadStream(this.filePath, { encoding: 'utf8' });
+    let endsInNewline = true;
+    stream.on('data', chunk => {
+      endsInNewline = chunk.toString().endsWith('\n');
+    });
+    const lines = createInterface({ input: stream, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        if (!line.trim()) continue;
+        // v1 used one JSON document, sometimes pretty-printed. Convert it once,
+        // atomically, before any append can mix the two storage formats.
+        if (this.sequence === 0 && (line.trim() === '{' || isLegacyDocument(line))) {
+          const legacy = fileSchema.parse(JSON.parse(await readFile(this.filePath, 'utf8')));
+          const temporary = `${this.filePath}.tmp`;
+          await writeFile(temporary, legacy.events.map(event => JSON.stringify(event) + '\n').join(''), {
+            encoding: 'utf8',
+            mode: 0o600,
+          });
+          await rename(temporary, this.filePath);
+          for (const event of legacy.events) this.apply(event);
+          return;
+        }
+        const event = eventSchema.parse(JSON.parse(line));
+        if (event.sequence !== this.sequence) throw new SyntaxError('Out of order audit sequence');
+        this.apply(event);
+      }
+      // A process can stop after the JSON record but before its newline. Repair
+      // that boundary before the next append can concatenate two valid records.
+      if (!endsInNewline) await appendFile(this.filePath, '\n', { encoding: 'utf8', mode: 0o600 });
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+      if (!(error instanceof SyntaxError || error instanceof z.ZodError)) throw error;
+      const quarantine = `${this.filePath}.corrupt-${this.now().getTime()}-${randomUUID()}`;
+      await rename(this.filePath, quarantine);
+      console.error(`[CapabilityLedger] Corrupt audit storage preserved at ${quarantine}`, error);
+      this.reset();
+    } finally {
+      lines.close();
+      stream.destroy();
+    }
   }
 
   private serialize<Result>(work: () => Promise<Result>): Promise<Result> {
@@ -297,19 +371,23 @@ export class CapabilityLedger {
 
   private async append(...events: AppendEvent[]): Promise<void> {
     if (events.length === 0) return;
-    const current = await this.read();
-    const next = [
-      ...current,
-      ...events.map((event, index) => ({ ...event, sequence: current.length + index }) as CapabilityAuditEvent),
-    ];
+    await this.read();
+    const next = events.map((event, index) => ({ ...event, sequence: this.sequence + index }) as CapabilityAuditEvent);
     await mkdir(dirname(this.filePath), { recursive: true });
-    const temporary = `${this.filePath}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 1, events: next }, null, 2), {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
-    await rename(temporary, this.filePath);
-    this.events = next;
+    try {
+      await appendFile(this.filePath, next.map(event => JSON.stringify(event) + '\n').join(''), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+    } catch (error) {
+      // An append may have written a partial tail. Reload (and quarantine if
+      // necessary) on the next operation rather than appending behind it.
+      this.loaded = false;
+      this.reset();
+      console.error('[CapabilityLedger] Could not append audit events; a later operation will retry', error);
+      throw error;
+    }
+    for (const event of next) this.apply(event);
   }
 }
 
@@ -318,7 +396,9 @@ function sameMigrationGrant(grant: CapabilityGrant, addition: GrantInput): boole
   if (grant.scope.value !== addition.scope.value || grant.subject.kind !== addition.subject.kind) return false;
   if (grant.subject.kind === 'desktop-user') return true;
   if (grant.subject.kind === 'session' && addition.subject.kind === 'session') {
-    return grant.subject.sessionId === addition.subject.sessionId;
+    return (
+      grant.subject.sessionId === addition.subject.sessionId && grant.subject.scopeKey === addition.subject.scopeKey
+    );
   }
   return (
     grant.subject.kind === 'project' &&
@@ -337,7 +417,9 @@ function sameGrant(grant: CapabilityGrant, input: GrantInput): boolean {
     return false;
   if (
     grant.subject.kind === 'session' &&
-    (input.subject.kind !== 'session' || grant.subject.sessionId !== input.subject.sessionId)
+    (input.subject.kind !== 'session' ||
+      grant.subject.sessionId !== input.subject.sessionId ||
+      grant.subject.scopeKey !== input.subject.scopeKey)
   )
     return false;
   if (
@@ -355,4 +437,9 @@ function normalizeScope(scope: CapabilityScope): CapabilityScope {
   if (scope.kind === 'path' || scope.kind === 'project') return { ...scope, value: resolve(scope.value) };
   if (scope.kind !== 'browser-origin') return scope;
   return { ...scope, value: new URL(scope.value).origin };
+}
+
+function isLegacyDocument(line: string): boolean {
+  const parsed: unknown = JSON.parse(line);
+  return typeof parsed === 'object' && parsed !== null && 'version' in parsed;
 }

@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
-import { DESKTOP_PROJECT_RULES_LABEL, DESKTOP_USER_RULES_LABEL } from './permissions/PermissionService';
 import { revokeSessionCapability } from './capabilities/approvalCapabilities';
 import type { ApprovalLogEntry } from './permissions/ApprovalLog';
 import { PermissionRuleSet, compileRule, parseRule, type CompiledRule, type RuleSource } from './permissions/rules';
@@ -202,72 +201,38 @@ describe('ChatService approval record', () => {
     expect(second.approval).toMatchObject({ outcome: 'allowed', decidedBy: { kind: 'chat-allowance' }, asked: false });
   });
 
-  it('links each use of a standing allowance to the grant that authorized it', async () => {
+  it('keeps grant changes without writing a use event for each authorized call', async () => {
     await run('ask', 'touch made.txt');
     const asked = await awaitCall('c1', 'awaiting-approval');
     approvals.resolve(asked.approvalId!, { decision: 'always' });
     await awaitCall('c1', 'done');
+    const firstState = await capabilities.state();
+    expect(firstState.grants).toHaveLength(1);
+    expect(firstState.audit.map(event => event.type)).toEqual(['grant']);
+
     await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
     useTool(streams[1], 'c2', 'touch made.txt');
     await awaitCall('c2', 'done');
-
-    const { grants, audit } = await capabilities.state();
-    const uses = audit.filter(event => event.type === 'use');
-    expect(uses).toHaveLength(2);
-    expect(uses.every(event => event.grantId === grants[0].id)).toBe(true);
+    expect(await capabilities.state()).toEqual(firstState);
   });
 
-  it('links a use allowed by a saved desktop rule to that rule grant', async () => {
-    rules = ruleSet({ allow: ['Bash(touch:*)'] }, { id: 'desktop-user', label: DESKTOP_USER_RULES_LABEL });
-    const grant = await capabilities.grant({
-      subject: { kind: 'desktop-user' },
-      capability: 'tool',
-      scope: { kind: 'permission-rule', value: 'Bash(touch:*)' },
-      source: 'permission-rule',
-    });
-    await run('ask', 'touch made.txt');
-    await awaitCall('c1', 'done');
-    const uses = (await capabilities.state()).audit.filter(event => event.type === 'use');
-    expect(uses).toMatchObject([{ grantId: grant.id }]);
-  });
-
-  it('does not link a use allowed by a Claude Code rule to a desktop grant with the same text', async () => {
-    rules = ruleSet({ allow: ['Bash(touch:*)'] });
-    await capabilities.grant({
-      subject: { kind: 'desktop-user' },
-      capability: 'tool',
-      scope: { kind: 'permission-rule', value: 'Bash(touch:*)' },
-      source: 'permission-rule',
-    });
-    await run('ask', 'touch made.txt');
-    await awaitCall('c1', 'done');
-    const [use] = (await capabilities.state()).audit.filter(event => event.type === 'use');
-    expect(use).toBeDefined();
-    expect(use).not.toHaveProperty('grantId');
-  });
-
-  it("does not link a use allowed by a project rule to another project's grant", async () => {
-    rules = ruleSet(
-      { allow: ['Bash(touch:*)'] },
-      { id: 'desktop-project:/elsewhere', label: DESKTOP_PROJECT_RULES_LABEL, path: '/elsewhere' }
+  it('runs ungated reads without reading or writing the capability ledger', async () => {
+    const use = vi.spyOn(capabilities, 'use').mockRejectedValue(new Error('ledger unavailable'));
+    const grant = vi.spyOn(capabilities, 'grant').mockRejectedValue(new Error('ledger unavailable'));
+    const created = await service.createSession();
+    await service.send(created.id, 'read the notes');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'read', name: 'file_read', arguments: JSON.stringify({ path: join(root, 'notes.txt') }) }],
+      })
     );
-    await capabilities.grant({
-      subject: { kind: 'project', directory: '/elsewhere' },
-      capability: 'tool',
-      scope: { kind: 'permission-rule', value: 'Bash(touch:*)' },
-      source: 'permission-rule',
-    });
-    await capabilities.grant({
-      subject: { kind: 'desktop-user' },
-      capability: 'tool',
-      scope: { kind: 'permission-rule', value: 'Bash(touch:*)' },
-      source: 'permission-rule',
-    });
-    await run('ask', 'touch made.txt');
-    await awaitCall('c1', 'done');
-    const [use] = (await capabilities.state()).audit.filter(event => event.type === 'use');
-    expect(use).toBeDefined();
-    expect(use).not.toHaveProperty('grantId');
+    streams[0].write(frame('[DONE]'));
+    const done = await awaitCall('read', 'done');
+    expect(done.preview).toContain('hello');
+    expect(use).not.toHaveBeenCalled();
+    expect(grant).not.toHaveBeenCalled();
   });
 
   it('revokes the exact shell allowance recorded by the live approval path', async () => {
@@ -276,7 +241,10 @@ describe('ChatService approval record', () => {
     approvals.resolve(asked.approvalId!, { decision: 'always' });
     await awaitCall('c1', 'done');
     const [grant] = (await capabilities.state()).grants;
-    expect(grant).toMatchObject({ subject: { kind: 'session', sessionId }, capability: 'tool' });
+    expect(grant).toMatchObject({
+      subject: { kind: 'session', sessionId, scopeKey: store.scopeKey() },
+      capability: 'tool',
+    });
     expect(grant.approvalKey).toEqual(expect.any(String));
     await capabilities.revoke(grant.id, entry => revokeSessionCapability(entry, approvals));
 
