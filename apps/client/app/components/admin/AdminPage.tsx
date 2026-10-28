@@ -183,7 +183,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
             {activeTab === AdminTab.Dependencies && <DependenciesTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ApiCookbook}>{activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}</TabPanel>
-          <TabPanel value={AdminTab.Subscribers}>{activeTab === AdminTab.Subscribers && <SubscribersTab />}</TabPanel>
+          <TabPanel value={AdminTab.Waitlist}>{activeTab === AdminTab.Waitlist && <SubscribersTab />}</TabPanel>
           <TabPanel value={AdminTab.SignupDomainHolds} sx={{ padding: 0 }}>
             {activeTab === AdminTab.SignupDomainHolds && <SignupDomainHoldsTab />}
           </TabPanel>

@@ -44,6 +44,12 @@ describe('adminTabFromSlug', () => {
     expect(adminTabFromSlug(ADMIN_AUDIT_LOG_TAB_SLUG)).toBe(AdminTab.AuditLog);
   });
 
+  it('resolves the renamed waitlist slug and its legacy alias to the waitlist tab', () => {
+    expect(adminTabFromSlug('waitlist')).toBe(AdminTab.Waitlist);
+    expect(adminTabFromSlug('subscribers')).toBe(AdminTab.Waitlist);
+    expect(adminTabToSlug(AdminTab.Waitlist)).toBe('waitlist');
+  });
+
   it('resolves the users slug to the users tab', () => {
     expect(adminTabFromSlug(ADMIN_USERS_TAB_SLUG)).toBe(AdminTab.Users);
   });
