@@ -55,6 +55,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
     'c51286a11ea2ee3a29b05d4d3586737a2e39f3cc0f0268e083f506f614a5fc32'
   ),
+  broker(
+    'queue:infra/businessMetricAlerts.ts:businessMetricAlertsDLQ',
+    '673c6f139ed9d3c3cb6695ec42bdf0f2da000f8d79e5ed17a00060cdc353549e'
+  ),
+  hostedOnly(
+    'schedule:infra/businessMetricAlerts.ts:businessMetricAlerts',
+    'c8f7a1da54367bdfacb6ccdf02843f4bca8200dfd493942452a3a402dab910c4',
+    'Hosted business analytics and Stripe receipts; not applicable to a portable deployment.'
+  ),
   gap('event:infra/eventBus.ts:email-send', '3e4a74324ec602608487f3d9f877681aebdf77d584cf02c00a89e2e759aa7d96'),
   gap(
     'event:infra/eventBus.ts:notebook-curation-complete-analytics',
@@ -823,6 +832,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'e52a55016d4e296fad2509ece2c328abb3a75afb574308f221762ab2049e8d45'
   ),
   gap(
+    'schedule:infra/cron.ts:disposableDomainRefresh',
+    'd4acc4d47d84373b51e0aaf008c3f5e4a263bd3a1d99510c1f42628710ca99a0',
+    ['cloudwatch:PutMetricData']
+  ),
+  gap(
     'schedule:infra/cron.ts:modelDiscoveryStalenessCron',
     'f906894c42c72f63c47bff4cd0214d9803e241702098291f3a30a67204b0da99',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
@@ -910,6 +924,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     symbol: 'registerTelemetryCleanup',
     fingerprint: 'da6450a4a59ea6ac4f91f4b6adc5e7c54586164f920952bb76654f03b4b0e228',
   }),
+  gap('schedule:infra/cron.ts:usagePatternSignals', '066edef1ae0b959ca2c6049626beb3c8630d5c22f99aed2b3bca1430f1f05766'),
   wired(
     'schedule:infra/cron.ts:voiceHoldSweep',
     '595f6930f39b7886ff6aeef3816bbb8acf214f81f330b3ece125304ca9908328',

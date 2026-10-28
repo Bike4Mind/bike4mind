@@ -99,3 +99,28 @@ describe('usersViewToSearch', () => {
     });
   });
 });
+
+describe('created-at window params', () => {
+  it('accepts only ISO instants and normalizes them', () => {
+    expect(USERS_SEARCH_PARSERS.createdFrom('2026-01-01T09:00:00+09:00')).toBe('2026-01-01T00:00:00.000Z');
+    expect(USERS_SEARCH_PARSERS.createdFrom('2026-01-01')).toBeUndefined();
+    expect(USERS_SEARCH_PARSERS.createdTo('yesterday')).toBeUndefined();
+    expect(USERS_SEARCH_PARSERS.createdTo(42)).toBeUndefined();
+  });
+
+  it('round-trips through the URL as part of the view', () => {
+    const view = usersViewFromSearch({
+      createdFrom: '2026-01-01T00:00:00.000Z',
+      createdTo: '2026-01-01T01:00:00.000Z',
+    });
+    expect(view).toMatchObject({
+      page: 1,
+      createdFrom: '2026-01-01T00:00:00.000Z',
+      createdTo: '2026-01-01T01:00:00.000Z',
+    });
+    expect(usersViewToSearch({ ...DEFAULT_USERS_PARAMS, ...view })).toMatchObject({
+      createdFrom: '2026-01-01T00:00:00.000Z',
+      createdTo: '2026-01-01T01:00:00.000Z',
+    });
+  });
+});

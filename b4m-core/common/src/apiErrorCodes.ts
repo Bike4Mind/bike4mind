@@ -118,6 +118,14 @@ export const API_ERROR_CODES = [
   'tool_changes_unsupported',
   /** A tool change message was malformed or sat where the provider does not accept one. */
   'invalid_tool_change',
+  // Skill Market import conflicts (POST /api/v1/skills/market/listings/{id}/import); see
+  // SKILL_MARKET_IMPORT_ERROR_CODES in schemas/skillMarketPublic.ts.
+  /** A newer version was approved since the one the caller reviewed. */
+  'version_changed',
+  /** The caller edited their imported copy since importing it; retry with `overwrite`. */
+  'local_changes',
+  /** The caller already has a skill with that name; retry with another `name`. */
+  'name_taken',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

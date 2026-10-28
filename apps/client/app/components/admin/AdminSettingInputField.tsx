@@ -30,6 +30,7 @@ import { useRef, useState } from 'react';
 import { useAdminSaveShortcut } from './shared/adminKeyboard';
 import ScopedSettingOverrides from './ScopedSettingOverrides';
 import { rangeMessage } from './settingFieldHelpers';
+import { useSettingsDraft } from './SettingsDraftProvider';
 
 interface SubSetting {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
@@ -40,13 +41,18 @@ interface SubSetting {
 const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
   const saveRef = useRef<HTMLDivElement>(null);
   useAdminSaveShortcut(saveRef);
-  const [value, setValue] = useState<boolean>(() => {
+  const initialValue = (() => {
     if (typeof defaultValue === 'boolean') return defaultValue;
     if (typeof defaultValue === 'number') return defaultValue === 1;
     if (typeof defaultValue === 'string') return defaultValue === 'true' || defaultValue === '1';
     return false;
-  });
+  })();
   const updateSettings = useUpdateSettings();
+  const draft = useSettingsDraft(setting.key, initialValue, {
+    name: setting.name,
+    save: value => updateSettings.mutateAsync({ key: setting.key, value }),
+  });
+  const { value, setValue } = draft;
   const resolvedDefault =
     typeof defaultValue === 'boolean'
       ? defaultValue
@@ -57,7 +63,7 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
 
   return (
     <Box
-      ref={saveRef}
+      ref={draft.staged ? null : saveRef}
       data-admin-settings-editor
       tabIndex={0}
       aria-label={`${setting.name} settings editor`}
@@ -73,8 +79,8 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-          <Switch checked={value} onChange={e => setValue(e.target.checked)} />
-          {isDirty && (
+          <Switch checked={value} disabled={draft.pending} onChange={e => setValue(e.target.checked)} />
+          {isDirty && !draft.staged && (
             <Tooltip title="Save" placement="top">
               <Button
                 color="success"
@@ -118,16 +124,41 @@ const AdminSettingInputField = ({
 }) => {
   const saveRef = useRef<HTMLDivElement>(null);
   useAdminSaveShortcut(saveRef);
-  const [value, setValue] = useState<string | number | boolean | null>(() => {
-    if (typeof defaultValue === 'object') return null;
-    return defaultValue ?? null;
-  });
   const updateSettings = useUpdateSettings();
+  const draft = useSettingsDraft<string | number | boolean | null>(
+    setting.key,
+    typeof defaultValue === 'object' ? null : (defaultValue ?? null),
+    {
+      name: setting.name,
+      equals: (left, right) => (setting.clearDeletesRow && left === '' ? null : left) === right,
+      save: async next => {
+        if (next === null) throw new Error('Enter a setting value before saving.');
+        return updateSettings.mutateAsync({
+          key: setting.key,
+          value: next,
+          ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}),
+          ...(floorWarning ? { confirmAboveMeasuredFloor: true } : {}),
+        });
+      },
+      blocked: next =>
+        lockedNote ??
+        (setting.type === 'number' && next !== '' && next !== null
+          ? rangeMessage(Number(next), setting.min, setting.max)
+          : undefined),
+      warning:
+        setting.key === 'defaultEmbeddingModel'
+          ? 'Changing the embedding model affects new files. Existing files may need reprocessing to restore search accuracy.'
+          : undefined,
+    }
+  );
+  const { value, setValue } = draft;
+  const [secretFocused, setSecretFocused] = useState(false);
   const [showEmbeddingWarning, setShowEmbeddingWarning] = useState(false);
   // Whether the admin actually typed into a sensitive field, as opposed to the field
   // being emptied by focus clearing the mask. Distinguishes a deliberate "unset this
   // key" from an accidental empty write - see the guard in saveValue.
-  const [secretEdited, setSecretEdited] = useState(false);
+  const [localSecretEdited, setSecretEdited] = useState(false);
+  const secretEdited = draft.staged ? draft.dirty : localSecretEdited;
 
   // A sensitive field sitting empty purely because focus cleared its mask is not an edit,
   // so Save stays disabled. Without this the field reads as dirty the moment it is focused
@@ -213,7 +244,7 @@ const AdminSettingInputField = ({
   return (
     <>
       <Card
-        ref={saveRef}
+        ref={draft.staged ? null : saveRef}
         data-admin-settings-editor
         tabIndex={0}
         aria-label={`${setting.name} settings editor`}
@@ -230,7 +261,7 @@ const AdminSettingInputField = ({
                   sx={{ alignSelf: 'baseline' }}
                   checked={typeof value === 'string' ? value === 'true' : (value as boolean)}
                   onChange={e => setValue(e.target.checked)}
-                  disabled={Boolean(lockedNote)}
+                  disabled={Boolean(lockedNote) || draft.pending}
                   slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-switch` } }}
                 />
               ) : setting.type === 'number' ? (
@@ -256,11 +287,11 @@ const AdminSettingInputField = ({
                   // Locked during the save round-trip: onSuccess resyncs this field from the
                   // server's resolved value, so an edit typed mid-flight would be silently
                   // overwritten by the response for the previous submission.
-                  disabled={updateSettings.isPending}
+                  disabled={updateSettings.isPending || draft.pending}
                 />
               ) : setting.type === 'string' ? (
                 setting.options ? (
-                  <Select value={(value as string) || ''} onChange={(e, v) => setValue(v)}>
+                  <Select disabled={draft.pending} value={(value as string) || ''} onChange={(e, v) => setValue(v)}>
                     {Array.from(new Set(setting.options)).map((option, i) => (
                       <Option key={`setting-${setting.key}-option-${option}-${i}`} value={option}>
                         {option}
@@ -275,7 +306,8 @@ const AdminSettingInputField = ({
                     // rather than leaving a pasted key rendered until the page is left. The
                     // server mask stays plain text so its last-4 tail is readable.
                     type={setting.isSensitive && secretEdited ? 'password' : 'text'}
-                    value={(value as string) || ''}
+                    value={draft.staged && secretFocused && showsStoredSecretMask ? '' : (value as string) || ''}
+                    disabled={draft.pending}
                     placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
                     onChange={e => {
                       setValue(e.target.value);
@@ -286,10 +318,12 @@ const AdminSettingInputField = ({
                     // value, and restore it on an untouched blur so the field stays non-dirty.
                     // A field the admin deliberately emptied is left alone - that is a clear.
                     onFocus={() => {
-                      if (showsStoredSecretMask) setValue('');
+                      if (draft.staged) setSecretFocused(true);
+                      else if (showsStoredSecretMask) setValue('');
                     }}
                     onBlur={() => {
-                      if (setting.isSensitive && value === '' && !secretEdited) {
+                      setSecretFocused(false);
+                      if (!draft.staged && setting.isSensitive && value === '' && !secretEdited) {
                         setValue((defaultValue as string) ?? '');
                       }
                     }}
@@ -306,24 +340,26 @@ const AdminSettingInputField = ({
             </FormControl>
           </Grid>
 
-          <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
-            <Tooltip title="Save setting (Cmd/Ctrl+S, including from inputs)" placement="top">
-              <Button
-                data-testid={`admin-setting-${setting.key}-save-btn`}
-                data-admin-save
-                aria-label={`Save ${setting.name} (Cmd/Ctrl+S)`}
-                aria-keyshortcuts="Meta+s Control+s"
-                color="success"
-                size="sm"
-                type="button"
-                loading={updateSettings.isPending}
-                onClick={handleSaveSetting}
-                disabled={!isDirty || Boolean(rangeError) || Boolean(lockedNote)}
-              >
-                <SaveIcon sx={{ marginX: 1 }} />
-              </Button>
-            </Tooltip>
-          </Grid>
+          {!draft.staged && (
+            <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
+              <Tooltip title="Save setting (Cmd/Ctrl+S, including from inputs)" placement="top">
+                <Button
+                  data-testid={`admin-setting-${setting.key}-save-btn`}
+                  data-admin-save
+                  aria-label={`Save ${setting.name} (Cmd/Ctrl+S)`}
+                  aria-keyshortcuts="Meta+s Control+s"
+                  color="success"
+                  size="sm"
+                  type="button"
+                  loading={updateSettings.isPending}
+                  onClick={handleSaveSetting}
+                  disabled={!isDirty || Boolean(rangeError) || Boolean(lockedNote)}
+                >
+                  <SaveIcon sx={{ marginX: 1 }} />
+                </Button>
+              </Tooltip>
+            </Grid>
+          )}
         </Grid>
 
         {/* Warning alert for embedding model changes */}

@@ -7,7 +7,15 @@ import { parseUserId } from '../Users/usersTabSearch';
 import { adminFocusScope, adminSurface } from './adminStyles';
 import { focusAdminSearch, isAdminChordEvent, isAdminOverlayOpen, isAdminShortcutEvent } from './adminKeyboard';
 
-export type AdminCommand = { id: string; label: string; shortcut?: string; disabled?: boolean; run: () => void };
+export type AdminCommand = {
+  id: string;
+  label: string;
+  shortcut?: string;
+  disabled?: boolean;
+  /** Keep it out of the visible button strip when the page already shows its own control for it. */
+  paletteOnly?: boolean;
+  run: () => void;
+};
 
 const shortcuts = [
   ['Cmd/Ctrl+K', 'Open command palette'],
@@ -129,20 +137,22 @@ export function AdminCommandPalette({
         >
           Keyboard shortcuts (?)
         </Button>
-        {commands.map(command => (
-          <Button
-            key={command.id}
-            variant="plain"
-            color="neutral"
-            size="sm"
-            data-testid={`admin-command-${command.id}-btn`}
-            disabled={command.disabled}
-            onClick={command.run}
-          >
-            {command.label}
-            {command.shortcut ? ` (${command.shortcut})` : ''}
-          </Button>
-        ))}
+        {commands
+          .filter(command => !command.paletteOnly)
+          .map(command => (
+            <Button
+              key={command.id}
+              variant="plain"
+              color="neutral"
+              size="sm"
+              data-testid={`admin-command-${command.id}-btn`}
+              disabled={command.disabled}
+              onClick={command.run}
+            >
+              {command.label}
+              {command.shortcut ? ` (${command.shortcut})` : ''}
+            </Button>
+          ))}
       </Stack>
       <Modal open={open} onClose={() => setOpen(false)}>
         <ModalDialog

@@ -2,6 +2,7 @@ import mongoose, { Schema } from 'mongoose';
 import type { SignupDomainReview, SignupObservation, SignupProtectionRepository } from '@bike4mind/common';
 import { emailDomainCandidates } from '@bike4mind/common';
 import { PartnerSignupRule } from './PartnerSignupRuleModel';
+import { disposableDomainRepository } from './DisposableDomainModel';
 
 const observationSchema = new Schema<SignupObservation>({
   userId: { type: String, required: true, unique: true },
@@ -72,4 +73,7 @@ export const signupProtectionRepository: SignupProtectionRepository = {
       organizationId: { $type: 'string', $ne: '' },
     }));
   },
+  disposableSources: disposableDomainRepository.disposableSources,
+  findDomainIntel: disposableDomainRepository.findDomainIntel,
+  saveDomainIntel: disposableDomainRepository.saveDomainIntel,
 };
