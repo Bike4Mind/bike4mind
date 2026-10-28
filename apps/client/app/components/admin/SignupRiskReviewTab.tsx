@@ -160,16 +160,25 @@ export const SignupRiskReviewTab: React.FC = () => {
     {
       id: 'account',
       label: 'Account',
-      render: row => (
-        <>
-          <Typography level="body-sm">{row.email ?? row.username ?? row.userId}</Typography>
-          {row.email && row.username && (
-            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-              {row.username}
-            </Typography>
-          )}
-        </>
-      ),
+      render: row => {
+        const primary = row.email ?? row.username ?? row.userId;
+        // Signups default the username to the email's local part; only a different one adds information.
+        const showUsername = row.email && row.username && row.username !== row.email.split('@')[0];
+        return (
+          <Tooltip title={showUsername ? `${primary} (${row.username})` : primary}>
+            <Stack tabIndex={0} sx={{ minWidth: '14rem', maxWidth: '22rem' }}>
+              <Typography level="body-sm" noWrap>
+                {primary}
+              </Typography>
+              {showUsername && (
+                <Typography level="body-xs" noWrap sx={{ color: 'admin.inkMuted' }}>
+                  {row.username}
+                </Typography>
+              )}
+            </Stack>
+          </Tooltip>
+        );
+      },
       sortValue: row => row.email ?? row.username ?? row.userId,
     },
     {

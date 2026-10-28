@@ -113,6 +113,14 @@ describe('SignupRiskReviewTab', () => {
     expect(screen.queryByTestId('signup-risk-truncated')).toBeNull();
   });
 
+  it('shows the username only when it differs from the email local part', () => {
+    m.useSignupRiskReviews.mockReturnValue(queue([row(), row({ userId: 'u3', username: 'renamed-bot' })]));
+    renderTab();
+
+    expect(within(screen.getByTestId('signup-risk-row-u1')).queryByText('bot1')).toBeNull();
+    expect(within(screen.getByTestId('signup-risk-row-u3')).getByText('renamed-bot')).toBeTruthy();
+  });
+
   it('says when the queue is capped', () => {
     m.useSignupRiskReviews.mockReturnValue({ ...queue(ROWS), data: { data: ROWS, truncated: true } });
     renderTab();
