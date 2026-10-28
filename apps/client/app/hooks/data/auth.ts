@@ -115,7 +115,10 @@ async function solveTurnstileIfRequired(queryClient: QueryClient): Promise<strin
   if (!config?.turnstileSiteKey) return undefined;
   try {
     return await getTurnstileToken(config.turnstileSiteKey, TURNSTILE_ACTION_OTC_SEND);
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === 'turnstile-cancelled') {
+      throw new Error('Verification cancelled. Submit again when you are ready.');
+    }
     throw new Error('Could not complete the verification check. Please refresh and try again.');
   }
 }

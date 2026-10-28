@@ -100,4 +100,14 @@ describe('useSendOTC challenge gate', () => {
     });
     expect(postMock).not.toHaveBeenCalled();
   });
+
+  it('reports a cancelled challenge without asking the user to refresh', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new Error('turnstile-cancelled'));
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+    const rejection = await result.current.mutateAsync({ email: 'x@test.com' }).catch(e => e);
+    expect(rejection.message).toContain('cancelled');
+    expect(rejection.message).not.toContain('refresh');
+    expect(postMock).not.toHaveBeenCalled();
+  });
 });
