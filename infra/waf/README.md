@@ -28,6 +28,14 @@ Firehose destinations fail deployment: the dashboard and production signup
 edge-signal alarm require CloudWatch Logs. The dashboard IAM policy and the
 signup filter follow the selected destination, including custom group names.
 
+The signup WAF fields (`signupMeta.wafAnonIp`, `signupMeta.wafBotSignal`) are
+filled only when the attached ACL inserts the label headers that the sample
+policy's label-forward rules insert, under the same header names. The
+stage-owned ACL always does. An external ACL does not by default: once it
+carries equivalent rules, set `WAF_LABEL_FORWARDING=true` in the deploy
+environment. Leave it unset otherwise, so a stage that is not checked records
+null rather than a false "clean".
+
 Before production adopts the external ACL:
 
 1. Deploy the retention change in PR #5805 to the existing production stack.
