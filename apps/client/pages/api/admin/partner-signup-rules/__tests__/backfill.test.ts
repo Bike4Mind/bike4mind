@@ -13,10 +13,19 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain: Record<string, unknown> = {
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+    };
     for (const method of ['get', 'post', 'put', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
-        h.handlers[method] = fn;
+        h.handlers[method] = async (req: unknown, res: unknown) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return fn(req, res);
+        };
         return chain;
       };
     }

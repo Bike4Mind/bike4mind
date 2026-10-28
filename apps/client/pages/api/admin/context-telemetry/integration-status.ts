@@ -1,6 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { GitHubService } from '@server/services/githubService';
 import { ApiKeyScope, ContextTelemetryAlertsSchema, CHAT_MODELS } from '@bike4mind/common';
@@ -12,12 +11,11 @@ interface HealthCheckItem {
   message: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const logger = new Logger({ metadata: { service: 'ContextTelemetryHealthCheck' } });
     const checks: HealthCheckItem[] = [];
 

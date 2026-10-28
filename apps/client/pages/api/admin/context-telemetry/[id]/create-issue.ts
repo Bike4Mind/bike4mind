@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
@@ -22,12 +22,11 @@ const bodySchema = z.object({
     .describe('Additional context to include in the issue'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const logger = new Logger({
       metadata: {
         service: 'ContextTelemetryCreateIssue',

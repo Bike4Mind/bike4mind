@@ -1,6 +1,6 @@
 import { toolDefinitionOverrideRepository } from '@bike4mind/database';
 import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { TOOL_MAPPING, TOOL_CATEGORIES } from '@client/app/utils/toolMapping';
 
@@ -109,12 +109,11 @@ function getCodeTools(): IToolDefinition[] {
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   try {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { category, enabled, search, source, page: pageParam, limit: limitParam } = req.query;
 
     // Parse pagination params

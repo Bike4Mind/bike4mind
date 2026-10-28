@@ -9,10 +9,15 @@ const { mockFindAllWithSecretPresence, mockFindByEmailDomain, mockCreateIDP } = 
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain: Record<string, unknown> = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (fn: (req: unknown, res: unknown) => unknown) => ((h.GET = fn), chain),
         post: (fn: (req: unknown, res: unknown) => unknown) => ((h.POST = fn), chain),
       }

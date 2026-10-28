@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { loadTeamPlanSettings, NotFoundError } from '@bike4mind/utils';
 import {
   adminSettingsRepository,
@@ -32,10 +32,11 @@ const backfillSchema = z.object({
 
 const SAMPLE_LIMIT = 25;
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   asyncHandler(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     let body: z.infer<typeof backfillSchema>;
     try {
       body = backfillSchema.parse(req.body);

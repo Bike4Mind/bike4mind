@@ -11,10 +11,14 @@ import { Quest } from '@bike4mind/database';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
       }
     );
@@ -27,9 +31,6 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {
-    name = 'ForbiddenError';
-  },
   NotFoundError: class NotFoundError extends Error {
     name = 'NotFoundError';
   },
@@ -142,7 +143,7 @@ describe('GET /api/admin/model-logs/[id]', () => {
     const quest = await createLog();
     const findSpy = vi.spyOn(Quest, 'findById');
     const { req, res } = run(quest.id, false);
-    await expect(handler(req, res)).rejects.toMatchObject({ name: 'ForbiddenError' });
+    await expect(handler(req, res)).rejects.toThrow(/missing permission/i);
     expect(findSpy).not.toHaveBeenCalled();
     findSpy.mockRestore();
   });

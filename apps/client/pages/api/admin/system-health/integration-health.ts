@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   integrationHealthCheckRepository,
@@ -20,16 +20,11 @@ import {
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { recordIntegrationProbe } from '@server/utils/integrationProbeAudit';
 
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const { integration, history } = req.query;
     const logger = new Logger();
 
@@ -79,8 +74,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const { integration } = req.body;
     const logger = new Logger();
 
@@ -121,8 +114,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     });
   })
   .put(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const { integration, mode, reason } = req.body;
 
     if (!integration || !INTEGRATION_HEALTH_INTEGRATIONS.includes(integration as IntegrationName)) {

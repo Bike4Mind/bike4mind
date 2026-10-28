@@ -16,11 +16,11 @@
  */
 
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { orgGitHubConnectionRepository, withTransaction } from '@bike4mind/database';
 import { encryptSecret, isEncrypted, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { BadRequestError, InternalServerError, NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validatePrivateKeyFormat } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -160,7 +160,10 @@ function diffUpdate(existing: IOrgGitHubConnectionDocument, data: z.infer<typeof
   return changes;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage', GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   // Rate limit all connection operations (GET/POST/PUT/DELETE) to prevent brute-force and abuse
   .use(
     rateLimit({
@@ -170,8 +173,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   )
   // POST - Create GitHub connection
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const parseResult = ConnectSchema.safeParse(req.body);
     if (!parseResult.success) {
       throw new BadRequestError(parseResult.error.issues[0]?.message || 'Invalid request body');
@@ -264,8 +265,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
   // GET - Get GitHub connection status
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const connection = await orgGitHubConnectionRepository.findSystemDefault();
     if (!connection) {
       return res.json({ connected: false });
@@ -315,8 +314,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
   // PUT - Update GitHub connection
   .put(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const parseResult = UpdateSchema.safeParse(req.body);
     if (!parseResult.success) {
       throw new BadRequestError(parseResult.error.issues[0]?.message || 'Invalid request body');
@@ -396,8 +393,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
   // DELETE - Delete GitHub connection
   .delete(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
-
     const connection = await orgGitHubConnectionRepository.findSystemDefault();
     if (!connection) {
       throw new NotFoundError('No GitHub connection found');

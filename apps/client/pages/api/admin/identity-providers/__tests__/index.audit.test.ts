@@ -12,11 +12,19 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const routes: Record<string, Route> = {};
-    const chain = Object.assign((req: unknown, res: unknown) => routes[(req as { method: string }).method](req, res), {
-      get: (fn: Route) => ((routes.GET = fn), chain),
-      post: (fn: Route) => ((routes.POST = fn), chain),
-    });
+    const chain = Object.assign(
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method: string }).method](req, res);
+      },
+      {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
+        get: (fn: Route) => ((routes.GET = fn), chain),
+        post: (fn: Route) => ((routes.POST = fn), chain),
+      }
+    );
     return chain;
   },
 }));

@@ -1,8 +1,8 @@
 import { adminSettingsRepository, agentRepository } from '@bike4mind/database';
-import { BadRequestError, ForbiddenError, NotFoundError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { deleteElevenLabsAgent, getElevenLabsAgent, updateElevenLabsAgent } from '@bike4mind/voice';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
@@ -18,12 +18,11 @@ const UpdateVoiceAgentBodySchema = z.object({
   isDefault: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PATCH: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const id = typeof req.query.id === 'string' ? req.query.id : null;
     if (!id) throw new NotFoundError('Agent ID required');
 
@@ -54,10 +53,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
   })
   .patch(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const id = typeof req.query.id === 'string' ? req.query.id : null;
     if (!id) throw new NotFoundError('Agent ID required');
 
@@ -140,10 +135,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.status(200).json({ agent: updated });
   })
   .delete(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const id = typeof req.query.id === 'string' ? req.query.id : null;
     if (!id) throw new NotFoundError('Agent ID required');
 

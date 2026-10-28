@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
@@ -97,16 +97,10 @@ const CreateSlackAppSchema = z.object({
   enableWorkflowSteps: z.boolean().optional().default(true),
 });
 
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  req.logger.info(req.user?.isAdmin, 'isAdmin');
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const result = CreateSlackAppSchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');

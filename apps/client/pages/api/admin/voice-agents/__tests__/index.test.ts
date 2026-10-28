@@ -16,6 +16,7 @@ const { adminAuditLogRepository, agentRepository, createElevenLabsAgent, deleteE
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain = {
+      use: () => chain,
       get: () => chain,
       post: (handler: Handler) => {
         route.post = handler;

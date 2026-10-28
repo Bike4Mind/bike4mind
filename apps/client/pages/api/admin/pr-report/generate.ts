@@ -10,18 +10,17 @@
  */
 
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@client/server/middlewares/baseApi';
+import { adminApi } from '@client/server/middlewares/adminApi';
 import { prReportService } from '@bike4mind/services';
-import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { BadRequestError } from '@bike4mind/utils';
 
 import { assertRepoFormat } from '@server/services/prReport/guards';
 import { createGenerateDeps, loadPrReportConfig } from '@server/services/prReport/context';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const config = await loadPrReportConfig();
 
   if (!config.repo) {

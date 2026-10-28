@@ -48,6 +48,12 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
 // before that declaration (the route is imported before the test body executes).
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: Record<string, unknown> = {};
+  const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+  chain.__middlewares = middlewares;
+  chain.use = (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+    middlewares.push(middleware);
+    return chain;
+  };
   for (const method of ['get', 'put', 'delete']) {
     chain[method] = (routeHandler: unknown) => {
       chain[`__${method}`] = routeHandler;
@@ -67,6 +73,9 @@ import handler from '../index';
 type RouteHandler = (req: unknown, res: unknown) => Promise<unknown>;
 
 const routes = handler as unknown as Record<string, RouteHandler>;
+const middlewares = (
+  handler as unknown as { __middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> }
+).__middlewares;
 
 const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -77,7 +86,10 @@ const invoke = async (
 ) => {
   const json = vi.fn((x: unknown) => x);
   const { isAdmin = true, ...rest } = req;
-  await routes[`__${method}`]({ user: { isAdmin }, logger, ...rest }, { json });
+  const request = { user: { isAdmin }, logger, method: method.toUpperCase(), ...rest };
+  const response = { json };
+  for (const middleware of middlewares) middleware(request, response, () => undefined);
+  await routes[`__${method}`](request, response);
   return json.mock.calls[0]?.[0];
 };
 
@@ -116,7 +128,10 @@ describe('admin/scoped-settings authorization', () => {
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
     // Pins the whole config object, not just requiredScopes - a sibling `auth: false` would skip
     // baseApi's entire api-key chain and disable this gate while leaving requiredScopes untouched.
-    expect((handler as unknown as { __config?: unknown }).__config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect((handler as unknown as { __config?: unknown }).__config).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      allowedMethods: ['GET', 'PUT', 'DELETE'],
+    });
   });
 });
 

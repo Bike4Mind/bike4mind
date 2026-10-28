@@ -12,10 +12,19 @@ const { handlers, configs, db, recordAdminActionFromRequest } = vi.hoisted(() =>
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     configs.push(config);
-    const chain: Record<string, (fn: (req: unknown, res: unknown) => unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain: Record<string, unknown> = {
+      use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+        middlewares.push(middleware);
+        return chain;
+      },
+    };
     for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
       chain[method] = (fn: (req: unknown, res: unknown) => unknown) => {
-        handlers[method] = fn;
+        handlers[method] = async (req: unknown, res: unknown) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return fn(req, res);
+        };
         return chain;
       };
     }
@@ -56,7 +65,7 @@ beforeEach(() => {
 
 describe('/api/admin/oauth-clients', () => {
   it('requires the admin API-key scope', () => {
-    expect(configs).toEqual([{ requiredScopes: [ApiKeyScope.ADMIN] }]);
+    expect(configs).toEqual([expect.objectContaining({ requiredScopes: [ApiKeyScope.ADMIN] })]);
   });
 
   it.each(['get', 'post'])('rejects a non-admin on %s with ForbiddenError and touches nothing', async method => {

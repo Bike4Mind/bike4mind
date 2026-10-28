@@ -15,9 +15,22 @@ function wrapHandler(fn: (req: unknown, res: any) => Promise<unknown>) {
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const mock: { _post?: (req: unknown, res: unknown) => Promise<unknown>; post: (fn: unknown) => typeof mock } = {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const mock: {
+      _post?: (req: unknown, res: unknown) => Promise<unknown>;
+      use: (fn: (req: unknown, res: unknown, next: () => void) => void) => typeof mock;
+      post: (fn: unknown) => typeof mock;
+    } = {
+      use: function (fn) {
+        middlewares.push(fn);
+        return mock;
+      },
       post: function (fn: unknown) {
-        mock._post = wrapHandler(fn as (req: unknown, res: unknown) => Promise<unknown>);
+        const handlerFn = fn as (req: unknown, res: unknown) => Promise<unknown>;
+        mock._post = wrapHandler(async (req, res) => {
+          for (const middleware of middlewares) middleware(req, res, () => undefined);
+          return handlerFn(req, res);
+        });
         return mock;
       },
     };

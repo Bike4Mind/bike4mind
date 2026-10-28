@@ -1,17 +1,16 @@
 import { identityProviderRepository, withTransaction } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, identityProviderListResponseSchema, identityProviderResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       // Presence flags, not values: the UI needs to distinguish a configured credential
       // from a blank one, and the secrets themselves must never reach a response.
       const idps = await identityProviderRepository.findAllWithSecretPresence();
@@ -23,10 +22,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   })
   .post(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { name, emailDomain, type, isActive = true, samlConfig, oktaConfig } = req.body;
 
       if (!name || !emailDomain || !type) {

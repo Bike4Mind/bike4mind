@@ -1,8 +1,8 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, adminSettingsRepository } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
 import {
@@ -32,12 +32,11 @@ const paramsSchema = z.object({
     .transform(v => v === 'true'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const logger = new Logger({ metadata: { service: 'ContextTelemetryAnalyze' } });
     const { id, force } = paramsSchema.parse(req.query);
 

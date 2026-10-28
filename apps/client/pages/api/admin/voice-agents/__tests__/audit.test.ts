@@ -17,11 +17,16 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const on = (method: string) => (fn: (req: unknown, res: unknown) => unknown) => ((routes[method] = fn), chain);
     const chain: Record<string, unknown> = Object.assign(
-      (req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res),
+      async (req: { method?: string }, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[req.method ?? 'GET']?.(req, res);
+      },
       {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: on('GET'),
         post: on('POST'),
         patch: on('PATCH'),

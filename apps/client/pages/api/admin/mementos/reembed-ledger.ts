@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { ApiKeyScope, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import {
   MEMORY_PRINCIPAL_KINDS,
@@ -7,7 +7,6 @@ import {
   type MemoryPrincipalKind,
   type PrincipalCursor,
 } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { migrateLedgerVectorsForPrincipal } from '@server/memory/reembedMementos';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
@@ -42,11 +41,10 @@ const bodySchema = z.object({
     .nullish(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });

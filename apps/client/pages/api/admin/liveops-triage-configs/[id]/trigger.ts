@@ -14,8 +14,8 @@ import {
   liveopsTriageConfigAuditLogRepository,
 } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
@@ -35,12 +35,11 @@ const TriggerRequestSchema = z.object({
   lookbackHours: LiveOpsTriageJobMessageSchema.shape.lookbackHours,
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   try {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query;
 
     if (!id || typeof id !== 'string') {

@@ -11,8 +11,28 @@ const { reads } = vi.hoisted(() => ({
   },
 }));
 
-// baseApi is stubbed (no auth chain), so ensureAdmin in each route is what is under test.
-vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
+// baseApi is stubbed (no auth chain) but runs the .use() middlewares, so the real adminApi gate is under test.
+vi.mock('@server/middlewares/baseApi', async () => {
+  const { default: errorHandler } = await import('@server/middlewares/errorHandler');
+  type Step = (req: unknown, res: unknown, next: () => void) => unknown;
+  return {
+    baseApi: () => {
+      const gates: Step[] = [];
+      const chain = {
+        use: (gate: Step) => (gates.push(gate), chain),
+        get: (handler: Step) => async (req: never, res: never) => {
+          try {
+            for (const gate of gates) await gate(req, res, () => undefined);
+            await handler(req, res, () => undefined);
+          } catch (error) {
+            errorHandler(error as Error, req, res);
+          }
+        },
+      };
+      return chain;
+    },
+  };
+});
 vi.mock('@server/qa/reads', () => reads);
 vi.mock('@server/qa/storage', () => ({ qaMediaStorage: () => ({ exists: vi.fn(), signedGetUrl: vi.fn() }) }));
 vi.mock('@server/qa/reportToken', () => ({ signQaReportToken: (id: string) => `tok-${id}` }));
@@ -42,7 +62,9 @@ describe('admin QA read routes', () => {
   it('403s a non-admin on every route', async () => {
     for (const route of [facets, overview, runs, runDetail, tests]) {
       const query = { product: 'product-a', id: 'a'.repeat(24), testKey: 'k' };
-      expect((await call(route, query, { id: 'u', isAdmin: false })).status).toBe(403);
+      const response = await call(route, query, { id: 'u', isAdmin: false });
+      expect(response.status).toBe(403);
+      expect(JSON.stringify(response.json)).toMatch(/missing permission/i);
     }
     for (const fn of Object.values(reads)) expect(fn).not.toHaveBeenCalled();
   });
