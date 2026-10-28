@@ -14,7 +14,9 @@ export type AdminToolResult =
 type AdminToolContext = Omit<ToolContext, 'config'>;
 type ToolParametersSchema = ReturnType<ToolDefinition['implementation']>['toolSchema']['parameters'];
 
-type AdminToolSpec<S extends z.ZodType> = {
+type AdminToolInput = z.ZodObject<z.ZodRawShape>;
+
+type AdminToolSpec<S extends AdminToolInput> = {
   name: AdminAssistantToolName;
   description: string;
   input: S;
@@ -23,7 +25,7 @@ type AdminToolSpec<S extends z.ZodType> = {
 
 const forbidden: AdminToolResult = { ok: false, error: 'forbidden', message: 'Admin access is required.' };
 
-function toParametersSchema(input: z.ZodType): ToolParametersSchema {
+function toParametersSchema(input: AdminToolInput): ToolParametersSchema {
   const { $schema: _draftUri, ...schema } = z.toJSONSchema(input) as Record<string, unknown>;
   // The LLM tool schema format has no slot for the draft URI; every admin input is a z.object,
   // so the remaining shape is the `{ type: 'object', properties }` the format expects.
@@ -35,7 +37,7 @@ function toParametersSchema(input: z.ZodType): ToolParametersSchema {
  * input parsing so a non-admin learns nothing about the tool's input shape, even if the
  * registry gate upstream is ever bypassed.
  */
-export function defineAdminTool<S extends z.ZodType>(spec: AdminToolSpec<S>): ToolDefinition {
+export function defineAdminTool<S extends AdminToolInput>(spec: AdminToolSpec<S>): ToolDefinition {
   return {
     name: spec.name,
     implementation: context => ({
@@ -52,7 +54,7 @@ export function defineAdminTool<S extends z.ZodType>(spec: AdminToolSpec<S>): To
   };
 }
 
-async function execute<S extends z.ZodType>(
+async function execute<S extends AdminToolInput>(
   spec: AdminToolSpec<S>,
   rawArgs: unknown,
   context: AdminToolContext
