@@ -204,6 +204,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
     it('allows setting the balance back to the list-load value once the admin enters it', async () => {
       const onCreditAdjustment = renderModal();
       fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'Restore balance' } });
+      fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '' } });
       fireEvent.change(screen.getByTestId('credit-adjust-set-input'), { target: { value: '100' } });
       expect(screen.getByTestId('credit-adjust-set-preview')).toHaveTextContent('Same as the balance at list load');
       fireEvent.click(screen.getByTestId('credit-adjust-set-btn'));
