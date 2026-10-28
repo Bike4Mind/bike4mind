@@ -97,6 +97,56 @@ export function resolveFeedbackSlackRoute(
     : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
 }
 
+export type SlackPostOutcome = 'sent' | 'unconfigured' | 'failed';
+
+// An empty SlackSecurityAlertsWebhookUrl is the documented way to turn security alerts off, so it is
+// warned about once per process rather than logged as an error on every alert.
+let securityAlertsDisabledWarned = false;
+
+function logUnconfiguredWebhook(channel: SlackChannelSettingKey): void {
+  if (channel !== 'SlackSecurityAlertsWebhookUrl') {
+    Logger.error(`Error posting message to Slack: no eligible webhook configured for ${channel}`);
+    return;
+  }
+  if (securityAlertsDisabledWarned) return;
+  securityAlertsDisabledWarned = true;
+  Logger.warn('Slack security alerts are disabled: SlackSecurityAlertsWebhookUrl is not set');
+}
+
+/**
+ * Posts to a Slack channel (LiveOps by default), swallowing errors, and reports whether the message
+ * was sent, skipped because no webhook is configured, or failed. Use this over postMessageToSlack
+ * when a caller treats "turned off" differently from "broken".
+ */
+export async function postMessageToSlackWithOutcome(
+  message: string,
+  channel: SlackChannelSettingKey = 'SlackLiveopsWebhookUrl',
+  options: { timeoutMs?: number } = {}
+): Promise<SlackPostOutcome> {
+  try {
+    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    const slackWebhookUrl = resolveSlackWebhookUrl(channel, settings);
+
+    if (!slackWebhookUrl) {
+      logUnconfiguredWebhook(channel);
+      return 'unconfigured';
+    }
+
+    await axios.post(
+      slackWebhookUrl,
+      { text: message },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: options.timeoutMs ?? 10_000,
+      }
+    );
+    return 'sent';
+  } catch (error) {
+    Logger.error('Error posting message to Slack:', error);
+    return 'failed';
+  }
+}
+
 /**
  * Posts to the LiveOps channel, swallowing errors as before, but reports whether a message was
  * actually delivered (true) or the post was unconfigured/failed (false). A caller that must not lose
@@ -108,28 +158,7 @@ export async function postMessageToSlack(
   channel: SlackChannelSettingKey = 'SlackLiveopsWebhookUrl',
   options: { timeoutMs?: number } = {}
 ): Promise<boolean> {
-  try {
-    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const slackWebhookUrl = resolveSlackWebhookUrl(channel, settings);
-
-    if (!slackWebhookUrl) {
-      Logger.error(`Error posting message to Slack: no eligible webhook configured for ${channel}`);
-      return false;
-    }
-
-    await axios.post(
-      slackWebhookUrl,
-      { text: message },
-      {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: options.timeoutMs ?? 10_000,
-      }
-    );
-    return true;
-  } catch (error) {
-    Logger.error('Error posting message to Slack:', error);
-    return false;
-  }
+  return (await postMessageToSlackWithOutcome(message, channel, options)) === 'sent';
 }
 
 /**
