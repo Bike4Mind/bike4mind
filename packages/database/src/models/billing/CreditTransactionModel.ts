@@ -280,7 +280,7 @@ export class CreditTransactionRepository
     from: Date,
     to: Date
   ): Promise<Array<{ day: string; netCredits: number }>> {
-    // Rides the {ownerId, ownerType, createdAt} index; usage rows are numerous, so sum server-side.
+    // Rides the {ownerId, ownerType, createdAt, _id} index; usage rows are numerous, so sum server-side.
     // Bounded at both ends so the sum and the balance snapshot describe the same instant.
     const rows = await this.model.aggregate<{ _id: string; netCredits: number }>([
       { $match: { ownerId, ownerType, createdAt: { $gte: from, $lte: to } } },
@@ -327,7 +327,7 @@ export class CreditTransactionRepository
 
   /**
    * One keyset page of an owner's ledger, newest first by {createdAt, _id}. Pass the last row of the
-   * previous page as `after` to continue strictly past it. Rides the {ownerId, ownerType, createdAt}
+   * previous page as `after` to continue strictly past it. Rides the {ownerId, ownerType, createdAt, _id}
    * index; the _id tiebreak keeps rows sharing a timestamp from being skipped or repeated.
    */
   async findLedgerPage(
