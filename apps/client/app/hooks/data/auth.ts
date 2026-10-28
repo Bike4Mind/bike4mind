@@ -16,8 +16,9 @@ import { useRouter, useSearch } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
-import { getTurnstileToken } from '@client/app/utils/turnstile';
+import { getTurnstileToken, TurnstileError } from '@client/app/utils/turnstile';
 import type { ServerConfigPublic } from '@pages/api/settings/serverConfigPublic';
+import type { TurnstileClientFailure } from '@pages/api/turnstile/client-failure';
 
 interface LoginError {
   message: string;
@@ -109,7 +110,12 @@ export function useSendOTC() {
 
 // Fresh token per attempt: Turnstile tokens are single-use, so retries solve again. Returns undefined
 // when the stage does not enforce the challenge.
-async function solveTurnstileIfRequired(queryClient: QueryClient, action: string): Promise<string | undefined> {
+type TurnstileAction = TurnstileClientFailure['action'];
+
+async function solveTurnstileIfRequired(
+  queryClient: QueryClient,
+  action: TurnstileAction
+): Promise<string | undefined> {
   const config = await queryClient.fetchQuery({
     queryKey: ['server-config-public'],
     queryFn: async () => (await api.get<ServerConfigPublic>('/api/settings/serverConfigPublic')).data,
@@ -118,9 +124,24 @@ async function solveTurnstileIfRequired(queryClient: QueryClient, action: string
   if (!config?.turnstileSiteKey) return undefined;
   try {
     return await getTurnstileToken(config.turnstileSiteKey, action);
-  } catch {
+  } catch (error) {
+    reportTurnstileFailure(action, error);
     throw new Error('Could not complete the verification check. Please refresh and try again.');
   }
+}
+
+/**
+ * Tells the server a challenge failed in the browser, which it otherwise never sees. Fire-and-forget:
+ * the user already gets the sign-in error, and a failed report must not replace it.
+ */
+function reportTurnstileFailure(action: TurnstileAction, error: unknown): void {
+  const failure: TurnstileClientFailure =
+    error instanceof TurnstileError
+      ? { action, reason: error.reason, errorCode: error.errorCode, attempts: error.attempts }
+      : { action, reason: 'unavailable', attempts: 1 };
+  api.post('/api/turnstile/client-failure', failure).catch((reportError: unknown) => {
+    console.warn('Failed to report Turnstile client failure', reportError);
+  });
 }
 
 /** The `<strategy>` segment of an `/api/auth/<strategy>` start URL, or undefined for any other path. */

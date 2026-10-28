@@ -40,9 +40,15 @@ vi.mock('../Details/GrantSubscriptionModal', () => ({
     </div>
   ),
 }));
-vi.mock('../Activity/UserViewTabs', () => ({
-  UserActivityTabPanel: ({ userId }: { userId: string }) => <div data-testid="stub-activity" data-user-id={userId} />,
+vi.mock('./tabs/ActivityTab', () => ({
+  ActivityTab: ({ userId, onOpenCredits }: { userId: string; onOpenCredits: () => void }) => (
+    <div data-testid="stub-activity" data-user-id={userId}>
+      <button data-testid="stub-activity-credits-btn" onClick={onOpenCredits} />
+    </div>
+  ),
 }));
+vi.mock('./tabs/SignInsTab', () => ({ SignInsTab: () => <div data-testid="stub-signins" /> }));
+vi.mock('./tabs/AdminLogTab', () => ({ AdminLogTab: () => <div data-testid="stub-admin-log" /> }));
 vi.mock('./UserProfileStats', () => ({ UserProfileStats: () => <div data-testid="stub-stats" /> }));
 vi.mock('./tabs/OverviewTab', () => ({
   OverviewTab: ({ onAction, onViewActivity }: { onAction: (action: 'tags') => void; onViewActivity: () => void }) => (
@@ -60,10 +66,6 @@ vi.mock('./tabs/credits/CreditsTab', () => ({
   ),
 }));
 vi.mock('./tabs/keys/ApiKeysTab', () => ({ ApiKeysTab: () => <div data-testid="stub-keys" /> }));
-vi.mock('./tabs/recordTabs', () => ({
-  SignInsTab: () => <div data-testid="stub-signins" />,
-  AdminLogTab: () => <div data-testid="stub-admin-log" />,
-}));
 vi.mock('./actions/accessDialogs', () => {
   const stub = (id: string) => {
     const Stub = () => <div data-testid={id} />;
@@ -149,8 +151,18 @@ describe('UserProfileView', () => {
     it('lists the profile commands in the palette, with Suspend disabled for a suspended account', () => {
       setup(buildProfile({ isBanned: true }));
 
-      expect(screen.getByTestId('admin-command-credits-btn')).toBeEnabled();
-      expect(screen.getByTestId('admin-command-suspend-btn')).toBeDisabled();
+      fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+
+      expect(screen.getByRole('option', { name: 'Adjust credits' })).toBeEnabled();
+      expect(screen.getByRole('option', { name: 'Suspend account' })).toBeDisabled();
+    });
+
+    it('does not repeat the header actions in the command strip', () => {
+      setup();
+
+      expect(screen.queryByTestId('admin-command-credits-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('admin-command-suspend-btn')).not.toBeInTheDocument();
+      expect(screen.getByTestId('admin-command-revoke-btn')).toBeInTheDocument();
     });
 
     it('Revoke API keys opens the audited revoke flow for this user only', () => {
@@ -316,6 +328,14 @@ describe('UserProfileView', () => {
       fireEvent.click(screen.getByTestId('stub-overview-activity-btn'));
 
       expect(onTabChange).toHaveBeenCalledWith('activity');
+    });
+
+    it('lets a credit event on the activity tab open the credits tab', () => {
+      const { onTabChange } = setup(buildProfile(), 'activity');
+
+      fireEvent.click(screen.getByTestId('stub-activity-credits-btn'));
+
+      expect(onTabChange).toHaveBeenCalledWith('credits');
     });
 
     it('opens Adjust credits from the credits tab', () => {

@@ -13,6 +13,7 @@ import {
   estimateFit,
   fitMarginBytes,
   flashAttnOffBytes,
+  isCpuOnly,
   kvCacheBytes,
   type FitInput,
   type HardwareProfile,
@@ -189,6 +190,18 @@ describe('contextTarget and contextFloor', () => {
     const a = arch({ ...ARCH_64K, contextMax });
     expect(contextTarget(a, mode, cap)).toBe(target);
     expect(contextFloor(a, mode, cap)).toBe(floor);
+  });
+});
+
+describe('isCpuOnly', () => {
+  it.each([
+    ['no GPU', machine('cpu', 64), true],
+    ['a discrete GPU of unknown memory', machine('discrete', 64), true],
+    ['a discrete GPU', machine('discrete', 64, 24), false],
+    ['unified memory', machine('unified', 64), false],
+  ] as const)('%s: %s', (_label, hw, expected) => {
+    expect(isCpuOnly(hw)).toBe(expected);
+    expect(fit({ hardware: hw, runtime: OLLAMA, context: 16384 }).requested?.placement === 'cpu').toBe(expected);
   });
 });
 

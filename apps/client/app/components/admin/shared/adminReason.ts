@@ -25,6 +25,7 @@ export const ADMIN_REASON_PRESETS = {
   subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
+  sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],

@@ -1,10 +1,11 @@
 // apps/client/pages/api/skills/market/review-queue.ts
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { Skill, SkillListing, SkillListingReport, SkillListingVersion } from '@bike4mind/database';
+import { Skill, SkillListing, SkillListingReport } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { ForbiddenError, type ISkillListing } from '@bike4mind/common';
-import { canReviewListing, serializeListing, type MarketActor } from '@server/skillMarket/market';
+import { ForbiddenError } from '@bike4mind/common';
+import { serializeListing, type MarketActor } from '@server/skillMarket/market';
+import { loadVersionQueue, requireReviewer, reviewScope } from '@server/skillMarket/reviewQueue';
 
 const QUEUE_LIMIT = 100;
 
@@ -18,14 +19,9 @@ const QUEUE_LIMIT = 100;
 const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: string }>>(async (req, res) => {
   const actor: MarketActor = { id: req.user!.id, isAdmin: req.user!.isAdmin };
   const adminOrgIds = await organizationRepository.findIdsAdministeredBy(actor.id);
-  if (!actor.isAdmin && adminOrgIds.length === 0) throw new ForbiddenError('Reviewers only');
+  requireReviewer(actor, adminOrgIds);
 
   const filter = req.query.filter ?? 'pending';
-  const scope = actor.isAdmin ? {} : { visibility: 'organization', organizationId: { $in: adminOrgIds } };
-  // Scope org admins BEFORE the queue limits, so other orgs' (or Public) backlog can't crowd theirs out.
-  const scopedListingIds = actor.isAdmin
-    ? null
-    : (await SkillListing.find(scope).select('_id').lean()).map(l => String(l._id));
 
   if (filter === 'legacy') {
     if (!actor.isAdmin) throw new ForbiddenError('Super-admins only');
@@ -48,6 +44,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
   }
 
   if (filter === 'reports') {
+    const { scope, scopedListingIds } = await reviewScope(actor, adminOrgIds);
     const grouped = await SkillListingReport.aggregate<{ _id: string; count: number; reports: unknown[] }>([
       { $match: { status: 'open', ...(scopedListingIds ? { listingId: { $in: scopedListingIds } } : {}) } },
       { $sort: { createdAt: -1 } },
@@ -80,44 +77,17 @@ const handler = baseApi({ auth: 'jwtOnly' }).get<Request<{}, {}, {}, { filter?: 
     });
   }
 
-  const versionFilter =
-    filter === 'audit'
-      ? { auditSample: true, auditedAt: null, reviewStatus: { $in: ['auto_approved', 'approved'] } }
-      : { reviewStatus: 'pending', scanStatus: 'passed' };
-  const versions = await SkillListingVersion.find({
-    ...versionFilter,
-    ...(scopedListingIds ? { listingId: { $in: scopedListingIds } } : {}),
-  })
-    .sort({ createdAt: 1 })
-    .limit(QUEUE_LIMIT * 3);
-  const listings = await SkillListing.find({ _id: { $in: versions.map(v => v.listingId) }, ...scope });
-  const byId = new Map(listings.map(l => [String(l._id), l]));
-
-  // The approved version each held one would replace, for the reviewer's diff.
-  const previousIds = listings.flatMap(l => (l.currentApprovedVersionId ? [l.currentApprovedVersionId] : []));
-  const previous = await SkillListingVersion.find({ _id: { $in: previousIds } }).select('version snapshot');
-  const previousById = new Map(previous.map(p => [String(p._id), p.toJSON()]));
-
-  const data = versions
-    .flatMap(v => {
-      const listing = byId.get(v.listingId);
-      if (!listing) return [];
-      // Only the listing's pending pointer is decidable; a "pending" row the pointer never reached
-      // (a crash between the verdict and pointer writes) would 409 on every approve or reject.
-      if (filter !== 'audit' && listing.pendingVersionId !== String(v._id)) return [];
-      const plain = listing.toJSON() as unknown as ISkillListing;
-      const prev = listing.currentApprovedVersionId ? previousById.get(listing.currentApprovedVersionId) : undefined;
-      return [
-        {
-          version: v.toJSON(),
-          listing: serializeListing(listing, { privileged: true }),
-          previous: prev && String(prev.id) !== String(v._id) ? prev : null,
-          // Self-approvals are audited by someone else, never by their author.
-          canDecide:
-            canReviewListing(plain, actor, adminOrgIds) && !(filter === 'audit' && plain.authorUserId === actor.id),
-        },
-      ];
-    })
+  const { rows } = await loadVersionQueue(actor, adminOrgIds, {
+    filter: filter === 'audit' ? 'audit' : 'pending',
+    limit: QUEUE_LIMIT * 3,
+  });
+  const data = rows
+    .map(({ version, listing, previous, canDecide }) => ({
+      version: version.toJSON(),
+      listing: serializeListing(listing, { privileged: true }),
+      previous,
+      canDecide,
+    }))
     .slice(0, QUEUE_LIMIT);
   res.json({ filter, data });
 });

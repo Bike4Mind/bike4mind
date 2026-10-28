@@ -59,6 +59,29 @@ describe('AdminCommandPalette', () => {
     expect(run).toHaveBeenCalledTimes(3);
   });
 
+  it('keeps a paletteOnly command out of the button strip but in the palette and shortcuts', async () => {
+    const run = vi.fn();
+    render(
+      <CssVarsProvider theme={theme}>
+        <AdminCommandPalette
+          commands={[
+            { id: 'credits', label: 'Adjust credits', shortcut: 'c', paletteOnly: true, run },
+            { id: 'revoke', label: 'Revoke API keys', run: vi.fn() },
+          ]}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('admin-command-credits-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('admin-command-revoke-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-shortcuts-open-btn')).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'c' });
+    expect(run).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId('admin-command-open-btn'));
+    fireEvent.change(screen.getByTestId('admin-search-input'), { target: { value: 'Adjust' } });
+    fireEvent.click(screen.getByRole('option', { name: 'Adjust credits' }));
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+  });
+
   it('opens the mounted Help Center through its host callback', async () => {
     const onOpenHelp = vi.fn();
     render(

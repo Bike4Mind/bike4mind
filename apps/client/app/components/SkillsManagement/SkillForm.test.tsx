@@ -24,6 +24,12 @@ const upload = (text: string) =>
     target: { files: [new File([text], 'SKILL.md', { type: 'text/markdown' })] },
   });
 
+const inFolder = (relativePath: string, content: string | Uint8Array) => {
+  const file = new File([content], relativePath.split('/').pop()!);
+  Object.defineProperty(file, 'webkitRelativePath', { value: relativePath });
+  return file;
+};
+
 const paste = (text: string) => {
   fireEvent.click(screen.getByTestId('skill-form-import-paste-toggle'));
   fireEvent.change(screen.getByTestId('skill-form-import-paste-input'), { target: { value: text } });
@@ -47,12 +53,72 @@ const deferredFile = () => {
 };
 
 describe('SkillForm SKILL.md import', () => {
-  it('always explains that supporting files are not imported', () => {
+  it('explains which supporting files a folder import brings along', () => {
     renderForm();
-    expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent('Only SKILL.md is imported');
-    paste('---\nname: review-pr\ndescription: Review a PR\n---\nRun scripts/review.py.');
-    expect(screen.queryByTestId('skill-form-import-dropped')).not.toBeInTheDocument();
-    expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent("aren't imported");
+    expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent('scripts/ and references/');
+  });
+
+  it('imports a skill folder with its scripts and references and submits them', async () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+      </CssVarsProvider>
+    );
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: {
+        files: [
+          inFolder('review-pr/SKILL.md', '---\nname: review-pr\ndescription: Review a PR\n---\nRun the script.'),
+          inFolder('review-pr/scripts/review.py', 'print("ok")'),
+          inFolder('review-pr/references/checklist.md', '- tests'),
+          inFolder('review-pr/README.md', 'readme'),
+          inFolder('review-pr/.DS_Store', 'junk'),
+        ],
+      },
+    });
+    await waitFor(() => expect(value('skill-name-input')).toBe('review-pr'));
+    expect(screen.getByTestId('skill-form-files')).toHaveTextContent('references/checklist.md');
+    expect(screen.getByTestId('skill-form-files-skipped')).toHaveTextContent('README.md');
+    expect(screen.getByTestId('skill-form-files-skipped')).not.toHaveTextContent('DS_Store');
+
+    fireEvent.submit(screen.getByTestId('skill-form'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [
+          { path: 'references/checklist.md', content: '- tests' },
+          { path: 'scripts/review.py', content: 'print("ok")' },
+        ],
+      })
+    );
+
+    fireEvent.click(screen.getByTestId('skill-form-files-remove'));
+    fireEvent.submit(screen.getByTestId('skill-form'));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ files: [] }));
+  });
+
+  it('refuses a folder with a binary script and leaves the form alone', async () => {
+    renderForm();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: {
+        files: [
+          inFolder('s/SKILL.md', '---\nname: s\ndescription: d\n---\nbody'),
+          inFolder('s/scripts/tool.bin', new Uint8Array([0xff, 0xfe, 0x00])),
+        ],
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent('scripts/tool.bin: only text files')
+    );
+    expect(value('skill-name-input')).toBe('');
+  });
+
+  it('keeps no supporting files from a folder whose SKILL.md is malformed', async () => {
+    renderForm();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: { files: [inFolder('s/SKILL.md', '---\nname: [\n---\nbody'), inFolder('s/scripts/a.py', 'x')] },
+    });
+    await waitFor(() => expect(screen.getByTestId('skill-form-import-error')).toBeInTheDocument());
+    expect(screen.queryByTestId('skill-form-files')).not.toBeInTheDocument();
   });
 
   it.each(['resolve', 'reject'] as const)(
@@ -149,6 +215,27 @@ describe('SkillForm SKILL.md import', () => {
     await waitFor(() => expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent(message));
     expect(value('skill-name-input')).toBe('kept');
     expect(value('skill-body-input')).toBe('Kept body');
+  });
+
+  it('does not warn about referenced files that a folder import brought along', async () => {
+    renderForm();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: {
+        files: [
+          inFolder(
+            'lint/SKILL.md',
+            '---\nname: lint\ndescription: Lint\n---\nRun `scripts/foo.sh` and read reference.md.'
+          ),
+          inFolder('lint/scripts/foo.sh', 'echo ok'),
+        ],
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('skill-form-import-supporting-files')).toHaveTextContent(
+        'files that were not imported: reference.md.'
+      )
+    );
+    expect(screen.getByTestId('skill-form-import-supporting-files')).not.toHaveTextContent('scripts/foo.sh');
   });
 
   it('warns about referenced supporting files even when no keys were dropped', () => {

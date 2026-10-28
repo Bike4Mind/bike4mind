@@ -16,6 +16,8 @@ import SeedStagedSignupSettings from './20260921235967_seed-staged-signup-settin
 import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup-activity-index';
 import EnsureUserSignupGrantOrgIndex from './20260921235968_ensure-user-signup-grant-org-index';
 import RedropShareTokenScalarIndex from './20260921235975_redrop-share-token-scalar-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureCreditTransactionBalanceEventIndex from './20260921235947_ensure-credit-transaction-balance-event-index';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
@@ -243,6 +245,8 @@ import ClearSuspensionMirroredIsModerated from './20260921235945_clear-suspensio
 import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import RestoreLegacyXlsMimeType from './20260921235946_restore-legacy-xls-mime-type';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -404,6 +408,7 @@ const coreMigrations: MigrationFile[] = [
   SetLiveopsTriageConfigAuditLogRetention,
   FoldOrganizationManagerIntoAdminUserIds,
   BackfillFreeCreditClaimEmail,
+  RestoreLegacyXlsMimeType,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureAdminAuditLogReadIndexes,
@@ -424,6 +429,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureQuestSignupActivityIndex,
   EnsureUserSignupGrantOrgIndex,
   RedropShareTokenScalarIndex,
+  EnsureCreditTransactionBalanceEventIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

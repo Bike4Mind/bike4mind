@@ -939,7 +939,8 @@ describe('OllamaLocal context sizing', () => {
     forgetLocalContexts();
   });
 
-  // Sizes follow the stub estimator: a 4 GiB model plus 2 GiB per 16K of context.
+  // Sizes follow the stub estimator: a 4 GiB model plus 2 GiB per 16K of context. A bare number is a
+  // unified machine of that many GiB, which Auto sizes by memory alone.
   const cpu = cpuMachine;
   const discrete = discreteMachine;
   const unified = unifiedMachine;
@@ -948,7 +949,7 @@ describe('OllamaLocal context sizing', () => {
   const footprintOn = (machine: Machine, arch = stubArch()): LocalModelFootprint =>
     machine === null
       ? { arch: null, weightsBytes: null, hardware: null }
-      : { arch, weightsBytes: 4 * GIB, hardware: typeof machine === 'number' ? cpu(machine) : machine };
+      : { arch, weightsBytes: 4 * GIB, hardware: typeof machine === 'number' ? unified(machine) : machine };
   const sizing = (setting: LocalContextSetting, machine: Machine, arch?: ModelArch) => {
     let footprint = footprintOn(machine, arch);
     return {
@@ -1009,6 +1010,14 @@ describe('OllamaLocal context sizing', () => {
     { setting: AUTO_LOCAL_CONTEXT, machine: unified(7), show: trainedFor(131072), expected: 16384 },
     { setting: AUTO_LOCAL_CONTEXT, machine: unified(13), show: trainedFor(131072), expected: 65536 },
     { setting: AUTO_LOCAL_CONTEXT, machine: lowConfidence(64), show: trainedFor(131072), expected: 16384 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: cpu(64), show: trainedFor(262144), expected: 32768 },
+    { setting: AUTO_LOCAL_CONTEXT, machine: cpu(7), show: trainedFor(262144), expected: 16384 },
+    {
+      setting: { mode: 'fixed', tokens: 131072 } as const,
+      machine: cpu(64),
+      show: trainedFor(262144),
+      expected: 131072,
+    },
     {
       setting: AUTO_LOCAL_CONTEXT,
       machine: 13,
@@ -1072,6 +1081,14 @@ describe('OllamaLocal context sizing', () => {
     forgetLocalContexts();
     await local.stream(longTurn, () => undefined);
     expect(sent().at(-1)).toBe(65536);
+  });
+
+  it('starts a model at 32K without a GPU and grows it one Settings size, not to its trained length', async () => {
+    const sent = ollama(trainedFor(262144), () => overflow(40_000));
+    const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, cpu(64)));
+    expect((await local.models())[0].contextWindow).toBe(32768);
+    await local.stream(longTurn, () => undefined);
+    expect(sent()).toEqual([32768, 65536]);
   });
 
   it('changes num_ctx at most once in a tool loop whose prompt grows every round', async () => {

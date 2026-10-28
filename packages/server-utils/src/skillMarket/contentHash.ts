@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import type { ISkill } from '@bike4mind/common';
+import { compareSkillFilePaths, type ISkill } from '@bike4mind/common';
 
 /**
  * Content identity of a skill, EXCLUDING its name: the name is the importer's slash-command handle
@@ -8,7 +8,13 @@ import type { ISkill } from '@bike4mind/common';
 export function skillContentHash(
   skill: Pick<
     ISkill,
-    'description' | 'body' | 'argumentHint' | 'allowedTools' | 'claudeCodeAllowedTools' | 'disableModelInvocation'
+    | 'description'
+    | 'body'
+    | 'argumentHint'
+    | 'allowedTools'
+    | 'claudeCodeAllowedTools'
+    | 'disableModelInvocation'
+    | 'files'
   >
 ): string {
   const parts: unknown[] = [
@@ -18,7 +24,14 @@ export function skillContentHash(
     skill.allowedTools ?? [],
     Boolean(skill.disableModelInvocation),
   ];
-  // Appended only when set, so every hash computed before this field existed stays valid.
+  // Each optional field is appended only when set, so every hash computed before it existed stays
+  // valid. Keep the order: claudeCodeAllowedTools shipped first, files after it.
   if (skill.claudeCodeAllowedTools?.length) parts.push(skill.claudeCodeAllowedTools);
-  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+  if (skill.files?.length) {
+    const sorted = [...skill.files].sort(compareSkillFilePaths);
+    parts.push(sorted.map(f => [f.path, sha256(f.content)]));
+  }
+  return sha256(JSON.stringify(parts));
 }
+
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');

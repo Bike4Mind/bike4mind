@@ -230,6 +230,12 @@ describe('first-session feature defaults', () => {
 
 describe('public settings projection (M2.5 security boundary)', () => {
   describe('userReadableSettingKeys', () => {
+    it('includes the no-card unlock flags the billing card reads', () => {
+      const keys = new Set(userReadableSettingKeys());
+      expect(keys.has('noCardUnlockEnabled')).toBe(true);
+      expect(keys.has('noCardUnlockProbeInconclusiveAllows')).toBe(true);
+    });
+
     it('excludes admin-only operational config a non-admin has no claim to', () => {
       // These carry no `isSensitive` flag, which is exactly why the previous opt-OUT
       // filter served them to every authenticated caller.
@@ -1450,4 +1456,22 @@ describe('apiKeyAccess default', () => {
     expect(['all', 'paid', 'disabled'].every(v => schema.safeParse(v).success)).toBe(true);
     expect(schema.safeParse('anyone').success).toBe(false);
   });
+});
+
+describe('API rate limit settings floor', () => {
+  it('lets the Free tier be set to 0 but rejects negatives and fractions', () => {
+    const { schema } = settingsMap.apiRateLimitFreePerMin;
+    expect(schema.safeParse(0).success).toBe(true);
+    expect(schema.safeParse(-1).success).toBe(false);
+    expect(schema.safeParse(0.5).success).toBe(false);
+    expect(schema.safeParse(1.5).success).toBe(false);
+  });
+
+  it.each(['apiRateLimitBasicPerMin', 'apiRateLimitProPerMin'] as const)(
+    'keeps a floor of 1 and requires an integer for %s',
+    key => {
+      expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
+      expect(settingsMap[key].schema.safeParse(1.5).success).toBe(false);
+    }
+  );
 });

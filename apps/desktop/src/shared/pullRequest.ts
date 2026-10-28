@@ -209,6 +209,8 @@ export interface PrBarState {
   sessionId: string;
   /** Null when the conversation has no PR, or the user dismissed it: no bar. */
   binding: PrBinding | null;
+  /** The user dismissed the bar, but the PR is still this conversation's: offer no second one. */
+  dismissed?: true;
   /** Null until the first read lands. */
   snapshot: PrBarSnapshot | null;
   gh: PrGhStatus;
