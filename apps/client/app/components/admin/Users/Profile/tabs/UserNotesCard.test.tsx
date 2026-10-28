@@ -96,4 +96,10 @@ describe('UserNotesCard', () => {
     expect(screen.getByTestId('user-note-history')).toHaveTextContent('<b>Original</b>');
     expect(screen.getByTestId('user-note-history').querySelector('b')).toBeNull();
   });
+  it('does not carry a draft to another user profile', () => {
+    const view = mount();
+    fireEvent.change(screen.getByTestId('user-profile-note-input'), { target: { value: 'Context for first user' } });
+    view.rerender(<UserNotesCard user={buildProfile({ id: 'another-user' })} />);
+    expect(screen.getByTestId('user-profile-note-input')).toHaveValue('');
+  });
 });

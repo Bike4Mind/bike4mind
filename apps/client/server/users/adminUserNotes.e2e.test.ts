@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose, { Types } from 'mongoose';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { createMocks } from 'node-mocks-http';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
@@ -11,6 +12,23 @@ import { AdminUserNoteModel, AdminUserNoteRevisionModel, AdminAuditLogModel, Use
 import { listAdminUserNotes, writeAdminUserNote } from './adminUserNotes';
 import { listUserTimeline } from '../utils/userTimeline';
 import { recordAdminActionFromRequest } from '../utils/adminAudit';
+
+const routes = vi.hoisted(() => ({
+  patch: undefined as undefined | ((req: Request, res: Response) => Promise<unknown>),
+}));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    const chain = {
+      use: () => chain,
+      patch: (fn: typeof routes.patch) => {
+        routes.patch = fn;
+        return chain;
+      },
+    };
+    return chain;
+  },
+}));
+await import('../../pages/api/admin/users/[userId]/tags');
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 vi.mock('../utils/adminAudit', async importOriginal => {
@@ -121,9 +139,31 @@ describe('admin user notes storage, service and timeline', () => {
     expect(
       (await listAdminUserNotes(request('GET', {}, { limit: '1', cursor: page.nextCursor }))).entries.map(row => row.id)
     ).toEqual([a.id]);
-    await AdminUserNoteModel.updateOne({ _id: a.id }, { $set: { userId: '650000000000000000000009' } });
+    const otherId = '650000000000000000000009';
+    await User.collection.insertOne({ _id: new Types.ObjectId(otherId), name: 'Other synthetic user' });
+    await expect(
+      writeAdminUserNote(request('PATCH', { noteId: a.id, version: 1, body: 'Wrong subject' }, { userId: otherId }))
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect((await listAdminUserNotes(request('GET', {}, { userId: otherId, noteId: a.id }))).entries).toEqual([]);
     await expect(
       writeAdminUserNote(request('PATCH', { noteId: '650000000000000000000099', version: 1, body: 'Unknown' }))
     ).rejects.toMatchObject({ statusCode: 404 });
+  });
+  it('atomically writes tags and their timeline audit, refuses stale changes, and rolls back failed auditing', async () => {
+    const writeTags = async (before: string[], tags: string[]) => {
+      const { res } = createMocks();
+      await routes.patch!(request('PATCH', { before, tags }), res as unknown as Response);
+    };
+    await writeTags([], ['pilot']);
+    const timeline = await listUserTimeline(
+      { id: USER, name: 'Synthetic user', isAdmin: false },
+      { types: ['admin'], limit: 50, range: {} }
+    );
+    expect(timeline.entries).toHaveLength(1);
+    expect(timeline.entries[0]).toMatchObject({ audit: { action: 'user.tags.updated', actor: { userId: ADMIN } } });
+    await expect(writeTags([], ['stale'])).rejects.toMatchObject({ statusCode: 409 });
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('Synthetic tag audit failure'));
+    await expect(writeTags(['pilot'], ['must-not-stick'])).rejects.toThrow('Synthetic tag audit failure');
+    expect((await User.findById(USER).lean())?.tags).toEqual(['pilot']);
   });
 });

@@ -101,7 +101,7 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
   const suggestions = useGetUserTags();
   const suggestionsId = useId();
   const showUndo = useUndoToast();
-  const tags = user.tags ?? [];
+  const [tags] = useState(() => user.tags ?? []);
   const managed = tags.filter(isManagedTag);
   const [custom, setCustom] = useState<string[]>(() => tags.filter(tag => !isManagedTag(tag)));
   const [input, setInput] = useState('');

@@ -11,12 +11,12 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'settings:manage' } }).patch(
   async (req, res) => {
-    const { userId, user } = await noteSubject(req, 'settings:manage');
-    assertCanActOnAdminTarget(req.user, user, 'change tags on');
     const parsed = AdminUserTagsChangeSchema.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError('Use up to 100 distinct tags of 1 to 64 characters');
     const { before, tags } = parsed.data;
     await withTransaction(async () => {
+      const { userId, user } = await noteSubject(req, 'settings:manage');
+      assertCanActOnAdminTarget(req.user, user, 'change tags on');
       const result = await User.updateOne(
         { _id: userId, tags: before.length ? before : { $in: [null, []] } },
         { $set: { tags } },

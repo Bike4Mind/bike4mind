@@ -232,6 +232,18 @@ describe('access dialogs', () => {
       expect(screen.getByTestId('user-tags-suggestions').innerHTML).toContain('pilot');
       expect(screen.getByTestId('user-tags-suggestions').innerHTML).not.toContain('Developer');
     });
+    it('keeps the original conflict snapshot when the profile refetches during a draft', async () => {
+      const props = { onClose: vi.fn(), user: buildProfile({ tags: ['original'] }) };
+      const view = render(<ManageTagsDialog {...props} />, { wrapper: ProfileTestWrapper });
+      fireEvent.change(screen.getByTestId('manage-tags-dialog-input'), { target: { value: 'draft' } });
+      fireEvent.click(screen.getByTestId('manage-tags-dialog-add-btn'));
+      view.rerender(<ManageTagsDialog {...props} user={buildProfile({ tags: ['concurrent'] })} />);
+      pickReason('manage-tags-dialog');
+      fireEvent.click(confirmButton('manage-tags-dialog'));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({ before: ['original'], tags: ['original', 'draft'] })
+      );
+    });
   });
 
   describe('ProductAccessDialog', () => {

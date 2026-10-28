@@ -47,7 +47,11 @@ const NoteHistory: React.FC<{ userId: string; noteId: string }> = ({ userId, not
   );
 };
 
-export const UserNotesCard: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
+export const UserNotesCard: React.FC<{ user: AdminUserProfile }> = ({ user }) => (
+  <UserNotesContent key={user.id} user={user} />
+);
+
+const UserNotesContent: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const { currentUser } = useUser();
   const canRead = hasAdminPermission(currentUser, 'support:read');
   const canWrite = hasAdminPermission(currentUser, 'users:moderate');
@@ -204,6 +208,7 @@ export const UserNotesCard: React.FC<{ user: AdminUserProfile }> = ({ user }) =>
         {canWrite && (
           <Stack gap={1}>
             <Textarea
+              disabled={write.isPending}
               value={draft}
               onChange={event => setDraft(event.target.value)}
               placeholder="Add an internal note..."
