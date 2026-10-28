@@ -61,6 +61,31 @@ describe('worktree cleanup safety', () => {
     expect(await readFile(environmentFile, 'utf8')).toBe('SECRET=local-only\n');
   });
 
+  it('removes a worktree whose only ignored content is an installed node_modules', async () => {
+    const directory = await fixture();
+    await writeFile(join(directory, '.gitignore'), '.b4m/\n.env\nnode_modules/\n');
+    await repositoryGit.git(directory, ['commit', '-qam', 'ignore modules']);
+    const worktree = await addWorktree(directory, 'installed');
+    await mkdir(join(worktree.path, 'node_modules', 'dep'), { recursive: true });
+    await writeFile(join(worktree.path, 'node_modules', 'dep', 'index.js'), '');
+
+    expect((await listAppWorktrees(directory, []))[0]).toMatchObject({ safe: true, state: 'clean' });
+    expect(await removeOrphanWorktree(directory, worktree.path, [])).toMatchObject({ status: 'removed' });
+    await expect(stat(worktree.path)).rejects.toThrow();
+  });
+
+  it('still keeps a worktree that holds node_modules next to an ignored .env', async () => {
+    const directory = await fixture();
+    await writeFile(join(directory, '.gitignore'), '.b4m/\n.env\nnode_modules/\n');
+    await repositoryGit.git(directory, ['commit', '-qam', 'ignore modules']);
+    const worktree = await addWorktree(directory, 'mixed');
+    await mkdir(join(worktree.path, 'node_modules'), { recursive: true });
+    await writeFile(join(worktree.path, 'node_modules', 'x'), '');
+    await writeFile(join(worktree.path, '.env'), 'SECRET=1\n');
+
+    expect((await listAppWorktrees(directory, []))[0]).toMatchObject({ safe: false, reason: '1 uncommitted file' });
+  });
+
   it('protects a worktree used only as another project context directory', async () => {
     const directory = await fixture();
     const worktree = await addWorktree(directory, 'context');

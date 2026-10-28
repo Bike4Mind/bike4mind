@@ -478,16 +478,18 @@ async function inspectCheckout(input: {
   if (await ownerOf(path, branch, container, others, options)) return result('Used by another conversation', 'owned');
   const held = options?.hold?.();
   if (held) return result(held, 'owned');
-  // Git removes ignored files too: local secrets and other ignored data must keep the checkout.
-  const status = await git(path, ['status', '--porcelain', '-z', '--untracked-files=all', '--ignored=matching']);
+  // `git worktree remove` deletes ignored files too, so ignored local data (.env and the like) keeps
+  // the checkout. An ignored `node_modules` is the installer's regenerable output and does not.
+  const status = await git(path, ['status', '--porcelain', '--untracked-files=all', '--ignored=matching', '-z']);
   if (status) {
     const records = status.split('\0');
     let count = 0;
     for (let index = 0; index < records.length - 1; index++) {
-      count++;
-      if (/^[RC]|^.[RC]/.test(records[index])) index++;
+      const record = records[index];
+      if (!(record.startsWith('!! ') && /(^|\/)node_modules\/?$/.test(record.slice(3)))) count++;
+      if (/^[RC]|^.[RC]/.test(record)) index++;
     }
-    return result(`${count} uncommitted file${count === 1 ? '' : 's'}`, 'dirty');
+    if (count > 0) return result(`${count} uncommitted file${count === 1 ? '' : 's'}`, 'dirty');
   }
   const upstream = (await git(path, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
   // `branch -d` judges a branch with an upstream against that upstream alone, and a command-local
