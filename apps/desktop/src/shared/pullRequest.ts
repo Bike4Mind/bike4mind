@@ -16,8 +16,16 @@ export interface PrRef {
   url: string;
 }
 
-/** How a binding was made. Recorded so a later automatic detection never overrides a manual one by surprise. */
-export type PrBindingSource = 'shell' | 'branch' | 'manual';
+/**
+ * How a binding was made. 'manual' is the user's /pr or pasted URL, 'agent' the agent at the
+ * user's word; both are explicit, and a later automatic detection never overrides them by
+ * surprise. See isExplicitBinding.
+ */
+export type PrBindingSource = 'shell' | 'branch' | 'manual' | 'agent';
+
+export function isExplicitBinding(source: PrBindingSource): boolean {
+  return source === 'manual' || source === 'agent';
+}
 
 /** The automations the CI popover offers, each opt-in for this one PR. */
 export type PrOption = 'autoFix' | 'autoMerge' | 'autoArchive';
@@ -238,6 +246,9 @@ export interface PrBarState {
 
 export type PrActionResult = { ok: true } | { ok: false; error: string };
 
+/** An explicit bind's outcome, with the PR it landed on. */
+export type PrBindOutcome = { ok: true; pr: PrRef } | { ok: false; error: string };
+
 const PR_URL_PATTERN = /https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d+)(?![\d/]*new\b)/g;
 
 function toRef(owner: string, repo: string, number: number): PrRef {
@@ -256,6 +267,24 @@ export function parsePullRequestUrl(text: string): PrRef | null {
   const number = Number(match[3]);
   if (!Number.isSafeInteger(number) || number < 1) return null;
   return toRef(match[1], match[2], number);
+}
+
+/**
+ * A PR as the agent may name one: a URL, `owner/repo#N`, or `#N` / `N` in `repo`. Null when it is
+ * none of these, or a bare number with no repo to resolve it in.
+ */
+export function parsePullRequestTarget(text: string, repo?: { owner: string; repo: string } | null): PrRef | null {
+  const trimmed = text.trim();
+  const url = parsePullRequestUrl(trimmed);
+  if (url) return url;
+  const named = /^([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)#(\d+)$/.exec(trimmed);
+  const bare = named ? null : /^#?(\d+)$/.exec(trimmed);
+  const owner = named ? named[1] : repo?.owner;
+  const name = named ? named[2] : repo?.repo;
+  const digits = named ? named[3] : bare?.[1];
+  if (!owner || !name || !digits) return null;
+  const number = Number(digits);
+  return Number.isSafeInteger(number) && number > 0 ? toRef(owner, name, number) : null;
 }
 
 /**

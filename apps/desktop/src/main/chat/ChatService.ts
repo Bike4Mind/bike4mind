@@ -77,6 +77,7 @@ import {
 } from '@shared/mcp';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
+import type { PrMonitor } from '../pr/PrMonitor';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import type { CapabilityLedger } from './capabilities/CapabilityLedger';
 import { capabilityFor, capabilityScope } from './capabilities/approvalCapabilities';
@@ -454,6 +455,8 @@ export interface ChatServiceDeps {
   mcp?: McpManager;
   /** The agent's hidden browser. Absent in tests that do not exercise it; the tools are then not declared. */
   browser?: BrowserProvider;
+  /** Each conversation's PR binding. Absent in tests that do not exercise it; set_session_pull_request is then not declared. */
+  pullRequests?: Pick<PrMonitor, 'bindForAgent' | 'dismiss'>;
   /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
   screen?: ScreenCapturer;
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
@@ -2710,6 +2713,7 @@ export class ChatService {
               suggestions: !session.origin,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
+              pullRequest: session.mode === 'code' && !!this.deps.pullRequests,
             });
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
@@ -3559,6 +3563,7 @@ export class ChatService {
       patchEdits,
       ask,
     } = scope;
+    const pullRequests = this.deps.pullRequests;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -3694,6 +3699,14 @@ export class ChatService {
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
           ...(this.deps.mcp ? { mcp: this.deps.mcp } : {}),
+          ...(pullRequests
+            ? {
+                pullRequests: {
+                  bind: (target: string) => pullRequests.bindForAgent(sessionId, target),
+                  clear: () => pullRequests.dismiss(sessionId),
+                },
+              }
+            : {}),
           report,
           isStanding: key => !!this.deps.approvals?.isStanding(sessionId, key),
         };

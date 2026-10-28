@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ciSummary,
   findPullRequestUrls,
+  parsePullRequestTarget,
   parsePullRequestUrl,
   prDisplayState,
   pullRequestFromShell,
@@ -93,6 +94,24 @@ describe('parsePullRequestUrl', () => {
     expect(parsePullRequestUrl('https://example.com/example-org/widgets/pull/42')).toBeNull();
     expect(parsePullRequestUrl('https://github.com/example-org/widgets/pull/0')).toBeNull();
     expect(parsePullRequestUrl('javascript:alert(1)//github.com/a/b/pull/1')).toBeNull();
+  });
+});
+
+describe('parsePullRequestTarget', () => {
+  const repo = { owner: 'example-org', repo: 'widgets' };
+
+  it('takes a URL, owner/repo#N, and a bare number in the given repo', () => {
+    expect(parsePullRequestTarget('https://github.com/example-org/widgets/pull/42')?.number).toBe(42);
+    expect(parsePullRequestTarget('other-org/gears#7')?.url).toBe('https://github.com/other-org/gears/pull/7');
+    expect(parsePullRequestTarget('#12', repo)?.url).toBe('https://github.com/example-org/widgets/pull/12');
+    expect(parsePullRequestTarget(' 12 ', repo)?.number).toBe(12);
+  });
+
+  it('refuses a bare number with no repo, and anything else', () => {
+    expect(parsePullRequestTarget('#12')).toBeNull();
+    expect(parsePullRequestTarget('#0', repo)).toBeNull();
+    expect(parsePullRequestTarget('the second one', repo)).toBeNull();
+    expect(parsePullRequestTarget('https://github.com/example-org/widgets/issues/42', repo)).toBeNull();
   });
 });
 

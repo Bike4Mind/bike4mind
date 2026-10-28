@@ -1,7 +1,9 @@
 import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
+  isExplicitBinding,
   isFinishedState,
+  parsePullRequestTarget,
   parsePullRequestUrl,
   prDisplayState,
   pullRequestFromShell,
@@ -11,6 +13,7 @@ import {
   type PrAutoFixStatus,
   type PrBarSnapshot,
   type PrBarState,
+  type PrBindOutcome,
   type PrBinding,
   type PrBindingSource,
   type PrGhStatus,
@@ -255,36 +258,74 @@ export class PrMonitor {
 
   /** The user pasted a URL. Always replaces what was there, unless auto-merge is armed on it. */
   async bindManual(sessionId: string, url: string): Promise<PrActionResult> {
-    if (!(await this.deps.chat.isCode(sessionId))) {
-      return { ok: false, error: 'Pull requests can only be added to a Code conversation.' };
-    }
-    const ref = parsePullRequestUrl(url);
-    if (!ref) return { ok: false, error: 'That is not a GitHub pull request URL.' };
-    const current = await this.deps.store.get(sessionId);
-    if (current?.autoMerge && !samePullRequest(current, ref)) {
-      return { ok: false, error: `Turn off auto-merge on #${current.number} before binding another PR.` };
-    }
-    await this.bind(sessionId, ref, 'manual');
-    return { ok: true };
+    const outcome = await this.bindExplicit(
+      sessionId,
+      'manual',
+      () => parsePullRequestUrl(url) ?? 'That is not a GitHub pull request URL.'
+    );
+    return outcome.ok ? { ok: true } : outcome;
   }
 
   /**
-   * Bind, or re-bind. The same PR keeps its options and its dismissal (a manual bind lifts that).
-   * A different PR replaces it only when nothing is armed on the old one: an automatic detection
-   * must not silently abandon an auto-merge the user switched on.
+   * The agent, at the user's word: bindManual's guards, plus `owner/repo#N` and a bare `#N`
+   * resolved in the repo of the PR bound now.
+   */
+  async bindForAgent(sessionId: string, target: string): Promise<PrBindOutcome> {
+    return this.bindExplicit(sessionId, 'agent', current => {
+      const ref = parsePullRequestTarget(target, current);
+      if (ref) return ref;
+      if (!current && /^#?\d+$/.test(target.trim())) {
+        return 'No pull request is bound yet, so a bare number names no repository. Give the full URL or owner/repo#N.';
+      }
+      return 'That is not a GitHub pull request URL, owner/repo#N, or #N.';
+    });
+  }
+
+  private async bindExplicit(
+    sessionId: string,
+    source: 'manual' | 'agent',
+    resolve: (current: PrBinding | null) => PrRef | string
+  ): Promise<PrBindOutcome> {
+    if (!(await this.deps.chat.isCode(sessionId))) {
+      return { ok: false, error: 'Pull requests can only be added to a Code conversation.' };
+    }
+    const current = await this.deps.store.get(sessionId);
+    const ref = resolve(current);
+    if (typeof ref === 'string') return { ok: false, error: ref };
+    if (current?.autoMerge && !samePullRequest(current, ref)) {
+      return { ok: false, error: `Turn off auto-merge on #${current.number} before binding another PR.` };
+    }
+    await this.bind(sessionId, ref, source);
+    return { ok: true, pr: ref };
+  }
+
+  /**
+   * Bind, or re-bind. The same PR keeps its options and its dismissal (an explicit bind lifts
+   * that, and marks a detected PR as chosen). A detection never replaces a PR with automation
+   * armed - it must not silently abandon an auto-merge the user switched on - nor one the user
+   * or agent chose, until that one is merged or closed.
    */
   protected async bind(sessionId: string, ref: PrRef, source: PrBindingSource): Promise<void> {
     const current = await this.deps.store.get(sessionId);
+    const explicit = isExplicitBinding(source);
     if (current && samePullRequest(current, ref)) {
-      if (source === 'manual' && current.dismissed) {
-        await this.deps.store.set(sessionId, { ...current, dismissed: false });
+      if (!explicit) return;
+      const undismiss = current.dismissed === true;
+      if (undismiss || !isExplicitBinding(current.source)) {
+        await this.deps.store.set(sessionId, {
+          ...current,
+          source: isExplicitBinding(current.source) ? current.source : source,
+          dismissed: false,
+        });
+      }
+      if (undismiss) {
         if (current.finalSnapshot) await this.publish(sessionId);
         else void this.read(sessionId);
       }
       return;
     }
-    if (current && source !== 'manual' && !current.dismissed && this.armed(current)) {
-      this.deps.logger.debug(`PR: kept #${current.number} on ${sessionId}; it has automation armed`);
+    if (current && !explicit && !current.dismissed && (this.armed(current) || this.pinned(sessionId, current))) {
+      this.deps.logger.debug(`PR: kept #${current.number} on ${sessionId}; it has automation armed or was chosen`);
       return;
     }
     const binding: PrBinding = { ...ref, source, boundAt: new Date(this.now()).toISOString() };
@@ -294,6 +335,12 @@ export class PrMonitor {
     this.deps.logger.debug(`PR: bound ${sessionId} to ${ref.url} (${source})`);
     await this.publish(sessionId);
     void this.read(sessionId);
+  }
+
+  /** A PR the user or agent chose, and not known to be finished; a follow-up PR may replace a merged one. */
+  private pinned(sessionId: string, binding: PrBinding): boolean {
+    if (!isExplicitBinding(binding.source)) return false;
+    return !isFinishedState(this.live.get(sessionId)?.snapshot?.state ?? binding.lastState);
   }
 
   protected armed(binding: PrBinding): boolean {
