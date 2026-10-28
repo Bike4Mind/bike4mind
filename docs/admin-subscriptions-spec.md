@@ -337,7 +337,7 @@ Backfill with a script that only **reads** Stripe (`subscriptions.retrieve` per 
 
 The webhook persists one `BillingEvent` per handled Stripe event:
 
-- `stripeEventId` (unique, which also gives event-level dedupe)
+- `stripeEventId` (unique; the row is upserted on it)
 - `type`
 - `ownerType`, `ownerId`
 - `subscriptionId`
@@ -345,7 +345,7 @@ The webhook persists one `BillingEvent` per handled Stripe event:
 - `occurredAt`
 - a small `data` projection (no card data, no full payload)
 
-Write it first, before side effects, so a duplicate delivery is detected up front. The unhandled types (`invoice.paid`, `invoice.finalized`, `trial_will_end`, `subscription.created`) are stored too, but do nothing else. Retention: indefinite. The rows are small, and the store is the dispute record.
+Record it as an upsert on `stripeEventId` **after** the event's side effects succeed, and keep the existing per-entity keys (`stripeRefundId`, `stripeDisputeId`, and so on) as the dedupe. There is no event-level short-circuit: a failed side effect rethrows, the route returns non-2xx and Stripe redelivers the same event id, so a replay must re-run the side effects rather than be skipped as a duplicate (otherwise a transient failure loses a credit grant or clawback for good). The unhandled types (`invoice.paid`, `invoice.finalized`, `trial_will_end`, `subscription.created`) are stored too, but do nothing else. Retention: indefinite. The rows are small, and the store is the dispute record.
 
 ### 6.3 Reconciliation
 
