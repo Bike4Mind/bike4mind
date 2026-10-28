@@ -33,6 +33,7 @@ import {
   useSaveOrgCustomMcpPolicy,
 } from '@client/app/hooks/data/useOrgCustomMcpPolicy';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
+import PaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
 
 type OpenMode = Exclude<CustomMcpPolicyMode, 'off'>;
 
@@ -87,11 +88,26 @@ const fromForm = (form: PolicyForm): CustomMcpPolicy | undefined => {
 };
 
 const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
-  const { data: view, isLoading } = useOrgCustomMcpPolicy(organization.id);
-  const { data: connections } = useOrgCustomMcpConnections(organization.id);
+  const { data: view, isLoading, isError, refetch } = useOrgCustomMcpPolicy(organization.id);
+  const {
+    data: connections,
+    isPending: connectionsPending,
+    isError: connectionsError,
+    refetch: refetchConnections,
+  } = useOrgCustomMcpConnections(organization.id);
   const { data: members } = useGetOrganizationUsers(organization.id);
   const save = useSaveOrgCustomMcpPolicy(organization.id);
   const reset = useResetOrgCustomMcpPolicy(organization.id);
+  const [connectionsPage, setConnectionsPage] = useState(1);
+  const [connectionsPerPage, setConnectionsPerPage] = useState(20);
+  const connectionCount = connections?.length ?? 0;
+  const connectionPages = Math.max(1, Math.ceil(connectionCount / connectionsPerPage));
+  const currentConnectionsPage = Math.min(connectionsPage, connectionPages);
+  if (connectionsPage !== currentConnectionsPage) setConnectionsPage(currentConnectionsPage);
+  const visibleConnections = connections?.slice(
+    (currentConnectionsPage - 1) * connectionsPerPage,
+    currentConnectionsPage * connectionsPerPage
+  );
   const [form, setForm] = useState<PolicyForm | null>(null);
   // The policy the form was last loaded from, so a newer one saved elsewhere does not silently
   // replace edits in progress.
@@ -125,6 +141,18 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
     () => !!view && !!policy && JSON.stringify(policy) !== JSON.stringify(view.policy),
     [policy, view]
   );
+
+  if (isError && !view) {
+    return (
+      <Alert
+        color="danger"
+        endDecorator={<Button onClick={() => void refetch()}>Retry</Button>}
+        data-testid="org-custom-mcp-policy-error"
+      >
+        Could not load the connector policy.
+      </Alert>
+    );
+  }
 
   if (isLoading || !view || !form) {
     return (
@@ -169,8 +197,8 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
           <Box>
             <Typography level="title-md">Custom connectors</Typography>
             <Typography level="body-sm">
-              Off blocks every member&apos;s custom connector tools on their next call. Members can still remove their
-              connections.
+              Off blocks every member&apos;s custom connector tools. Changes can take up to five minutes to apply across
+              the deployment. Members can still remove their connections.
             </Typography>
           </Box>
           <Switch
@@ -270,7 +298,7 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
           color="neutral"
           disabled={!view.overridden || busy}
           loading={reset.isPending}
-          onClick={() => reset.mutate()}
+          onClick={() => reset.mutate(undefined, { onSuccess: next => load(next.policy) })}
           data-testid="org-custom-mcp-reset-btn"
         >
           Use platform default
@@ -291,31 +319,56 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
         <Typography level="title-md" sx={{ mb: 1 }}>
           Member connections
         </Typography>
-        {connections && connections.length > 0 ? (
-          <Table size="sm" data-testid="org-custom-mcp-connections-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Host</th>
-                <th>Member</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {connections.map(connection => (
-                <tr key={connection.id}>
-                  <td>{connection.displayName}</td>
-                  <td>{connection.urlHost}</td>
-                  <td>{memberNames.get(connection.userId) ?? connection.userId}</td>
-                  <td>
-                    <Chip size="sm" color={connection.status === 'blocked_by_policy' ? 'danger' : 'neutral'}>
-                      {connection.status}
-                    </Chip>
-                  </td>
+        {connectionsPending ? (
+          <Typography level="body-sm" data-testid="org-custom-mcp-connections-loading">
+            Loading member connections…
+          </Typography>
+        ) : connectionsError ? (
+          <Alert
+            color="danger"
+            endDecorator={<Button onClick={() => void refetchConnections()}>Retry</Button>}
+            data-testid="org-custom-mcp-connections-error"
+          >
+            Could not load member connections.
+          </Alert>
+        ) : connections && connections.length > 0 ? (
+          <Stack gap={1}>
+            <Table size="sm" data-testid="org-custom-mcp-connections-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Host</th>
+                  <th>Member</th>
+                  <th>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </Table>
+              </thead>
+              <tbody>
+                {visibleConnections?.map(connection => (
+                  <tr key={connection.id}>
+                    <td>{connection.displayName}</td>
+                    <td>{connection.urlHost}</td>
+                    <td>{memberNames.get(connection.userId) ?? connection.userId}</td>
+                    <td>
+                      <Chip size="sm" color={connection.status === 'blocked_by_policy' ? 'danger' : 'neutral'}>
+                        {connection.status}
+                      </Chip>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+            <PaginationControls
+              currentPage={currentConnectionsPage}
+              totalPages={connectionPages}
+              itemsPerPage={connectionsPerPage}
+              totalItems={connectionCount}
+              onPageChange={setConnectionsPage}
+              onItemsPerPageChange={count => {
+                setConnectionsPerPage(count);
+                setConnectionsPage(1);
+              }}
+            />
+          </Stack>
         ) : (
           <Typography level="body-sm" data-testid="org-custom-mcp-connections-empty">
             No member has a custom connector in this organization.

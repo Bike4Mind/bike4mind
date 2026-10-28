@@ -5,7 +5,6 @@ import {
   evaluateCustomMcpPolicy,
   orgAclRowConfersMembership,
   toMcpConnectionPublic,
-  type CustomMcpPolicy,
   type IMcpConnectionPublic,
   type OrgCustomMcpPolicyView,
   type SettingScope,
@@ -18,7 +17,7 @@ import { isFeatureEnabled } from '@server/middlewares/featureFlag';
  * The org admin side of custom MCP connectors (design #4845 section 8): an org owner or manager
  * reads and sets the org's `customMcpPolicy` override and sees which current members hold
  * connections. Authorization is the caller's (`verifyOrgAccess`); members pick the policy up through
- * `resolveCustomMcpContext` on their next request or call.
+ * `resolveCustomMcpContext`; other instances observe changes after their settings cache expires.
  */
 
 /** Same scope `resolveCustomMcpContext` resolves for a member of this org. */
@@ -106,22 +105,28 @@ export async function listOrgMemberConnections(
     userId: string;
     users?: ReadonlyArray<{ userId: string; permissions?: readonly string[] | null }> | null;
   },
-  policy: CustomMcpPolicy
+  view: OrgCustomMcpPolicyView
 ): Promise<IMcpConnectionPublic[]> {
   const [connections, platform] = await Promise.all([
     mcpConnectionRepository.listMemberConnections(org.id, currentOrgMemberIds(org)),
-    scopedSettingsService.resolveScopedSettingEntries(['customMcpBlockedHosts'], orgScope(org.id), settingsDb),
+    scopedSettingsService.resolveScopedSettingEntries(['customMcpBlockedHosts'], orgScope(org.id), settingsDb, {
+      readFailureMode: 'throw',
+    }),
   ]);
-  const platformBlockedHosts = platform.customMcpBlockedHosts.value.hosts;
+  const blocklist = platform.customMcpBlockedHosts;
+  const disabled = !view.platformEnabled || view.invalidOverride || blocklist.platformRejected === true;
+  const platformBlockedHosts = blocklist.value.hosts;
   return connections.map(connection =>
     toMcpConnectionPublic(
       connection,
-      evaluateCustomMcpPolicy({
-        urlHost: connection.urlHost,
-        authKind: connection.auth?.kind ?? 'none',
-        policy,
-        platformBlockedHosts,
-      })
+      disabled
+        ? { allowed: false }
+        : evaluateCustomMcpPolicy({
+            urlHost: connection.urlHost,
+            authKind: connection.auth?.kind ?? 'none',
+            policy: view.policy,
+            platformBlockedHosts,
+          })
     )
   );
 }

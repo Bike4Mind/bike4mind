@@ -9,13 +9,28 @@ import OrgCustomMcpPolicySection from './OrgCustomMcpPolicySection';
 const state = vi.hoisted(() => ({
   view: undefined as OrgCustomMcpPolicyView | undefined,
   connections: [] as Record<string, unknown>[],
+  policyError: false,
+  connectionsPending: false,
+  connectionsError: false,
+  refetchPolicy: vi.fn(),
+  refetchConnections: vi.fn(),
   save: vi.fn(),
   reset: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/useOrgCustomMcpPolicy', () => ({
-  useOrgCustomMcpPolicy: () => ({ data: state.view, isLoading: false }),
-  useOrgCustomMcpConnections: () => ({ data: state.connections }),
+  useOrgCustomMcpPolicy: () => ({
+    data: state.view,
+    isLoading: false,
+    isError: state.policyError,
+    refetch: state.refetchPolicy,
+  }),
+  useOrgCustomMcpConnections: () => ({
+    data: state.connections,
+    isPending: state.connectionsPending,
+    isError: state.connectionsError,
+    refetch: state.refetchConnections,
+  }),
   useSaveOrgCustomMcpPolicy: () => ({ mutate: state.save, isPending: false }),
   useResetOrgCustomMcpPolicy: () => ({ mutate: state.reset, isPending: false }),
 }));
@@ -48,6 +63,11 @@ describe('OrgCustomMcpPolicySection', () => {
   beforeEach(() => {
     state.view = viewOf();
     state.connections = [];
+    state.policyError = false;
+    state.connectionsPending = false;
+    state.connectionsError = false;
+    state.refetchPolicy.mockReset();
+    state.refetchConnections.mockReset();
     state.save.mockReset();
     state.reset.mockReset();
   });
@@ -97,6 +117,58 @@ describe('OrgCustomMcpPolicySection', () => {
     expect((screen.getAllByTestId('org-custom-mcp-reset-btn')[1] as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('loads the platform default after resetting a policy with unsaved edits', () => {
+    const { rerender } = renderSection();
+    toggle('org-custom-mcp-require-approval-switch');
+
+    const platformView = viewOf({ overridden: false }, { mode: 'any' });
+    state.reset.mockImplementation(
+      (_input: undefined, options: { onSuccess: (view: OrgCustomMcpPolicyView) => void }) => {
+        state.view = platformView;
+        options.onSuccess(platformView);
+      }
+    );
+    fireEvent.click(screen.getByTestId('org-custom-mcp-reset-btn'));
+    rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
+
+    expect(screen.queryByTestId('org-custom-mcp-changed-elsewhere')).toBeNull();
+    expect(saveButton().disabled).toBe(true);
+    expect(
+      (within(screen.getByTestId('org-custom-mcp-require-approval-switch')).getByRole('switch') as HTMLInputElement)
+        .checked
+    ).toBe(false);
+    expect(screen.getByTestId('org-custom-mcp-mode-select').textContent).toContain('Any host');
+  });
+
+  it('shows a failed policy read with a retry instead of an endless spinner', () => {
+    state.view = undefined;
+    state.policyError = true;
+    renderSection();
+
+    expect(screen.getByText('Could not load the connector policy.')).toBeTruthy();
+    fireEvent.click(within(screen.getByTestId('org-custom-mcp-policy-error')).getByText('Retry'));
+    expect(state.refetchPolicy).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+  });
+
+  it('keeps pending connection reads distinct from an empty roster', () => {
+    state.connectionsPending = true;
+    renderSection();
+
+    expect(screen.getByTestId('org-custom-mcp-connections-loading')).toBeTruthy();
+    expect(screen.queryByTestId('org-custom-mcp-connections-empty')).toBeNull();
+  });
+
+  it('shows failed connection reads with a retry instead of an empty roster', () => {
+    state.connectionsError = true;
+    renderSection();
+
+    expect(screen.getByText('Could not load member connections.')).toBeTruthy();
+    expect(screen.queryByTestId('org-custom-mcp-connections-empty')).toBeNull();
+    fireEvent.click(within(screen.getByTestId('org-custom-mcp-connections-error')).getByText('Retry'));
+    expect(state.refetchConnections).toHaveBeenCalledOnce();
+  });
+
   it('warns when the platform switch is off or the stored policy is invalid', () => {
     state.view = viewOf({ platformEnabled: false, invalidOverride: true });
     renderSection();
@@ -142,5 +214,31 @@ describe('OrgCustomMcpPolicySection', () => {
     const table = screen.getByTestId('org-custom-mcp-connections-table');
     expect(within(table).getByText('Ada')).toBeTruthy();
     expect(within(table).getByText('blocked_by_policy')).toBeTruthy();
+  });
+
+  it('pages member connections and clamps the page after connections are removed', () => {
+    state.connections = Array.from({ length: 21 }, (_, index) => ({
+      id: `connection-${index}`,
+      displayName: `Connector ${index + 1}`,
+      urlHost: 'mcp.example.com',
+      userId: 'u1',
+      status: 'connected',
+    }));
+    const { rerender } = renderSection();
+    const table = screen.getByTestId('org-custom-mcp-connections-table');
+    expect(within(table).getAllByRole('row')).toHaveLength(21);
+    expect(within(table).queryByText('Connector 21')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(within(table).getAllByRole('row')).toHaveLength(2);
+    expect(within(table).getByText('Connector 21')).toBeTruthy();
+    expect(within(table).queryByText('Connector 1')).toBeNull();
+
+    state.connections = state.connections.slice(0, 1);
+    rerender(<OrgCustomMcpPolicySection organization={{ id: 'org-1' } as IOrganizationDocument} />);
+    expect(screen.getByText('Page 1 of 1')).toBeTruthy();
+    expect(within(table).getByText('Connector 1')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

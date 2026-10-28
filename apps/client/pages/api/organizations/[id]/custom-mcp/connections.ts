@@ -11,8 +11,8 @@ import { verifyOrgAccess } from '@server/utils/orgAccess';
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const org = await verifyOrgAccess(req.user!, typeof req.query.id === 'string' ? req.query.id : '');
-    const { policy } = await getOrgCustomMcpPolicy(org.id);
-    return res.json(await listOrgMemberConnections(org, policy));
+    const view = await getOrgCustomMcpPolicy(org.id);
+    return res.json(await listOrgMemberConnections(org, view));
   })
 );
 

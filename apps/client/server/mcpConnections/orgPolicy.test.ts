@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CustomMcpPolicySchema, type CustomMcpPolicy } from '@bike4mind/common';
+import { CustomMcpPolicySchema, type CustomMcpPolicy, type OrgCustomMcpPolicyView } from '@bike4mind/common';
 
 const state = vi.hoisted(() => ({
   flags: {} as Record<string, boolean>,
@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   ignoredOverrides: undefined as unknown[] | undefined,
   resolvedPolicy: {} as Partial<CustomMcpPolicy>,
   blockedHosts: [] as string[],
+  blocklistRejected: false,
   connections: [] as Record<string, unknown>[],
 }));
 
@@ -36,10 +37,26 @@ vi.mock('@bike4mind/services', () => ({
               ...(state.ignoredOverrides ? { ignoredOverrides: state.ignoredOverrides } : {}),
             },
           }
-        : { customMcpBlockedHosts: { value: { hosts: state.blockedHosts }, source: 'platform' } }
+        : {
+            customMcpBlockedHosts: {
+              value: { hosts: state.blockedHosts },
+              source: 'platform',
+              platformRejected: state.blocklistRejected,
+            },
+          }
     ),
   },
 }));
+
+const { scopedSettingsService } = await import('@bike4mind/services');
+const resolveEntries = vi.mocked(scopedSettingsService.resolveScopedSettingEntries);
+
+const viewOf = (policy: Partial<CustomMcpPolicy> = {}): OrgCustomMcpPolicyView => ({
+  policy: CustomMcpPolicySchema.parse(policy),
+  overridden: true,
+  invalidOverride: false,
+  platformEnabled: true,
+});
 
 const {
   currentOrgMemberIds,
@@ -75,6 +92,7 @@ beforeEach(() => {
   state.ignoredOverrides = undefined;
   state.resolvedPolicy = {};
   state.blockedHosts = [];
+  state.blocklistRejected = false;
   state.connections = [];
 });
 
@@ -89,6 +107,17 @@ describe('getOrgCustomMcpPolicy', () => {
       invalidOverride: false,
       platformEnabled: true,
     });
+  });
+
+  it('propagates a failed policy read and requests strict resolution', async () => {
+    resolveEntries.mockRejectedValueOnce(new Error('policy unavailable'));
+    await expect(getOrgCustomMcpPolicy('org-1')).rejects.toThrow('policy unavailable');
+    expect(resolveEntries).toHaveBeenLastCalledWith(
+      ['customMcpPolicy'],
+      expect.objectContaining({ organizationId: 'org-1' }),
+      expect.anything(),
+      { readFailureMode: 'throw' }
+    );
   });
 
   it('flags an inherited policy, a refused stored override and a platform switch that is off', async () => {
@@ -152,8 +181,35 @@ describe('listOrgMemberConnections', () => {
   const org = { id: 'org-1', userId: 'owner', users: [{ userId: 'member', permissions: ['read'] }] };
 
   it('asks only for current members, so a member who left is not listed', async () => {
-    await listOrgMemberConnections(org, CustomMcpPolicySchema.parse({ mode: 'any' }));
+    await listOrgMemberConnections(org, viewOf({ mode: 'any' }));
     expect(listMemberConnections).toHaveBeenCalledWith('org-1', ['owner', 'member']);
+  });
+
+  it.each([{ platformEnabled: false }, { invalidOverride: true }])(
+    'reports disabled connections for %j',
+    async flags => {
+      state.connections = [connection('member', 'mcp.ok.example')];
+      const listed = await listOrgMemberConnections(org, { ...viewOf({ mode: 'any' }), ...flags });
+      expect(listed[0]?.status).toBe('blocked_by_policy');
+    }
+  );
+
+  it('fails closed when the stored platform blocklist is invalid', async () => {
+    state.blocklistRejected = true;
+    state.connections = [connection('member', 'mcp.ok.example')];
+    const listed = await listOrgMemberConnections(org, viewOf({ mode: 'any' }));
+    expect(listed[0]?.status).toBe('blocked_by_policy');
+  });
+
+  it('propagates a failed platform blocklist read instead of reporting allowed connections', async () => {
+    resolveEntries.mockRejectedValueOnce(new Error('settings unavailable'));
+    await expect(listOrgMemberConnections(org, viewOf({ mode: 'any' }))).rejects.toThrow('settings unavailable');
+    expect(resolveEntries).toHaveBeenLastCalledWith(
+      ['customMcpBlockedHosts'],
+      expect.objectContaining({ organizationId: 'org-1' }),
+      expect.anything(),
+      { readFailureMode: 'throw' }
+    );
   });
 
   it("reports each connection's status under the org policy and the platform blocklist", async () => {
@@ -165,11 +221,11 @@ describe('listOrgMemberConnections', () => {
     ];
     const listed = await listOrgMemberConnections(
       org,
-      CustomMcpPolicySchema.parse({ mode: 'any', blockedHostPatterns: ['mcp.org-blocked.example'] })
+      viewOf({ mode: 'any', blockedHostPatterns: ['mcp.org-blocked.example'] })
     );
     expect(listed.map(c => c.status)).toEqual(['connected', 'blocked_by_policy', 'blocked_by_policy']);
 
-    const off = await listOrgMemberConnections(org, CustomMcpPolicySchema.parse({ mode: 'off' }));
+    const off = await listOrgMemberConnections(org, viewOf({ mode: 'off' }));
     expect(off.every(c => c.status === 'blocked_by_policy')).toBe(true);
   });
 });

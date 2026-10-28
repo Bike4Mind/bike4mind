@@ -416,6 +416,7 @@ describe('resolveAccessibleTab', () => {
       canViewUsage: false,
       canViewAnalysis: false,
       canManageIntegrations: false,
+      canManageConnectors: false,
       canManageGroups: false,
       canViewBilling: false,
     };

@@ -346,7 +346,7 @@ const OrganizationPage: FC = () => {
                 <Typography level="title-lg" startDecorator={<HubOutlinedIcon />} sx={{ mb: 3 }}>
                   Custom Connectors
                 </Typography>
-                <OrgCustomMcpPolicySection organization={organization} />
+                <OrgCustomMcpPolicySection key={organization.id} organization={organization} />
               </TabPanel>
             )}
             {canManageOrg && (

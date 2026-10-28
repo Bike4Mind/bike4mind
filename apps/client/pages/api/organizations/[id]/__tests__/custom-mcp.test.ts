@@ -8,7 +8,8 @@ import { NotFoundError } from '@bike4mind/utils';
  * this pins the routes' own contract: who may call them, body validation, and the audit record.
  */
 
-type Handler = (req: any, res: any) => unknown;
+type Handler = (req: unknown, res: unknown) => unknown;
+type RouteChain = Record<'get' | 'put' | 'delete', (handler: Handler) => RouteChain>;
 const mockRefs = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, Handler>>,
   current: '' as string,
@@ -19,13 +20,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
     mockRefs.baseApiOptions.push(options);
     const route = (mockRefs.handlers[mockRefs.current] = {} as Record<string, Handler>);
-    const chain: any = {};
-    for (const method of ['get', 'put', 'delete']) {
-      chain[method] = (fn: Handler) => {
-        route[method] = fn;
+    const register =
+      (method: keyof RouteChain) =>
+      (handler: Handler): RouteChain => {
+        route[method] = handler;
         return chain;
       };
-    }
+    const chain: RouteChain = { get: register('get'), put: register('put'), delete: register('delete') };
     return chain;
   },
 }));
@@ -59,7 +60,7 @@ const VIEW = {
 
 const call = async (route: string, method: string, body?: unknown) => {
   const { req, res } = createMocks({ method: method.toUpperCase() as 'GET', query: { id: 'org1' }, body });
-  (req as any).user = { id: 'manager1', isAdmin: false };
+  Object.assign(req, { user: { id: 'manager1', isAdmin: false } });
   await mockRefs.handlers[route]![method]!(req, res);
   return res;
 };
@@ -160,7 +161,7 @@ describe('custom-mcp org routes', () => {
     const listed = [{ id: 'c1' }];
     orgPolicy.listOrgMemberConnections.mockResolvedValue(listed);
     const res = await call('connections', 'get');
-    expect(orgPolicy.listOrgMemberConnections).toHaveBeenCalledWith(ORG, VIEW.policy);
+    expect(orgPolicy.listOrgMemberConnections).toHaveBeenCalledWith(ORG, VIEW);
     expect(res._getJSONData()).toEqual(listed);
   });
 });
