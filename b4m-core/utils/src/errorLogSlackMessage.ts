@@ -10,7 +10,8 @@ import type { SlackWebhookPayload } from './slack';
 export interface ErrorLogMessageInput {
   message: string;
   severity: string;
-  metadata: Record<string, string>;
+  /** The parsed log line as logged; values under the request keys are usually strings but not always. */
+  metadata: Record<string, unknown>;
   stage: string;
   logGroup: string;
   /** CloudWatch log event viewer link. */
@@ -21,9 +22,15 @@ export interface ErrorLogMessageInput {
 }
 
 const HEADLINE_MAX = 300;
+const ROUTE_MAX = 200;
+const FIELD_MAX = 80;
 const STACK_FRAME_MAX = 160;
 const STACK_LINES_MAX = 6;
 const STACK_BLOCK_MAX = 1000;
+/** Slack rejects the whole post when a section's text exceeds 3000 characters. */
+const SECTION_TEXT_MAX = 3000;
+/** Same limit for each entry of a section's fields. */
+const FIELD_TEXT_MAX = 2000;
 
 const FIELD_KEYS: { key: string; label: string }[] = [
   { key: 'method', label: 'Method' },
@@ -47,6 +54,15 @@ const SEVERITY_STYLE: Record<string, { emoji: string; color: string }> = {
 const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 3)}...` : s);
+
+/** Escaping expands text after it was clipped, so the Slack limits are enforced on the escaped result. */
+const section = (text: string) => ({ type: 'section', text: { type: 'mrkdwn', text: clip(text, SECTION_TEXT_MAX) } });
+
+const metadataText = (metadata: Record<string, unknown>, key: string): string | undefined => {
+  const value = metadata[key];
+  if (value === undefined || value === null || value === '') return undefined;
+  return typeof value === 'string' ? value : String(value);
+};
 
 interface ErrorDetail {
   code?: string;
@@ -122,20 +138,25 @@ export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWe
   const style = SEVERITY_STYLE[severity] ?? SEVERITY_STYLE.error;
   const { headline, detail } = splitErrorDetail(input.message);
   const title = clip(errorTitle(headline, detail), HEADLINE_MAX);
-  const route = [input.metadata.method, input.metadata.path].filter(Boolean).join(' ');
+  const route = clip(
+    [metadataText(input.metadata, 'method'), metadataText(input.metadata, 'path')].filter(Boolean).join(' '),
+    ROUTE_MAX
+  );
   const headerLine = `${style.emoji} *${severity.toUpperCase()} on ${escape(input.stage)}*${route ? `  |  ${escape(route)}` : ''}`;
 
   const fields: string[] = [];
+  const field = (label: string, value: string) =>
+    fields.push(clip(`*${label}*\n${escape(clip(value, FIELD_MAX))}`, FIELD_TEXT_MAX));
   for (const { key, label } of FIELD_KEYS) {
-    const value = input.metadata[key];
-    if (value && !(key === 'method' || key === 'path')) fields.push(`*${label}*\n${escape(clip(value, 80))}`);
+    const value = metadataText(input.metadata, key);
+    if (value && !(key === 'method' || key === 'path')) field(label, value);
   }
-  if (detail?.code) fields.push(`*Code*\n${escape(clip(detail.code, 80))}`);
+  if (detail?.code) field('Code', detail.code);
   const logGroupName = input.logGroup.replace(/^\/aws\/lambda\//, '');
-  if (!input.metadata.functionName && logGroupName) fields.push(`*Log group*\n${escape(clip(logGroupName, 80))}`);
+  if (!metadataText(input.metadata, 'functionName') && logGroupName) field('Log group', logGroupName);
   if (input.count > 1) fields.push(`*Seen*\n${input.count} times in ${input.duration ?? 'the last few minutes'}`);
 
-  const blocks: unknown[] = [{ type: 'section', text: { type: 'mrkdwn', text: `${headerLine}\n${escape(title)}` } }];
+  const blocks: unknown[] = [section(`${headerLine}\n${escape(title)}`)];
   if (fields.length > 0) {
     blocks.push({ type: 'section', fields: fields.slice(0, 10).map(text => ({ type: 'mrkdwn', text })) });
   }
@@ -152,7 +173,7 @@ export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWe
       const more = rest.length > STACK_LINES_MAX ? `\n... ${rest.length - STACK_LINES_MAX} more` : '';
       stackLines.push(`\`\`\`${escape(clip(folded + more, STACK_BLOCK_MAX))}\`\`\``);
     }
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: stackLines.join('\n') } });
+    blocks.push(section(stackLines.join('\n')));
   }
 
   blocks.push({

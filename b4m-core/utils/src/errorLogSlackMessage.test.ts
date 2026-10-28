@@ -156,6 +156,35 @@ describe('formatErrorLogSlackMessage', () => {
     );
   });
 
+  it('clips a long request path and keeps every section under the Slack limit after escaping', () => {
+    const path = '/api/search?q=' + '<a>&'.repeat(600);
+    const payload = render({ metadata: { ...metadata, path } });
+    const blocks = blocksOf(payload);
+    const first = blocks[0].text?.text ?? '';
+    expect(first).toContain('GET /api/search?q=&lt;a&gt;&amp;');
+    expect(first).toContain('...');
+    expect(first.length).toBeLessThanOrEqual(3000);
+    for (const block of blocks) {
+      if (block.text) expect(block.text.text.length).toBeLessThanOrEqual(3000);
+      for (const f of block.fields ?? []) expect(f.text.length).toBeLessThanOrEqual(2000);
+    }
+  });
+
+  it('caps an escape-heavy stack section after escaping', () => {
+    const frames = Array.from({ length: 10 }, (_, i) => `    at f${i} (${'<&>'.repeat(60)}:${i}:1)`);
+    const message = `Boom ${JSON.stringify({ stack: ['Error: boom', ...frames].join('\n') })}`;
+    const stack = blocksOf(render({ message }))[2].text?.text ?? '';
+    expect(stack.length).toBeLessThanOrEqual(3000);
+  });
+
+  it('coerces non-string metadata values instead of throwing', () => {
+    const payload = render({ metadata: { ...metadata, requestId: 12345, userId: { id: 'u1' }, sessionId: null } });
+    const fields = blocksOf(payload)[1].fields?.map(f => f.text) ?? [];
+    expect(fields).toContain('*Request*\n12345');
+    expect(fields).toContain('*User*\n[object Object]');
+    expect(fields.some(f => f.startsWith('*Session*'))).toBe(false);
+  });
+
   it('clips a runaway headline', () => {
     const payload = render({ message: 'x'.repeat(500) });
     expect(payload.text.length).toBeLessThan(330);
