@@ -21,6 +21,7 @@ export * from './UndoToast';
 export * from './SegmentedControl';
 export * from './ChangePreview';
 export * from './Kbd';
+export * from './InlineBar';
 export * from './ToggleChipGroup';
 export * from './SaveBar';
 export * from './UnsavedChangesGuard';

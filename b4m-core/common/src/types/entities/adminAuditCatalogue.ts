@@ -159,6 +159,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
   'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.api_key.restored': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.api_key.rotated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.api_keys.revoked_all': { category: 'access', severity: 'notice', write: 'strict' },
   'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
   // Handler coverage: liveops, sre and queues

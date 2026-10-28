@@ -262,6 +262,52 @@ describe('isApiKeyAccessAllowed', () => {
   });
 });
 
+describe('describeApiKeyAccess', () => {
+  it.each(['all', 'paid', 'disabled'] as const)('reports the %s mode with an admin bypass', async mode => {
+    setMode(mode);
+    expect(await gate.describeApiKeyAccess(ADMIN)).toEqual({ mode, allowed: true, basis: 'admin' });
+    expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('reports a developer bypass', async () => {
+    expect(await gate.describeApiKeyAccess({ ...USER, tags: ['developer'] })).toEqual({
+      mode: 'paid',
+      allowed: true,
+      basis: 'developer',
+    });
+  });
+
+  it('reports open access without a subscription lookup', async () => {
+    setMode('all');
+    expect(await gate.describeApiKeyAccess(USER)).toEqual({ mode: 'all', allowed: true, basis: 'open_to_all' });
+    expect(findActiveUserSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('reports a disabled switch as denying a regular user', async () => {
+    setMode('disabled');
+    expect(await gate.describeApiKeyAccess(USER)).toEqual({ mode: 'disabled', allowed: false, basis: 'disabled' });
+  });
+
+  it('reports paid mode by whether the user holds a paid subscription', async () => {
+    expect(await gate.describeApiKeyAccess(USER)).toEqual({
+      mode: 'paid',
+      allowed: false,
+      basis: 'no_paid_subscription',
+    });
+    findActiveUserSubscriptions.mockResolvedValue([{ priceId: plans.PROFESSIONAL_PRICE_ID }]);
+    expect(await gate.describeApiKeyAccess(USER)).toEqual({ mode: 'paid', allowed: true, basis: 'paid_subscription' });
+  });
+
+  it('agrees with isApiKeyAccessAllowed for a billing-less key', async () => {
+    for (const mode of ['all', 'paid', 'disabled']) {
+      setMode(mode);
+      gate.clearApiKeyAccessModeCache();
+      const described = await gate.describeApiKeyAccess(USER);
+      expect(described.allowed).toBe(await gate.isApiKeyAccessAllowed(USER));
+    }
+  });
+});
+
 describe('assertApiKeyAccessAllowed', () => {
   it('throws ForbiddenError with the subscription message on denial', async () => {
     const error = await gate.assertApiKeyAccessAllowed(USER).catch((error: unknown) => error);

@@ -143,9 +143,10 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
   }
 
   // Status-filtered in the same write, not checked on a prior read, so a re-revoke or a revoke
-  // racing deactivateAllByUserId keeps the first audit stamp instead of overwriting it.
-  async revokeIfNotDisabled(id: string, revokedBy: string, revokedReason?: string) {
-    await this.model.updateOne(
+  // racing deactivateAllByUserId keeps the first audit stamp instead of overwriting it. True when
+  // this call revoked it.
+  async revokeIfNotDisabled(id: string, revokedBy: string, revokedReason?: string): Promise<boolean> {
+    const result = await this.model.updateOne(
       { _id: id, status: { $ne: ApiKeyStatus.DISABLED } },
       {
         $set: {
@@ -156,6 +157,26 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
         },
       }
     );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Undoes a revoke: ACTIVE again and the revoke stamps cleared, only while the key is still
+   * DISABLED by `revokedBy` at or after `revokedSince` and has not expired. The conditions ride the
+   * same write, so two concurrent restores cannot both succeed. True when this call restored it.
+   */
+  async restoreRevoked(id: string, revokedBy: string, revokedSince: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        status: ApiKeyStatus.DISABLED,
+        revokedBy,
+        revokedAt: { $gte: revokedSince },
+        $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+      },
+      { $set: { status: ApiKeyStatus.ACTIVE }, $unset: { revokedAt: 1, revokedBy: 1, revokedReason: 1 } }
+    );
+    return result.modifiedCount === 1;
   }
 
   findExpiredKeys() {
