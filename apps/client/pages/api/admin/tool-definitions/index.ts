@@ -1,7 +1,6 @@
 import { toolDefinitionOverrideRepository } from '@bike4mind/database';
 import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { TOOL_MAPPING, TOOL_CATEGORIES } from '@client/app/utils/toolMapping';
 
 // Tool definition interface for API response
@@ -235,9 +234,6 @@ const handler = adminApi({
     });
   } catch (error) {
     console.error('Error fetching tool definitions:', error);
-    if (error instanceof ForbiddenError) {
-      return res.status(403).json({ error: error.message });
-    }
     return res.status(500).json({ error: 'Failed to fetch tool definitions' });
   }
 });

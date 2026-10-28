@@ -39,9 +39,9 @@ vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn
 
 import handler from '../index';
 
-const call = async (method: string, body?: unknown) => {
+const call = async (method: string, body?: unknown, user: object = { id: 'a1', isAdmin: true }) => {
   const { req, res } = createMocks({ method: method as 'GET', body: body as object });
-  (req as unknown as Record<string, unknown>).user = { id: 'a1', isAdmin: true };
+  (req as unknown as Record<string, unknown>).user = user;
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 };
@@ -108,5 +108,13 @@ describe('/api/admin/identity-providers response schema', () => {
     expect(JSON.stringify(body)).not.toMatch(/PRIVATE-KEY|PRIVATE-CERT|OKTA-SECRET/);
     expect(body).not.toHaveProperty('somethingUndeclared');
     expect(body.id).toBe('idp1');
+  });
+
+  it('refuses a non-admin before reading or creating anything', async () => {
+    const nonAdmin = { id: 'u1', isAdmin: false };
+    await expect(call('GET', undefined, nonAdmin)).rejects.toThrow(/missing permission/i);
+    await expect(call('POST', { name: 'x' }, nonAdmin)).rejects.toThrow(/missing permission/i);
+    expect(mockFindAllWithSecretPresence).not.toHaveBeenCalled();
+    expect(mockCreateIDP).not.toHaveBeenCalled();
   });
 });

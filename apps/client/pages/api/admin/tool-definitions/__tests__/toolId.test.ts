@@ -56,11 +56,11 @@ const BODY = {
 };
 const EXISTING = { toolId: TOOL_ID, description: 'old description', shortDescription: 'old short', enabled: false };
 
-const invoke = async (method: 'PUT' | 'DELETE', body?: object) => {
+const invoke = async (method: 'PUT' | 'DELETE', body?: object, isAdmin = true) => {
   const { req, res } = createMocks({ method, body, query: { toolId: TOOL_ID } });
   (req as unknown as { user: { id: string; isAdmin: boolean; name: string } }).user = {
     id: 'admin-1',
-    isAdmin: true,
+    isAdmin,
     name: 'Admin',
   };
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
@@ -144,6 +144,15 @@ describe('DELETE /api/admin/tool-definitions/[toolId] admin audit', () => {
     const { res } = await invoke('DELETE');
 
     expect(res._getStatusCode()).toBe(404);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/admin/tool-definitions/[toolId] non-admin', () => {
+  it('refuses a non-admin before touching the override', async () => {
+    await expect(invoke('PUT', BODY, false)).rejects.toThrow(/missing permission/i);
+    await expect(invoke('DELETE', undefined, false)).rejects.toThrow(/missing permission/i);
+    expect(h.findByToolId).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
   });
 });
