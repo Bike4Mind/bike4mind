@@ -208,7 +208,7 @@ describe('NotificationDeduplicator', () => {
       expect(mockPostMessageToSlack).toHaveBeenCalledOnce();
       expect(mockPostMessageToSlack).toHaveBeenCalledWith(
         slackUrl,
-        expect.stringContaining('*ERROR* - Database connection failed')
+        expect.objectContaining({ text: 'ERROR on production: Database connection failed' })
       );
     });
 
@@ -288,7 +288,7 @@ describe('NotificationDeduplicator', () => {
       );
 
       expect(mockPostMessageToSlack).toHaveBeenCalledTimes(2);
-      expect(mockPostMessageToSlack).toHaveBeenNthCalledWith(2, slackUrl, expect.stringContaining('`count: 4`'));
+      expect(JSON.stringify(mockPostMessageToSlack.mock.calls[1][1])).toContain('*Seen*\\n4 times in');
 
       vi.useRealTimers();
     });

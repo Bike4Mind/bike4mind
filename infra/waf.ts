@@ -12,6 +12,7 @@ import { buildDevWafRuleJson, getDevWafMeta, parseWafBlockedIps } from './wafPol
 import { resolveExternalWafAssociation, resolveWafLogDestination } from './wafAssociation';
 import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { buildDlqAgeMetricQueries } from '@bike4mind/infra';
 import { parseAlarmThreshold, SIGNUP_EDGE_SIGNAL_DEFAULT } from './signupAlarmThreshold';
@@ -286,11 +287,13 @@ export const wafOobAlarmTopic = productionAlerts
  * Created in the default region; SNS cross-region invocation carries the
  * alarm payload from us-east-1 to the handler.
  */
+const wafMentionArgs = alarmSlackMentionFunctionArgs();
 export const wafAlarmSlackHandler = productionAlerts
   ? new sst.aws.Function('WafAlarmSlackHandler', {
       handler: 'apps/workers/src/events/wafAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...wafMentionArgs.environment },
+      permissions: wafMentionArgs.permissions,
       logging: { retention: '1 month' },
     })
   : undefined;
