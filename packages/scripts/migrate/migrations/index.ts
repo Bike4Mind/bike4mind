@@ -11,7 +11,8 @@
  */
 
 // 2. Import the file here:
-import EnsureAdminUserNoteIndexes from './20261028000001_ensure-admin-user-note-indexes';
+// Backdated so the fail-closed OAuth backfill cannot block these indexes.
+import EnsureAdminUserNoteIndexes from './20260921235898_ensure-admin-user-note-indexes';
 // Backdated below the fail-closed OAuth backfill; $setOnInsert makes an old-id rerun safe.
 import SeedStagedSignupSettings from './20260921235967_seed-staged-signup-settings';
 import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup-activity-index';

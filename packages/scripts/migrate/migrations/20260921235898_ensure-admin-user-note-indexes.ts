@@ -2,7 +2,7 @@ import { AdminUserNoteModel, AdminUserNoteRevisionModel } from '@bike4mind/datab
 import type { MigrationFile } from './index';
 
 const migration: MigrationFile = {
-  id: 20261028000001,
+  id: 20260921235898,
   name: 'ensure admin user note indexes',
   up: async () => {
     await AdminUserNoteModel.createIndexes();
