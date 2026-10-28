@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
+import { DOWN_RECHECK_MS } from './useModelHub';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -249,6 +250,42 @@ describe('ModelsScreen installed', () => {
     await click(q('models-explore-result-row'));
     expect(q('models-detail-runtime-down')).not.toBeNull();
     expect(q('models-build-pull-btn')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('checks again on its own while Ollama looks down, and lists its models once it answers', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bridge.status = { ...DOWN, error: 'timed out after 1500ms' };
+      await mount();
+      expect(q('models-runtime-status')?.dataset.state).toBe('down');
+
+      bridge.status = RUNNING;
+      bridge.installed = {
+        ok: true,
+        models: [
+          {
+            name: 'qwen2.5:0.5b',
+            sizeBytes: 1,
+            quantization: null,
+            family: null,
+            parameterSize: null,
+            modifiedAt: null,
+            capabilities,
+            loaded: false,
+          },
+        ],
+      };
+      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS));
+      await flush();
+      expect(q('models-runtime-status')?.dataset.state).toBe('running');
+      expect(all('models-installed-row').map(row => row.dataset.name)).toEqual(['qwen2.5:0.5b']);
+
+      const checks = calls.getStatus.mock.calls.length;
+      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS * 3));
+      expect(calls.getStatus.mock.calls.length).toBe(checks);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
