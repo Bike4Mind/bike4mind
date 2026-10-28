@@ -20,7 +20,10 @@ export const SkillListingVisibilitySchema = z.enum(['public', 'organization', 'u
 export const PublicSkillSnapshotSchema = z.object({
   name: z.string(),
   description: z.string(),
-  body: z.string().optional().describe('The SKILL.md body. Omitted from list responses.'),
+  body: z
+    .string()
+    .optional()
+    .describe('The SKILL.md body. Omitted from marketplace list responses; included in the review queue.'),
   argument_hint: z.string().nullable(),
   allowed_tools: z.array(z.string()),
   disable_model_invocation: z.boolean(),
@@ -217,3 +220,44 @@ export const SkillListingDetailSchema = z.object({
     .nullable(),
 });
 export type SkillListingDetail = z.infer<typeof SkillListingDetailSchema>;
+
+// Review (api-contract/contracts/skillMarketReview.contract.ts). The reviewer sees the privileged
+// version and listing shapes, so `PRIVILEGED` fields above are always present here.
+
+export const ReviewSkillVersionRequestSchema = z.discriminatedUnion('action', [
+  z
+    .object({
+      action: z.literal('approve'),
+      ack_high_risk: z.boolean().optional().describe('Required to approve a version whose `risk_tier` is `high`.'),
+      ack_mismatch: z
+        .boolean()
+        .optional()
+        .describe(
+          'Required when `honest_summary.description_matches` is false: the description understates the skill.'
+        ),
+      note: z.string().trim().max(2000).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('reject'),
+      note: z.string().trim().min(1, 'A note is required to reject').max(2000).describe('Shown to the author.'),
+    })
+    .strict(),
+]);
+export type ReviewSkillVersionRequest = z.infer<typeof ReviewSkillVersionRequestSchema>;
+
+export const ReviewSkillVersionResponseSchema = z.object({ version: PublicSkillListingVersionSchema });
+
+export const ReviewQueueItemSchema = z.object({
+  version: PublicSkillListingVersionSchema,
+  listing: PublicSkillListingSchema,
+  previous: z
+    .object({ id: z.string(), version: z.number().int(), snapshot: PublicSkillSnapshotSchema })
+    .nullable()
+    .describe('The approved version this one would replace, for a diff.'),
+  can_decide: z.boolean(),
+});
+
+export const ReviewQueueQuerySchema = PaginationQuerySchema;
+export const ReviewQueueResponseSchema = paginatedResponseSchema(ReviewQueueItemSchema);

@@ -87,6 +87,7 @@ import {
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
 } from './skillMarketWrite.contract';
+import { listSkillMarketReviewQueueContract, reviewSkillMarketVersionContract } from './skillMarketReview.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -175,4 +176,6 @@ export const CONTRACTS: readonly EndpointContract[] = [
   submitSkillMarketListingVersionContract,
   importSkillMarketListingContract,
   rescanSkillMarketVersionContract,
+  listSkillMarketReviewQueueContract,
+  reviewSkillMarketVersionContract,
 ];

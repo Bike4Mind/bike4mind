@@ -146,6 +146,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Skill Market listings: \`/api/v1/skills/market/listings\`, \`/api/v1/skills/market/listings/mine\`,
   \`/api/v1/skills/market/listings/{id}\` (+ \`/versions\`, \`/import\`),
   \`/api/v1/skills/market/versions/{vid}/rescan\`
+- Skill Market review (org admins): \`/api/v1/skills/market/review-queue\`,
+  \`/api/v1/skills/market/versions/{vid}/review\`
 - Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
