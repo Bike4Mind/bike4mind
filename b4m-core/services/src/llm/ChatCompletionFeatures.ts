@@ -389,7 +389,7 @@ export const ALL_FEATURE_NAMES = Object.keys(ALL_FEATURE_NAMES_MAP) as featureNa
 export interface RapidReplyResultRecord {
   id: string;
   userId: string;
-  status: string;
+  status: 'success' | 'failed' | 'timeout' | 'replaced';
   rapidResponse: { content: string; latency: number; ttfvt?: number };
   metrics?: Record<string, unknown>;
 }
