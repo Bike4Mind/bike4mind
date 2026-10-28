@@ -115,6 +115,69 @@ describe('orphan worktree removal', () => {
     expect(await branchExists(directory, orphan.branch)).toBe(true);
   });
 
+  it.each(['grant-only', 'context-only'] as const)(
+    'preserves a %s conversation reference through the service',
+    async kind => {
+      const { directory, store, service } = await fixture();
+      const checkout = await addWorktree(directory, 'shared');
+      const title = `Shared ${kind} checkout`;
+      await store.create(undefined, {
+        title,
+        ...(kind === 'grant-only'
+          ? { grantedDirectories: [checkout.path] }
+          : {
+              project: {
+                directory,
+                name: 'other project',
+                branch: 'main',
+                workspace: false,
+                workingDirectory: directory,
+                contextDirectories: [checkout.path],
+              },
+            }),
+      });
+
+      expect((await service.listWorktrees(directory))[0]).toMatchObject({
+        path: checkout.path,
+        safe: false,
+        state: 'owned',
+        owner: title,
+      });
+      expect((await service.removeWorktrees(directory, [checkout.path]))[0]).toMatchObject({
+        status: 'skipped',
+        message: 'Used by another conversation',
+      });
+      expect((await stat(checkout.path)).isDirectory()).toBe(true);
+      expect(await branchExists(directory, checkout.branch)).toBe(true);
+    }
+  );
+
+  it('preserves a grant-only owner when deleting the checkout conversation', async () => {
+    const { directory, store, service } = await fixture();
+    const checkout = await addWorktree(directory, 'shared');
+    const owningSession = await store.create(undefined, {
+      project: {
+        directory,
+        name: 'checkout owner',
+        branch: 'main',
+        workspace: true,
+        workspaceBranch: checkout.branch,
+        workingDirectory: checkout.path,
+        contextDirectories: [],
+      },
+    });
+    await store.create(undefined, { title: 'Reference checkout', grantedDirectories: [checkout.path] });
+
+    expect(await service.inspectSessionWorktreeRemoval(owningSession.id)).toMatchObject({
+      safe: false,
+      reason: 'Used by another conversation',
+    });
+    await expect(service.deleteSession(owningSession.id, true)).rejects.toThrow('Used by another conversation');
+    expect(await store.get(owningSession.id)).not.toBeNull();
+    expect((await stat(checkout.path)).isDirectory()).toBe(true);
+    expect(await branchExists(directory, checkout.branch)).toBe(true);
+  });
+
   it('skips a path that is not a listed worktree', async () => {
     const { directory, service } = await fixture();
     const [result] = await service.removeWorktrees(directory, [directory]);

@@ -81,13 +81,19 @@ export function useWorktrees(): WorktreesState {
     (directory: string) => run(() => window.b4m.chat.removeWorktrees(directory)),
     [run]
   );
-  const reveal = useCallback(async (directory: string, path: string) => {
-    try {
-      await window.b4m.chat.revealWorktree(directory, path);
-    } catch (error) {
-      setReport([{ path, branch: '', status: 'failed', message: messageOf(error) }]);
-    }
-  }, []);
+  const reveal = useCallback(
+    async (directory: string, path: string) => {
+      try {
+        if (!(await window.b4m.chat.revealWorktree(directory, path))) {
+          setReport([{ path, branch: '', status: 'skipped', message: 'This worktree is no longer listed.' }]);
+          await load();
+        }
+      } catch (error) {
+        setReport([{ path, branch: '', status: 'failed', message: messageOf(error) }]);
+      }
+    },
+    [load]
+  );
 
   return { projects, loading, busy, report, removeOne, removeAllSafe, reveal };
 }

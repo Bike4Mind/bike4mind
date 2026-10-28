@@ -2,7 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
-import type { AppWorktree, WorktreeRemoval, WorktreeState, WorktreeSweepItem } from '@shared/worktreeRemoval';
+import type {
+  AppWorktree,
+  WorkspaceOwner,
+  WorktreeRemoval,
+  WorktreeState,
+  WorktreeSweepItem,
+} from '@shared/worktreeRemoval';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
@@ -415,21 +421,34 @@ export function hasAppWorkspaceBranch(
   return !!project?.workspaceBranch?.startsWith(BRANCH_PREFIX);
 }
 
-/** The first conversation project that uses this checkout, by location or by branch in the same repository. */
+/** The first conversation that uses this checkout, including folders granted as context. */
 async function ownerOf(
   path: string,
   branch: string,
   container: string,
-  projects: readonly (ChatProject | undefined)[]
-): Promise<ChatProject | null> {
-  for (const other of projects) {
+  projects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
+): Promise<string | null> {
+  for (const owner of options.owners ?? []) {
+    for (const directory of owner.directories) {
+      const ownerPath = (await canonical(directory)) ?? resolve(directory);
+      if (containsPath(path, ownerPath)) return owner.title;
+    }
+  }
+  const allProjects = new Set([...projects, ...(options.owners ?? []).map(owner => owner.project)]);
+  for (const other of allProjects) {
     if (!other) continue;
-    const otherPath = (await canonical(other.workingDirectory)) ?? resolve(other.workingDirectory);
-    const otherDirectory = (await canonical(other.directory)) ?? resolve(other.directory);
-    if (containsPath(path, otherPath) || containsPath(path, otherDirectory)) return other;
+    const title =
+      options.titles?.get(other) ??
+      options.owners?.find(owner => owner.project === other)?.title ??
+      'Another conversation';
+    for (const directory of [other.workingDirectory, other.directory, ...other.contextDirectories]) {
+      const ownerPath = (await canonical(directory)) ?? resolve(directory);
+      if (containsPath(path, ownerPath)) return title;
+    }
     if (other.workspaceBranch !== branch && other.branch !== branch) continue;
     // A matching branch name in another repository does not share this checkout.
-    if ((await canonical(await containerDirectory(other.directory))) === (await canonical(container))) return other;
+    if ((await canonical(await containerDirectory(other.directory))) === (await canonical(container))) return title;
   }
   return null;
 }
@@ -445,8 +464,9 @@ async function inspectCheckout(input: {
   entries: readonly WorktreeEntry[];
   others: readonly (ChatProject | undefined)[];
   bases: readonly string[];
+  options?: OrphanListOptions;
 }): Promise<Inspection> {
-  const { path, branch, container, entries, others, bases } = input;
+  const { path, branch, container, entries, others, bases, options } = input;
   const result = (reason: string | null, state: WorktreeState): Inspection => ({
     removal: { path, branch, safe: reason === null, reason },
     state,
@@ -455,8 +475,11 @@ async function inspectCheckout(input: {
     const otherPath = (await canonical(other.path)) ?? resolve(other.path);
     if (otherPath !== path && containsPath(path, otherPath)) return result('Contains another worktree', 'nested');
   }
-  if (await ownerOf(path, branch, container, others)) return result('Used by another conversation', 'owned');
-  const status = await git(path, ['status', '--porcelain', '-z', '--untracked-files=all']);
+  if (await ownerOf(path, branch, container, others, options)) return result('Used by another conversation', 'owned');
+  const held = options?.hold?.();
+  if (held) return result(held, 'owned');
+  // Git removes ignored files too: local secrets and other ignored data must keep the checkout.
+  const status = await git(path, ['status', '--porcelain', '-z', '--untracked-files=all', '--ignored=matching']);
   if (status) {
     const records = status.split('\0');
     let count = 0;
@@ -504,7 +527,8 @@ async function canonicalWorktreeRoot(directory: string): Promise<{ container: st
 /** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
 export async function inspectWorktreeRemoval(
   project: ChatProject | undefined,
-  otherProjects: readonly (ChatProject | undefined)[]
+  otherProjects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
 ): Promise<InspectedWorktreeRemoval | null> {
   if (!hasAppWorkspaceBranch(project)) return null;
   const path = await canonical(project.workingDirectory);
@@ -518,7 +542,7 @@ export async function inspectWorktreeRemoval(
   const entry = await registeredAt(entries, path);
   if (entry?.branch !== branch || (await canonical(project.directory)) === path) return null;
   const bases = project.branch ? [project.branch] : [];
-  return (await inspectCheckout({ path, branch, container, entries, others: otherProjects, bases })).removal;
+  return (await inspectCheckout({ path, branch, container, entries, others: otherProjects, bases, options })).removal;
 }
 
 const FALLBACK_BASES = ['main', 'master'];
@@ -544,6 +568,8 @@ async function orphanBases(directory: string): Promise<string[]> {
 }
 
 export type OrphanListOptions = {
+  /** All referenced folders, including grants held by conversations without a project. */
+  owners?: readonly WorkspaceOwner[];
   /** The title of each project's conversation, which is what an owner is called. */
   titles?: ReadonlyMap<ChatProject, string>;
   /** Evaluated per checkout; a reason makes it unsafe, e.g. a workspace is still being cut. */
@@ -562,8 +588,7 @@ async function inspectAppWorktree(
   options: OrphanListOptions
 ): Promise<ListedWorktree> {
   const { container } = location;
-  const owner = await ownerOf(path, entry.branch ?? '', container, projects);
-  const ownerName = owner ? (options.titles?.get(owner) ?? 'Another conversation') : null;
+  const ownerName = await ownerOf(path, entry.branch ?? '', container, projects, options);
   const lastCommit = await lastCommitOf(path);
   if (!entry.branch?.startsWith(BRANCH_PREFIX)) {
     return {
@@ -597,6 +622,7 @@ async function inspectAppWorktree(
     entries,
     others: projects,
     bases,
+    options,
   });
   const unverified = removal.safe && !removal.preservedRef;
   return {
@@ -629,19 +655,35 @@ export async function listAppWorktrees(
   for (const entry of entries) {
     const path = await canonical(entry.path);
     if (!path || path === location.root || !containsPath(location.root, path)) continue;
-    listed.push(await inspectAppWorktree(location, entries, entry, path, bases, projects, options));
+    try {
+      listed.push(await inspectAppWorktree(location, entries, entry, path, bases, projects, options));
+    } catch (error) {
+      listed.push({
+        path,
+        branch: entry.branch ?? '',
+        safe: false,
+        reason: `Could not inspect worktree: ${error instanceof Error ? error.message : String(error)}`,
+        owner: null,
+        lastCommit: null,
+        state: 'unverified',
+        preservedRef: null,
+      });
+    }
   }
   return listed;
 }
 
 export async function removeSessionWorktree(
   project: ChatProject,
-  otherProjects: readonly (ChatProject | undefined)[]
+  otherProjects: readonly (ChatProject | undefined)[],
+  options: OrphanListOptions = {}
 ): Promise<void> {
-  const inspection = await inspectWorktreeRemoval(project, otherProjects);
+  const inspection = await inspectWorktreeRemoval(project, otherProjects, options);
   if (!inspection?.safe || !inspection.preservedRef) {
     throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
   }
+  const held = options.hold?.();
+  if (held) throw new Error(held);
   await removeWorktreeAt(project.directory, inspection.path, inspection.branch, inspection.preservedRef);
 }
 
@@ -671,28 +713,38 @@ export async function removeOrphanWorktree(
   projects: readonly (ChatProject | undefined)[],
   options: OrphanListOptions = {}
 ): Promise<WorktreeSweepItem> {
-  const wanted = (await canonical(path)) ?? resolve(path);
-  const location = await canonicalWorktreeRoot(directory);
-  const entries = location ? await listWorktrees(directory) : [];
-  let entry: WorktreeEntry | null = null;
-  if (location && containsPath(location.root, wanted) && wanted !== location.root) {
-    entry = await registeredAt(entries, wanted);
-  }
-  if (!location || !entry) return { path, branch: '', status: 'skipped', message: 'No longer listed' };
-  const current = await inspectAppWorktree(
-    location,
-    entries,
-    entry,
-    wanted,
-    await orphanBases(directory),
-    projects,
-    options
-  );
-  const { branch, preservedRef } = current;
-  if (!current.safe || !preservedRef) {
-    return { path, branch, status: 'skipped', message: current.reason ?? 'Cannot verify the upstream or base branch' };
-  }
+  let branch = '';
   try {
+    const wanted = (await canonical(path)) ?? resolve(path);
+    const location = await canonicalWorktreeRoot(directory);
+    const entries = location ? await listWorktrees(directory) : [];
+    let entry: WorktreeEntry | null = null;
+    if (location && containsPath(location.root, wanted) && wanted !== location.root) {
+      entry = await registeredAt(entries, wanted);
+    }
+    if (!location || !entry) return { path, branch, status: 'skipped', message: 'No longer listed' };
+    branch = entry.branch ?? '';
+    const current = await inspectAppWorktree(
+      location,
+      entries,
+      entry,
+      wanted,
+      await orphanBases(directory),
+      projects,
+      options
+    );
+    const { preservedRef } = current;
+    if (!current.safe || !preservedRef) {
+      return {
+        path,
+        branch,
+        status: 'skipped',
+        message: current.reason ?? 'Cannot verify the upstream or base branch',
+      };
+    }
+    // Preparation can start during the inspection's Git awaits; check again at the deletion boundary.
+    const held = options.hold?.();
+    if (held) return { path, branch, status: 'skipped', message: held };
     await removeWorktreeAt(directory, current.path, branch, preservedRef);
     return { path, branch, status: 'removed', message: null };
   } catch (err) {

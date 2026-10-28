@@ -93,7 +93,7 @@ describe('the Worktrees view', () => {
         { path: '/p/c', branch: 'app/c', status: 'failed', message: 'branch not fully merged' },
       ],
     });
-    expect(html).toContain('Removed 1, left 2.');
+    expect(html).toContain('Removed 1, skipped 1, failed 1.');
     expect(html).toContain('data-testid="worktrees-report-skipped-item"');
     expect(html).toContain('data-testid="worktrees-report-failed-item"');
     expect(html).toContain('branch not fully merged');

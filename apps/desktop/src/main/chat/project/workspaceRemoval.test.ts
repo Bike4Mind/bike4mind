@@ -114,11 +114,12 @@ describe('session worktree removal', () => {
     );
   });
 
-  it('does not count ignored files', async () => {
+  it('keeps ignored files that Git would otherwise delete with the checkout', async () => {
     const project = await fixture();
     await writeFile(join(project.workingDirectory, 'ignored'), 'generated\n');
-    expect((await inspectWorktreeRemoval(project, []))?.safe).toBe(true);
-    await removeSessionWorktree(project, []);
+    expect((await inspectWorktreeRemoval(project, []))?.safe).toBe(false);
+    await expect(removeSessionWorktree(project, [])).rejects.toThrow('1 uncommitted file');
+    expect((await stat(join(project.workingDirectory, 'ignored'))).isFile()).toBe(true);
   });
 
   it('keeps an ignored nested worktree and its uncommitted files', async () => {

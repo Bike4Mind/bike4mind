@@ -108,6 +108,8 @@ export function WorktreesView({ state }: { state: WorktreesState }) {
   const { projects, loading, busy, report, removeOne, removeAllSafe, reveal } = state;
   const problems = report.filter(item => item.status !== 'removed');
   const removed = report.length - problems.length;
+  const skipped = problems.filter(item => item.status === 'skipped').length;
+  const failed = problems.length - skipped;
 
   return (
     <Stack spacing={2} data-testid="worktrees-panel">
@@ -163,7 +165,7 @@ export function WorktreesView({ state }: { state: WorktreesState }) {
       {report.length > 0 && (
         <Stack spacing={0.5} role="status" data-testid="worktrees-report">
           <Typography level="body-sm" data-testid="worktrees-report-summary">
-            {`Removed ${removed}, left ${problems.length}.`}
+            {`Removed ${removed}, skipped ${skipped}, failed ${failed}.`}
           </Typography>
           {problems.map((item, index) => (
             <Typography

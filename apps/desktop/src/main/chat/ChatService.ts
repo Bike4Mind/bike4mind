@@ -1260,7 +1260,9 @@ export class ChatService {
         },
       });
       const workspace = { workspaceBranch: resolved.branch, workingDirectory: resolved.workingDirectory };
-      const summary = await this.deps.store.updateProjectWorkspace(session.id, workspace);
+      const summary = await this.withWorkspaceBindings(() =>
+        this.deps.store.updateProjectWorkspace(session.id, workspace)
+      );
       if (!summary) return { error: 'That conversation no longer exists.' };
       // The sidebar row says "Preparing worktree..." off this project until it hears otherwise.
       this.deps.summaryChanged?.(summary);
@@ -1327,6 +1329,13 @@ export class ChatService {
     const project = session.project;
     if (!project || !(await isGitDirectory(project.workingDirectory))) return project;
 
+    return this.withWorkspaceBindings(() => this.repairBareWorkingDirectoryWithWorkspaceLease(session, project));
+  }
+
+  private async repairBareWorkingDirectoryWithWorkspaceLease(
+    session: ChatSession,
+    project: ChatProject
+  ): Promise<ChatProject | undefined> {
     let workingDirectory = project.directory;
     if (project.workspace && project.branch) {
       try {
@@ -1586,8 +1595,12 @@ export class ChatService {
     const session = await this.deps.store.get(sessionId);
     // The scan parses every stored conversation; most deletes have no app worktree to inspect.
     if (!hasAppWorkspaceBranch(session?.project)) return null;
-    const others = await this.deps.store.workspaceProjectsExcept(sessionId);
-    const inspection = await inspectWorktreeRemoval(session.project, others);
+    const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+    const inspection = await inspectWorktreeRemoval(
+      session.project,
+      owners.map(owner => owner.project),
+      { owners }
+    );
     if (inspection && this.hasTurnInFlight(sessionId)) {
       return { ...inspection, safe: false, reason: 'Conversation is still running' };
     }
@@ -1595,8 +1608,7 @@ export class ChatService {
   }
 
   /**
-   * Holds while any workspace is being cut: ensureWorkspace runs outside the store lease and
-   * persists its project only afterwards, so a fresh checkout is briefly ownerless.
+   * Preparation stays active until its binding is persisted under the same lease as cleanup.
    */
   private orphanOptions(titles?: ReadonlyMap<ChatProject, string>) {
     return {
@@ -1609,7 +1621,8 @@ export class ChatService {
     const owners = await this.deps.store.workspaceOwnersExcept('');
     return {
       projects: owners.map(owner => owner.project),
-      titles: new Map(owners.map(owner => [owner.project, owner.title] as const)),
+      owners,
+      titles: new Map(owners.flatMap(owner => (owner.project ? [[owner.project, owner.title] as const] : []))),
     };
   }
 
@@ -1633,13 +1646,13 @@ export class ChatService {
     // Recent folders first: the Settings view lists exactly those, so the store is rarely read.
     if (await matches(recentFolders)) return true;
     const owners = await this.deps.store.workspaceOwnersExcept('');
-    return matches(owners.map(owner => owner.project.directory));
+    return matches(owners.flatMap(owner => (owner.project ? [owner.project.directory] : [])));
   }
 
   async listWorktrees(directory: string): Promise<AppWorktree[]> {
     const listed = await this.withWorkspaceBindings(async () => {
-      const { projects, titles } = await this.orphanContext();
-      return listAppWorktrees(directory, projects, this.orphanOptions(titles));
+      const { projects, titles, owners } = await this.orphanContext();
+      return listAppWorktrees(directory, projects, { ...this.orphanOptions(titles), owners });
     });
     // preservedRef is internal to the removal path.
     return listed.map(({ preservedRef: _preservedRef, ...item }) => item);
@@ -1648,8 +1661,8 @@ export class ChatService {
   /** Named paths, or every safe orphan when none are given; each is re-inspected as it is removed. */
   removeWorktrees(directory: string, paths?: readonly string[]) {
     return this.withWorkspaceBindings(async () => {
-      const { projects, titles } = await this.orphanContext();
-      const options = this.orphanOptions(titles);
+      const { projects, titles, owners } = await this.orphanContext();
+      const options = { ...this.orphanOptions(titles), owners };
       if (!paths) return sweepSafeOrphans(directory, projects, options);
       const results = [];
       for (const path of paths) results.push(await removeOrphanWorktree(directory, path, projects, options));
@@ -1686,8 +1699,12 @@ export class ChatService {
       releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
       this.deps.sessionClosed?.(sessionId);
       await this.deps.browser?.closeSession(sessionId);
-      const others = await this.deps.store.workspaceProjectsExcept(sessionId);
-      await removeSessionWorktree(session.project, others);
+      const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+      await removeSessionWorktree(
+        session.project,
+        owners.map(owner => owner.project),
+        { owners }
+      );
       await this.cleanupDeletedSession(sessionId, true);
     } finally {
       releaseTerminals?.();
@@ -5244,6 +5261,17 @@ export class ChatService {
     directory: string
   ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
     const expectedScope = this.deps.store.scopeKey();
+    return this.withWorkspaceBindings(() =>
+      this.grantSessionDirectoryWithWorkspaceLease(sessionId, directory, expectedScope)
+    );
+  }
+
+  private async grantSessionDirectoryWithWorkspaceLease(
+    sessionId: string,
+    directory: string,
+    expectedScope: string | null
+  ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
+    if (this.deps.store.scopeKey() !== expectedScope) return { ok: false };
     const scopeKey = expectedScope ?? 'local';
     const real = await realpath(directory).catch(() => null);
     const kind = real ? await stat(real).catch(() => null) : null;

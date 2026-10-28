@@ -1,3 +1,11 @@
+import type { ChatProject } from './chat';
+
+export type WorkspaceOwner = {
+  project?: ChatProject;
+  directories: readonly string[];
+  title: string;
+};
+
 export type WorktreeRemoval = {
   path: string;
   branch: string;

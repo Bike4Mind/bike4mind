@@ -90,7 +90,7 @@ describe('listAppWorktrees', () => {
     const listed = await listAppWorktrees(
       directory,
       owners.map(owner => owner.project),
-      { titles: new Map(owners.map(owner => [owner.project, owner.title])) }
+      { titles: new Map(owners.flatMap(owner => (owner.project ? [[owner.project, owner.title] as const] : []))) }
     );
     expect(byName(listed, 'direct')).toMatchObject({ safe: false, state: 'owned', owner: 'Fix the login bug' });
     expect(byName(listed, 'child')).toMatchObject({ safe: false, state: 'owned', owner: 'Local child' });
