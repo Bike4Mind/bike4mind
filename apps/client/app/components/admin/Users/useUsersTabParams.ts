@@ -1,61 +1,60 @@
 import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
-import type { UsersDisplayMode } from './UsersFilterBar';
-import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useShallow } from 'zustand/react/shallow';
-import { DEFAULT_USERS_PARAMS, isSameUsersView, usersViewFromSearch, usersViewToSearch } from './usersTabSearch';
+import {
+  DEFAULT_USERS_PARAMS,
+  USERS_FILTER_KEYS,
+  isSameUsersView,
+  migrateStoredUsersParams,
+  usersViewFromSearch,
+  usersViewToSearch,
+  type UsersListParams,
+} from './usersTabSearch';
 
 export { DEFAULT_USERS_PARAMS, PAGE_LIMIT_OPTIONS } from './usersTabSearch';
 
 const ADMIN_PATH = '/admin';
 
-// Persist key must stay 'admin-user-tab-01': changing it silently discards
-// every admin's saved filters.
+// Persist key must stay 'admin-user-tab-01': changing it silently discards every admin's saved
+// filters. Version 1 is the rebuilt list; `migrate` carries a version 0 copy across.
 export const useUsersTab = create<{
-  params: IGetUsersParams;
-  setParams: (params: Partial<IGetUsersParams>) => void;
-  // Persisted because opening a user's profile page unmounts the list, and coming back must not
-  // drop the admin out of the mode they were scanning in.
-  displayMode: UsersDisplayMode;
-  setDisplayMode: (displayMode: UsersDisplayMode) => void;
+  params: UsersListParams;
+  setParams: (params: Partial<UsersListParams>) => void;
 }>()(
   persist(
     (set, get) => ({
       params: { ...DEFAULT_USERS_PARAMS },
       setParams: params => set({ params: { ...get().params, ...params } }),
-      displayMode: 'slim',
-      setDisplayMode: displayMode => set({ displayMode }),
     }),
-    { name: 'admin-user-tab-01' }
+    {
+      name: 'admin-user-tab-01',
+      version: 1,
+      partialize: state => ({ params: state.params }),
+      migrate: persisted => {
+        const params = (persisted as { params?: unknown } | null)?.params;
+        return {
+          params: migrateStoredUsersParams(typeof params === 'object' && params !== null ? { ...params } : {}),
+        };
+      },
+    }
   )
 );
 
 type SearchRecord = Record<string, unknown>;
 
-const VIEW_KEYS = [
-  'page',
-  'limit',
-  'sortField',
-  'sortOrder',
-  'orgSearch',
-  'tags',
-  'groupBy',
-  'recentSignups',
-  'createdFrom',
-  'createdTo',
-] as const;
+const VIEW_KEYS = ['page', 'limit', 'sortField', 'sortOrder', 'orgSearch', 'tags', 'groupBy', ...USERS_FILTER_KEYS];
 
-const touchesView = (patch: Partial<IGetUsersParams>) => VIEW_KEYS.some(key => key in patch);
+const touchesView = (patch: Partial<UsersListParams>) => VIEW_KEYS.some(key => key in patch);
 
 /**
  * The Users tab's list params. The URL owns the view (page, limit, sort, org and tag filters) when it
  * carries one; the persisted store holds the free-text search, which never enters the URL, and a copy
  * of the view so a bare `?tab=users` restores the last one. Every write goes to both, with `replace`.
  */
-export const useUsersParams = (): readonly [IGetUsersParams, (patch: Partial<IGetUsersParams>) => void] => {
+export const useUsersParams = (): readonly [UsersListParams, (patch: Partial<UsersListParams>) => void] => {
   const [storedParams, setStoredParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
   const search = useSearch({ strict: false }) as SearchRecord;
   const navigate = useNavigate();
@@ -64,7 +63,7 @@ export const useUsersParams = (): readonly [IGetUsersParams, (patch: Partial<IGe
   const params = useMemo(() => (urlView ? { ...storedParams, ...urlView } : storedParams), [storedParams, urlView]);
 
   const setParams = useCallback(
-    (patch: Partial<IGetUsersParams>) => {
+    (patch: Partial<UsersListParams>) => {
       setStoredParams(patch);
       if (!touchesView(patch)) return;
       // Written from the store, which useUsersTabUrlSync keeps level with the URL and which already
@@ -108,29 +107,4 @@ export const useUsersTabUrlSync = (): void => {
       replace: true,
     });
   }, [isUsersTabUrl, urlView, navigate]);
-};
-
-/** Filters that the mobile drawer's "Clear all" and the desktop filter chip reset. */
-export const CLEARED_FILTER_PARAMS: Partial<IGetUsersParams> = {
-  orgSearch: DEFAULT_USERS_PARAMS.orgSearch,
-  tags: DEFAULT_USERS_PARAMS.tags,
-  sortField: DEFAULT_USERS_PARAMS.sortField,
-  sortOrder: DEFAULT_USERS_PARAMS.sortOrder,
-  page: 1,
-  groupBy: undefined,
-  recentSignups: undefined,
-  createdFrom: undefined,
-  createdTo: undefined,
-};
-
-export const countActiveFilters = (params: IGetUsersParams): number => {
-  let count = 0;
-  if (params.recentSignups) count++;
-  if (params.createdFrom || params.createdTo) count++;
-  if (params.orgSearch && !params.orgSearch.includes('all') && params.orgSearch.length > 0) count++;
-  if (params.tags && params.tags.length > 0) count++;
-  if (params.sortField !== DEFAULT_USERS_PARAMS.sortField || params.sortOrder !== DEFAULT_USERS_PARAMS.sortOrder) {
-    count++;
-  }
-  return count;
 };

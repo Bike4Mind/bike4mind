@@ -851,6 +851,7 @@ export class PrMonitor {
     return {
       sessionId,
       binding: binding && !binding.dismissed ? withoutFinal(binding) : null,
+      ...(binding?.dismissed ? { dismissed: true } : {}),
       snapshot: snapshot ? forTheBar(snapshot) : null,
       gh: this.gh,
       ...(live?.error ? { error: live.error } : {}),
@@ -881,10 +882,10 @@ export class PrMonitor {
   /**
    * The sidebar's view of a conversation's PR, from what is already in hand. Falls back to the
    * state stored at the last read for a conversation not read since launch, and to nothing for
-   * one never read at all. A dismissed bar keeps its icon: the PR is still this session's.
+   * one never read at all. A dismissed bar has no icon either, so the two agree.
    */
   private summaryOf(sessionId: string, binding: PrBinding | null): PrSummary | null {
-    if (!binding) return null;
+    if (!binding || binding.dismissed) return null;
     const snapshot = this.snapshotFor(sessionId, binding);
     // live.queued, which the bar's icon and chip also read: set from this launch's reads and the
     // app's own enqueue, never from the binding file. A PR sits in the queue for minutes, so a

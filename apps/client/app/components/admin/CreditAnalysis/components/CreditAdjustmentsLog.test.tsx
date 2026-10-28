@@ -96,7 +96,7 @@ describe('CreditAdjustmentsLog', () => {
   it('shows skeletons instead of stale rows while fetching', () => {
     useLog.mockReturnValue({ data: result, isFetching: true, refetch });
     renderLog();
-    expect(screen.getAllByTestId('admin-table-skeleton-row')).toHaveLength(5);
+    expect(screen.getAllByTestId('admin-table-skeleton-row')).toHaveLength(8);
     expect(screen.queryByText('Test correction')).toBeNull();
   });
 

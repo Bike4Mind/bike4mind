@@ -1409,6 +1409,16 @@ UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });
 UserSchema.index({ 'notionConnect.status': 1 });
+// Admin users list: the Signed up, Last active and Credits sorts and the built-in view counts
+// (apps/client/server/admin/usersList/listAdminUsers.ts). The sort keys end in _id because
+// adminUsersSort adds an _id tiebreak, and a sort only uses an index whose key it prefixes; each
+// serves both directions. The flag and band indexes are partial/sparse so they stay small. Built
+// by the ensure-user-admin-list-indexes migration.
+UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
+UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
+UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
+UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235957 byte-for-byte.
 UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 'user_riskScore_review' });

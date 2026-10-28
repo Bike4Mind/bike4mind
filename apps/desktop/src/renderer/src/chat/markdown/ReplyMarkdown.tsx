@@ -108,7 +108,8 @@ function buildComponents(mode: 'light' | 'dark'): Components {
         );
       }
       const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? 'text';
-      return <CodeBlock code={String(children).replace(/\n$/, '')} language={language} mode={mode} />;
+      // An empty fence has no children at all.
+      return <CodeBlock code={String(children ?? '').replace(/\n$/, '')} language={language} mode={mode} />;
     },
 
     img: ({ node: _node, ...props }) => <MarkdownImage {...props} />,
