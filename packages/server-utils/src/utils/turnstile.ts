@@ -47,8 +47,8 @@ const TURNSTILE_TEST_SECRETS: ReadonlySet<string> = new Set([
   '3x0000000000000000000000000000000AA',
 ]);
 
-export function isTurnstileTestSecret(secret: string | undefined): boolean {
-  return !!secret && TURNSTILE_TEST_SECRETS.has(secret.trim());
+export function isTurnstileTestSecret(secret: string): boolean {
+  return TURNSTILE_TEST_SECRETS.has(secret.trim());
 }
 
 /**

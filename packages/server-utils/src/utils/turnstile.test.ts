@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  isTurnstileSecretConfigured,
-  isTurnstileTestSecret,
-  verifyTurnstile,
-} from './turnstile';
+import { isTurnstileSecretConfigured, isTurnstileTestSecret, verifyTurnstile } from './turnstile';
 
 const respond = (body: unknown, ok = true) => vi.fn().mockResolvedValue({ ok, json: async () => body });
 const base = { secret: 's', expectedAction: 'otc-send', ip: '203.0.113.9' };
@@ -168,7 +164,6 @@ describe('isTurnstileTestSecret', () => {
   });
 
   it.each([
-    undefined,
     '',
     '0x4AAA',
     '1x0000000000000000000000000000000AAA',

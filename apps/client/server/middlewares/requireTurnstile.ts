@@ -1,6 +1,6 @@
 import { Request, RequestHandler, Response } from 'express';
 import { Resource } from 'sst';
-import { isE2EEnabled, isProduction } from '@bike4mind/server-utils/utils/config';
+import { isDevelopment, isE2EEnabled, isProduction } from '@bike4mind/server-utils/utils/config';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { isTurnstileTestSecret, verifyTurnstile } from '@bike4mind/server-utils/utils/turnstile';
 import { getTurnstilePolicy, turnstileAllowedHostnames } from '@server/utils/auth/turnstile';
@@ -54,11 +54,14 @@ export const requireTurnstile = (action: string, options: RequireTurnstileOption
     if (isE2ETestRequest(req)) return next();
 
     const ip = getClientIp(req);
-    // Production keeps the strict checks, so a public test secret there rejects every token
-    // instead of admitting everyone.
+    // A public test secret rejects every token on production (strict checks stay) and admits anyone
+    // on other stages. Local development is where it belongs, so only deployed stages log it.
     const production = isProduction();
-    if (production && isTurnstileTestSecret(policy.secret)) {
+    const testSecret = isTurnstileTestSecret(policy.secret);
+    if (testSecret && production) {
       req.logger?.error('turnstile-test-secret-in-production', { action });
+    } else if (testSecret && !isDevelopment()) {
+      req.logger?.warn('turnstile-test-secret-on-deployed-stage', { action });
     }
     const result = await verifyTurnstile({
       token: readToken(req),
