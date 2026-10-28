@@ -48,7 +48,7 @@ export interface ModelRuntimePort {
 export interface ModelHubPort {
   readonly endpoint: string;
   search(options: HubSearchOptions): Promise<HubSearchPage>;
-  getModel(repo: string, options?: { signal?: AbortSignal }): Promise<HubModelDetail>;
+  getModel(repo: string, options?: { signal?: AbortSignal; refresh?: boolean }): Promise<HubModelDetail>;
   verifyOllamaRef(
     detail: Pick<HubModelDetail, 'id' | 'builds'>,
     build: HubGgufBuild,
