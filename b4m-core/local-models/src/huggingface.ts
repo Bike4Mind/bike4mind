@@ -44,6 +44,9 @@ const MAX_BASE_MODELS = 10;
 const MAX_LICENSES = 10;
 export const HUB_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 200;
+const DEFAULT_MAX_RATE_LIMIT_WAIT_MS = 5_000;
+const MAX_RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_BACKOFF_MS = 500;
 
 export type HubSort = 'downloads' | 'likes' | 'trending' | 'updated';
 
@@ -57,6 +60,11 @@ export interface HuggingFaceHubOptions {
   token?: string;
   /** Deadline per request (ms); a multi-page file listing gets it once per page. */
   requestTimeoutMs?: number;
+  /**
+   * Most a request waits in total before surfacing `HubRateLimitError`; it retries on 429 after `Retry-After`, and
+   * rejects at once when the wait asked for would pass this. Default 5000; 0 never retries.
+   */
+  maxRateLimitWaitMs?: number;
 }
 
 export interface HubSearchOptions {
@@ -573,6 +581,21 @@ function retryAfterMs(headers: Headers): number | null {
 
 class BodyTooLargeError extends Error {}
 
+function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 // Shared by every client, so a new instance (say, after a token change) still hits; keys carry the endpoint and a
 // token hash, so one token's answers never reach another.
 const hubCache = new Map<string, { expires: number; value: unknown }>();
@@ -633,6 +656,7 @@ export class HuggingFaceHub {
   readonly #client: HttpClient;
   readonly #requestTimeoutMs: number;
   readonly #cacheScope: string;
+  readonly #maxRateLimitWaitMs: number;
 
   constructor(options: HuggingFaceHubOptions = {}) {
     this.endpoint = hubEndpoint(options.endpoint ?? DEFAULT_HUGGING_FACE_ENDPOINT);
@@ -643,6 +667,7 @@ export class HuggingFaceHub {
     this.#token = options.token?.trim() || undefined;
     if (this.#token) assertHeaderValues({ authorization: `Bearer ${this.#token}` }, this.id);
     this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.#maxRateLimitWaitMs = options.maxRateLimitWaitMs ?? DEFAULT_MAX_RATE_LIMIT_WAIT_MS;
     this.#cacheScope = `${this.endpoint}\n${this.#token ? `token:${createHash('sha256').update(this.#token).digest('hex')}` : 'anonymous'}`;
     this.#client = { runtimeId: this.id, baseUrl: this.endpoint, fetch: options.fetch ?? fetch };
   }
@@ -869,6 +894,8 @@ export class HuggingFaceHub {
     const signal = combinedSignal(context.signal, this.#requestTimeoutMs);
     const origin = new URL(this.endpoint).origin;
     let url = `${this.endpoint}${path}`;
+    let retries = 0;
+    let waitedMs = 0;
     for (let hop = 0; ; hop++) {
       let response: Response;
       try {
@@ -883,6 +910,17 @@ export class HuggingFaceHub {
         });
       } catch (error) {
         throw this.#connectionError(shown, error, context.signal);
+      }
+      if (response.status === 429 && retries < MAX_RATE_LIMIT_RETRIES) {
+        const delay = retryAfterMs(response.headers) ?? RATE_LIMIT_BACKOFF_MS * 2 ** retries;
+        if (waitedMs + delay <= this.#maxRateLimitWaitMs) {
+          await response.body?.cancel().catch(() => undefined);
+          await sleep(delay, context.signal);
+          waitedMs += delay;
+          retries++;
+          hop--;
+          continue;
+        }
       }
       if (response.status < 300 || response.status >= 400) {
         if (!response.ok) throw await this.#httpError(response, shown, context);
