@@ -1639,10 +1639,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
       { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     ],
     nodejs: {
-      // A paid Bob scan connects to a Chromium in a Fargate task with
-      // playwright-core, which esbuild cannot bundle. external + install ships
-      // the package. apps/client pins it to the task image's Playwright: a
-      // connect needs the same version on both ends.
+      // playwright-core cannot be bundled, so external + install ships it. Pinned in apps/client to
+      // the remote Chromium's Playwright: a connect needs the same version on both ends.
       install: ['playwright-core'],
       esbuild: {
         external: ['playwright-core'],
