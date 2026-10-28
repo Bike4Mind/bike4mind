@@ -25,6 +25,7 @@ import StripePaymentReturnHandler from '@client/app/components/stripe/StripePaym
 import { Toaster } from 'sonner';
 import { CookieConsentBanner } from '@client/app/components/CookieConsentBanner';
 import { ClientOutdatedBanner } from '@client/app/components/ClientOutdatedBanner';
+import { ImpersonationBanner } from '@client/app/components/ImpersonationBanner';
 import { TranslationProvider } from '@client/app/contexts/TranslationProvider';
 import { QuestPreparationOverlay } from '@client/app/components/QuestPreparationOverlay';
 import { runLocalStorageCleanup } from '@client/app/utils/localStorageCleanup';
@@ -211,7 +212,10 @@ export function ClientProviders({ children }: { children: ReactNode }) {
             <UserProvider>
               <ServerStatusProvider>
                 <QuestPreparationOverlay />
-                <Box sx={{ display: 'grid', gridTemplateRows: 'auto 1fr', height: '100dvh' }}>{children}</Box>
+                <Box sx={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
+                  <ImpersonationBanner />
+                  <Box sx={{ display: 'grid', gridTemplateRows: 'auto 1fr', flex: 1, minHeight: 0 }}>{children}</Box>
+                </Box>
                 <ConfirmationModal />
                 <StepUpModal />
               </ServerStatusProvider>

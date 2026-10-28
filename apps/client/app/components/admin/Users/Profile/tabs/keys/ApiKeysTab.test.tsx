@@ -81,7 +81,7 @@ describe('ApiKeysTab', () => {
     expect(active.getByText('+2')).toBeInTheDocument();
     expect(active.getByText('120 in 24h')).toBeInTheDocument();
     expect(active.getByText('1,204')).toBeInTheDocument();
-    expect(active.getByRole('img', { name: '1204 requests in 7 days' })).toBeInTheDocument();
+    expect(active.getByTestId('admin-inline-bar')).toBeInTheDocument();
     expect(active.getByText('Active')).toBeInTheDocument();
 
     const revoked = within(row('key-3'));

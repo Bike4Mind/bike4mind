@@ -471,7 +471,7 @@ const cloudSecurityScanCron = runsScheduledJobs
       schedule: 'rate(1 day)',
       function: {
         vpc: lambdaVpc,
-        handler: 'apps/client/server/security/cloudScan.handler',
+        handler: 'apps/workers/src/security/cloudScan.handler',
         runtime: 'nodejs24.x',
         timeout: '5 minutes',
         link: [...allSecrets],

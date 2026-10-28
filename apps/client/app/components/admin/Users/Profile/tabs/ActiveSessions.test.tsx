@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn() }
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: mocks.get, post: mocks.post, delete: mocks.delete },
 }));
+vi.mock('./SupportAccessHistory', () => ({ SupportAccessHistory: () => null }));
 
 import { ActiveSessions, sessionDevice } from './ActiveSessions';
 

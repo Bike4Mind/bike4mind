@@ -1,25 +1,20 @@
 import { Box } from '@mui/joy';
 
 /**
- * A table-cell magnitude bar (DESIGN_GUIDE.md, Data visualization): 6px tall on a `selection`
- * track, filled with the accent. `value` is scaled against `max`; a zero max draws an empty track.
+ * A 56 px track with a 6 px accent bar: a number's share of the largest in view. Decorative, so the
+ * number itself stays in the cell. A non-zero value keeps a sliver visible against a much larger max.
  */
-export function InlineBar({ value, max, label }: { value: number; max: number; label: string }) {
-  const percent = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+export function InlineBar({ value, max }: { value: number; max: number }) {
+  const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
   return (
     <Box
-      role="img"
-      aria-label={label}
+      aria-hidden
       data-testid="admin-inline-bar"
-      sx={{ width: 64, height: 6, borderRadius: '3px', bgcolor: 'admin.selection.background', flexShrink: 0 }}
+      sx={{ width: 56, height: 6, borderRadius: '3px', bgcolor: 'admin.hover', overflow: 'hidden', flexShrink: 0 }}
     >
       <Box
-        style={{ width: `${value > 0 ? Math.max(percent, 4) : 0}%` }}
-        sx={{
-          height: '100%',
-          borderRadius: '3px',
-          bgcolor: 'admin.accent',
-        }}
+        style={{ width: `${value > 0 && percent > 0 ? Math.max(percent, 4) : 0}%` }}
+        sx={{ height: '100%', borderRadius: '3px', bgcolor: 'admin.accent' }}
       />
     </Box>
   );

@@ -166,7 +166,7 @@ const buildColumns = (
         return (
           <Stack alignItems="flex-end" gap={0.25}>
             <Stack direction="row" alignItems="center" gap={1}>
-              <InlineBar value={last7d} max={weeklyMax} label={`${last7d} requests in 7 days`} />
+              <InlineBar value={last7d} max={weeklyMax} />
               <span>{last7d.toLocaleString('en-US')}</span>
             </Stack>
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>

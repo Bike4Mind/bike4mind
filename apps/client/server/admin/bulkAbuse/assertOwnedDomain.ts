@@ -4,6 +4,10 @@ import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 const PUBLIC_MAIL_PROVIDERS = new Set<string>([...personalEmailProviders, ...DISALLOWED_SIGNUP_RULE_DOMAINS]);
 
+/** Non-throwing assertOwnedDomain for an already-normalized domain. */
+export const isOwnedDomain = (domain: string): boolean =>
+  registrableDomain(domain, { allowPrivateDomains: true }) !== null && !PUBLIC_MAIL_PROVIDERS.has(domain);
+
 /**
  * A domain target matches every subdomain, so a bare public suffix (co.uk, github.io) would action
  * and block unrelated accounts. Same rule as the blockedEmailDomains check in

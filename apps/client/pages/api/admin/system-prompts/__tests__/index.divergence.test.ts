@@ -4,12 +4,12 @@ import { createMocks } from 'node-mocks-http';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
-// baseApi: capture the GET handler to invoke it directly. The real route chains
+// adminApi: capture the GET handler to invoke it directly. The real route chains
 // .get(...).post(...), so the mock must return `this` from each. vi.hoisted so the
 // holder exists before the mock factory runs at import.
 const captured = vi.hoisted(() => ({ getHandler: undefined as HandlerFn | undefined }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => {
     const chain = {
       use() {
         return this;

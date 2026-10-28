@@ -12,9 +12,9 @@
 
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, RETRYABLE_STATUSES } from '@bike4mind/database';
 import { SreSourceType, SreClassification, SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
 import type { SreEventPayload, SreJobType } from '@bike4mind/common';
@@ -30,10 +30,8 @@ import { Logger } from '@bike4mind/observability';
 
 const RETRYABLE_SET = new Set(RETRYABLE_STATUSES);
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
     const { id } = req.query as Record<string, string>;
     if (typeof id !== 'string' || !isValidObjectId(id)) {
       throw new NotFoundError('Invalid tracking ID');
