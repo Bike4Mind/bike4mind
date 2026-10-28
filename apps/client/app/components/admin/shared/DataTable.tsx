@@ -241,7 +241,10 @@ export function DataTable<Row>({
                     aria-selected={selectable ? isSelected(id) : activeRowId === id}
                     data-testid={rowTestId?.(row) ?? `admin-table-row-${id}`}
                     onClick={event => {
-                      if ((event.target as HTMLElement).closest('button, input, a, [role="checkbox"]')) return;
+                      const target = event.target as HTMLElement;
+                      // Portalled cell content (a row menu, a popover) bubbles here through React but sits outside the row.
+                      if (!event.currentTarget.contains(target)) return;
+                      if (target.closest('button, input, a, [role="checkbox"]')) return;
                       onRowActivate?.(row);
                     }}
                     onKeyDown={event => {

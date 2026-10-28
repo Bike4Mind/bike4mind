@@ -161,6 +161,7 @@ describe('SignupRiskReviewTab', () => {
 
     await approveFirstRow();
 
+    expect(m.openProfile).not.toHaveBeenCalled();
     expect(m.mutate).toHaveBeenCalledWith(
       { action: 'approve', userIds: ['u1'], reason: 'Verified legitimate user' },
       expect.anything()
@@ -200,6 +201,16 @@ describe('SignupRiskReviewTab', () => {
     fireEvent.click(screen.getByTestId('bulk-abuse-stub'));
     expect(m.useSignupRiskReviews.mock.results[0].value.refetch).toHaveBeenCalled();
     expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+  });
+
+  it('suspends one account from its row menu without opening the profile', async () => {
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('signup-risk-actions-u2'));
+    fireEvent.click(await screen.findByTestId('signup-risk-suspend-u2'));
+
+    expect(m.bulkAbuse).toHaveBeenCalledWith(['u2']);
+    expect(m.openProfile).not.toHaveBeenCalled();
   });
 
   it('opens the user profile when a row is activated', () => {
