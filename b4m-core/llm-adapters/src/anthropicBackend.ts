@@ -1130,7 +1130,6 @@ export class AnthropicBackend implements ICompletionBackend {
           `[Pre-API #6181] Tool block mismatch! tool_use: ${toolUseCount}, tool_result: ${toolResultCount}. Attempting auto-repair...`
         );
 
-        // Re-run integrity check (catches adjacency issues missed on first pass)
         filteredMessages = ensureToolPairingIntegrity(filteredMessages, this.logger);
         ({ useCount: toolUseCount, resultCount: toolResultCount } = countToolBlocks(filteredMessages));
 

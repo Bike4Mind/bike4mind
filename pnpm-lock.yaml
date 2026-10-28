@@ -582,6 +582,9 @@ importers:
       pdfjs-dist:
         specifier: 6.3.289
         version: 6.3.289
+      playwright-core:
+        specifier: 1.64.0
+        version: 1.64.0
       pretty-bytes:
         specifier: ^7.1.3
         version: 7.1.3

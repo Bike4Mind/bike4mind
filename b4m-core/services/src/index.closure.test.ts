@@ -126,7 +126,7 @@ describe('@bike4mind/services barrel closure', () => {
     ['llm/ImageGeneration.ts', 'apps/client server/imageGenerations/imageGeneration.ts'],
     ['llm/ImageEdit.ts', 'apps/client server/imageGenerations/imageEdit.ts'],
     ['llm/toolAvailability.ts', 'apps/client pages/api/settings/serverConfig.ts'],
-    ['llm/imageModerationGate.ts', 'apps/client generate-avatar + knowledgeModerationDeps'],
+    ['llm/imageModerationGate.ts', 'apps/client generateAgentAvatar + knowledgeModerationDeps'],
     ['llm/SmallLLMService.ts', 'apps/client server/deepAgent'],
     ['llm/reranker/index.ts', 'apps/client pages/api/sessions/semantic-search.ts'],
     ['llm/intentClassifier.ts', 'apps/client pages/api/ai/classify-intent.ts'],

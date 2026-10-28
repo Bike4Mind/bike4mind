@@ -45,8 +45,23 @@ vi.mock('@client/app/hooks/data/user', () => ({
   useUserLogout: () => ({ mutate: logoutMutate, isPending: false }),
 }));
 
-// Keep the modal + toasts inert so the test focuses on the effect's call behavior.
-vi.mock('@client/app/components/common/MFAModal', () => ({ default: () => null }));
+// A stub modal: surfaces the inline error and lets a test submit a code.
+vi.mock('@client/app/components/common/MFAModal', () => ({
+  default: ({
+    error,
+    mode,
+    onVerify,
+  }: {
+    error?: string | null;
+    mode?: string;
+    onVerify: (code: string, remember: boolean) => void;
+  }) => (
+    <div data-testid="mfa-modal-stub" data-mode={mode}>
+      <span data-testid="mfa-modal-stub-error">{error}</span>
+      <button data-testid="mfa-modal-stub-verify" onClick={() => onVerify('000000', false)} />
+    </div>
+  ),
+}));
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: toastError, success: vi.fn() } }));
 
@@ -241,7 +256,53 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
   });
 });
 
+describe('MFAEnforcementWrapper - failed setup verification', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    get.mockResolvedValue({ data: { enabled: false } });
+    post.mockImplementation((url: string) =>
+      url === '/api/auth/mfa/setup'
+        ? Promise.resolve({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } })
+        : Promise.reject({ response: { data: { error: 'Invalid code', attemptsRemaining: 2 } } })
+    );
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the error inline with the attempts remaining, and still toasts it', async () => {
+    renderWrapper();
+
+    fireEvent.click(await screen.findByTestId('mfa-modal-stub-verify'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mfa-modal-stub-error').textContent).toBe('Invalid code (2 attempts remaining)')
+    );
+    expect(toastError).toHaveBeenCalledWith('Invalid code (2 attempts remaining)');
+    expect(screen.getByTestId('mfa-modal-stub').getAttribute('data-mode')).toBe('setup');
+  });
+
+  it('clears the inline error when the user retries', async () => {
+    renderWrapper();
+    fireEvent.click(await screen.findByTestId('mfa-modal-stub-verify'));
+    await waitFor(() => expect(screen.getByTestId('mfa-modal-stub-error').textContent).not.toBe(''));
+
+    post.mockImplementation(() => new Promise(() => {})); // the retry stays in flight
+    fireEvent.click(screen.getByTestId('mfa-modal-stub-verify'));
+    await waitFor(() => expect(screen.getByTestId('mfa-modal-stub-error').textContent).toBe(''));
+  });
+});
+
 describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    get.mockResolvedValue({ data: { enabled: false } });
+    post.mockResolvedValue({ data: { qrCodeUrl: 'qr', manualEntryKey: 'key', backupCodes: [] } });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });

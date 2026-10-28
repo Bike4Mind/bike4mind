@@ -56,6 +56,23 @@ describe('ApprovalGate', () => {
     expect(gate.isStanding('session-b', 'bash:rm')).toBeNull();
   });
 
+  it('reports an "always" it did not keep as "once", so callers never record it as standing', async () => {
+    const gate = new ApprovalGate();
+    for (const options of [{ remember: false }, { rememberable: ['run'] }]) {
+      let approvalId = '';
+      const answer = gate.request(
+        'session-a',
+        'bash:rm',
+        new AbortController().signal,
+        id => (approvalId = id),
+        options
+      );
+      gate.resolve(approvalId, { decision: 'always', optionId: 'redirect' });
+      await expect(answer).resolves.toMatchObject({ decision: 'once' });
+    }
+    expect(gate.isStanding('session-a', 'bash:rm')).toBeNull();
+  });
+
   describe('a card waits for an answer', () => {
     afterEach(() => {
       vi.useRealTimers();
@@ -152,6 +169,42 @@ describe('ApprovalGate', () => {
   it('offers no way to list what other conversations are waiting on', () => {
     const gate = new ApprovalGate() as unknown as Record<string, unknown>;
     expect(gate.pendingApprovals).toBeUndefined();
+  });
+
+  it('revokes a standing approval immediately without affecting another session', async () => {
+    const gate = new ApprovalGate();
+    const first = ask(gate, 'session-a');
+    gate.resolve(first.approvalId(), { decision: 'always' });
+    await first.answer;
+    expect(gate.revoke('session-a', 'bash:rm')).toBe(true);
+    expect(gate.revoke('session-a', 'bash:rm')).toBe(false);
+    expect(gate.revoke('missing-session', 'bash:rm')).toBe(false);
+    expect(gate.isStanding('session-a', 'bash:rm')).toBeNull();
+    expect(gate.isStanding('session-b', 'bash:rm')).toBeNull();
+  });
+
+  it('reports removal of option-specific approvals and leaves unrelated keys intact', async () => {
+    const gate = new ApprovalGate();
+    const controller = new AbortController();
+    for (const [key, optionId] of [
+      ['browser-script:https://example.com', 'signed-in'],
+      ['unrelated', 'run'],
+    ]) {
+      await gate.request(
+        'session-a',
+        key,
+        controller.signal,
+        id => {
+          gate.resolve(id, { decision: 'always', optionId });
+        },
+        { rememberable: [optionId] }
+      );
+    }
+    expect(gate.isStanding('session-a', 'browser-script:https://example.com', ['signed-in'])).not.toBeNull();
+    expect(gate.revoke('session-a', 'browser-script:https://example.com')).toBe(true);
+    expect(gate.isStanding('session-a', 'browser-script:https://example.com', ['signed-in'])).toBeNull();
+    expect(gate.isStanding('session-a', 'unrelated', ['run'])).not.toBeNull();
+    expect(gate.revoke('session-a', 'browser-script:https://example.com')).toBe(false);
   });
 
   describe('always allow by prefix', () => {
@@ -310,6 +363,45 @@ describe('ApprovalGate', () => {
       await allow(gate, always(['ls *'], ['ls']));
       gate.forgetSession('s');
       expect(gate.coversCommands('s', always(['ls *'], ['ls']))).toBe(false);
+    });
+
+    it('drops shell prefix coverage when its standing grant is revoked', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status']);
+      await allow(gate, remembered);
+      expect(gate.coversCommands('s', remembered)).toBe(true);
+      gate.revoke('s', 'key');
+      expect(gate.coversCommands('s', remembered)).toBe(false);
+    });
+
+    it('keeps unrelated shell coverage when another grant is revoked', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status']);
+      await allow(gate, remembered);
+      gate.revoke('s', 'browser-open:https://example.com');
+      expect(gate.coversCommands('s', remembered)).toBe(true);
+    });
+
+    it('revokes tainted coverage without removing another exact grants normal coverage', async () => {
+      const gate = new ApprovalGate();
+      const remembered = always(['git status *'], ['git status'], ['/tmp/tainted']);
+      await allow(gate, remembered, true);
+      await gate.request(
+        's',
+        'other-key',
+        new AbortController().signal,
+        id => {
+          gate.resolve(id, { decision: 'always' });
+        },
+        { always: always(['git status *'], ['git status'], ['/tmp/normal']) }
+      );
+      expect(gate.coversCommands('s', remembered, true)).toBe(true);
+
+      gate.revoke('s', 'key');
+
+      expect(gate.coversCommands('s', remembered)).toBe(true);
+      expect(gate.coversCommands('s', remembered, true)).toBe(false);
+      expect(gate.uncoveredDirectories('s', ['/tmp/tainted', '/tmp/normal'])).toEqual(['/tmp/tainted']);
     });
   });
 

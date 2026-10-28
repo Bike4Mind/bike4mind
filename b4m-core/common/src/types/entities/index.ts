@@ -131,5 +131,6 @@ export * from './adminActionReason';
 export * from './adminAuditCatalogue';
 export * from './adminAuditQuery';
 export * from './adminUserActivity';
+export * from './adminUserTimeline';
 
 export * from './SignupProtectionTypes';
