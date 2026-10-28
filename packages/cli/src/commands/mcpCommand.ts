@@ -13,6 +13,7 @@ interface McpCommandArgs {
   command?: string;
   args?: string[];
   http?: boolean;
+  local?: boolean;
   port?: number;
   apiKey?: string;
   apiUrl?: string;
@@ -102,6 +103,7 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
       const { handleMcpServeCommand } = await import('../mcp/serve.js');
       await handleMcpServeCommand({
         http: Boolean(argv.http),
+        local: Boolean(argv.local),
         port: typeof argv.port === 'number' ? argv.port : undefined,
         apiKey: typeof argv.apiKey === 'string' ? argv.apiKey : undefined,
         apiUrl: typeof argv.apiUrl === 'string' ? argv.apiUrl : undefined,

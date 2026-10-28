@@ -42,8 +42,14 @@ const ENV_FLAG_MAP = {
 let envTarget = null;
 {
   const cleaned = [];
-  for (const token of process.argv.slice(2)) {
-    if (Object.prototype.hasOwnProperty.call(ENV_FLAG_MAP, token)) {
+  const args = process.argv.slice(2);
+  const mcpIndex = args.indexOf('mcp');
+  // `mcp serve --local` is serve's own flag (local model tools only), not the --dev alias.
+  const isMcpServe = mcpIndex !== -1 && args[mcpIndex + 1] === 'serve';
+  for (const token of args) {
+    if (isMcpServe && (token === '--local' || token === '-local')) {
+      cleaned.push('--local');
+    } else if (Object.prototype.hasOwnProperty.call(ENV_FLAG_MAP, token)) {
       envTarget = ENV_FLAG_MAP[token]; // last one wins
     } else {
       cleaned.push(token);
@@ -204,6 +210,11 @@ const argv = await yargs(hideBin(process.argv))
             description: 'Serve over streamable HTTP instead of stdio',
             default: false,
           })
+          .option('local', {
+            type: 'boolean',
+            description: 'Serve only the local model tools (models_*), with no Bike4Mind backend. Stdio only',
+            default: false,
+          })
           .option('port', {
             type: 'number',
             description: 'Port for --http mode',
@@ -222,6 +233,7 @@ const argv = await yargs(hideBin(process.argv))
             description: 'Bearer token required by --http mode (overrides B4M_MCP_TOKEN; generated and printed when unset). Visible in process listings; prefer B4M_MCP_TOKEN',
           })
           .example('b4m mcp serve', 'Serve over stdio for Claude Desktop and other local clients')
+          .example('b4m mcp serve --local', 'Serve only the local model tools, without a backend')
           .example('b4m mcp serve --http --port 7000', 'Serve over streamable HTTP on port 7000');
       }, async () => {
         // Handled by external command handler

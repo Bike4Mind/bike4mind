@@ -54,3 +54,16 @@ export async function buildStdioMcpServer(
   registerModelTools(server, modelTools);
   return server;
 }
+
+/**
+ * `mcp serve --local`: only the local model tools, which need the model runtime and Hugging Face but
+ * never a Bike4Mind backend, so it builds no API client. Stdio only, like {@link buildStdioMcpServer}.
+ */
+export function buildLocalMcpServer(
+  options: Pick<BuildServerOptions, 'configStore' | 'version'>,
+  modelTools: ModelToolsDeps = localModelToolsDeps(options.configStore)
+): McpServer {
+  const server = new McpServer({ name: 'bike4mind', version: options.version }, { capabilities: { tools: {} } });
+  registerModelTools(server, modelTools);
+  return server;
+}
