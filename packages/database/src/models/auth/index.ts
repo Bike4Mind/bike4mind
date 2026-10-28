@@ -31,6 +31,7 @@ export * from './UserApiKeyAuditLogModel';
 export * from './UserApiKeyModel';
 export * from './UserAuthAuditLogModel';
 export * from './UserModel';
+export * from './UserUsagePatternSignalsModel';
 export * from './VoiceIdModel';
 export * from './WsConnectTicketModel';
 export * from './GithubUnlockClaimModel';
