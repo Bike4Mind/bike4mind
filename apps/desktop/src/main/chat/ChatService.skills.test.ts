@@ -7,6 +7,7 @@ import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, type ChatServiceDeps } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { remoteSkillsKey } from './skills/accountSkills';
@@ -41,6 +42,7 @@ describe('ChatService and skills', () => {
   let streams: PassThrough[];
   let project: string;
   let catalog: SkillCatalog;
+  let queue: MessageQueue;
   /** Mutated per test: the service holds this object, so a test can shrink a budget before it runs. */
   const turnLimits: NonNullable<ChatServiceDeps['turnLimits']> = {};
 
@@ -104,6 +106,7 @@ describe('ChatService and skills', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     post = calls;
+    queue = new MessageQueue(() => undefined);
     service = new ChatService({
       store: new SessionStore(join(base, 'sessions'), 'test-model'),
       access: { list: async () => [] } as unknown as AccessStore,
@@ -116,6 +119,7 @@ describe('ChatService and skills', () => {
       getEnvironmentUrl: () => 'http://localhost:3000',
       userInstructionsRoot: join(base, 'user'),
       skills: catalog,
+      queue,
       approvals: new ApprovalGate(),
       turnLimits,
       emit: event => emitted.push(event),
@@ -340,6 +344,26 @@ describe('ChatService and skills', () => {
       content: 'the build is green, so /ship-it please',
     });
     expect((await service.getSession(id))?.messages[0]?.skill).toBeUndefined();
+  });
+
+  it('takes a relay that starts with /name into a running turn as text, while a typed /name waits', async () => {
+    const id = await session();
+    await catalog.setTrusted(project, true);
+
+    await service.send(id, 'a long task');
+    await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 5000, interval: 5 });
+    queue.enqueueRelay(id, '/ship-it now', { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 });
+    queue.enqueue(id, '/ship-it');
+    streams[0].write(frame({ type: 'tool_use', tools: [{ id: 'step', name: 'no_such_tool', arguments: '{}' }] }));
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 5 });
+
+    const messages = post.mock.calls[1][1].messages as { role: string; content: unknown }[];
+    const sent = JSON.stringify(messages[messages.length - 1].content);
+    expect(sent).toContain('[Message from another conversation');
+    expect(sent).toContain('/ship-it now');
+    expect(sent).not.toContain('Ship.');
+    expect(queue.list(id).map(entry => entry.text)).toEqual(['/ship-it']);
   });
 
   it('refuses a user-only skill named mid-message instead of sending it as literal text', async () => {

@@ -175,6 +175,46 @@ describe('ChatService session_send', () => {
     await expect(awaitStream(settled, 1000)).rejects.toThrow();
   });
 
+  it('stops two busy sessions relaying to each other mid-turn', async () => {
+    const alpha = await codeSession('Alpha');
+    const beta = await codeSession('Beta');
+    await service.send(alpha.id, 'kick off alpha');
+    await service.send(beta.id, 'kick off beta');
+
+    // Every request that ends on a kick-off or a relay answers by messaging the other session and
+    // carrying on with a tool step, so both stay busy and each relay lands at a round boundary.
+    let opened = 0;
+    let midTurn = 0;
+    for (; opened < 60; opened++) {
+      try {
+        await awaitStream(opened, 1500);
+      } catch {
+        break;
+      }
+      const messages = messagesOf(opened);
+      const last = JSON.stringify(messages.at(-1)?.content ?? '');
+      if (!last.includes('kick off') && !last.includes('[Message from another conversation')) {
+        endTurn(streams[opened]);
+        continue;
+      }
+      if (!isFreshTurn(opened)) midTurn++;
+      const isAlpha = String(messages[1]?.content).includes('kick off alpha');
+      requestSend(streams[opened], isAlpha ? beta.id : alpha.id, `ping ${opened}`, `send-${opened}`);
+    }
+    expect(opened).toBeLessThan(60);
+    expect(midTurn).toBeGreaterThan(0);
+
+    // Two chains, one per kick-off, each held to five hops however the relays land.
+    const calls = settledCalls('session_send');
+    expect(calls.filter(call => call?.status === 'done')).toHaveLength(10);
+    const refused = calls.filter(call => call?.status === 'error');
+    expect(refused).toHaveLength(2);
+    for (const call of refused) expect(call?.error).toMatch(/hops from the user/);
+
+    const settled = streams.length;
+    await expect(awaitStream(settled, 1000)).rejects.toThrow();
+  });
+
   it('caps how many messages one turn may send, so a single turn cannot fan out across the project', async () => {
     const sender = await codeSession('Sender');
     const one = await codeSession('One');
