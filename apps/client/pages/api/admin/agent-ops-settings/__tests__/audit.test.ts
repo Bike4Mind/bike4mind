@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
     createOrUpdateSettings: vi.fn(),
     addMetaPromptVersion: vi.fn(),
     activateMetaPromptVersion: vi.fn(),
+    getActiveMetaPrompt: vi.fn(),
   },
   findById: vi.fn(),
 }));
@@ -180,20 +181,39 @@ describe('agent ops admin audit', () => {
   });
 
   it('activate records version_activated', async () => {
-    h.repo.getSettings.mockResolvedValue({ currentVersionNumber: 2 });
+    h.repo.getActiveMetaPrompt.mockResolvedValue({ versionNumber: 2, isActive: true });
     h.repo.activateMetaPromptVersion.mockResolvedValue({});
     const res = await call(activate, 'POST', undefined, { version: '3' });
     expect(res._getStatusCode()).toBe(200);
     expect(h.audit.mock.calls[0][1]).toMatchObject({
       action: 'settings.agent_ops.version_activated',
       target,
-      changes: [{ field: 'currentVersionNumber', before: 2, after: 3 }],
+      changes: [{ field: 'activeVersion', before: 2, after: 3 }],
       details: { version: 3 },
     });
   });
 
+  it('activate audits a newly added version even though currentVersionNumber already points at it', async () => {
+    // Shape addMetaPromptVersion persists: v2 added and newest, v1 still active.
+    h.repo.getSettings.mockResolvedValue({
+      currentVersionNumber: 2,
+      versions: [
+        { versionNumber: 1, isActive: true },
+        { versionNumber: 2, isActive: false },
+      ],
+    });
+    h.repo.getActiveMetaPrompt.mockResolvedValue({ versionNumber: 1, isActive: true });
+    h.repo.activateMetaPromptVersion.mockResolvedValue({});
+    const res = await call(activate, 'POST', undefined, { version: '2' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      changes: [{ field: 'activeVersion', before: 1, after: 2 }],
+    });
+  });
+
   it('activate does not audit when the version is already active', async () => {
-    h.repo.getSettings.mockResolvedValue({ currentVersionNumber: 3 });
+    h.repo.getActiveMetaPrompt.mockResolvedValue({ versionNumber: 3, isActive: true });
     h.repo.activateMetaPromptVersion.mockResolvedValue({});
     const res = await call(activate, 'POST', undefined, { version: '3' });
     expect(res._getStatusCode()).toBe(200);
@@ -201,7 +221,7 @@ describe('agent ops admin audit', () => {
   });
 
   it('activate does not audit when the version is not found', async () => {
-    h.repo.getSettings.mockResolvedValue({ currentVersionNumber: 2 });
+    h.repo.getActiveMetaPrompt.mockResolvedValue({ versionNumber: 2, isActive: true });
     h.repo.activateMetaPromptVersion.mockRejectedValue(new Error('Version 9 not found'));
     await expect(call(activate, 'POST', undefined, { version: '9' })).rejects.toThrow('not found');
     expect(h.audit).not.toHaveBeenCalled();

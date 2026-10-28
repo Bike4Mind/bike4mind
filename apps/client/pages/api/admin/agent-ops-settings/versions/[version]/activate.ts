@@ -15,7 +15,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     throw new BadRequestError('Invalid version number');
   }
 
-  const previousVersion = (await agentOpsSettingsRepository.getSettings())?.currentVersionNumber;
+  // currentVersionNumber tracks the newest added version, not the active one.
+  const previousVersion = (await agentOpsSettingsRepository.getActiveMetaPrompt())?.versionNumber;
   let updatedSettings;
   try {
     updatedSettings = await agentOpsSettingsRepository.activateMetaPromptVersion(versionNumber);
@@ -33,7 +34,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       action: 'settings.agent_ops.version_activated',
       target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
       summary: `activated Agent Ops meta-prompt version ${versionNumber}`,
-      changes: [{ field: 'currentVersionNumber', before: previousVersion, after: versionNumber }],
+      changes: [{ field: 'activeVersion', before: previousVersion, after: versionNumber }],
       details: { version: versionNumber },
     });
   }
