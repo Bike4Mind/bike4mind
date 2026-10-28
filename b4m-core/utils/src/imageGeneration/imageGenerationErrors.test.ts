@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { insufficientCreditsError, spendCapExceededError, UnprocessableEntityError } from '@bike4mind/common';
 import {
   ImageInputRejectedError,
   ImageModerationBlockedError,
@@ -32,6 +33,28 @@ describe('logImageGenerationFailure', () => {
       provider: 'xai',
       requestId: 'req-1',
     });
+  });
+
+  it.each([
+    ['insufficient_credits', insufficientCreditsError('You do not have enough credits for image generation.')],
+    ['spend_cap_exceeded', spendCapExceededError('This key has reached its spend cap.')],
+  ])('logs a %s billing refusal at warn with its error code', (errorCode, error) => {
+    const logger = makeLogger();
+
+    logImageGenerationFailure(logger, 'failed', error, { questId: 'q1' });
+
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('failed', { questId: 'q1', errorCode });
+  });
+
+  it('logs an untagged 422 (e.g. a failed credit hold) at error', () => {
+    const logger = makeLogger();
+    const error = new UnprocessableEntityError('Credit hold failed');
+
+    logImageGenerationFailure(logger, 'failed', error);
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith('failed', error);
   });
 
   it('logs any other failure at error', () => {

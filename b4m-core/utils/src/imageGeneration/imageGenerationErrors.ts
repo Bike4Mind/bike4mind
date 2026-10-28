@@ -1,3 +1,5 @@
+import { getQuestErrorCode, type QuestErrorCode } from '@bike4mind/common';
+
 export type ExpectedImageFailureKind = 'moderation_blocked' | 'provider_unavailable' | 'input_rejected';
 
 /**
@@ -52,14 +54,17 @@ export class ImageInputRejectedError extends ExpectedImageGenerationError {
   }
 }
 
+/** Billing refusals: the user already sees the remedy, so they are not incidents either. */
+const EXPECTED_QUEST_ERROR_CODES = new Set<QuestErrorCode>(['insufficient_credits', 'spend_cap_exceeded']);
+
 type FailureLogger = {
   warn: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
 };
 
 /**
- * The one place an image-generation caller reports a failure: expected failures at warn, anything
- * else at error (which pages). `context` is extra caller metadata (ids), never the prompt.
+ * The one place an image-generation caller reports a failure: expected failures and billing refusals
+ * at warn, anything else at error (which pages). `context` is extra caller metadata (ids), never the prompt.
  */
 export function logImageGenerationFailure(
   logger: FailureLogger,
@@ -69,6 +74,11 @@ export function logImageGenerationFailure(
 ): void {
   if (error instanceof ExpectedImageGenerationError) {
     logger.warn(message, { ...context, kind: error.kind, ...error.logContext });
+    return;
+  }
+  const errorCode = getQuestErrorCode(error);
+  if (errorCode && EXPECTED_QUEST_ERROR_CODES.has(errorCode)) {
+    logger.warn(message, { ...context, errorCode });
     return;
   }
   if (context) {
