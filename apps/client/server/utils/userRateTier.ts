@@ -92,6 +92,29 @@ export function ladderRateTier(
 }
 
 /**
+ * Per-process cache of the tier settings read. This runs on every request to per-keystroke helpers
+ * (rapid-reply, optimize-input, semantic search), so it bypasses the shared 5-minute settings cache
+ * with its own short TTL: an admin's 0 (block) or its lift reaches every process within the TTL.
+ */
+const TIER_SETTINGS_CACHE_TTL_MS = 15_000;
+const tierSettingsCache = new Map<string, { settings: Record<string, string>; expiresAt: number }>();
+
+/** Test-only: drop the in-process cache so a mocked setting in one test cannot leak into the next. */
+export const __resetTierSettingsCache = (): void => tierSettingsCache.clear();
+
+async function readTierSettings(settingKey: SettingKey): Promise<Record<string, string>> {
+  const now = Date.now();
+  const cached = tierSettingsCache.get(settingKey);
+  if (cached && cached.expiresAt > now) return cached.settings;
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { skipCache: true, names: [settingKey] }
+  );
+  tierSettingsCache.set(settingKey, { settings, expiresAt: now + TIER_SETTINGS_CACHE_TTL_MS });
+  return settings;
+}
+
+/**
  * Resolve the requests-per-minute limit for a user, reading the tier's tunable
  * admin setting. Returns `Infinity` for bypass tiers (admins/developers) and in
  * development, so the middleware skips enforcement. Token/compute spend is
@@ -118,11 +141,7 @@ export async function resolveUserRateLimitPerMin(
     if (tier === 'bypass') return Infinity;
 
     const settingKey = TIER_SETTING_KEY[tier];
-    // Uncached so an admin's 0 (block) or its lift reaches every process on the next request.
-    const settings = await getSettingsMap(
-      { adminSettings: adminSettingsRepository },
-      { skipCache: true, names: [settingKey] }
-    );
+    const settings = await readTierSettings(settingKey);
     // `??` keeps an explicit 0, which the middleware treats as "block".
     return getSettingsValue(settingKey, settings) ?? FALLBACK_RATE_LIMIT_PER_MIN;
   } catch (error) {

@@ -46,7 +46,12 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
   TEAM_PLAN: { priceId: 'price_team', tier: 2 },
 }));
 
-import { hasPaidSubscription, resolveUserRateTier, resolveUserRateLimitPerMin } from './userRateTier';
+import {
+  __resetTierSettingsCache,
+  hasPaidSubscription,
+  resolveUserRateTier,
+  resolveUserRateLimitPerMin,
+} from './userRateTier';
 
 const TIER_LIMITS: Record<string, number> = {
   apiRateLimitFreePerMin: 10,
@@ -155,6 +160,8 @@ describe('resolveUserRateLimitPerMin', () => {
     findPlanHolderOrgIdsMock.mockResolvedValue([]);
     getSettingsValueMock.mockReset();
     getSettingsValueMock.mockImplementation((key: string) => TIER_LIMITS[key]);
+    getSettingsMapMock.mockClear();
+    __resetTierSettingsCache();
   });
 
   it('returns Infinity (no enforcement) on the dev server without touching settings', async () => {
@@ -221,6 +228,21 @@ describe('resolveUserRateLimitPerMin', () => {
       skipCache: true,
       names: ['apiRateLimitFreePerMin'],
     });
+  });
+
+  it('reuses the tier settings read within the TTL and re-reads after it expires', async () => {
+    vi.useFakeTimers();
+    try {
+      await resolveUserRateLimitPerMin({ id: 'u1' });
+      await resolveUserRateLimitPerMin({ id: 'u2' });
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(15_001);
+      await resolveUserRateLimitPerMin({ id: 'u1' });
+      expect(getSettingsMapMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps an explicit 0 Free-tier limit instead of the fallback', async () => {
