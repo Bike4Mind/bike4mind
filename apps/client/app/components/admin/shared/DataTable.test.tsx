@@ -173,15 +173,20 @@ describe('DataTable', () => {
           render: row =>
             row.id === '1' &&
             createPortal(
-              <div role="menuitem" data-testid="portal-item">
-                Approve
-              </div>,
+              <>
+                <div role="menuitem" data-testid="portal-item">
+                  Approve
+                </div>
+                {/* Matches no CELL_CONTROLS selector, so only the contains() check stops it. */}
+                <div data-testid="portal-popover">Details</div>
+              </>,
               document.body
             ),
         },
       ],
     });
     fireEvent.click(screen.getByTestId('portal-item'));
+    fireEvent.click(screen.getByTestId('portal-popover'));
     expect(activate).not.toHaveBeenCalled();
   });
 
