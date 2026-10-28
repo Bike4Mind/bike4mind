@@ -375,4 +375,45 @@ describe('ModelServerRegistry', () => {
     expect(servers.chatFor('ollama')).toBeNull();
     expect(servers.chatFor('lmstudio')).toBeNull();
   });
+
+  it('forgets a removed server and refuses chats to it', async () => {
+    const { registry: servers, changed } = registry(fakeOllama());
+    await servers.add({
+      address: 'http://192.168.1.20:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    const [saved] = (await servers.views()).slice(1);
+    changed.mockClear();
+    const views = await servers.remove(saved.id);
+    expect(views.map(view => view.name)).toEqual(['This computer']);
+    expect(changed).toHaveBeenCalled();
+    await expect(servers.chatFor(`srv-${saved.id}`)!.contextTokens('local:x:y')).rejects.toThrow(/was removed/);
+  });
+
+  it('sizes llama-server context from /props once the probe has identified it', async () => {
+    const asked: string[] = [];
+    const fetchFor =
+      (): FetchLike =>
+      async input => {
+        const path = new URL(String(input)).pathname;
+        asked.push(path);
+        if (path === '/v1/models') return json({ data: [{ id: 'm', owned_by: 'llamacpp' }] });
+        if (path === '/props') return json({ build_info: 'b1', default_generation_settings: { n_ctx: 8192 } });
+        return json({ error: 'not found' }, 404);
+      };
+    const { registry: servers } = registry({ fetchFor } as unknown as ReturnType<typeof fakeOllama>);
+    await servers.add({
+      address: 'http://192.168.1.20:8080',
+      credential: none,
+      name: 'llama',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    const [saved] = (await servers.views()).slice(1);
+    const chat = servers.chatFor(`srv-${saved.id}`)!;
+    expect(await chat.contextTokens(`local:srv-${saved.id}:m`)).toBe(8192);
+  });
 });

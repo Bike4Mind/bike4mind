@@ -242,8 +242,8 @@ export class ModelServerRegistry {
 
   async remove(id: string): Promise<ModelServerView[]> {
     await this.load();
-    this.entries.delete(id);
     await this.deps.store.remove(id);
+    this.entries.delete(id);
     this.emit();
     return this.views();
   }
@@ -275,10 +275,12 @@ export class ModelServerRegistry {
         if (entry.health.state === 'online' || entry.health.state === 'unknown') {
           try {
             const listed = await entry.client.listModels();
-            void this.deps.store.setModels(
-              entry.record.id,
-              listed.map(model => model.name)
-            );
+            void this.deps.store
+              .setModels(
+                entry.record.id,
+                listed.map(model => model.name)
+              )
+              .catch(() => undefined);
             entry.record = { ...entry.record, models: listed.map(model => model.name) };
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
             return listed.map(model => ({ ...model, server }));
@@ -424,7 +426,11 @@ export class ModelServerRegistry {
       });
       return;
     }
-    entry.product = outcome.product ?? entry.product;
+    if (outcome.product && outcome.product !== entry.product) {
+      entry.product = outcome.product;
+      // The chat client reads the product once, so rebuild it to start using what the probe learned.
+      entry.client = this.build(entry.record, entry).client;
+    }
     this.setHealth(entry, {
       state: 'online',
       version: outcome.version,
