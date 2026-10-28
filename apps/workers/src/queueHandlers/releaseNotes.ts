@@ -133,7 +133,7 @@ async function generateAndStore(
 ): Promise<{ note: ReleaseNote; preserved: boolean; usage: TokenUsage; modelId: string }> {
   const deadline = Date.now() + GENERATION_BUDGET_MS;
   const { complete, modelId } = await createReleaseNotesCompleter(config, logger, deadline);
-  const triage = await triageReleaseNotes(payload.prs, complete);
+  const triage = await triageReleaseNotes(payload.prs, complete, { logger });
   const usage: TokenUsage = { ...triage.usage };
 
   let feedback: string[] = [];
