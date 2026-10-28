@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
-import { getSlackDeps, getSlackDb } from './di/registry';
 import type { ISlackDevWorkspaceDocument } from '@bike4mind/common';
+import { getSlackDeps, getSlackDb } from './di/registry';
 import type { BaseStatePayload } from './di/types';
 import { getControlledScopes } from './manifestTemplate';
 
@@ -13,16 +13,18 @@ export interface OrgSlackConnectStatePayload extends BaseStatePayload {
   userId: string;
 }
 
-/**
- * Get the system's Slack app credentials for org OAuth flow.
- * Reuses the first active SlackDevWorkspace with OAuth credentials.
- */
-export async function getSystemSlackAppCredentials(): Promise<{
+export interface SystemSlackAppCredentials {
   clientId: string;
   clientSecret: string;
   signingSecret: string | undefined;
   appId: string;
-} | null> {
+}
+
+/**
+ * Get the system's Slack app credentials for org OAuth flow.
+ * Reuses the first active SlackDevWorkspace with OAuth credentials.
+ */
+export async function getSystemSlackAppCredentials(): Promise<SystemSlackAppCredentials | null> {
   // DI types repositories as unknown; the bound implementation is the database SlackDevWorkspace repository.
   const slackDevWorkspaceRepository = getSlackDb().slackDevWorkspaceRepository as {
     findAllActiveWithCredentials(): Promise<ISlackDevWorkspaceDocument[]>;

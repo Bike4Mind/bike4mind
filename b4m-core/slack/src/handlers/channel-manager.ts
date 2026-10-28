@@ -4,6 +4,7 @@ import { SlackClient } from '../SlackClient';
 
 export interface ChannelCommandUser {
   isAdmin?: boolean;
+  // isWorkspaceAdmin is not part of IUser['slackSettings'] and nothing syncs it yet, so only isAdmin grants access today.
   slackSettings?: { slackUserId?: string; isWorkspaceAdmin?: boolean } | null;
 }
 
