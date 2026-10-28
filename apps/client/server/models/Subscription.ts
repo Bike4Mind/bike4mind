@@ -123,6 +123,11 @@ SubscriptionSchema.index({ priceId: 1, ownerType: 1, ownerId: 1, status: 1 }); /
 SubscriptionSchema.index({ periodEndsAt: 1, status: 1 }); // For subscription expiry queries
 // Admin grants listing in /api/admin/organizations/grants - small cardinality query
 SubscriptionSchema.index({ ownerType: 1, source: 1, status: 1 });
+// Admin subscriptions list sorts, each with an _id tiebreak (server/admin/subscriptionsList). Keep in sync
+// with SUBSCRIPTION_ADMIN_LIST_INDEXES in packages/scripts/migrate/migrations/20260921236200_*.
+SubscriptionSchema.index({ createdAt: -1, _id: -1 });
+SubscriptionSchema.index({ periodEndsAt: 1, _id: 1 });
+SubscriptionSchema.index({ status: 1, createdAt: -1, _id: -1 });
 
 // Invoices remembered per row for the payment-failed claim. Only invoices still inside Stripe's
 // retry window can fire again, so a short history is enough and keeps the row bounded.
