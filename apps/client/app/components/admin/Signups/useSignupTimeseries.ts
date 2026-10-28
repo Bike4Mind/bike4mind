@@ -2,7 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type { SignupTimeseries, SignupTimeseriesRange } from '@client/app/utils/signupSignals';
 
-export const signupTimeseriesQueryKey = (range: SignupTimeseriesRange) => ['admin-signup-timeseries', range] as const;
+// Nested under ['users'] so every user mutation's prefix invalidation (create, delete, ...) refreshes the chart.
+export const signupTimeseriesQueryKey = (range: SignupTimeseriesRange) =>
+  ['users', 'signup-timeseries', range] as const;
 
 /** Signups bucketed at the viewer's local hour or midnight, split by the suspected-signup classifier. */
 export function useSignupTimeseries(range: SignupTimeseriesRange) {

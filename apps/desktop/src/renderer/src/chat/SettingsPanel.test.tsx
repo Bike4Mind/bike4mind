@@ -51,6 +51,14 @@ describe('the Settings screen', () => {
     expect(imports).not.toContain('data-entry="appearance"');
   });
 
+  it('gives model servers their own page, which works signed out too', () => {
+    const servers = markup(<SettingsScreen auth={null} section="servers" onClose={() => {}} />);
+    expect(servers).toContain('data-entry="model-servers"');
+    expect(servers).toContain('data-testid="model-servers"');
+    expect(servers).not.toContain('data-entry="appearance"');
+    expect(isSettingsSection('servers')).toBe(true);
+  });
+
   it('only takes known page names from the route', () => {
     expect(isSettingsSection('import')).toBe(true);
     expect(isSettingsSection('billing')).toBe(false);

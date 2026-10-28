@@ -1,5 +1,7 @@
 import { emailDomain } from '@client/app/utils/signupAnomaly';
 import { type DomainSignupSignal, type SignupSignal, SIGNUP_SIGNALS } from '@client/app/utils/signupSignals';
+import { deliveryMailbox } from '@server/utils/deliveryMailbox';
+import { ipv6Slash64 } from '@server/utils/ipv6Slash64';
 
 /**
  * Deterministic suspected-signup classifier. Every account gets the list of signals it triggered
@@ -31,9 +33,18 @@ export const EARLY_API_KEY_MS = DAY_MS;
 export const DORMANCY_MIN_AGE_MS = DAY_MS;
 /** Activity this soon after signup still counts as the first session. */
 export const FIRST_SESSION_MS = HOUR_MS;
+/** Trailing hours whose median signup count is an hour's baseline for the spike check. */
+export const SPIKE_BASELINE_HOURS = 28 * 24;
+/** An hour is a spike at SPIKE_FACTOR times its baseline, and never below SPIKE_MIN_ACCOUNTS signups. */
+export const SPIKE_FACTOR = 10;
+export const SPIKE_MIN_ACCOUNTS = 10;
+export const SHARED_NETWORK_WINDOW_MS = DAY_MS;
+/** Accounts from one /24 (IPv4) or /64 (IPv6) inside SHARED_NETWORK_WINDOW_MS that share a network. */
+export const SHARED_NETWORK_MIN_ACCOUNTS = 3;
 
 /**
- * Consumer webmail: volume on these is just popularity, so burst and cadence never apply to them.
+ * Consumer webmail: volume on one of these is just popularity, so burst and cadence never apply to
+ * them. A platform-wide surge, webmail included, is signupSpike's job instead.
  * Generic providers only; abusive domains are never listed here or anywhere in this repo.
  */
 export const MAJOR_WEBMAIL_DOMAINS: ReadonlySet<string> = new Set([
@@ -76,7 +87,7 @@ export type SignupCandidate = {
   email: string | null;
   createdAt: Date;
   lastActiveAt?: Date | null;
-  signupMeta?: { isDatacenter?: boolean | null; wafBotSignal?: boolean | null } | null;
+  signupMeta?: { ip?: string | null; isDatacenter?: boolean | null; wafBotSignal?: boolean | null } | null;
   /** Earliest API key the account created, if any. */
   firstApiKeyAt?: Date | null;
   /** Latest use of any of the account's API keys; REST traffic never touches lastActiveAt. */
@@ -84,8 +95,9 @@ export type SignupCandidate = {
 };
 
 type CohortMember = Pick<SignupCandidate, 'id' | 'email' | 'createdAt'>;
+type ClusterMember = Pick<SignupCandidate, 'id' | 'email' | 'createdAt' | 'signupMeta'>;
 
-const addSignal = (signals: Map<string, Set<DomainSignupSignal>>, id: string, signal: DomainSignupSignal) => {
+const addSignal = <T extends SignupSignal>(signals: Map<string, Set<T>>, id: string, signal: T) => {
   const set = signals.get(id) ?? new Set();
   set.add(signal);
   signals.set(id, set);
@@ -98,7 +110,11 @@ const pushTo = <T>(groups: Map<string, T[]>, key: string, item: T) => {
 };
 
 /** Ids of members (sorted by createdAt) that fall in any `windowMs` window holding `minCount` of them. */
-function membersOfDenseWindows(members: CohortMember[], windowMs: number, minCount: number): string[] {
+function membersOfDenseWindows(
+  members: Pick<CohortMember, 'id' | 'createdAt'>[],
+  windowMs: number,
+  minCount: number
+): string[] {
   const hit = new Set<string>();
   let start = 0;
   for (let end = 0; end < members.length; end++) {
@@ -174,22 +190,82 @@ export function classifyDomainCohorts(users: CohortMember[]): Map<string, Set<Do
   return signals;
 }
 
-/** Signals for one account, given the domain signals its cohort produced. Missing metadata is no signal. */
+/** The /24 of an IPv4 address or the /64 of an IPv6 one; null when the address does not parse. */
+export function networkPrefix(ip: string | null | undefined): string | null {
+  if (!ip) return null;
+  const address = ip
+    .trim()
+    .split('%')[0]
+    .replace(/^::ffff:(?=\d+\.)/i, '');
+  const ipv4 = address.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/);
+  if (ipv4)
+    return ipv4.slice(1).some(octet => Number(octet) > 255) ? null : `${ipv4.slice(1).map(Number).join('.')}.0/24`;
+  return ipv6Slash64(address);
+}
+
+/**
+ * Network and inbox signals for a cohort of signups, keyed by account id. Both apply to webmail too:
+ * a farm on Gmail shares a network range or rotates dots and plus-tags on one inbox. Weak signals.
+ */
+export function classifySignupClusters(users: ClusterMember[]): Map<string, Set<SignupSignal>> {
+  const byNetwork = new Map<string, ClusterMember[]>();
+  const byMailbox = new Map<string, ClusterMember[]>();
+  for (const user of users) {
+    const network = networkPrefix(user.signupMeta?.ip);
+    if (network) pushTo(byNetwork, network, user);
+    if (user.email) pushTo(byMailbox, deliveryMailbox(user.email), user);
+  }
+  const signals = new Map<string, Set<SignupSignal>>();
+  for (const members of byNetwork.values()) {
+    members.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    for (const id of membersOfDenseWindows(members, SHARED_NETWORK_WINDOW_MS, SHARED_NETWORK_MIN_ACCOUNTS)) {
+      addSignal(signals, id, 'sharedNetwork');
+    }
+  }
+  for (const members of byMailbox.values()) {
+    if (members.length > 1) members.forEach(member => addSignal(signals, member.id, 'aliasedEmail'));
+  }
+  return signals;
+}
+
+/**
+ * Starts of the hours whose signup count is a spike against the median of the SPIKE_BASELINE_HOURS
+ * before it. `hourlyCounts` is keyed by UTC hour start (ms) and must reach back SPIKE_BASELINE_HOURS
+ * before the first hour being judged; a missing hour counts as zero.
+ */
+export function spikeHours(hourlyCounts: ReadonlyMap<number, number>): Set<number> {
+  const spikes = new Set<number>();
+  for (const [hour, count] of hourlyCounts) {
+    if (count < SPIKE_MIN_ACCOUNTS) continue;
+    const history = Array.from(
+      { length: SPIKE_BASELINE_HOURS },
+      (_, i) => hourlyCounts.get(hour - (i + 1) * HOUR_MS) ?? 0
+    ).sort((a, b) => a - b);
+    if (count >= SPIKE_FACTOR * history[Math.floor(history.length / 2)]) spikes.add(hour);
+  }
+  return spikes;
+}
+
+const hourStart = (date: Date) => Math.floor(date.getTime() / HOUR_MS) * HOUR_MS;
+
+/**
+ * Signals for one account, given the signals its cohort produced. Missing signupMeta is no signal, but
+ * a null lastActiveAt is: the account never came back after signup.
+ */
 export function classifySignup(
   user: SignupCandidate,
-  domainSignals: ReadonlySet<DomainSignupSignal> = new Set(),
+  cohortSignals: ReadonlySet<SignupSignal> = new Set(),
   now = new Date()
 ): SignupSignal[] {
   const createdAt = user.createdAt.getTime();
-  const found = new Set<SignupSignal>(domainSignals);
+  const found = new Set<SignupSignal>(cohortSignals);
   if (user.signupMeta?.wafBotSignal === true) found.add('wafBotSignal');
   if (user.signupMeta?.isDatacenter === true) found.add('datacenterNetwork');
   if (user.firstApiKeyAt && user.firstApiKeyAt.getTime() - createdAt <= EARLY_API_KEY_MS) found.add('earlyApiKey');
   const usedApiLater = !!user.lastApiUseAt && user.lastApiUseAt.getTime() - createdAt > FIRST_SESSION_MS;
   if (
     now.getTime() - createdAt >= DORMANCY_MIN_AGE_MS &&
-    user.lastActiveAt &&
-    user.lastActiveAt.getTime() - createdAt <= FIRST_SESSION_MS &&
+    (!user.lastActiveAt || user.lastActiveAt.getTime() - createdAt <= FIRST_SESSION_MS) &&
     !usedApiLater
   ) {
     found.add('dormantAfterSignup');
@@ -197,7 +273,23 @@ export function classifySignup(
   return SIGNUP_SIGNALS.filter(signal => found.has(signal));
 }
 
-export function classifySignups(users: SignupCandidate[], now = new Date()): Map<string, SignupSignal[]> {
+/** `hourlyCounts` feeds the spike check (see spikeHours); without it no account is in a spike. */
+export function classifySignups(
+  users: SignupCandidate[],
+  now = new Date(),
+  hourlyCounts: ReadonlyMap<number, number> = new Map()
+): Map<string, SignupSignal[]> {
   const domainSignals = classifyDomainCohorts(users);
-  return new Map(users.map(user => [user.id, classifySignup(user, domainSignals.get(user.id), now)]));
+  const clusterSignals = classifySignupClusters(users);
+  const spikes = spikeHours(hourlyCounts);
+  return new Map(
+    users.map(user => {
+      const cohortSignals = new Set<SignupSignal>([
+        ...(domainSignals.get(user.id) ?? []),
+        ...(clusterSignals.get(user.id) ?? []),
+      ]);
+      if (spikes.has(hourStart(user.createdAt))) cohortSignals.add('signupSpike');
+      return [user.id, classifySignup(user, cohortSignals, now)];
+    })
+  );
 }

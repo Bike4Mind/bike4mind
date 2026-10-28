@@ -55,6 +55,7 @@ import {
   NO_LOCAL_MODEL,
   parseLocalModelId,
   pickLocalModel,
+  SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
@@ -75,6 +76,8 @@ import {
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import type { CapabilityLedger } from './capabilities/CapabilityLedger';
+import { capabilityFor, capabilityScope } from './capabilities/approvalCapabilities';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName, suggestBranchName } from './project/branchName';
@@ -126,6 +129,8 @@ import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
 import { OllamaLocal } from './OllamaLocal';
+import type { LocalChat } from './localChat';
+import { ServerCredentialsError } from '../modelServers/errors';
 import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
@@ -375,16 +380,16 @@ const SUMMARY_SHRINK_RETRIES = 2;
  * MAX_CONCURRENT_SPAWNED draws: a person spending their own attention on each turn is not the
  * runaway this guards against.
  */
-const MAX_MESSAGE_HOPS = 3;
+const MAX_MESSAGE_HOPS = 5;
 
 /**
  * How many messages one turn may send, which bounds the FAN where the hop count bounds the
- * chain. Neither is sufficient alone: without this, each turn in a 3-hop chain could message
+ * chain. Neither is sufficient alone: without this, each turn in a 5-hop chain could message
  * every session in the project and the total would still be "finite".
  *
- * Together they cap one user turn at 2 + 4 + 8 = 14 relayed turns in the worst case. That
- * bound is structural and is the only one: session_send is not held at the approval gate in
- * every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
+ * Together they cap one user turn at 2 + 4 + 8 + 16 + 32 = 62 relayed turns in the worst case.
+ * That bound is structural and is the only one: session_send is not held at the approval gate
+ * in every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
  */
 const MAX_SENDS_PER_TURN = 2;
 
@@ -416,6 +421,7 @@ export interface ChatServiceDeps {
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
+  capabilities?: Pick<CapabilityLedger, 'grant' | 'revokeMatching'>;
   /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
   approvalLog?: Pick<ApprovalLog, 'append'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
@@ -447,7 +453,8 @@ export interface ChatServiceDeps {
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
   prepareImage?: ImageContext['prepare'];
   history?: LocalHistory;
-  local?: OllamaLocal;
+  /** This computer's Ollama and the saved model servers; see modelServers/LocalModels. */
+  local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -1407,10 +1414,34 @@ export class ChatService {
   }
 
   /** Also any time: the running turn drops the folder before its next tool call. */
-  async removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
-    const updated = await this.deps.store.removeContextDirectory(sessionId, directory);
-    if (updated) this.bumpScope(sessionId);
+  async removeContextDirectory(
+    sessionId: string,
+    directory: string,
+    auditCapability = true,
+    expectedScope = this.deps.store.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    const scopeKey = this.deps.store.scopeKey() ?? 'local';
+    const normalizedDirectory = resolve(directory);
+    const updated = await this.deps.store.removeContextDirectory(sessionId, normalizedDirectory, expectedScope);
+    if (updated) {
+      this.bumpScope(sessionId);
+      if (auditCapability)
+        await this.deps.capabilities
+          ?.revokeMatching(
+            grant =>
+              grant.subject.kind === 'session' &&
+              grant.subject.sessionId === sessionId &&
+              grant.subject.scopeKey === scopeKey &&
+              grant.scope.kind === 'path' &&
+              grant.scope.value === normalizedDirectory
+          )
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder revocation: ${String(error)}`));
+    }
     return updated;
+  }
+
+  refreshAccessScopes(): void {
+    for (const sessionId of this.active.keys()) this.bumpScope(sessionId);
   }
 
   private scopeVersion(sessionId: string): number {
@@ -1447,6 +1478,27 @@ export class ChatService {
     const root = session?.project?.workingDirectory;
     if (!root) return this.listSkills(sessionId);
     await this.deps.skills.setTrusted(root, trusted);
+    if (this.deps.capabilities) {
+      if (trusted) {
+        await this.deps.capabilities
+          .grant({
+            subject: { kind: 'project', directory: resolve(root) },
+            capability: 'project-trust',
+            scope: { kind: 'project', value: root },
+            source: 'project-trust',
+          })
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project trust: ${String(error)}`));
+      } else {
+        await this.deps.capabilities
+          .revokeMatching(
+            grant =>
+              grant.capability === 'project-trust' &&
+              grant.scope.kind === 'project' &&
+              grant.scope.value === resolve(root)
+          )
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project revocation: ${String(error)}`));
+      }
+    }
     // Trust also decides whether the project's Claude Code files may allow anything.
     this.deps.permissions?.invalidate();
     return this.deps.skills.state(root);
@@ -1574,9 +1626,18 @@ export class ChatService {
     historyScope = this.deps.history?.scopeKey() ?? null
   ): Promise<void> {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
+    const scopeKey = this.deps.store.scopeKey() ?? 'local';
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     this.stop(sessionId);
+    await this.deps.capabilities
+      ?.revokeMatching(
+        grant =>
+          grant.subject.kind === 'session' &&
+          grant.subject.sessionId === sessionId &&
+          grant.subject.scopeKey === scopeKey
+      )
+      .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit session deletion: ${String(error)}`));
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
     this.scopeVersions.delete(sessionId);
@@ -3031,7 +3092,11 @@ export class ChatService {
       const expired = err instanceof SessionRevokedError || err instanceof NotAuthenticatedError;
       const message = expired ? SESSION_PAUSED_MESSAGE : err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(expired ? 'CHAT: reply paused: the session expired' : `CHAT: reply failed: ${message}`);
-      const stop = expired ? { stopReason: SESSION_EXPIRED_STOP } : {};
+      const stop = expired
+        ? { stopReason: SESSION_EXPIRED_STOP }
+        : err instanceof ServerCredentialsError
+          ? { stopReason: SERVER_CREDENTIALS_STOP }
+          : {};
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
@@ -4813,6 +4878,30 @@ export class ChatService {
       await gate.settleCovered(sessionId);
     }
 
+    if (answer.decision === 'always' && this.deps.capabilities) {
+      await this.deps.capabilities
+        .grant({
+          subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
+          capability: capabilityFor(call.name, prompt.key),
+          scope: capabilityScope(call.name, prompt.key),
+          approvalKey: prompt.key,
+          source: 'approval',
+        })
+        .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
+      if (savedEverywhere) {
+        for (const rule of everywhere) {
+          await this.deps.capabilities
+            .grant({
+              subject: { kind: 'desktop-user' },
+              capability: 'tool',
+              scope: { kind: 'permission-rule', value: rule },
+              source: 'permission-rule',
+            })
+            .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit permission grant: ${String(error)}`));
+        }
+      }
+    }
+
     const picked = findOption(prompt, answer.optionId);
     const card = shownCard(answer, requestedAt, askedBecause);
     const decidedBy = cardDecider(answer.settledBy, { ...answer, everywhere: savedEverywhere }, picked, coveredBy);
@@ -5079,6 +5168,8 @@ export class ChatService {
     sessionId: string,
     directory: string
   ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
+    const expectedScope = this.deps.store.scopeKey();
+    const scopeKey = expectedScope ?? 'local';
     const real = await realpath(directory).catch(() => null);
     const kind = real ? await stat(real).catch(() => null) : null;
     if (real !== directory || !kind?.isDirectory()) return { ok: false };
@@ -5086,10 +5177,18 @@ export class ChatService {
     if (!session) return { ok: false };
     const updated =
       session.mode === 'code' && session.project
-        ? await this.deps.store.addContextDirectory(sessionId, directory)
-        : await this.deps.store.addGrantedDirectory(sessionId, directory);
+        ? await this.deps.store.addContextDirectory(sessionId, directory, expectedScope)
+        : await this.deps.store.addGrantedDirectory(sessionId, directory, expectedScope);
     if (!updated) return { ok: false };
     this.bumpScope(sessionId);
+    await this.deps.capabilities
+      ?.grant({
+        subject: { kind: 'session', sessionId, scopeKey },
+        capability: 'files',
+        scope: { kind: 'path', value: directory },
+        source: 'approval',
+      })
+      .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder grant: ${String(error)}`));
     return { ok: true, session: updated };
   }
 
@@ -5877,7 +5976,7 @@ async function streamRound(...args: Parameters<typeof streamCompletion>): Promis
 }
 
 async function streamLocalRound(
-  local: OllamaLocal,
+  local: LocalChat,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
   signal?: AbortSignal,

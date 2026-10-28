@@ -63,6 +63,7 @@ export * from './toolEchoMatcher';
 export * from './retrievalExclusion';
 export * from './validation';
 export * from './slack';
+export * from './errorLogSlackMessage';
 export * from './cacheKeys';
 export * from './pagination';
 export * from './settings';

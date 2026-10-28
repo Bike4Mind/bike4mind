@@ -9,7 +9,16 @@ import type {
   CookieImportState,
 } from './browserCookies';
 import type { ClaudeImportResult, ClaudeImportState, ClaudeRemoveResult } from './claudeImport';
+import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
+import type {
+  ModelServerAddInput,
+  ModelServerMutationResult,
+  ModelServerProbeInput,
+  ModelServerProbeResult,
+  ModelServerUpdateInput,
+  ModelServerView,
+} from './modelServers';
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
@@ -248,6 +257,14 @@ export const IPC_CHANNELS = {
   mcpReconnectServer: 'mcp:reconnect-server',
   /** main -> renderer push; a server changed state, which the renderer never polls for. */
   mcpServersChanged: 'mcp:servers-changed',
+  modelServersList: 'servers:list',
+  modelServersProbe: 'servers:probe',
+  modelServersAdd: 'servers:add',
+  modelServersUpdate: 'servers:update',
+  modelServersRemove: 'servers:remove',
+  modelServersCheck: 'servers:check',
+  /** main -> renderer push; a server was added, changed, or its health was rechecked. */
+  modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
@@ -258,6 +275,8 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  capabilitiesGetState: 'capabilities:get-state',
+  capabilitiesRevoke: 'capabilities:revoke',
   /**
    * Import from Claude, Settings only. No channel takes a path: folders and export files are
    * picked through native dialogs in main, and the importer only ever reads them.
@@ -945,6 +964,20 @@ export interface DesktopApi {
     /** Subscribe to connection-state pushes; returns the unsubscribe. */
     onChanged(listener: (state: McpServersState) => void): () => void;
   };
+  /**
+   * Model servers on other machines, "This computer" first. A credential travels renderer -> main
+   * on probe, add and update, and never back: a view names only its kind. See @shared/modelServers.
+   */
+  modelServers: {
+    list(): Promise<ModelServerView[]>;
+    probe(input: ModelServerProbeInput): Promise<ModelServerProbeResult>;
+    add(input: ModelServerAddInput): Promise<ModelServerMutationResult>;
+    update(id: string, input: ModelServerUpdateInput): Promise<ModelServerMutationResult>;
+    remove(id: string): Promise<ModelServerMutationResult>;
+    /** Rechecks one server, or all of them when `id` is omitted. */
+    check(id?: string): Promise<ModelServerView[]>;
+    onChanged(listener: (servers: ModelServerView[]) => void): () => void;
+  };
   /** User-made sidebar sections; see @shared/sidebarSections. */
   sidebar: {
     getSections(): Promise<SidebarSectionsState>;
@@ -967,6 +1000,10 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+  };
+  capabilities: {
+    getState(): Promise<CapabilityLedgerState>;
+    revoke(grantId: string): Promise<CapabilityLedgerState>;
   };
   claudeImport: {
     getState(): Promise<ClaudeImportState>;
