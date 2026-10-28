@@ -89,7 +89,7 @@ export async function resolveSearch(search: string | undefined): Promise<Resolve
       condition: {
         $or: [
           { _id: new mongoose.Types.ObjectId(id) },
-          { ownerId: id },
+          { ownerType: { $in: ['User', 'Organization'] }, ownerId: id },
           { ownerType: 'Organization', ownerId: { $in: billedOrganizationIds.slice(0, OWNER_SEARCH_LIMIT) } },
         ],
       },

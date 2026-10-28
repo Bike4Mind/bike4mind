@@ -198,6 +198,34 @@ describe('listAdminSubscriptions', () => {
       expect(byOwnerId.total).toBe(2);
     });
 
+    it('keeps an owner id search on the owner index instead of walking the sort index', async () => {
+      const user = await seedUser('jane');
+      await seedSubscription(String(user._id));
+      await Subscription.insertMany(
+        Array.from({ length: 300 }, () => ({
+          subscriptionId: `sub_${nextId()}`,
+          ownerType: 'User',
+          ownerId: new mongoose.Types.ObjectId().toHexString(),
+          priceId: 'price_test',
+          status: 'active',
+          source: 'stripe',
+          quantity: 1,
+          periodStartsAt: NOW,
+          periodEndsAt: NOW,
+        }))
+      );
+      await Subscription.syncIndexes();
+
+      const { match } = await adminSubscriptionsMatch({ search: String(user._id) }, NOW, subscriptionPlanCatalog());
+      const explain = (await Subscription.find(match)
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(25)
+        .explain('executionStats')) as unknown as { executionStats: { totalDocsExamined: number; nReturned: number } };
+
+      expect(explain.executionStats.nReturned).toBe(1);
+      expect(explain.executionStats.totalDocsExamined).toBeLessThan(25);
+    });
+
     it('matches an uppercase owner id, and the org that owner is billed for', async () => {
       const user = await seedUser('jane');
       const organization = await seedOrganization('Acme', String(user._id));
