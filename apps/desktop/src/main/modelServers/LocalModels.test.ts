@@ -54,6 +54,15 @@ describe('credentialInput', () => {
     );
   });
 
+  it('trims a pasted token before measuring it, so leading whitespace cannot hide truncation', () => {
+    const token = 'a'.repeat(4_096);
+    const input = credentialInput({ type: 'bearer', token: `\n\n${token}` });
+    expect(input.type === 'bearer' && input.token).toBe(token);
+    expect(() => credentialHeaders(credentialInput({ type: 'bearer', token: `\n\n${token}b` }))).toThrow(
+      /longer than 4096/
+    );
+  });
+
   it('turns anything malformed from the renderer into no credential', () => {
     expect(credentialInput(undefined)).toEqual({ type: 'none' });
     expect(credentialInput({ type: 'basic', token: 'x' })).toEqual({ type: 'none' });

@@ -23,8 +23,8 @@ function access(value: unknown): ModelServerAccess | undefined {
   return value === 'chat' || value === 'manage' ? value : undefined;
 }
 
-// One past the limit, so credentialHeaders rejects an over-long value instead of it being saved truncated.
-const credentialText = (value: unknown, max: number) => text(value, max + 1);
+// Trimmed first, then one past the limit, so credentialHeaders rejects an over-long value instead of it being saved truncated.
+const credentialText = (value: unknown, max: number) => text(typeof value === 'string' ? value.trim() : value, max + 1);
 
 /** The renderer is ours, but these reach the network: anything malformed becomes "no credential". */
 export function credentialInput(value: unknown): ModelServerCredentialInput {
