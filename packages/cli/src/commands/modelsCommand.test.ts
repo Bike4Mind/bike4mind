@@ -139,7 +139,8 @@ function fakeRuntime(overrides: Partial<LocalRuntime> = {}): LocalRuntime {
     inspect: vi.fn(),
     pull: vi.fn(async (_ref: string, opts?: PullOptions) => {
       opts?.onProgress?.({ status: 'pulling manifest', completedBytes: 0, totalBytes: null });
-      opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 100, totalBytes: 400 });
+      opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 0, totalBytes: 400 });
+      opts?.onProgress?.({ status: 'pulling def456', completedBytes: 100, totalBytes: 400 });
       opts?.onProgress?.({ status: 'success', completedBytes: 400, totalBytes: 400 });
     }),
     remove: vi.fn().mockResolvedValue(undefined),
@@ -658,7 +659,14 @@ describe('models pull (Hugging Face)', () => {
     const verifyOrder = vi.mocked(h.hub.verifyOllamaRef).mock.invocationCallOrder[0];
     const pullOrder = vi.mocked(h.runtime.pull).mock.invocationCallOrder[0];
     expect(verifyOrder).toBeLessThan(pullOrder);
-    expect(h.progress).toEqual(['pulling manifest', 'pulling abc123  25%  100 B / 400 B', 'success', '<end>']);
+    expect(h.progress).toEqual([
+      'pulling manifest',
+      'pulling abc123  0%  0 B / 400 B',
+      'pulling def456  25%  100 B / 400 B',
+      'success',
+      '<end>',
+    ]);
+    expect(h.lines.some(line => line.startsWith('Already downloaded'))).toBe(false);
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pulled hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M\./);
   });
 
@@ -793,7 +801,7 @@ describe('models pull (Hugging Face)', () => {
       pull: vi.fn(
         (_ref: string, opts?: PullOptions) =>
           new Promise<void>((_resolve, reject) => {
-            opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 50, totalBytes: 400 });
+            opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 0, totalBytes: 400 });
             opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
             h.controller.abort();
           })
@@ -801,7 +809,7 @@ describe('models pull (Hugging Face)', () => {
     });
     const h = harness({ runtime, answers: [true] });
     expect(await runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).toBe(EXIT_CANCELLED);
-    expect(h.progress).toEqual(['pulling abc123  12%  50 B / 400 B', '<end>']);
+    expect(h.progress).toEqual(['pulling abc123  0%  0 B / 400 B', '<end>']);
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pull cancelled\. Nothing was installed/);
   });
 
