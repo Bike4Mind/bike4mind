@@ -11,6 +11,7 @@ import {
   adminSubscriptionsMatch,
   adminSubscriptionsSummary,
   listAdminSubscriptions,
+  OWNER_SEARCH_LIMIT,
 } from './listAdminSubscriptions';
 import { subscriptionPlanCatalog } from './adminSubscriptionsQuery';
 
@@ -197,6 +198,37 @@ describe('listAdminSubscriptions', () => {
       expect(byOwnerId.total).toBe(2);
     });
 
+    it('matches an uppercase owner id, and the org that owner is billed for', async () => {
+      const user = await seedUser('jane');
+      const organization = await seedOrganization('Acme', String(user._id));
+      await seedSubscription(String(user._id));
+      await seedSubscription(String(organization._id), { ownerType: 'Organization' });
+      await seedSubscription(String((await seedUser('bob'))._id));
+
+      const result = await listAdminSubscriptions({ ...params, search: String(user._id).toUpperCase() }, NOW);
+
+      expect(result.subscriptions.map(row => row.ownerId).sort()).toEqual(
+        [String(user._id), String(organization._id)].sort()
+      );
+    });
+
+    it('reports a truncated search past OWNER_SEARCH_LIMIT matching owners', async () => {
+      const users = await User.insertMany(
+        Array.from({ length: OWNER_SEARCH_LIMIT + 1 }, (_, index) => ({
+          name: `many${index}`,
+          username: `many${index}`,
+          email: `many${index}@example.com`,
+        }))
+      );
+      await Promise.all(users.map(user => seedSubscription(String(user._id))));
+
+      const list = await listAdminSubscriptions({ ...params, search: 'many' }, NOW);
+      const summary = await adminSubscriptionsSummary({ search: 'many' }, NOW);
+
+      expect(list).toMatchObject({ searchTruncated: true, total: OWNER_SEARCH_LIMIT });
+      expect(summary).toMatchObject({ searchTruncated: true, total: OWNER_SEARCH_LIMIT });
+    });
+
     it('matches nothing when no owner matches', async () => {
       const user = await seedUser('jane');
       await seedSubscription(String(user._id));
@@ -240,7 +272,11 @@ describe('adminSubscriptionsSummary', () => {
 
     const summary = await adminSubscriptionsSummary({}, NOW);
 
-    expect(summary).toEqual({ total: 7, views: { paying: 3, pastDue: 1, comped: 1, churned: 1 } });
+    expect(summary).toEqual({
+      total: 7,
+      views: { paying: 3, pastDue: 1, comped: 1, churned: 1 },
+      searchTruncated: false,
+    });
   });
 
   it('intersects the views with the current filter', async () => {
@@ -248,7 +284,11 @@ describe('adminSubscriptionsSummary', () => {
 
     const summary = await adminSubscriptionsSummary({ ownerType: 'Organization' }, NOW);
 
-    expect(summary).toEqual({ total: 1, views: { paying: 1, pastDue: 0, comped: 0, churned: 0 } });
+    expect(summary).toEqual({
+      total: 1,
+      views: { paying: 1, pastDue: 0, comped: 0, churned: 0 },
+      searchTruncated: false,
+    });
   });
 });
 

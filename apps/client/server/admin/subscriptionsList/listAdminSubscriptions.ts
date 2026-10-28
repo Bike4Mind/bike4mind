@@ -59,6 +59,7 @@ const userIdsMatching = async (query: Condition) =>
     await User.find(query)
       .select('_id')
       .limit(OWNER_SEARCH_LIMIT + 1)
+      .maxTimeMS(LIST_MAX_TIME_MS)
       .lean()
   );
 
@@ -67,6 +68,7 @@ const organizationIdsMatching = async (query: Condition) =>
     await Organization.find(query)
       .select('_id')
       .limit(OWNER_SEARCH_LIMIT + 1)
+      .maxTimeMS(LIST_MAX_TIME_MS)
       .lean()
   );
 
@@ -80,9 +82,18 @@ export async function resolveSearch(search: string | undefined): Promise<Resolve
   const kind = classifySearch(search);
   if (kind === 'subscriptionId') return { condition: { subscriptionId: search }, truncated: false };
   if (kind === 'objectId') {
+    // ownerId is a stored string, so it only matches the canonical lowercase hex.
+    const id = search.toLowerCase();
+    const billedOrganizationIds = await organizationIdsMatching({ userId: id });
     return {
-      condition: { $or: [{ _id: new mongoose.Types.ObjectId(search) }, { ownerId: search }] },
-      truncated: false,
+      condition: {
+        $or: [
+          { _id: new mongoose.Types.ObjectId(id) },
+          { ownerId: id },
+          { ownerType: 'Organization', ownerId: { $in: billedOrganizationIds.slice(0, OWNER_SEARCH_LIMIT) } },
+        ],
+      },
+      truncated: billedOrganizationIds.length > OWNER_SEARCH_LIMIT,
     };
   }
 
@@ -225,7 +236,7 @@ export async function adminSubscriptionsSummary(
   filter: AdminSubscriptionsFilter,
   now = new Date()
 ): Promise<AdminSubscriptionsSummary> {
-  const { match } = await adminSubscriptionsMatch(filter, now, subscriptionPlanCatalog());
+  const { match, searchTruncated } = await adminSubscriptionsMatch(filter, now, subscriptionPlanCatalog());
   const views = viewConditions(now);
   const [result] = await executeFacetCompatible(
     Subscription,
@@ -247,6 +258,7 @@ export async function adminSubscriptionsSummary(
       comped: countOf(result.comped),
       churned: countOf(result.churned),
     },
+    searchTruncated,
   };
 }
 

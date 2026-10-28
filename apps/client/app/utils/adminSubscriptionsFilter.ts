@@ -152,4 +152,6 @@ export type AdminSubscriptionsListResponse = {
 export type AdminSubscriptionsSummary = {
   total: number;
   views: { paying: number; pastDue: number; comped: number; churned: number };
+  /** Same meaning as on the list response: the counts cover only the owners the search resolved. */
+  searchTruncated: boolean;
 };

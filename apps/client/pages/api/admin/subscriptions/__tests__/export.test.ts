@@ -21,6 +21,7 @@ const mockMatch = vi.fn();
 vi.mock('@server/admin/subscriptionsList/listAdminSubscriptions', () => ({
   adminSubscriptionsExportPage: (...args: unknown[]) => mockPage(...args),
   adminSubscriptionsMatch: (...args: unknown[]) => mockMatch(...args),
+  OWNER_SEARCH_LIMIT: 500,
 }));
 vi.mock('@client/app/utils/adminSubscriptionsFilter', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/utils/adminSubscriptionsFilter')>()),
@@ -131,9 +132,9 @@ describe('GET /api/admin/subscriptions/export', () => {
     const { res } = await call({});
 
     expect(mockPage).toHaveBeenCalledTimes(2);
-    expect(mockPage.mock.calls[0].slice(1, 3)).toEqual([null, 501]);
+    expect(mockPage.mock.calls[0].slice(0, 3)).toEqual([{ status: 'x' }, null, 501]);
     const cursor = { createdAt: new Date(firstPage[499].createdAt), id: firstPage[499].id };
-    expect(mockPage.mock.calls[1].slice(1, 3)).toEqual([cursor, 501]);
+    expect(mockPage.mock.calls[1].slice(0, 3)).toEqual([{ status: 'x' }, cursor, 501]);
     const lines = res._getData().trim().split('\n');
     expect(lines).toHaveLength(1 + 500 + 1);
     expect(res._getData()).not.toContain('# Truncated');
@@ -149,6 +150,17 @@ describe('GET /api/admin/subscriptions/export', () => {
     const lines = res._getData().trim().split('\n');
     expect(lines).toHaveLength(1 + 1000 + 1);
     expect(lines.at(-1)).toBe('# Truncated at 1,000 rows');
+  });
+
+  it('ends with a line saying so when the search resolved only some owners', async () => {
+    mockMatch.mockResolvedValueOnce({ match: { status: 'x' }, searchTruncated: true });
+    mockPage.mockResolvedValueOnce([makeRow(1)]);
+
+    const { res } = await call({ search: 'gmail' });
+
+    expect(res._getData().trim().split('\n').at(-1)).toBe(
+      '# Search matched more than 500 owners; narrow it to export every match'
+    );
   });
 
   it('cuts the connection when a read fails after the headers went out', async () => {

@@ -34,7 +34,7 @@ async function call(query: Record<string, string>, user: Record<string, unknown>
 }
 
 describe('GET /api/admin/subscriptions/summary', () => {
-  const summary = { total: 3, views: { paying: 2, pastDue: 1, comped: 0, churned: 0 } };
+  const summary = { total: 3, views: { paying: 2, pastDue: 1, comped: 0, churned: 0 }, searchTruncated: false };
 
   beforeEach(() => {
     vi.clearAllMocks();

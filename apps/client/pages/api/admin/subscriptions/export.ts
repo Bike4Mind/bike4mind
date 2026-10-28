@@ -10,6 +10,7 @@ import { escapeCsvCell } from '@client/app/utils/csv';
 import {
   adminSubscriptionsExportPage,
   adminSubscriptionsMatch,
+  OWNER_SEARCH_LIMIT,
   type ExportCursor,
 } from '@server/admin/subscriptionsList/listAdminSubscriptions';
 import { subscriptionPlanCatalog } from '@server/admin/subscriptionsList/adminSubscriptionsQuery';
@@ -78,7 +79,8 @@ const toCsvLine = (row: AdminSubscriptionRow): string => {
  *
  * Streams the filtered subscriptions as CSV, newest first, in keyset pages of 500 rows up to
  * ADMIN_SUBSCRIPTIONS_EXPORT_MAX_ROWS. Truncation is only known after the headers are sent, so a
- * truncated export ends with a `# Truncated at N rows` line. Same shape as the credit ledger export.
+ * truncated export ends with a `# Truncated at N rows` line, and a search that resolved only some of its
+ * owners ends with a line saying so. Same shape as the credit ledger export.
  */
 const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: 6, windowMs: 60_000, bucket: 'admin-subscriptions-export' }))
@@ -93,7 +95,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       }
 
       const catalog = subscriptionPlanCatalog();
-      const { match } = await adminSubscriptionsMatch(parsed.data, new Date(), catalog);
+      const { match, searchTruncated } = await adminSubscriptionsMatch(parsed.data, new Date(), catalog);
       let after: ExportCursor | null = null;
       let truncated = false;
       let rowsWritten = 0;
@@ -136,6 +138,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
 
       if (truncated) {
         res.write(`# Truncated at ${ADMIN_SUBSCRIPTIONS_EXPORT_MAX_ROWS.toLocaleString('en-US')} rows\n`);
+      }
+      if (searchTruncated) {
+        res.write(`# Search matched more than ${OWNER_SEARCH_LIMIT} owners; narrow it to export every match\n`);
       }
       res.end();
     })
