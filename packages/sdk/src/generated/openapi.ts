@@ -5778,7 +5778,14 @@ export interface components {
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
+          /** @description Tools pre-approved when the skill runs in Claude Code. */
+          claude_code_allowed_tools: string[];
           disable_model_invocation: boolean;
+          /** @description Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version. */
+          files?: {
+            path: string;
+            content: string;
+          }[];
         };
         /** @enum {string|null} */
         risk_tier: 'clean' | 'review' | 'high' | null;
@@ -5881,7 +5888,14 @@ export interface components {
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
+          /** @description Tools pre-approved when the skill runs in Claude Code. */
+          claude_code_allowed_tools: string[];
           disable_model_invocation: boolean;
+          /** @description Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version. */
+          files?: {
+            path: string;
+            content: string;
+          }[];
         };
         /** @enum {string|null} */
         risk_tier: 'clean' | 'review' | 'high' | null;
@@ -5986,7 +6000,14 @@ export interface components {
             body?: string;
             argument_hint: string | null;
             allowed_tools: string[];
+            /** @description Tools pre-approved when the skill runs in Claude Code. */
+            claude_code_allowed_tools: string[];
             disable_model_invocation: boolean;
+            /** @description Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version. */
+            files?: {
+              path: string;
+              content: string;
+            }[];
           };
           /** @enum {string|null} */
           risk_tier: 'clean' | 'review' | 'high' | null;
@@ -6074,7 +6095,14 @@ export interface components {
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
+          /** @description Tools pre-approved when the skill runs in Claude Code. */
+          claude_code_allowed_tools: string[];
           disable_model_invocation: boolean;
+          /** @description Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version. */
+          files?: {
+            path: string;
+            content: string;
+          }[];
         };
         /** @enum {string|null} */
         risk_tier: 'clean' | 'review' | 'high' | null;
@@ -6173,7 +6201,14 @@ export interface components {
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
+          /** @description Tools pre-approved when the skill runs in Claude Code. */
+          claude_code_allowed_tools: string[];
           disable_model_invocation: boolean;
+          /** @description Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version. */
+          files?: {
+            path: string;
+            content: string;
+          }[];
         };
         /** @enum {string|null} */
         risk_tier: 'clean' | 'review' | 'high' | null;
@@ -6224,7 +6259,14 @@ export interface components {
             body?: string;
             argument_hint: string | null;
             allowed_tools: string[];
+            /** @description Tools pre-approved when the skill runs in Claude Code. */
+            claude_code_allowed_tools: string[];
             disable_model_invocation: boolean;
+            /** @description Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version. */
+            files?: {
+              path: string;
+              content: string;
+            }[];
           };
           /** @enum {string|null} */
           risk_tier: 'clean' | 'review' | 'high' | null;
@@ -6309,7 +6351,14 @@ export interface components {
             body?: string;
             argument_hint: string | null;
             allowed_tools: string[];
+            /** @description Tools pre-approved when the skill runs in Claude Code. */
+            claude_code_allowed_tools: string[];
             disable_model_invocation: boolean;
+            /** @description Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version. */
+            files?: {
+              path: string;
+              content: string;
+            }[];
           };
         } | null;
         can_decide: boolean;
@@ -6327,7 +6376,14 @@ export interface components {
           body?: string;
           argument_hint: string | null;
           allowed_tools: string[];
+          /** @description Tools pre-approved when the skill runs in Claude Code. */
+          claude_code_allowed_tools: string[];
           disable_model_invocation: boolean;
+          /** @description Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version. */
+          files?: {
+            path: string;
+            content: string;
+          }[];
         };
         /** @enum {string|null} */
         risk_tier: 'clean' | 'review' | 'high' | null;
