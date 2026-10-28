@@ -31,7 +31,7 @@ A server can need a bearer token or a custom header (for example `X-Api-Key`). D
 - Plain `http` to a private network address (`192.168.x.x`, `10.x.x.x`, `172.16.x.x` to `172.31.x.x`, and Tailscale IPv4 `100.x.y.z`) works only without credentials. Desktop marks these servers Unencrypted.
 - A public address needs `https` with a valid certificate. Plain `http` to a public address is refused.
 
-If your computer has no secure storage available, Desktop keeps the credential only until you quit and marks the server session only.
+If your computer has no secure storage available, Desktop keeps the credential only until you quit and marks the server Credentials kept until Desktop quits.
 
 ## Pick a setup
 
@@ -130,7 +130,7 @@ Desktop marks the server Unencrypted. Anyone on that network can read your conve
 2. Under Add a server, enter the address. A bare `host:port` is treated as `http`.
 3. Set Credentials to None, Bearer token or Custom header, and fill in the token, or the header name and value.
 4. Select Test. Desktop reports the kind, version, model count and latency, or the reason it could not connect.
-5. Check the Name, Kind (Ollama or OpenAI-compatible) and Access, then select Save server.
+5. Check the Name, Kind (Ollama or OpenAI-compatible) and Access (Chat only or Chat and manage), then select Save server.
 
 The address must not include a username, password, query string or fragment. If the server sits behind a proxy path, include the path.
 
@@ -141,4 +141,4 @@ If Test warns that a public address answered without credentials, put a proxy wi
 - Needs credentials: the server returned 401 or 403. Check the token, or the header name and value.
 - Unreachable: the address, port or firewall is wrong, or the SSH forward is closed.
 - Refused: the server redirected, or the address is not allowed. Read the message under Test, and enter the final `https` address if you were redirected.
-- Certificate not trusted: use a certificate from a trusted authority or a local CA your computer already trusts. Tailscale certificates also work.
+- The certificate is not trusted: Test shows this message when the certificate fails verification. Use a certificate from a trusted authority or a local CA your computer already trusts. Tailscale certificates also work.
