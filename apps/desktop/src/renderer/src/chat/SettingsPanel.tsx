@@ -246,7 +246,8 @@ function modelServersEntry(
   setServers: (servers: ModelServerView[]) => void,
   loadError: string | null
 ): ConfigEntry {
-  const attention = servers?.some(server => server.health.state === 'credentials') ? 'Needs credentials' : undefined;
+  // One word: the side nav shows it beside the section label.
+  const attention = servers?.some(server => server.health.state === 'credentials') ? 'Credentials' : undefined;
   return {
     id: 'model-servers',
     icon: <ServerIcon />,
