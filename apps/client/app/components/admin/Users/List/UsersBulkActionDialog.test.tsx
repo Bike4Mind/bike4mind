@@ -151,7 +151,7 @@ describe('UsersBulkActionDialog', () => {
     const dryRun = await screen.findByTestId('admin-users-bulk-dry-run');
     await waitFor(() => expect(dryRun).toHaveTextContent('1 email domain: acme.com'));
     expect(dryRun).toHaveTextContent('Already blocked: old.com.');
-    expect(dryRun).toHaveTextContent('Public mail domains are never blocked: gmail.com.');
+    expect(dryRun).toHaveTextContent('Skipped as public mail domains: gmail.com.');
 
     fireEvent.click(screen.getByTestId('admin-users-bulk-contain-reason-input-preset-0'));
     fireEvent.click(screen.getByTestId('admin-users-bulk-contain-confirm-btn'));

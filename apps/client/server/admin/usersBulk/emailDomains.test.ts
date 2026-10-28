@@ -25,6 +25,13 @@ describe('emailDomainsOf', () => {
   it('keeps a subdomain exact instead of widening to its parent', () => {
     expect(emailDomainsOf(users('a@mail.acme.com')).owned).toEqual(['mail.acme.com']);
   });
+
+  it('drops a subdomain whose parent is also in the cohort', () => {
+    expect(emailDomainsOf(users('a@mail.acme.com', 'b@acme.com', 'c@eu.mail.other.com')).owned).toEqual([
+      'acme.com',
+      'eu.mail.other.com',
+    ]);
+  });
 });
 
 describe('planEmailDomains', () => {

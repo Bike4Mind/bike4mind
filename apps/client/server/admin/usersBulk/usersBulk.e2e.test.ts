@@ -457,6 +457,20 @@ describe('users bulk actions on a real replica set', () => {
       expect(await auditCount('settings.admin_settings.updated')).toBe(2);
     });
 
+    it('touches no user and releases the idempotency key when blocking the domains fails', async () => {
+      const adminId = await seedUser({ isAdmin: true });
+      const target = await seedUser({ email: 'a@fresh-campaign.com' });
+      const body = request([target], CONTAIN_AND_BLOCK, [target]);
+
+      await expect(
+        run(adminId, body, { blockEmailDomains: () => Promise.reject(new Error('settings write failed')) })
+      ).rejects.toThrow('settings write failed');
+      expect((await User.findById(target).lean())?.isBanned).toBeFalsy();
+
+      const retried = await run(adminId, body);
+      expect(retried).toMatchObject({ applied: 1, blockedDomains: ['fresh-campaign.com'] });
+    });
+
     it('does not touch the list when the toggle is off', async () => {
       const adminId = await seedUser({ isAdmin: true });
       const target = await seedUser({ email: 'a@fresh-campaign.com' });

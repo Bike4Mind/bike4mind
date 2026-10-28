@@ -21,7 +21,8 @@ import { useAdminUsersBulkExecute, useAdminUsersBulkPreview, useAdminUsersBulkUn
 
 type CreditMode = 'set' | 'add' | 'subtract';
 
-// Domains named in a dry-run line before it falls back to "and N more".
+// Domains named in an informational line before it falls back to "and N more". Never applied to the
+// domains a batch would block: the admin confirms every one of those.
 const DOMAINS_SHOWN = 5;
 
 type BulkActionCopy = {
@@ -139,10 +140,10 @@ function domainList(domains: readonly string[]): string {
 function emailDomainLines({ toBlock, alreadyBlocked, notOwned }: AdminUsersBulkEmailDomains): string[] {
   return [
     toBlock.length > 0
-      ? `New signups blocked from ${toBlock.length.toLocaleString()} email domain${toBlock.length === 1 ? '' : 's'}: ${domainList(toBlock)}.`
+      ? `New signups blocked from ${toBlock.length.toLocaleString()} email domain${toBlock.length === 1 ? '' : 's'}: ${toBlock.join(', ')}.`
       : 'No new email domains to block.',
     alreadyBlocked.length > 0 ? `Already blocked: ${domainList(alreadyBlocked)}.` : null,
-    notOwned.length > 0 ? `Public mail domains are never blocked: ${domainList(notOwned)}.` : null,
+    notOwned.length > 0 ? `Skipped as public mail domains: ${domainList(notOwned)}.` : null,
   ].filter((line): line is string => line !== null);
 }
 
@@ -253,7 +254,9 @@ export function UsersBulkActionDialog({
           `Stopped after ${plural(result.applied)}; ${plural(result.remaining)} not changed. Run it again for the rest.`
         );
       showUndoToast({
-        message: `${copy.done} ${plural(result.applied)}`,
+        message:
+          `${copy.done} ${plural(result.applied)}` +
+          (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : ''),
         onUndo: async () => {
           const restored = await undo.mutateAsync(result.batchId);
           if (restored.stillBlockedDomains.length > 0)

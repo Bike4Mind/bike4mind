@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
+import { AdminSettings } from '@bike4mind/database/infra';
 
 vi.mock('@server/middlewares/baseApi', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
@@ -97,7 +98,7 @@ describe('POST /api/admin/users/bulk/execute', () => {
     it('refuses with 403 when the admin cannot update admin settings', async () => {
       const ability = canEditSettings(false);
       await expect(call(BLOCKING, ADMIN, ability)).rejects.toMatchObject({ statusCode: 403 });
-      expect(ability.can).toHaveBeenCalledWith('update', expect.anything());
+      expect(ability.can).toHaveBeenCalledWith('update', AdminSettings);
       expect(mockExecute).not.toHaveBeenCalled();
     });
 

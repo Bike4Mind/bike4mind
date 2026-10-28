@@ -64,7 +64,7 @@ While rows are selected, a bar under the table offers these actions (on a narrow
 Each action opens a dialog with a dry run: how many users will change, who is excluded (you and other admins are never included), and how many API keys and credits are affected. A reason is required and is recorded in the audit log for every user.
 
 - A batch is limited to 500 users. If more match, narrow the filters first.
-- **Block email domains** (Contain only) adds the users' email domains to the blocked email domains setting before any user is changed. The dry run lists the domains it would block and the ones already blocked. Public mail domains such as gmail.com are never blocked. It needs permission to edit admin settings.
+- **Block email domains** (Contain only) adds the users' email domains to the blocked email domains setting before any user is changed. The dry run lists every domain it would block and the ones already blocked. Well-known public mail domains such as gmail.com are skipped, but the list is not exhaustive, so check the domains before you confirm. It needs permission to edit admin settings.
 - If the matching users change between the dry run and the confirm, nothing is applied and the dialog shows the new count to confirm again.
 - After a bulk action, an **Undo** button is shown for 30 seconds. It restores the whole batch and unblocks the email domains the batch added (domains that were already blocked stay blocked). Sessions that were ended stay ended.
 
