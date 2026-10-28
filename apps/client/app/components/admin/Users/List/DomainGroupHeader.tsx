@@ -49,7 +49,7 @@ export function DomainGroupHeader({
       }}
     >
       <Typography sx={{ color: 'admin.ink', fontWeight: 700, fontSize: 13 }}>{group.domain}</Typography>
-      <Typography sx={{ color: 'admin.inkSecondary', fontSize: 12 }}>{facts.join(' · ')}</Typography>
+      <Typography sx={{ color: 'admin.inkSecondary', fontSize: 12 }}>{facts.join(' \u00b7 ')}</Typography>
       {group.signals.map(signal => (
         <Box
           key={signal}
