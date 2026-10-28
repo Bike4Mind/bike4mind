@@ -89,7 +89,7 @@
     "@bike4mind/desktop#build": {
       "dependsOn": ["^build"],
       "outputs": ["out/**"],
-      "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json"]
+      "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json", "$TURBO_ROOT$/catalog/model-hub/**"]
     },
     // @bike4mind/workers compiles and tests apps/client/server code through its interim path
     // alias (apps/workers/tsconfig.json), and some of that code imports the premium-generated
