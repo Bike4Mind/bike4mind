@@ -14,7 +14,7 @@ Desktop supports two kinds of server:
 - Ollama.
 - OpenAI-compatible servers such as llama-server, LM Studio and vLLM.
 
-Only chat uses a model server today. Pulling, removing and other management actions are not available yet.
+Each server has an Access setting. Chat only lets Desktop use the server's models for chat. Chat and manage marks the server as one you administer, which is what Desktop needs before it can offer model management on it. Chat only is the default, and the setting applies to this device only.
 
 ## When to use this
 
@@ -28,7 +28,7 @@ A server can need a bearer token or a custom header (for example `X-Api-Key`). D
 - Credentials are sent only to the address you saved, never to any other host.
 - Desktop does not follow redirects. A server that redirects, including `http` to `https`, shows an error and no credentials are sent on. Enter the final address instead.
 - Credentials travel only over `https`, or over plain `http` to this computer (loopback) or a Tailscale IPv6 address (`fd7a:115c:a1e0::/48`).
-- Plain `http` to a private network address (`192.168.x.x`, `10.x.x.x`, `172.16.x.x` to `172.31.x.x`, and Tailscale IPv4 `100.x.y.z`) works only without credentials. Desktop marks these servers Unencrypted.
+- Plain `http` to a private network address (`192.168.x.x`, `10.x.x.x`, `172.16.x.x` to `172.31.x.x`, and Tailscale IPv4 `100.64.0.0/10`, which covers `100.64.x.x` to `100.127.x.x`) works only without credentials. Desktop marks these servers Unencrypted.
 - A public address needs `https` with a valid certificate. Plain `http` to a public address is refused.
 
 If your computer has no secure storage available, Desktop keeps the credential only until you quit and marks the server Credentials kept until Desktop quits.
@@ -39,7 +39,7 @@ If your computer has no secure storage available, Desktop keeps the credential o
 |-------|-------------------|-------------|
 | Tailscale with HTTPS | `https://gpu.tailnet-name.ts.net` | Optional |
 | Caddy in front of Ollama | `https://ollama.example.com` | Bearer token |
-| SSH local port forward | `http://127.0.0.1:11434` | None needed |
+| SSH local port forward | `http://127.0.0.1:21434` | None needed |
 | Plain LAN | `http://192.168.1.20:11434` | None, shown as Unencrypted |
 
 ## Prepare the server
@@ -58,13 +58,15 @@ For llama-server, start it with `--host` and `--port` the same way, and `--api-k
 
 Tailscale gives each machine a private address that only your tailnet can reach. Install Tailscale on both machines and sign in to the same tailnet.
 
-Desktop trusts plain `http` with credentials only on the Tailscale IPv6 address. The `100.x.y.z` IPv4 address counts as a private network address, so it works without credentials and is marked Unencrypted. To use a token or to avoid the Unencrypted mark, serve the model over HTTPS with Tailscale's own certificates:
+Desktop trusts plain `http` with credentials only on the Tailscale IPv6 address. The IPv4 address in `100.64.0.0/10` counts as a private network address, so it works without credentials and is marked Unencrypted. To use a token or to avoid the Unencrypted mark, serve the model over HTTPS with Tailscale's own certificates:
 
 ```bash
 tailscale serve --bg --https=443 http://127.0.0.1:11434
 ```
 
 Then add `https://<machine>.<tailnet>.ts.net` in Settings > Model servers. Check the Tailscale documentation for the current `serve` syntax and to enable HTTPS certificates for your tailnet.
+
+Ollama rejects requests whose `Host` header is not a local name, and Tailscale's documentation does not say whether `serve` rewrites that header. Before you add the server, run `curl -i https://<machine>.<tailnet>.ts.net/api/version` from another machine on the tailnet. If it returns `403`, use the Caddy setup below on the same machine instead, or connect over the Tailscale IPv6 address without `serve`.
 
 ## Caddy with https and a bearer token
 
@@ -76,9 +78,13 @@ Create a `Caddyfile`:
 {$SITE_ADDRESS} {
 	@unauthorized not header Authorization "Bearer {$OLLAMA_TOKEN}"
 	respond @unauthorized "Unauthorized" 401
-	reverse_proxy 127.0.0.1:11434
+	reverse_proxy 127.0.0.1:11434 {
+		header_up Host {upstream_hostport}
+	}
 }
 ```
+
+The `header_up` line is required. Caddy passes the public name through as the `Host` header, and Ollama answers `403` to any `Host` that is not a local name.
 
 Generate a token and run Caddy with both values set:
 
@@ -104,14 +110,10 @@ The first call returns `401`. The second returns the Ollama version.
 If you can already SSH to the server, forward its Ollama port to your computer. Desktop then sees a loopback address, which it trusts without `https`, and SSH encrypts the traffic.
 
 ```bash
-ssh -N -L 11434:127.0.0.1:11434 user@gpu.example.com
-```
-
-If Ollama is already running on your own computer, pick a different local port:
-
-```bash
 ssh -N -L 21434:127.0.0.1:11434 user@gpu.example.com
 ```
+
+Use a local port other than `11434`. Desktop's This computer entry always uses `127.0.0.1:11434`, so a tunnel on that port would clash with a local Ollama or make This computer talk to the remote machine.
 
 Add `http://127.0.0.1:21434` in Settings > Model servers. The server shows Unreachable whenever the SSH session is closed, so keep it running, or use a tool such as `autossh` to restart it.
 
@@ -138,7 +140,8 @@ If Test warns that a public address answered without credentials, put a proxy wi
 
 ## Troubleshooting
 
-- Needs credentials: the server returned 401 or 403. Check the token, or the header name and value.
+- Needs credentials: the server returned 401 or 403, or Desktop no longer has the saved credential. Check the token, or the header name and value. If the message says the saved credential could not be read, the secure storage lost it, for example after a keyring reset. If it says the credential was kept only until Desktop quit, it was session-only and Desktop restarted. In both cases open the server's credentials and enter the value again.
+- Needs credentials with a correct token, behind a proxy: Ollama may be answering 403 because the `Host` header was not rewritten. Check the Caddy setup above, and test with `curl -i` against the address.
 - Unreachable: the address, port or firewall is wrong, or the SSH forward is closed.
 - Refused: the server redirected, or the address is not allowed. Read the message under Test, and enter the final `https` address if you were redirected.
 - The certificate is not trusted: Test shows this message when the certificate fails verification. Use a certificate from a trusted authority or a local CA your computer already trusts. Tailscale certificates also work.
