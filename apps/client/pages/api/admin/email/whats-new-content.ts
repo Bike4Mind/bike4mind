@@ -1,8 +1,7 @@
 import { ModalModel } from '@bike4mind/database';
 import { usableObjectIds } from '@bike4mind/db-core';
 import { ApiKeyScope, IModalDocument } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { assertDateInRange } from '@server/utils/dateParam';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { renderAndSanitize } from '@server/utils/marketingReportRenderer';
@@ -15,11 +14,10 @@ import { MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
  * - days: number of days to look back (default: 7)
  * - ids: comma-separated list of specific modal IDs to fetch (overrides days filter)
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const { days = '7', ids, limit: limitParam = '1' } = req.query as { days?: string; ids?: string; limit?: string };
 
   // Look for modals with whats-new related tags
