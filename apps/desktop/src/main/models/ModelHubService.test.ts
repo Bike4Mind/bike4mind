@@ -22,7 +22,7 @@ import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localConte
 import { pullKey, type ModelPull } from '@shared/models';
 import { describe, expect, it, vi } from 'vitest';
 import { loadCuratedManifest } from './loadCuratedManifest';
-import { ModelHubService, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
+import { ModelHubService, toModelHubError, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const SHA = 'a'.repeat(64);
@@ -579,6 +579,11 @@ describe('ModelHubService reads', () => {
     const { service, runtime } = harness();
     runtime.list.mockRejectedValueOnce(new RuntimeConnectionError('refused', 'ollama', { cause: new Error('x') }));
     expect(await service.installed()).toMatchObject({ ok: false, error: { kind: 'runtime-unavailable' } });
+  });
+
+  it('names ollama.com when the registry is unreachable', () => {
+    const error = new RuntimeConnectionError('offline', 'ollama-registry', { cause: new Error('x') });
+    expect(toModelHubError(error)).toEqual({ kind: 'runtime-unavailable', message: 'Could not reach ollama.com.' });
   });
 
   it('labels abliterated results and maps rate limits and outages', async () => {
