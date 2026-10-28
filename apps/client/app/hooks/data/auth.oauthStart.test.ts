@@ -94,6 +94,22 @@ describe('useStartOAuthSignIn', () => {
     expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', expect.anything());
   });
 
+  it('ignores a second start while the first challenge is still open', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    let solve: (token: string) => void = () => {};
+    solveMock.mockReturnValueOnce(new Promise(resolve => (solve = resolve))).mockResolvedValueOnce('tok-2');
+    const { result } = renderHook(() => useStartOAuthSignIn(), { wrapper });
+    const first = result.current('/api/auth/google');
+    await vi.waitFor(() => expect(solveMock).toHaveBeenCalledTimes(1));
+    await result.current('/api/auth/google');
+    expect(solveMock).toHaveBeenCalledTimes(1);
+    solve('tok-1');
+    await first;
+    expect(location.href).toBe('/api/auth/google?turnstileToken=tok-1');
+    await result.current('/api/auth/github');
+    expect(solveMock).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects a cancelled challenge without reporting it or navigating', async () => {
     getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
     solveMock.mockRejectedValue(new TurnstileCancelledError());

@@ -13,7 +13,7 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AxiosError } from 'axios';
 import { useRouter, useSearch } from '@tanstack/react-router';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
 import { getTurnstileToken, TurnstileCancelledError, TurnstileError } from '@client/app/utils/turnstile';
@@ -170,12 +170,20 @@ export function oauthStartUrl(startUrl: string, redirectTo: string | null, turns
  */
 export function useStartOAuthSignIn() {
   const queryClient = useQueryClient();
+  // Synchronous: a double-clicked provider button must not start a second challenge while the first is open.
+  const startingRef = useRef(false);
   return async (startUrl: string): Promise<void> => {
-    const turnstileToken = isTurnstileOAuthProvider(oauthStartProvider(startUrl))
-      ? await solveTurnstileIfRequired(queryClient, TURNSTILE_ACTION_OAUTH_START)
-      : undefined;
-    const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
-    window.location.href = oauthStartUrl(startUrl, redirectTo, turnstileToken);
+    if (startingRef.current) return;
+    startingRef.current = true;
+    try {
+      const turnstileToken = isTurnstileOAuthProvider(oauthStartProvider(startUrl))
+        ? await solveTurnstileIfRequired(queryClient, TURNSTILE_ACTION_OAUTH_START)
+        : undefined;
+      const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
+      window.location.href = oauthStartUrl(startUrl, redirectTo, turnstileToken);
+    } finally {
+      startingRef.current = false;
+    }
   };
 }
 

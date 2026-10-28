@@ -814,6 +814,36 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
       vi.useRealTimers();
     }
   });
+
+  it('ignores a second Resend click while a resend is still in flight', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let finishResend: (value: { pendingToken: string }) => void = () => {};
+      mocks.sendOTC
+        .mockResolvedValueOnce({ pendingToken: 'ptok-1' })
+        .mockReturnValueOnce(new Promise(resolve => (finishResend = resolve)));
+      renderLogin();
+
+      await user.type(textboxIn('login-email-input'), 'someone@test.com');
+      await user.click(screen.getByTestId('login-continue-btn'));
+      await screen.findByTestId('login-resend-btn');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31000);
+      });
+      await user.dblClick(screen.getByTestId('login-resend-btn'));
+      expect(mocks.sendOTC).toHaveBeenCalledTimes(2);
+
+      await act(async () => finishResend({ pendingToken: 'ptok-2' }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31000);
+      });
+      await user.click(screen.getByTestId('login-resend-btn'));
+      expect(mocks.sendOTC).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('MultiStepLogin - second-factor handoff', () => {

@@ -60,6 +60,8 @@ export class TurnstileCancelledError extends Error {
 let scriptPromise: Promise<TurnstileApi> | undefined;
 let challengeCount = 0;
 let challengeInFlight: Promise<unknown> = Promise.resolve();
+/** Bumped on every Cancel, so challenges queued behind the cancelled one are dismissed too. */
+let cancelCount = 0;
 
 function loadTurnstile(): Promise<TurnstileApi> {
   if (window.turnstile) return Promise.resolve(window.turnstile);
@@ -193,11 +195,16 @@ function retryDelay(signal: AbortSignal): Promise<void> {
  * Solves a Turnstile challenge and resolves with a single-use token. The widget stays invisible
  * unless Cloudflare needs interaction, in which case it is shown in a card over a dimmed backdrop until solved.
  * Rejects with a TurnstileError once retries are spent, or a TurnstileCancelledError if the user cancels.
- * Concurrent calls run one at a time, since each card makes everything else on the page inert.
+ * Concurrent calls run one at a time, since each card makes everything else on the page inert, and a
+ * Cancel also dismisses any call queued behind it: the user declined the check, not just one card.
  */
 export async function getTurnstileToken(siteKey: string, action: string): Promise<string> {
   const turnstile = await loadTurnstileWithRetry();
-  const challenge = challengeInFlight.then(() => solveChallenge(turnstile, siteKey, action));
+  const cancelsBefore = cancelCount;
+  const challenge = challengeInFlight.then(() => {
+    if (cancelCount !== cancelsBefore) throw new TurnstileCancelledError();
+    return solveChallenge(turnstile, siteKey, action);
+  });
   challengeInFlight = challenge.catch(() => undefined);
   return challenge;
 }
@@ -305,7 +312,10 @@ async function solveChallenge(turnstile: TurnstileApi, siteKey: string, action: 
 
   // The backdrop blocks the page, so give the user a way out of a stuck challenge.
   const cancelling = new AbortController();
-  cancel.onclick = () => cancelling.abort();
+  cancel.onclick = () => {
+    cancelCount++;
+    cancelling.abort();
+  };
   const onKeyDown = (e: KeyboardEvent) => {
     if (interactive) handleKeydown(e);
   };

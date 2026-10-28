@@ -538,21 +538,26 @@ describe('getTurnstileToken', () => {
     await expect(second).resolves.toBe('tok-2');
   });
 
-  it('runs the next challenge after a cancelled one', async () => {
+  it('dismisses challenges queued behind a cancelled one but runs later ones', async () => {
     const solvers: RenderOptions[] = [];
     render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
       solvers.push(opts);
       return `widget-${solvers.length}`;
     });
     const first = getTurnstileToken('site', 'otc-send');
-    const second = getTurnstileToken('site', 'otc-send');
+    const queued = getTurnstileToken('site', 'otc-send');
     await vi.waitFor(() => expect(solvers).toHaveLength(1));
     solvers[0]['before-interactive-callback']();
     document.querySelector<HTMLButtonElement>('[data-testid="turnstile-challenge-cancel"]')!.click();
     await expect(first).rejects.toBeInstanceOf(TurnstileCancelledError);
+    await expect(queued).rejects.toBeInstanceOf(TurnstileCancelledError);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+
+    const later = getTurnstileToken('site', 'otc-send');
     await vi.waitFor(() => expect(solvers).toHaveLength(2));
     solvers[1].callback('tok-2');
-    await expect(second).resolves.toBe('tok-2');
+    await expect(later).resolves.toBe('tok-2');
   });
 });
 
