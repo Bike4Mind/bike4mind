@@ -20,7 +20,10 @@ export const ClaudePluginZipQuerySchema = z.object({
 export const ClaudeMarketplacePluginSchema = z.object({
   name: z.string(),
   description: z.string(),
-  /** The listing's approved version number; Claude Code offers an update when it changes. */
+  /**
+   * A listing's approved version number, or a bundle's content hash prefix; Claude Code offers an
+   * update when it changes (it compares for equality, not order).
+   */
   version: z.string(),
   source: z.object({
     source: z.literal('archive'),

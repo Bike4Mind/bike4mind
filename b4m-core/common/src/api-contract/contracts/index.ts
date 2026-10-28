@@ -76,7 +76,11 @@ import {
   updateAgentContract,
   deleteAgentContract,
 } from './agents.contract';
-import { getClaudeMarketplaceContract, getClaudePluginZipContract } from './skillMarket.contract';
+import {
+  getClaudeBundleZipContract,
+  getClaudeMarketplaceContract,
+  getClaudePluginZipContract,
+} from './skillMarket.contract';
 import {
   listSkillMarketListingsContract,
   getSkillMarketListingContract,
@@ -168,6 +172,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteAgentContract,
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
+  getClaudeBundleZipContract,
   listSkillMarketListingsContract,
   getSkillMarketListingContract,
   publishSkillMarketListingContract,
