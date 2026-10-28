@@ -130,6 +130,8 @@ export class ModelServerStore {
   private orphans: unknown[] = [];
   /** The file came from a newer Desktop; nothing is written back. */
   private readOnly = false;
+
+  private writing: Promise<void> = Promise.resolve();
   /** Decrypted secrets by server id; the only copy when encryption is unavailable. */
   private readonly secrets = new Map<string, string>();
 
@@ -302,9 +304,14 @@ export class ModelServerStore {
     return document;
   }
 
+  // Writes share one temp file, so overlapping ones would interleave and corrupt the list.
   private async persist(document: StoreDocument): Promise<void> {
     this.document = document;
-    await this.file.write(JSON.stringify({ ...document, servers: [...document.servers, ...this.orphans] }, null, 2));
+    const write = this.writing.then(() =>
+      this.file.write(JSON.stringify({ ...document, servers: [...document.servers, ...this.orphans] }, null, 2))
+    );
+    this.writing = write.catch(() => undefined);
+    await write;
   }
 
   private assertWritable(): void {

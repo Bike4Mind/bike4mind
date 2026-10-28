@@ -220,4 +220,22 @@ describe('credentialHeaders', () => {
     expect(credentialHeaders({ type: 'header', name: 'X-Key', value: 'a\tb' })).toEqual({ 'x-key': 'a\tb' });
     expect(() => credentialHeaders({ type: 'bearer', token: '   ' })).toThrow(/Enter the token/);
   });
+
+  it('writes overlapping model-list updates one after another', async () => {
+    let active = 0;
+    let overlapped = false;
+    const file: StoreFile = {
+      read: () => Promise.resolve(null),
+      write: async () => {
+        overlapped ||= ++active > 1;
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active--;
+      },
+    };
+    const store = new ModelServerStore(cipher(), file, logger);
+    const one = await store.add(base, { type: 'none' });
+    const two = await store.add({ ...base, name: 'second' }, { type: 'none' });
+    await Promise.all([store.setModels(one.id, ['a', 'b']), store.setModels(two.id, ['c'])]);
+    expect(overlapped).toBe(false);
+  });
 });
