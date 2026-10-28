@@ -222,7 +222,7 @@ describe('ChatService session_send', () => {
         await service.send(target.id, 'a long task');
         await awaitStream(0);
         const origin = { fromSessionId: other.id, fromTitle: 'Other' };
-        queue.enqueueRelay(target.id, 'deep relay', { ...origin, hops: 3 });
+        queue.enqueueRelay(target.id, 'deep relay', { ...origin, hops: 5 });
         if (boundary === 'same boundary') queue.enqueueRelay(target.id, 'shallow relay', { ...origin, hops: 1 });
         askForTool(streams[0], 'step-1');
         await awaitStream(1);
@@ -236,7 +236,7 @@ describe('ChatService session_send', () => {
         await vi.waitUntil(() => settledCalls('session_send').length === 1);
         expect(settledCalls('session_send')[0]).toMatchObject({
           status: 'error',
-          error: expect.stringMatching(/3 hops from the user/),
+          error: expect.stringMatching(/5 hops from the user/),
         });
         expect(queue.list(other.id)).toEqual([]);
         expect((await store.get(other.id))?.messages).toEqual([]);
@@ -250,7 +250,7 @@ describe('ChatService session_send', () => {
 
       await service.send(target.id, 'a long task');
       await awaitStream(0);
-      queue.enqueueRelay(target.id, 'pass this on', { fromSessionId: sender.id, fromTitle: 'Sender', hops: 3 });
+      queue.enqueueRelay(target.id, 'pass this on', { fromSessionId: sender.id, fromTitle: 'Sender', hops: 5 });
       askForTool(streams[0], 'step-1');
 
       await awaitStream(1);
@@ -259,7 +259,7 @@ describe('ChatService session_send', () => {
 
       await vi.waitUntil(() => settledCalls('session_send').length === 1, { timeout: 5000, interval: 5 });
       expect(settledCalls('session_send')[0]?.status).toBe('error');
-      expect(settledCalls('session_send')[0]?.error).toMatch(/3 hops from the user/);
+      expect(settledCalls('session_send')[0]?.error).toMatch(/5 hops from the user/);
       expect(queue.list(other.id)).toHaveLength(0);
       expect((await store.get(other.id))?.messages ?? []).toHaveLength(0);
     });
