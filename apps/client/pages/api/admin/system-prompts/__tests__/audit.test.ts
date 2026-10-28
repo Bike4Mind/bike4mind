@@ -73,7 +73,7 @@ beforeEach(() => {
 describe('system prompt admin audit', () => {
   it('POST index records created', async () => {
     h.repo.findOne.mockResolvedValue(null);
-    h.repo.create.mockResolvedValue({ promptId: 'p1', category: 'system', enabled: true });
+    h.repo.create.mockResolvedValue({ promptId: 'p1', category: 'system', enabled: true, version: 1 });
     const res = await call(indexHandler, 'POST', {
       promptId: 'p1',
       name: 'Prompt One',
