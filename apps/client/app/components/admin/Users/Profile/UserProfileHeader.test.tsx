@@ -144,4 +144,22 @@ describe('UserProfileHeader', () => {
     expect(await screen.findByTestId('user-profile-menu-shadowTier-item')).toHaveTextContent('Remove limited tier');
     expect(screen.getByTestId('user-profile-shadow-tier-chip')).toHaveTextContent('Limited tier');
   });
+
+  it('marks the chip not in effect for an exempt shadowed user', () => {
+    const throttle = { tier: 'shadow', source: 'admin', reason: 'abuse', changedAt: new Date('2026-10-01') } as const;
+    renderHeader(buildProfile({ throttle, isAdmin: true }));
+    expect(screen.getByTestId('user-profile-shadow-tier-chip')).toHaveTextContent('Limited tier (not in effect)');
+  });
+
+  it('marks the chip not in effect for a Developer-tagged shadowed user', () => {
+    const throttle = { tier: 'shadow', source: 'admin', reason: 'abuse', changedAt: new Date('2026-10-01') } as const;
+    renderHeader(buildProfile({ throttle, tags: ['Developer'] }));
+    expect(screen.getByTestId('user-profile-shadow-tier-chip')).toHaveTextContent('Limited tier (not in effect)');
+  });
+
+  it('shows the plain chip for a normal shadowed user', () => {
+    const throttle = { tier: 'shadow', source: 'admin', reason: 'abuse', changedAt: new Date('2026-10-01') } as const;
+    renderHeader(buildProfile({ throttle }));
+    expect(screen.getByTestId('user-profile-shadow-tier-chip')).toHaveTextContent(/^Limited tier$/);
+  });
 });

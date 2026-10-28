@@ -154,6 +154,24 @@ describe('account dialogs', () => {
       );
     });
 
+    it('flags the tier as not in effect for a Developer-tagged user only', () => {
+      renderDialog(
+        (user, close) => <ShadowTierDialog user={user} onClose={close} />,
+        buildProfile({ tags: ['Developer'] })
+      );
+      expect(screen.getByTestId('profile-shadow-tier-exempt')).toHaveTextContent('Not in effect');
+    });
+
+    it('flags the tier as not in effect for an admin', () => {
+      renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />, buildProfile({ isAdmin: true }));
+      expect(screen.getByTestId('profile-shadow-tier-exempt')).toBeInTheDocument();
+    });
+
+    it('does not flag a normal user', () => {
+      renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />);
+      expect(screen.queryByTestId('profile-shadow-tier-exempt')).not.toBeInTheDocument();
+    });
+
     it('shows state and signals, and removes the tier', async () => {
       renderDialog((user, close) => <ShadowTierDialog user={user} onClose={close} />, shadowed);
 

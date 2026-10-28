@@ -5,6 +5,7 @@ import { EntityHeader, StatusChip } from '../../shared';
 import type { ProfileAction } from './actions/profileActions';
 import {
   LEVEL_LABELS,
+  isShadowTierExempt,
   accountStatus,
   displayName,
   initials,
@@ -78,7 +79,11 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
         <>
           <StatusChip tone={status.tone} label={status.label} dot data-testid="user-profile-status-chip" />
           {user.throttle?.tier === 'shadow' && (
-            <StatusChip tone="neutral" label="Limited tier" data-testid="user-profile-shadow-tier-chip" />
+            <StatusChip
+              tone="neutral"
+              label={isShadowTierExempt(user) ? 'Limited tier (not in effect)' : 'Limited tier'}
+              data-testid="user-profile-shadow-tier-chip"
+            />
           )}
           {level && <StatusChip tone="info" label={level} data-testid="user-profile-level-chip" />}
           {org && <StatusChip tone="neutral" label={org} data-testid="user-profile-org-chip" />}
