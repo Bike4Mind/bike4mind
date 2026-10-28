@@ -120,6 +120,19 @@ describe('useStartOAuthSignIn', () => {
     expect(location.href).toBe('/api/auth/google?turnstileToken=tok');
   });
 
+  it('allows another start once the page is restored from the back/forward cache', async () => {
+    const { result } = renderHook(() => useStartOAuthSignIn(), { wrapper });
+    await result.current('/api/auth/google');
+    expect(location.href).toBe('/api/auth/google');
+    location.href = '';
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+    await result.current('/api/auth/github');
+    expect(location.href).toBe('');
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    await result.current('/api/auth/github');
+    expect(location.href).toBe('/api/auth/github');
+  });
+
   it('rejects a cancelled challenge without reporting it or navigating', async () => {
     getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
     solveMock.mockRejectedValue(new TurnstileCancelledError());

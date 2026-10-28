@@ -172,6 +172,14 @@ export function useStartOAuthSignIn() {
   const queryClient = useQueryClient();
   // Synchronous: a double-clicked provider button must not start a second challenge while the first is open.
   const startingRef = useRef(false);
+  // Back from the provider can restore this page from bfcache with the guard still set.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) startingRef.current = false;
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
   return async (startUrl: string): Promise<void> => {
     if (startingRef.current) return;
     startingRef.current = true;
