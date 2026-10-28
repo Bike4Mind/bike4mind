@@ -163,7 +163,7 @@ const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 const licenseSet = (ids: readonly string[]) => [...new Set(ids.map(id => id.toLowerCase()))].sort().join(',');
 
 /** True while the registry serves the reviewed weights and exactly the pinned other layers, nothing more. */
-function servesReviewed(live: OllamaRegistryLayers, reviewed: HubBuild): boolean {
+export function servesReviewed(live: OllamaRegistryLayers, reviewed: HubBuild): boolean {
   const pins = pinsOf(reviewed);
   if (!pins || !live.model || live.model !== modelDigest(reviewed)) return false;
   const expected = new Map<string, string>();
@@ -180,13 +180,17 @@ function servesReviewed(live: OllamaRegistryLayers, reviewed: HubBuild): boolean
 }
 
 /**
- * True when what Ollama installed is the reviewed weights, template, license and num_ctx; params beyond num_ctx
- * are not visible through /api/show, so the registry check before the pull covers them.
+ * True when what Ollama installed is the reviewed weights, projector, draft, template, license and num_ctx.
+ * Other params are covered by the registry check before the pull.
  */
-function installedReviewed(inspection: ModelInspection, reviewed: HubBuild): boolean {
+export function installedReviewed(inspection: ModelInspection, reviewed: HubBuild): boolean {
   const pins = pinsOf(reviewed);
   const contents = inspection.contents;
   if (!pins || !contents || contents.modelBlob !== modelDigest(reviewed)) return false;
+  const matchesBlob = (actual: (string | null)[] | undefined, expected: string | null) =>
+    expected ? actual?.length === 1 && actual[0] === expected : (actual?.length ?? 0) === 0;
+  if (!matchesBlob(contents.projectorBlobs, pins.projector) || !matchesBlob(contents.draftBlobs, pins.draft))
+    return false;
   // A library build with no template layer chats through Ollama's renderer, so /api/show has no template to compare.
   const template = pins.installedTemplate ?? pins.template;
   if (template && (contents.template === null || sha256(contents.template) !== template)) return false;
@@ -216,7 +220,7 @@ function pause(ms: number, signal: AbortSignal): Promise<boolean> {
 const versionParts = (text: string) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(text.trim())?.slice(1).map(Number);
 
 /** Why this Ollama cannot download the build; one with a minimum is blocked while Ollama reports no version. */
-function ollamaBlocked(build: HubBuild, version: string | null): string | null {
+export function ollamaBlocked(build: HubBuild, version: string | null): string | null {
   const minimum = build.runtimeMin?.ollama;
   const want = minimum && versionParts(minimum);
   if (!minimum || !want) return null;
@@ -536,6 +540,7 @@ export class ModelHubService {
             reviewed.hf &&
             sameRepo(reviewed.hf.repo, detail.id) &&
             weights?.path.toLowerCase() === file?.path.toLowerCase() &&
+            weights.sha256 === file?.sha256 &&
             weights.sizeBytes === file?.sizeBytes
           )
             return reviewedFit(entry, reviewed, sizing);
@@ -647,6 +652,11 @@ export class ModelHubService {
     const ref = libraryOf(build)?.ref ?? this.#hfRef(entryId, build);
     const hadTag = this.#unverified.get(ref.toLowerCase()) ?? null;
     const error = await this.#checkInstalled(build, ref, hadTag, new AbortController().signal);
+    for (const [key, entry] of this.#pulls) {
+      if (entry.view.phase !== 'failed' || entry.view.ref?.toLowerCase() !== ref.toLowerCase()) continue;
+      if (error) this.#fail(key, entry, error);
+      else this.#drop(key, entry);
+    }
     this.#deps.onInstalledChanged();
     return error ? { ok: false, error } : { ok: true };
   }
@@ -786,8 +796,15 @@ export class ModelHubService {
         };
       const blocked = blockedReason(detail, live);
       if (blocked) return { ok: false, error: hubError('cannot-pull', blocked) };
-      const refusal =
-        (await this.#checkLicenses(entry, detail)) ?? (await this.#checkLayers(reviewed, reviewed.quant.label));
+      const licenses = await this.#checkLicenses(entry, detail);
+      if (licenses) return { ok: false, error: licenses };
+      const ref = await this.#deps.hub.verifyOllamaRef(detail, live);
+      if (!ref)
+        return {
+          ok: false,
+          error: hubError('unverified', 'Hugging Face could not confirm Ollama would get this exact file.'),
+        };
+      const refusal = await this.#checkLayers(reviewed, ref.slice(ref.lastIndexOf(':') + 1));
       if (refusal) return { ok: false, error: refusal };
       const model = toView(this.#deps.hub.endpoint, detail, this.#buildFit(detail, sizing));
       const build = model.builds.find(candidate => candidate.id === live.id);
@@ -928,7 +945,7 @@ export class ModelHubService {
     if (curated && !libraryOf(curated.build)) this.#pulledRefs.set(`${curated.entry.id}\0${curated.build.id}`, ref);
     const installed = curated ? await this.#checkInstalled(curated.build, ref, hadTag, controller.signal) : null;
     this.#deps.onInstalledChanged();
-    if (installed) return refuse(installed);
+    if (installed) return this.#fail(key, entry, installed);
     this.#drop(key, entry);
     return { ok: true, ref };
   }
@@ -1029,6 +1046,10 @@ export class ModelHubService {
       await this.#deps.runtime.remove(name);
     } catch (error) {
       return { ok: false, error: toModelHubError(error) };
+    }
+    this.#unverified.delete(name.toLowerCase());
+    for (const [key, entry] of this.#pulls) {
+      if (entry.view.phase === 'failed' && entry.view.ref?.toLowerCase() === name.toLowerCase()) this.#drop(key, entry);
     }
     this.#deps.onInstalledChanged();
     return { ok: true };
