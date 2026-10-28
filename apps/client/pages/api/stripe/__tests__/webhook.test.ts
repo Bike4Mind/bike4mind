@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   findByPaymentIntentId: vi.fn(),
   updateTransactionStatus: vi.fn(),
   emitBillingEvent: vi.fn(),
+  subtractCredits: vi.fn(),
+  flagDisputePending: vi.fn(),
+  clawbackCreditLotsByStripeRef: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -41,10 +44,17 @@ vi.mock('@bike4mind/database', () => ({
     updateTransactionStatus: mocks.updateTransactionStatus,
   },
   organizationRepository: {},
+  realtimeConnectionRepository: {},
   userRepository: { findById: mocks.findUserById, findByStripeCustomerId: mocks.findUserByStripeCustomerId },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
-vi.mock('@bike4mind/services', () => ({ creditService: {}, userService: {} }));
+vi.mock('@bike4mind/services', () => ({
+  creditService: {
+    subtractCredits: mocks.subtractCredits,
+    clawbackCreditLotsByStripeRef: mocks.clawbackCreditLotsByStripeRef,
+  },
+  userService: { flagDisputePending: mocks.flagDisputePending },
+}));
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     updateByStripeSubscriptionId: mocks.updateByStripeSubscriptionId,
@@ -455,6 +465,8 @@ describe('charge.dispute.created - inviter reward', () => {
   });
 
   it('reverses the inviter reward as a full refund before the payer clawback runs', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: false });
     const res = await deliver(dispute());
 
     expect(res._getStatusCode()).toBe(200);
@@ -464,6 +476,8 @@ describe('charge.dispute.created - inviter reward', () => {
       amountCaptured: 3000,
       reason: 'disputed',
     });
+    expect(mocks.subtractCredits).toHaveBeenCalledOnce();
+    expect(reverseReward.mock.invocationCallOrder[0]).toBeLessThan(mocks.subtractCredits.mock.invocationCallOrder[0]);
   });
 
   it('leaves the reward alone when the dispute has no payment intent', async () => {
