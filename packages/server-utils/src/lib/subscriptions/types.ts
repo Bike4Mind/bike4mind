@@ -163,6 +163,19 @@ export interface ISubscription {
   paymentFailureNotifiedInvoiceIds?: string[];
   /** When the owner was emailed that dunning cancelled the subscription; the once-only claim. */
   nonPaymentCancelNotifiedAt?: Date;
+  /**
+   * Mirror of the Stripe subscription, written by every Stripe write path through
+   * `stripeMirrorFields` (./stripeMirror.ts). Absent on admin grants and on rows not yet
+   * synced or backfilled. `unitAmount` is per unit in minor units; null when the price
+   * has no flat unit amount (tiered or decimal pricing).
+   */
+  unitAmount?: number | null;
+  currency?: string;
+  interval?: Stripe.Price.Recurring.Interval | null;
+  cancelAtPeriodEnd?: boolean;
+  trialEndsAt?: Date | null;
+  stripeCustomerId?: string;
+  lastSyncedAt?: Date;
 }
 
 /**

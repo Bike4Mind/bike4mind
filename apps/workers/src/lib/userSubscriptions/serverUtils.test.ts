@@ -94,17 +94,32 @@ const buildSubscription = (): Stripe.Subscription =>
   ({
     id: 'sub_stripe_xyz',
     status: 'active',
+    customer: 'cus_test',
+    currency: 'usd',
+    cancel_at_period_end: false,
+    trial_end: null,
     items: {
       data: [
         {
           quantity: 4,
-          price: { id: 'price_org' },
+          price: { id: 'price_org', unit_amount: 1500, currency: 'usd', recurring: { interval: 'month' } },
           current_period_start: 1700000000,
           current_period_end: 1702592000,
         },
       ],
     },
   }) as unknown as Stripe.Subscription;
+
+// The mirror fields buildSubscription projects to (stripeMirrorFields).
+const orgMirror = {
+  unitAmount: 1500,
+  currency: 'usd',
+  interval: 'month',
+  cancelAtPeriodEnd: false,
+  trialEndsAt: null,
+  stripeCustomerId: 'cus_test',
+  lastSyncedAt: expect.any(Date),
+};
 
 describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
   beforeEach(() => {
@@ -153,6 +168,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
         priceId: 'price_org',
         status: 'active',
         quantity: 4,
+        ...orgMirror,
       })
     );
     expect(subscriptionRepository.create).not.toHaveBeenCalled();
@@ -212,6 +228,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
         subscriptionId: 'sub_stripe_xyz',
         source: SubscriptionSource.Stripe,
         quantity: 4,
+        ...orgMirror,
       })
     );
     expect(subscriptionRepository.update).not.toHaveBeenCalled();
@@ -604,10 +621,14 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
     ({
       id: 'sub_user_xyz',
       status: 'active',
+      customer: 'cus_user',
+      currency: 'usd',
+      cancel_at_period_end: false,
+      trial_end: 1700604800,
       items: {
         data: [
           {
-            price: { id: priceId },
+            price: { id: priceId, unit_amount: 2000, currency: 'usd', recurring: { interval: 'year' } },
             current_period_start: 1700000000,
             current_period_end: 1702592000,
           },
@@ -730,6 +751,13 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
         subscriptionId: 'sub_user_xyz',
         priceId: 'price_test_professional',
         source: SubscriptionSource.Stripe,
+        unitAmount: 2000,
+        currency: 'usd',
+        interval: 'year',
+        cancelAtPeriodEnd: false,
+        trialEndsAt: new Date(1700604800 * 1000),
+        stripeCustomerId: 'cus_user',
+        lastSyncedAt: expect.any(Date),
       })
     );
     expect(creditService.addCredits).toHaveBeenCalledWith(
