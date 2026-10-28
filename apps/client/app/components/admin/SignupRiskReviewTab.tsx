@@ -54,7 +54,7 @@ const SignupTime: React.FC<{ iso: string; now: number }> = ({ iso, now }) => {
   const date = new Date(iso);
   return (
     <Tooltip title={date.toISOString()}>
-      <Typography component="time" dateTime={date.toISOString()} tabIndex={0} level="body-sm">
+      <Typography component="time" dateTime={date.toISOString()} tabIndex={0} level="body-sm" noWrap>
         {relativeTime(date, now)}
       </Typography>
     </Tooltip>
@@ -166,8 +166,8 @@ export const SignupRiskReviewTab: React.FC = () => {
         const showUsername = row.email && row.username && row.username !== row.email.split('@')[0];
         return (
           <Tooltip title={showUsername ? `${primary} (${row.username})` : primary}>
-            <Stack tabIndex={0} sx={{ minWidth: '14rem', maxWidth: '22rem' }}>
-              <Typography level="body-sm" noWrap>
+            <Stack tabIndex={0} sx={{ minWidth: 0 }}>
+              <Typography level="body-sm" noWrap sx={{ color: 'admin.ink' }}>
                 {primary}
               </Typography>
               {showUsername && (
@@ -184,7 +184,14 @@ export const SignupRiskReviewTab: React.FC = () => {
     {
       id: 'domain',
       label: 'Domain',
-      render: row => row.domain ?? <Typography sx={{ color: 'admin.inkMuted' }}>-</Typography>,
+      render: row =>
+        row.domain ? (
+          <Typography level="body-sm" noWrap title={row.domain} sx={{ color: 'admin.ink' }}>
+            {row.domain}
+          </Typography>
+        ) : (
+          <Typography sx={{ color: 'admin.inkMuted' }}>-</Typography>
+        ),
       sortValue: row => row.domain ?? '',
     },
     {
@@ -201,6 +208,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       ),
       sortValue: row => row.score,
       numeric: true,
+      width: '8.5rem',
     },
     { id: 'signals', label: 'Signals', render: row => <Signals row={row} /> },
     {
@@ -208,6 +216,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       label: 'Signed up',
       render: row => <SignupTime iso={row.createdAt} now={now} />,
       sortValue: row => row.createdAt,
+      width: '8rem',
     },
     {
       id: 'creditsSpent',
@@ -215,6 +224,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       render: row => row.creditsSpent.toLocaleString(),
       sortValue: row => row.creditsSpent,
       numeric: true,
+      width: '7rem',
     },
     {
       id: 'apiKeysCreated',
@@ -222,37 +232,35 @@ export const SignupRiskReviewTab: React.FC = () => {
       render: row => row.apiKeysCreated.toLocaleString(),
       sortValue: row => row.apiKeysCreated,
       numeric: true,
-    },
-    {
-      id: 'actions',
-      label: 'Actions',
-      render: row => (
-        <Dropdown>
-          <MenuButton
-            slots={{ root: IconButton }}
-            slotProps={{
-              root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${row.email ?? row.userId}` },
-            }}
-            data-testid={`signup-risk-actions-${row.userId}`}
-          >
-            <MoreHorizontal size={16} />
-          </MenuButton>
-          <Menu placement="bottom-end">
-            <MenuItem data-testid={`signup-risk-approve-${row.userId}`} onClick={() => setApproving([row])}>
-              Approve account
-            </MenuItem>
-            <MenuItem
-              color="danger"
-              data-testid={`signup-risk-suspend-${row.userId}`}
-              onClick={() => setSuspending([row.userId])}
-            >
-              Suspend account
-            </MenuItem>
-          </Menu>
-        </Dropdown>
-      ),
+      width: '5.5rem',
     },
   ];
+
+  const rowActions = (row: SignupRiskReviewRow) => (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: { variant: 'plain', size: 'sm', 'aria-label': `Actions for ${row.email ?? row.userId}` },
+        }}
+        data-testid={`signup-risk-actions-${row.userId}`}
+      >
+        <MoreHorizontal size={16} />
+      </MenuButton>
+      <Menu placement="bottom-end">
+        <MenuItem data-testid={`signup-risk-approve-${row.userId}`} onClick={() => setApproving([row])}>
+          Approve account
+        </MenuItem>
+        <MenuItem
+          color="danger"
+          data-testid={`signup-risk-suspend-${row.userId}`}
+          onClick={() => setSuspending([row.userId])}
+        >
+          Suspend account
+        </MenuItem>
+      </Menu>
+    </Dropdown>
+  );
 
   const filtered = needle !== '' || Object.values(view.filters).some(Boolean);
 
@@ -305,6 +313,9 @@ export const SignupRiskReviewTab: React.FC = () => {
         error={reviews.error ? "Couldn't load the review queue." : undefined}
         onRetry={() => void reviews.refetch()}
         onRowActivate={row => void openProfile(row.userId)}
+        rowActions={rowActions}
+        // The fixed-width columns plus room for account, domain and signals; narrower screens scroll sideways.
+        minWidth="72rem"
         selection={selection}
         onSelectionChange={setSelection}
         empty={
