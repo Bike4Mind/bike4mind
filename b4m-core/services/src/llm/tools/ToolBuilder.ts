@@ -43,7 +43,7 @@ import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
-import { buildSharedTools } from '../sharedToolBuilder';
+import { buildSharedTools, type ToolBuilderDeps } from '../sharedToolBuilder';
 import { UNATTRIBUTED_TOOL_CHARGE } from '../settleToolCredits';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
@@ -450,6 +450,8 @@ export interface BuildToolsArgs {
   };
   /** See `ToolBuilderDeps.subagentModels`. */
   subagentModels?: ModelInfo[];
+  /** See `ToolBuilderDeps.substituteIdentity`. */
+  substituteIdentity?: ToolBuilderDeps['substituteIdentity'];
   agentOnlyMcpServers?: string[];
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
@@ -952,6 +954,7 @@ export class ToolBuilder {
     organization,
     precomputed,
     subagentModels,
+    substituteIdentity,
     agentOnlyMcpServers = [],
     apiKeyTable,
     getAbortSignal,
@@ -993,6 +996,7 @@ export class ToolBuilder {
         servingModel,
         precomputed,
         subagentModels,
+        substituteIdentity,
         apiKeyTable,
         thinking,
         thinkingVisibility,

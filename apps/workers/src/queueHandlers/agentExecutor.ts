@@ -1916,6 +1916,9 @@ async function processExecution(
         models,
       },
       subagentModels: shadowSettings && runModelInfo ? [runModelInfo] : runnableModels,
+      substituteIdentity: shadowModelInfo
+        ? { substituteId: shadowModelInfo.id, identityId: execution.model, displayName: modelInfo?.name }
+        : undefined,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // The delegation tools are injected as OBJECTS keyed on these two deps, never on
       // `enabledTools` names (issue #1829), so a profile that denies them - the optimizer
@@ -4072,6 +4075,9 @@ async function processSubagentDispatch(
       model: runModel,
       precomputed: { adminSettingsEnforceCredits: false, models },
       subagentModels: childRunnableModels,
+      substituteIdentity: shadowModelInfo
+        ? { substituteId: shadowModelInfo.id, identityId: childModel, displayName: modelInfo?.name }
+        : undefined,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // Same dependency gate as the top-level path: the delegate tool is injected as an
       // object keyed on this dep, so a CHILD whose own record denies delegate_to_agent

@@ -24,6 +24,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import type { ServerAgentStore } from './agents/ServerAgentStore';
 import type {
+  ServerOrchestratorDeps,
   ServerSubagentTracker,
   SubagentHandoffSignal,
   SubagentToolPermissions,
@@ -114,6 +115,8 @@ export interface ToolBuilderDeps {
    * other model falls back to the parent's (see `ServerSubagentOrchestrator.resolveAgentRuntime`).
    */
   subagentModels?: ModelInfo[];
+  /** Set on a tier-substituted run so in-process subagents keep the requested model's identity; see `ServerOrchestratorDeps.substituteIdentity`. */
+  substituteIdentity?: ServerOrchestratorDeps['substituteIdentity'];
   apiKeyTable?: ApiKeyTable;
   thinking?: { enabled: boolean; budget_tokens: number };
   /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
@@ -646,6 +649,7 @@ export function buildSharedTools(
     getSignal: getAbortSignal,
     onCredits: callbacks.onSubagentCredits,
     availableModels: subagentModels,
+    substituteIdentity: deps.substituteIdentity,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)
       : undefined,
@@ -679,6 +683,7 @@ export function buildSharedTools(
       parentTools,
       getSignal: getAbortSignal,
       availableModels: subagentModels,
+      substituteIdentity: deps.substituteIdentity,
       onCredits: callbacks.onSubagentCredits,
       onStatusUpdate: callbacks.onSubagentStatusUpdate
         ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)

@@ -3580,6 +3580,13 @@ export class ChatCompletionProcess {
           models,
         },
         subagentModels,
+        substituteIdentity: this.shadowSubstitution
+          ? {
+              substituteId: this.shadowSubstitution.actual.id,
+              identityId: this.shadowSubstitution.requested.id,
+              displayName: this.shadowSubstitution.requested.name,
+            }
+          : undefined,
         agentOnlyMcpServers,
         apiKeyTable,
         getAbortSignal: () => abortSignalHolder.signal,

@@ -1103,6 +1103,30 @@ describe('ChatCompletionProcess', () => {
         expect(args?.config?.deep_research?.model).toBe(requested.id);
         expect(args?.config?.deep_research?.apiKeys).toBeUndefined();
         expect(args?.subagentModels?.map(model => model.id)).toEqual([requested.id]);
+        expect(args?.substituteIdentity).toBeUndefined();
+      } finally {
+        buildTools.mockRestore();
+      }
+    });
+
+    it('hands delegated subagents the requested identity on a substituted turn', async () => {
+      const { body } = wireRestrictedTurn();
+      const requested = { ...((await mockedGetAvailableModels()) as unknown as ModelInfo[])[0], supportsTools: true };
+      mockedGetAvailableModels.mockResolvedValue([requested, { ...cheapModel, supportsTools: true }] as never);
+      restrict();
+      mockSession.agentIds = ['some-agent-id'];
+      const buildTools = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildTools.mockClear();
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        const args = buildTools.mock.calls[0]?.[0];
+        expect(args?.subagentModels?.map(model => model.id)).toEqual(['cheap-model']);
+        expect(args?.substituteIdentity).toEqual({
+          substituteId: 'cheap-model',
+          identityId: requested.id,
+          displayName: requested.name,
+        });
       } finally {
         buildTools.mockRestore();
       }
