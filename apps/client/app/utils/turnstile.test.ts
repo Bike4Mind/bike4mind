@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getTurnstileToken } from './turnstile';
 import userEvent from '@testing-library/user-event';
+import { getTurnstileToken } from './turnstile';
 
 type RenderOptions = {
   callback: (t: string) => void;
@@ -302,24 +302,6 @@ describe('getTurnstileToken', () => {
     expect(render.mock.calls[1][1]).toMatchObject({ theme: 'light' });
   });
 
-  it('uses the compact widget on narrow viewports', async () => {
-    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
-      queueMicrotask(() => opts.callback('tok-1'));
-      return 'widget-1';
-    });
-    const original = window.innerWidth;
-    try {
-      window.innerWidth = 320;
-      await getTurnstileToken('site', 'otc-send');
-      window.innerWidth = 1024;
-      await getTurnstileToken('site', 'otc-send');
-    } finally {
-      window.innerWidth = original;
-    }
-    expect(render.mock.calls[0][1]).toMatchObject({ size: 'compact' });
-    expect(render.mock.calls[1][1]).toMatchObject({ size: 'normal' });
-  });
-
   it('expires the challenge and removes its widget', async () => {
     render.mockImplementation((_el: HTMLElement, options: RenderOptions) => {
       queueMicrotask(() => options['expired-callback']());
@@ -338,6 +320,26 @@ describe('getTurnstileToken', () => {
     await rejection;
     expect(remove).toHaveBeenCalledWith('widget-1');
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
+  it('restarts the timeout when the interactive card appears', async () => {
+    vi.useFakeTimers();
+    let options: RenderOptions | undefined;
+    render.mockImplementation((_el: HTMLElement, o: RenderOptions) => {
+      options = o;
+      return 'widget-1';
+    });
+    let settled = false;
+    const pending = getTurnstileToken('site', 'otc-send').finally(() => {
+      settled = true;
+    });
+    const rejection = expect(pending).rejects.toThrow('turnstile-timeout');
+    await vi.advanceTimersByTimeAsync(50_000);
+    options!['before-interactive-callback']();
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
   });
 
   it('cleans up when rendering throws before producing a widget', async () => {

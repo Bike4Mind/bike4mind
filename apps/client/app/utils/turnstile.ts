@@ -26,6 +26,7 @@ declare global {
 }
 
 let scriptPromise: Promise<TurnstileApi> | undefined;
+let challengeCount = 0;
 
 function loadTurnstile(): Promise<TurnstileApi> {
   if (window.turnstile) return Promise.resolve(window.turnstile);
@@ -67,11 +68,11 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
   const overlay = document.createElement('div');
   overlay.setAttribute('data-testid', 'turnstile-challenge-overlay');
   overlay.style.cssText =
-    'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:2000;pointer-events:none';
+    'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:10001;pointer-events:none';
   const card = document.createElement('div');
   card.setAttribute('data-testid', 'turnstile-challenge-card');
   const message = document.createElement('p');
-  message.id = 'turnstile-challenge-message';
+  message.id = `turnstile-challenge-message-${++challengeCount}`;
   message.textContent = 'Quick security check - confirm you are human to continue.';
   message.style.cssText = 'display:none;margin:0 0 16px;font:14px/1.4 system-ui,sans-serif';
   const container = document.createElement('div');
@@ -144,12 +145,16 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
       focusBeforeWidget();
     }
   };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let armTimeout = () => {};
   const showChrome = () => {
     if (interactive || finished) return;
     interactive = true;
+    // Give the user the full window to solve the card, not what is left after the invisible attempt.
+    armTimeout();
     overlay.style.background = 'rgba(0,0,0,0.45)';
     overlay.style.pointerEvents = 'auto';
-    card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box;max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);overflow:auto;text-align:center`;
+    card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);overflow:auto;text-align:center`;
     message.style.display = 'block';
     cancel.style.display = 'block';
     card.setAttribute('role', 'dialog');
@@ -165,10 +170,13 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
   };
 
   let widgetId: string | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<string>((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('turnstile-timeout')), CHALLENGE_TIMEOUT_MS);
+      armTimeout = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => reject(new Error('turnstile-timeout')), CHALLENGE_TIMEOUT_MS);
+      };
+      armTimeout();
       const settle = (fn: () => void) => {
         clearTimeout(timer);
         fn();
@@ -204,7 +212,7 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
       document.removeEventListener('focusin', containFocus);
       overlay.remove();
       for (const el of inertedByUs) el.removeAttribute('inert');
-      if (inertedByUs.length) previouslyFocused?.focus();
+      if (interactive) previouslyFocused?.focus();
     }
   }
 }
