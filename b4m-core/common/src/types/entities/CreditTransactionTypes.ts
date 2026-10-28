@@ -109,6 +109,7 @@ export const GenericDeductReasons = [
   'optihashi_cost_chargeup',
   'credit_expiry',
   'abuse_clawback',
+  'referral_reward_takeback',
 ] as const;
 
 /**
