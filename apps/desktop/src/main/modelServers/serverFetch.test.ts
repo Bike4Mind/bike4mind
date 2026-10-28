@@ -169,6 +169,25 @@ describe('createServerFetch', () => {
     expect(JSON.stringify({ message: error.message, cause: String(error.cause) })).not.toContain(TOKEN);
   });
 
+  it('redacts the credential from an error body and status text the server echoes back', async () => {
+    const target = await serve((req, res) => {
+      const value = String(req.headers.authorization ?? req.headers['x-api-key']);
+      res.writeHead(req.url === '/401' ? 401 : 500, `Rejected ${value}`, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: `bad credential ${value}, token ${value.replace('Bearer ', '')}` }));
+    });
+    const bearer = createServerFetch(endpoint(target.origin));
+    const rejected = await bearer(`${target.origin}/401`);
+    expect(rejected.status).toBe(401);
+    expect(rejected.statusText).toBe('Rejected [redacted]');
+    expect(await rejected.json()).toEqual({ error: 'bad credential [redacted], token [redacted]' });
+
+    const header = createServerFetch(endpoint(target.origin, { 'x-api-key': 'k/ey"1' }));
+    const failed = await header(`${target.origin}/500`);
+    expect(failed.status).toBe(500);
+    const text = await failed.text();
+    expect(text).toBe(JSON.stringify({ error: 'bad credential [redacted], token [redacted]' }));
+  });
+
   it('reads the credential per request, so a change applies at once', async () => {
     const target = await serve(ok);
     let token = 'first';

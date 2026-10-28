@@ -87,7 +87,7 @@ function capturedFile(out: Outbound, saved: string | null): StoreFile & { conten
   };
 }
 
-type Mode = 'ok' | 'reject' | 'error' | 'hang';
+type Mode = 'ok' | 'reject' | 'error' | 'hang' | 'echo-401' | 'echo-500';
 
 interface Seen {
   method: string;
@@ -114,6 +114,14 @@ async function fakeServer(kind: ModelServerKind) {
       };
       if (state.mode === 'reject') return send(401, { error: 'unauthorized' });
       if (state.mode === 'error') return send(500, { error: 'the model failed to load' });
+      if (state.mode === 'echo-401' || state.mode === 'echo-500') {
+        // A server or proxy that quotes the credential it was sent back in its error.
+        const sent = [req.headers.authorization, req.headers[HEADER_NAME]].filter(Boolean).join(' ');
+        res.writeHead(state.mode === 'echo-401' ? 401 : 500, `Rejected ${sent}`, {
+          'content-type': 'application/json',
+        });
+        return res.end(JSON.stringify({ error: `credential ${sent} is not valid here` }));
+      }
       const route = `${req.method} ${req.url}`;
       if (kind === 'ollama') {
         if (route === 'GET /api/version') return send(200, { version: '0.12.0' });
@@ -321,6 +329,20 @@ async function scenario(kind: ModelServerKind, keyring: boolean, first: 'bearer'
     expect(out.records.some(record => record.where === 'log.warn')).toBe(true);
   }
 
+  // Echoed: the server quotes the credential back in 401 and 500 replies, before and after the edit below.
+  const echoes = async (current: 'bearer' | 'header') => {
+    for (const mode of ['echo-401', 'echo-500'] as const) {
+      target.state.mode = mode;
+      await invoke(IPC_CHANNELS.modelServersProbe, { address: target.address, credential: credential(current) });
+      await invoke(IPC_CHANNELS.modelServersCheck, saved.id);
+      await main.chat(model);
+      await main.listModels();
+    }
+    target.state.mode = 'ok';
+  };
+  await echoes(first);
+  expect(out.records.some(record => record.text.includes('[redacted]'))).toBe(true);
+
   // Edited: renamed, then the credential replaced with the other kind.
   await invoke(IPC_CHANNELS.modelServersUpdate, saved.id, { name: 'gpu box 2' });
   const edited = await invoke<ModelServerMutationResult>(IPC_CHANNELS.modelServersUpdate, saved.id, {
@@ -328,6 +350,7 @@ async function scenario(kind: ModelServerKind, keyring: boolean, first: 'bearer'
   });
   expect(edited.ok).toBe(true);
   expect((await main.chat(model)).events).toContainEqual({ type: 'content', text: 'hello' });
+  await echoes(second);
 
   // Failures: the server refuses the credential, errors, stops answering, then is gone.
   target.state.mode = 'reject';
