@@ -1,6 +1,11 @@
 import dns from 'node:dns';
 import { isIP } from 'node:net';
-import type { FetchLike, OpenAICompatibleProduct } from '@bike4mind/local-models';
+import {
+  RuntimeConnectionError,
+  RuntimeHttpError,
+  type FetchLike,
+  type OpenAICompatibleProduct,
+} from '@bike4mind/local-models';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
 import {
   LOCAL_SERVER_ID,
@@ -276,7 +281,8 @@ export class ModelServerRegistry {
             entry.record = { ...entry.record, models: listed.map(model => model.name) };
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
             return listed.map(model => ({ ...model, server }));
-          } catch (err) {
+          } catch (raw) {
+            const err = this.unwrapFailure(raw, entry);
             entry.health = failureHealth(err, entry.record.name) ?? {
               ...entry.health,
               state: 'unreachable',
@@ -321,16 +327,26 @@ export class ModelServerRegistry {
       const result = await task(entry);
       if (entry.health.state !== 'online') void this.check(id);
       return result;
-    } catch (err) {
-      if (signal?.aborted) throw err;
+    } catch (raw) {
+      if (signal?.aborted) throw raw;
+      const err = this.unwrapFailure(raw, entry);
       const health = failureHealth(err, entry.record.name);
-      if (!health) throw err;
+      if (!health) throw raw;
       entry.health = health;
       this.emit();
       if (health.state === 'unreachable')
         throw new ServerUnreachableError(entry.record.name, describeFailure(err), { cause: err });
       throw err;
     }
+  }
+
+  /** The runtime's 401/403 as a credentials error, and the cause of a connection error it wrapped. */
+  private unwrapFailure(err: unknown, entry: Entry): unknown {
+    const inner = err instanceof RuntimeConnectionError && err.cause !== undefined ? err.cause : err;
+    if (inner instanceof RuntimeHttpError && (inner.status === 401 || inner.status === 403)) {
+      return new ServerCredentialsError(entry.record.name, !!this.deps.store.headers(entry.record));
+    }
+    return inner;
   }
 
   private async checkAll(): Promise<ModelServerView[]> {

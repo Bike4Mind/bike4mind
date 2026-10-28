@@ -313,6 +313,39 @@ describe('ModelServerRegistry', () => {
     expect((await servers.views())[1].health.state).toBe('unreachable');
   });
 
+  it('asks for credentials when an OpenAI-compatible server answers 401 during a picker refresh', async () => {
+    let revoked = false;
+    const fetchFor = (): FetchLike => async input => {
+      if (revoked) return json({ error: 'unauthorized' }, 401);
+      if (new URL(String(input)).pathname === '/v1/models') {
+        return json({ object: 'list', data: [{ id: 'm1', object: 'model' }] });
+      }
+      return json({ error: 'not found' }, 404);
+    };
+    const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
+    const servers = new ModelServerRegistry({
+      store,
+      logger: { debug: () => undefined, warn: () => undefined },
+      fetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+      resolve: async () => ['93.184.216.34'],
+    });
+    await servers.add({
+      address: 'https://gpu.example.test',
+      credential: { type: 'bearer', token: TOKEN },
+      name: 'gpu',
+      kind: 'openai-compatible',
+      access: 'chat',
+      acceptOpen: true,
+    });
+    revoked = true;
+    const [model] = await servers.models();
+    const view = (await servers.views())[1];
+    expect(view.health.state).toBe('credentials');
+    expect(view.health.error).toMatch(/rejected the credentials/);
+    expect(model.unavailable).toMatch(/needs new credentials/);
+  });
+
   it('returns no chat client for this computer or a hosted model', () => {
     const { registry: servers } = registry(fakeOllama());
     expect(servers.chatFor('ollama')).toBeNull();
