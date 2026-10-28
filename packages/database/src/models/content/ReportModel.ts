@@ -37,6 +37,14 @@ const DailyReportSchema = new mongoose.Schema<IDailyReportDocument>(
   }
 );
 
+/**
+ * Revision of the date windows a stored weekly report was computed with. Rows from an older
+ * revision are treated as missing, so they are regenerated and overwritten on the next request.
+ * Revision 2: the full startDate..endDate week (rows without the field covered only the last day).
+ * Must change whenever CounterLogModel.ts `weeklyReportWindows` changes what a report counts.
+ */
+export const WEEKLY_REPORT_WINDOW_VERSION = 2;
+
 // Weekly Report
 class WeeklyReportRepository extends BaseRepository<IWeeklyReportDocument> implements IWeeklyReportRepository {
   constructor(model: mongoose.Model<IWeeklyReportDocument>) {
@@ -44,13 +52,13 @@ class WeeklyReportRepository extends BaseRepository<IWeeklyReportDocument> imple
   }
 
   async findByDateRange(startDate: string, endDate: string) {
-    return this.findOne({ startDate, endDate });
+    return this.findOne({ startDate, endDate, windowVersion: WEEKLY_REPORT_WINDOW_VERSION });
   }
 
   async upsertReport(startDate: string, endDate: string, report: string, aiInsights?: string | null) {
     return this.model.findOneAndUpdate(
       { startDate, endDate },
-      { startDate, endDate, report, aiInsights, updatedAt: new Date() },
+      { startDate, endDate, report, aiInsights, windowVersion: WEEKLY_REPORT_WINDOW_VERSION, updatedAt: new Date() },
       { upsert: true, new: true }
     );
   }
@@ -62,6 +70,7 @@ const WeeklyReportSchema = new mongoose.Schema<IWeeklyReportDocument>(
     endDate: { type: String, required: true },
     report: { type: String, required: true },
     aiInsights: { type: String, default: null },
+    windowVersion: { type: Number },
   },
   {
     timestamps: true,

@@ -31,6 +31,68 @@ function newAccountExpression(createdAtField: string, windowEnd: Date) {
   };
 }
 
+/**
+ * Date ranges for `metricsByDate`. The `week*` range is the report's main window (named for the
+ * weekly report; a daily report's is one day), `lastWeek*` the comparison window, and `month*`
+ * the weekly report's 4-week baseline. All bounds are inclusive.
+ */
+type ReportWindows = {
+  weekStart: Date;
+  weekEnd: Date;
+  lastWeekStart: Date;
+  lastWeekEnd: Date;
+  monthStart: Date | null;
+  monthEnd: Date | null;
+  lastMonthStart: Date | null;
+  lastMonthEnd: Date | null;
+};
+
+/** Daily: the rolling 24 hours for today, else the UTC day; compared with the same span 7 days earlier. */
+function dailyReportWindows(date: string): ReportWindows {
+  const now = dayjs().utc();
+  const queryDate = dayjs.utc(date);
+  const isToday = queryDate.startOf('day').isSame(now.startOf('day'));
+  const weekStart = isToday ? now.subtract(24, 'hours') : queryDate.startOf('day');
+  const weekEnd = isToday ? now : queryDate.endOf('day');
+
+  return {
+    weekStart: weekStart.toDate(),
+    weekEnd: weekEnd.toDate(),
+    lastWeekStart: weekStart.subtract(7, 'days').startOf('day').toDate(),
+    lastWeekEnd: weekEnd.subtract(7, 'days').endOf('day').toDate(),
+    monthStart: null,
+    monthEnd: null,
+    lastMonthStart: null,
+    lastMonthEnd: null,
+  };
+}
+
+/**
+ * Weekly: [startDate 00:00, endDate 23:59:59.999] UTC, the same span 7 days earlier, and as the
+ * 4-week baseline the 28 days before this week (`month*`) and the 28 days before those
+ * (`lastMonth*`), so `fourWeekAverage` is a true average of the four preceding weeks.
+ */
+function weeklyReportWindows(startDate: string, endDate: string): ReportWindows {
+  const weekStart = dayjs.utc(startDate).startOf('day');
+  const weekEnd = dayjs.utc(endDate).endOf('day');
+  if (!weekStart.isValid() || !weekEnd.isValid() || weekEnd.isBefore(weekStart)) {
+    throw new Error(`Invalid weekly report range: ${startDate} to ${endDate}`);
+  }
+  const monthStart = weekStart.subtract(28, 'days');
+  const lastMonthStart = monthStart.subtract(28, 'days');
+
+  return {
+    weekStart: weekStart.toDate(),
+    weekEnd: weekEnd.toDate(),
+    lastWeekStart: weekStart.subtract(7, 'days').toDate(),
+    lastWeekEnd: weekEnd.subtract(7, 'days').toDate(),
+    monthStart: monthStart.toDate(),
+    monthEnd: weekStart.subtract(1, 'millisecond').toDate(),
+    lastMonthStart: lastMonthStart.toDate(),
+    lastMonthEnd: monthStart.subtract(1, 'millisecond').toDate(),
+  };
+}
+
 export type YoungAccountSpender = {
   userId: string;
   creditsSpent: number;
@@ -201,8 +263,9 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
     startDate: string,
     endDate: string
   ): Promise<(ICounterLog & { user: IUserDocument })[]> {
-    const start = dayjs(startDate).startOf('day').toDate();
-    const end = dayjs(endDate).endOf('day').toDate();
+    // UTC, matching the weekly report's metricsByDate window.
+    const start = dayjs.utc(startDate).startOf('day').toDate();
+    const end = dayjs.utc(endDate).endOf('day').toDate();
 
     const pipeline = [
       {
@@ -242,41 +305,16 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
 
   async metricsByDate(date: string, startDate?: string): Promise<FacetResults[]> {
     const isWeeklyReport = !!startDate;
-
-    // Always work with dates in UTC
-    const now = dayjs().utc();
-    // Convert input date to UTC immediately
-    const queryDate = dayjs.utc(date);
-
-    // Different handling for current day vs past days
-    const isToday = queryDate.startOf('day').isSame(now.startOf('day'));
-    let weekEnd, weekStart;
-
-    if (isToday) {
-      // For today: use current time
-      weekEnd = now;
-      weekStart = now.subtract(24, 'hours');
-    } else {
-      // For past dates: use UTC day boundaries
-      weekStart = queryDate.startOf('day');
-      weekEnd = queryDate.endOf('day');
-    }
-
-    // Convert to Date objects while preserving UTC
-    const weekEndDate = weekEnd.toDate();
-    const weekStartDate = weekStart.toDate();
-
-    // Calculate other ranges
-    const lastWeekEnd = weekEnd.subtract(7, 'days').endOf('day').toDate();
-    const lastWeekStart = weekStart.subtract(7, 'days').startOf('day').toDate();
-
-    // Only calculate these for weekly reports
-    const monthEnd = isWeeklyReport ? weekEndDate : null;
-    const monthStart = isWeeklyReport ? dayjs(monthEnd).utc().subtract(30, 'days').startOf('day').toDate() : null;
-    const lastMonthEnd = isWeeklyReport ? monthStart : null;
-    const lastMonthStart = isWeeklyReport
-      ? dayjs(lastMonthEnd).utc().subtract(30, 'days').startOf('day').toDate()
-      : null;
+    const {
+      weekStart: weekStartDate,
+      weekEnd: weekEndDate,
+      lastWeekStart,
+      lastWeekEnd,
+      monthStart,
+      monthEnd,
+      lastMonthStart,
+      lastMonthEnd,
+    } = startDate ? weeklyReportWindows(startDate, date) : dailyReportWindows(date);
 
     // Internal-user match from the shared NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS list
     // (all internal domains, not a hardcoded one) so it can't drift from the
@@ -304,8 +342,8 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           },
         },
       ],
-      // Same window as last24h: the rolling 24 hours for today, the UTC day for past
-      // dates. startDate only flags a weekly report; it does not widen this window.
+      // Same window as last24h: the whole startDate..date range for a weekly report, the
+      // rolling 24 hours (today) or the UTC day (past dates) for a daily one.
       thisWeek: [
         {
           $match: {
@@ -415,7 +453,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             weeklyActiveUsers: [
               {
                 $match: {
-                  datetime: { $gte: weekEnd.subtract(7, 'days').toDate(), $lte: weekEndDate },
+                  datetime: { $gte: dayjs.utc(weekEndDate).subtract(7, 'days').toDate(), $lte: weekEndDate },
                 },
               },
               { $group: { _id: '$userId' } },

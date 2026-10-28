@@ -5,6 +5,8 @@ export interface IWeeklyReport {
   endDate: string;
   report: string;
   aiInsights?: string | null;
+  /** Date-window revision the report was computed with; absent on rows written before revision 2. */
+  windowVersion?: number;
 }
 
 export interface IDailyReport {
