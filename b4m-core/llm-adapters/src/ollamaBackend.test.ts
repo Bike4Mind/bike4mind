@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type IMessage } from '@bike4mind/common';
 import type { ChatRequest } from 'ollama';
-import { OllamaBackend } from './ollamaBackend';
+import { OllamaBackend, ollamaNumCtx } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 import { MAX_RECORDED_TOOL_RESULT_CHARS, TOOL_RESULT_TRUNCATION_NOTICE } from './recordToolResult';
 
@@ -320,6 +320,22 @@ describe('OllamaBackend.complete tool loop', () => {
   });
 });
 
+describe('ollamaNumCtx', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('caps the reported window at 32K unless OLLAMA_MAX_NUM_CTX sets another cap', () => {
+    expect(ollamaNumCtx(262144)).toBe(32768);
+    expect(ollamaNumCtx(Infinity)).toBe(32768);
+    expect(ollamaNumCtx(8192)).toBe(8192);
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', '65536');
+    expect(ollamaNumCtx(262144)).toBe(65536);
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', 'nonsense');
+    expect(ollamaNumCtx(262144)).toBe(32768);
+  });
+});
+
 // getModelInfo derives each model's flags from Ollama's own /api/show
 // capabilities rather than a hardcoded list, so a thinking-capable model
 // (e.g. qwen3.5) must surface can_think and drive the Thinking toggle.
@@ -344,7 +360,7 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(true);
     expect(info.supportsVision).toBe(true);
     expect(info.supportsTools).toBe(true);
-    // The window is what we will actually allocate (see effectiveContextWindow), not the
+    // The window is what we will actually allocate (see ollamaNumCtx), not the
     // 262144 the model reports, so callers size history to what fits. Output is half of
     // that, which is what leaves room for the prompt.
     expect(info.contextWindow).toBe(32768);
