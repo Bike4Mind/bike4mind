@@ -211,6 +211,18 @@ describe('DELETE /api/projects/[id]/members - pinned files the leaver can no lon
 
     expect(await pinned(member.id)).toEqual([ownerFile.id]);
   });
+
+  it("drops the owner's pin on the leaver's file once the owner's project grant is revoked", async () => {
+    const { owner, member, projectId, memberFile } = await seedProjectFiles();
+    await FabFile.updateOne({ _id: memberFile.id }, { $push: { users: projectGrant(owner.id, projectId) } });
+    await pin(owner.id, memberFile.id);
+    const { req, res } = request(member, projectId);
+
+    await deleteHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(await pinned(owner.id)).toEqual([]);
+  });
 });
 
 describe("DELETE /api/projects/[id]/members - the owner's grant on a departing member's documents (real DB)", () => {
