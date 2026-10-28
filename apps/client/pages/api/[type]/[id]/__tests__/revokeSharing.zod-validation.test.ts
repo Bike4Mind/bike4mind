@@ -17,7 +17,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const revoke = vi.hoisted(() => vi.fn(async () => ({ id: 'doc1' })));
-vi.mock('@bike4mind/services', () => ({ sharingService: { revoke } }));
+vi.mock('@bike4mind/services', () => ({ sharingService: { revoke, cleanUpRevokedFileReferences: vi.fn() } }));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},

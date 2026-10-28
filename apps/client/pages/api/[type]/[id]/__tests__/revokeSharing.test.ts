@@ -29,8 +29,12 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 
 const mockRevoke = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'doc1' }));
+const mockCleanUp = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/services', () => ({
-  sharingService: { revoke: (...a: unknown[]) => mockRevoke(...a) },
+  sharingService: {
+    revoke: (...a: unknown[]) => mockRevoke(...a),
+    cleanUpRevokedFileReferences: (...a: unknown[]) => mockCleanUp(...a),
+  },
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -47,6 +51,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 function request(query: Record<string, unknown>, body: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'DELETE', query, body });
   (req as any).user = { id: 'caller' };
+  (req as any).logger = { warn: vi.fn() };
   return { req, res };
 }
 
@@ -85,5 +90,38 @@ describe('/api/[type]/[id]/revokeSharing - URL params win', () => {
     const { req, res } = request({ type: 'sessions', id: ['a', 'b'] }, { userId: 'u2' });
     await expect(mockRefs.useHandler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
     expect(mockRevoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/[type]/[id]/revokeSharing - revoked file references', () => {
+  beforeEach(() => {
+    mockRevoke.mockClear();
+    mockCleanUp.mockClear();
+  });
+
+  it("cleans up the revoked user's references after a direct file revoke", async () => {
+    const { req, res } = request({ type: 'files', id: 'file1' }, { userId: 'target-user' });
+    await mockRefs.useHandler!(req, res);
+    expect(mockCleanUp).toHaveBeenCalledWith('file1', 'target-user', expect.anything());
+    expect(mockRevoke.mock.invocationCallOrder[0]).toBeLessThan(mockCleanUp.mock.invocationCallOrder[0]);
+  });
+
+  it('leaves references alone for a project-scoped file revoke', async () => {
+    const { req, res } = request({ type: 'files', id: 'file1' }, { userId: 'target-user', projectId: 'p1' });
+    await mockRefs.useHandler!(req, res);
+    expect(mockCleanUp).not.toHaveBeenCalled();
+  });
+
+  it.each(['sessions', 'projects'])('does not run for a %s revoke', async type => {
+    const { req, res } = request({ type, id: 'doc1' }, { userId: 'target-user' });
+    await mockRefs.useHandler!(req, res);
+    expect(mockCleanUp).not.toHaveBeenCalled();
+  });
+
+  it('does not clean up when the revoke fails', async () => {
+    mockRevoke.mockRejectedValueOnce(new Error('denied'));
+    const { req, res } = request({ type: 'files', id: 'file1' }, { userId: 'target-user' });
+    await expect(mockRefs.useHandler!(req, res)).rejects.toThrow('denied');
+    expect(mockCleanUp).not.toHaveBeenCalled();
   });
 });
