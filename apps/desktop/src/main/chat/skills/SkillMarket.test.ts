@@ -407,6 +407,18 @@ describe('SkillMarket', () => {
       expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ claudeCodeAllowedTools: [] }));
     });
 
+    it('sends each supporting file with its path and content, on create and update', async () => {
+      const files = [{ path: 'scripts/run.sh', content: '#!/bin/sh\necho hi\n' }];
+      get.mockResolvedValueOnce({ data: { data: [] } });
+      post.mockResolvedValueOnce({ data: { id: 's1' } });
+      await market.saveSkill({ fields: { ...FIELDS, files }, mode: 'create' });
+      expect(post).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ files }));
+
+      get.mockResolvedValueOnce({ data: { id: 's1', userId: 'me' } }).mockResolvedValueOnce(mineBody([]));
+      await market.saveSkill({ fields: { ...FIELDS, files }, mode: 'update', targetSkillId: 's1' });
+      expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ files }));
+    });
+
     it.each([undefined, '', '<topic>'])('sends the argument hint on create: %s', async argumentHint => {
       get.mockResolvedValueOnce({ data: { data: [] } });
       post.mockResolvedValueOnce({ data: { id: 's1' } });

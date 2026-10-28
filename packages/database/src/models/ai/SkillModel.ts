@@ -125,7 +125,7 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
   // behavior identical (only `find`/`findOne` get the plugin's pre-hook).
 
   async listForUser(userId: string): Promise<ISkill[]> {
-    const results = await this.skillModel.find({ userId, deletedAt: null }).sort({ name: 1 });
+    const results = await this.skillModel.find({ userId, deletedAt: null }).select('-files').sort({ name: 1 });
     return results.map(doc => doc.toJSON());
   }
 

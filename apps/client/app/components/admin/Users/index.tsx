@@ -2,12 +2,13 @@ import { useGetUsers } from '@client/app/hooks/data/user';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
-import { Alert, Box, Checkbox, LinearProgress, Option, Select, Sheet, Stack } from '@mui/joy';
+import { Alert, Box, Checkbox, Chip, ChipDelete, LinearProgress, Option, Select, Sheet, Stack } from '@mui/joy';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
 import { AnomalyBanner } from './AnomalyBanner';
 import { EmailDomainGroups } from './EmailDomainGroups';
+import { SignupActivityPanel } from '../Signups/SignupActivityPanel';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import AdminProfileModal from '../AdminProfileModal';
@@ -149,6 +150,8 @@ const UsersTab: React.FC = () => {
               setSearch('');
               setParams({
                 recentSignups: 'hour',
+                createdFrom: undefined,
+                createdTo: undefined,
                 groupBy: 'emailDomain',
                 page: 1,
                 search: '',
@@ -158,6 +161,14 @@ const UsersTab: React.FC = () => {
             }}
           />
           {anomalyQuery.isError && <Alert color="warning">Could not check signup anomalies. Refresh to retry.</Alert>}
+          <Box sx={{ mt: 1 }}>
+            <SignupActivityPanel
+              onSelectWindow={window => {
+                clearSelection();
+                setParams({ ...window, recentSignups: undefined, page: 1 });
+              }}
+            />
+          </Box>
           <Stack direction="row" gap={2} flexWrap="wrap" sx={{ my: 1 }}>
             <Select
               aria-label="Group by"
@@ -180,6 +191,25 @@ const UsersTab: React.FC = () => {
                 setParams({ recentSignups: event.target.checked ? 'hour' : undefined, page: 1 });
               }}
             />
+            {(params.createdFrom || params.createdTo) && (
+              <Chip
+                variant="outlined"
+                data-testid="users-created-window-chip"
+                endDecorator={
+                  <ChipDelete
+                    aria-label="Clear created-at filter"
+                    data-testid="users-created-window-clear-btn"
+                    onDelete={() => {
+                      clearSelection();
+                      setParams({ createdFrom: undefined, createdTo: undefined, page: 1 });
+                    }}
+                  />
+                }
+              >
+                Created {params.createdFrom ? new Date(params.createdFrom).toLocaleString() : 'any time'} to{' '}
+                {params.createdTo ? new Date(params.createdTo).toLocaleString() : 'now'}
+              </Chip>
+            )}
           </Stack>
           <UsersFilterBar
             displayMode={displayMode}

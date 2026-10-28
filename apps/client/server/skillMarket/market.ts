@@ -316,6 +316,9 @@ export const submitRateLimits = () => [
   }),
 ];
 
+/** Imports per user, shared by the SPA import route and its v1 twin so they draw on one allowance. */
+export const importRateLimit = () => rateLimit({ limit: 60, windowMs: HOUR_MS, bucket: 'skill-market-import' });
+
 /**
  * Applies `submitRateLimits` from inside a handler, for a route that scans only on some requests (a
  * global-skill save that changes content). Shares the publish buckets, so saves and submissions

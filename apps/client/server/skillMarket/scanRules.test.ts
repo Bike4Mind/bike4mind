@@ -427,6 +427,27 @@ describe('runDeterministicScan - supporting files', () => {
     expect(reviewStatusFor(tier as 'review', 'organization')).toBe('pending');
   });
 
+  it('routes a non-prose reference file to human review even when no rule fires', () => {
+    const findings = scan(
+      skill('Read it.', {
+        files: [
+          { path: 'references/run.py', content: 'print("hello")' },
+          { path: 'references/style.md', content: 'Use bullets.' },
+        ],
+      })
+    );
+    expect(findings).toEqual([
+      {
+        rule: 'script_present',
+        severity: 'medium',
+        source: 'rules',
+        message: "references/run.py: Ships a file that could run on the importer's machine",
+        file: 'references/run.py',
+      },
+    ]);
+    expect(computeTier(findings, pass, 0.8)).toBe('review');
+  });
+
   it('flags a reference that names a high-risk tool when no tools are declared', () => {
     const files = [{ path: 'references/how.md', content: 'Call web_fetch on the target.' }];
     expect(scan(skill('Read it.', { files }))).toEqual([

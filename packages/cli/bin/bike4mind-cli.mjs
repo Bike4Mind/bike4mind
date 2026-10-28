@@ -256,7 +256,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .command('skills', 'Manage your Bike4Mind skills', (yargs) => {
     return yargs
-      .command('push <path>', 'Create or update a skill from a Claude Code SKILL.md', (yargs) => {
+      .command('push <path>', 'Create or update a skill from a Claude Code SKILL.md, and optionally publish it', (yargs) => {
         return yargs
           .positional('path', {
             type: 'string',
@@ -272,8 +272,33 @@ const argv = await yargs(hideBin(process.argv))
             description: "Push another author's Skill Market skill as your own without asking",
             default: false,
           })
+          .option('publish', {
+            type: 'boolean',
+            description: 'Also list it on the Skill Market: a new listing, or a new version of its live listing',
+            default: false,
+          })
+          .option('visibility', {
+            type: 'string',
+            choices: ['organization', 'public', 'unlisted'],
+            description: 'Who can see a new listing (with --publish)',
+            default: 'organization',
+          })
+          .option('org', {
+            type: 'string',
+            description: 'Organization id for an organization listing; optional when you belong to exactly one',
+          })
+          .option('tags', {
+            type: 'string',
+            description: 'Comma-separated listing tags (with --publish)',
+          })
+          .option('api-key', {
+            type: 'string',
+            description:
+              'Bike4Mind API key with the skills:write and me:read scopes (overrides B4M_API_KEY and the stored login). Visible in process listings; prefer B4M_API_KEY, which also takes precedence over the stored login when set, even without --publish',
+          })
           .example('b4m skills push ~/.claude/skills/my-skill', 'Create a skill from a Claude Code skill folder')
-          .example('b4m skills push ./SKILL.md --update', 'Update the existing skill of the same name');
+          .example('b4m skills push ./SKILL.md --update', 'Update the existing skill of the same name')
+          .example('b4m skills push ./my-skill --publish --update', 'Update the skill and publish it to the Skill Market');
       }, async () => {
         // Handled by external command handler
       })

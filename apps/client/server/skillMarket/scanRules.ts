@@ -54,6 +54,7 @@ const LOCAL_RISKY_TOOLS = [
 const toolKey = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const KNOWN_TOOL_KEYS = new Set<string>(b4mLLMTools.options.map(toolKey));
+const PROSE_EXTENSIONS = new Set(['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'csv']);
 
 export type ScanOptions = {
   /** Tools that force human review, ADDED to DEFAULT_HIGH_RISK_TOOLS (admin setting). */
@@ -557,9 +558,17 @@ export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOpti
     for (const f of [...scanned.findings, ...mentions]) {
       findings.push({ ...f, message: `${file.path}: ${f.message}`, file: file.path });
     }
-    if (file.path.startsWith('scripts/')) {
+    const isScript = file.path.startsWith('scripts/');
+    const extension = /\.([^./]+)$/.exec(file.path)?.[1].toLowerCase() ?? '';
+    if (isScript || !PROSE_EXTENSIONS.has(extension) || file.content.startsWith('#!')) {
       findings.push({
-        ...finding('script_present', 'medium', `${file.path}: Ships a script that runs on the importer's machine`),
+        ...finding(
+          'script_present',
+          'medium',
+          isScript
+            ? `${file.path}: Ships a script that runs on the importer's machine`
+            : `${file.path}: Ships a file that could run on the importer's machine`
+        ),
         file: file.path,
       });
     }
