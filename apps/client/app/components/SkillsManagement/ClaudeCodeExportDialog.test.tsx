@@ -24,6 +24,11 @@ const publicConfig = vi.hoisted(() => ({
   refetch: vi.fn(),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ usePublicConfig: () => publicConfig }));
+vi.mock('@client/app/hooks/data/skillMarket', () => ({
+  useSkillBundles: () => ({ data: { bundles: [], listings: [], canEdit: false }, isPending: false, isError: false }),
+  useSaveSkillBundle: () => ({ mutate: vi.fn(), isPending: false }),
+  useDeleteSkillBundle: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 const downloadData = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/utils/download', () => ({ downloadData }));
 
@@ -99,6 +104,17 @@ describe('ClaudeCodeExportDialog', () => {
   it('shows no tabs without an org marketplace', () => {
     renderDialog();
     expect(screen.queryByTestId('skill-claude-code-tab-marketplace')).not.toBeInTheDocument();
+  });
+
+  it('warns where the key is stored and never to commit it', () => {
+    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'foo-a1b2c3' } });
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(screen.getByText(/known_marketplaces\.json/)).toBeInTheDocument();
+    const warning = screen.getByTestId('skill-claude-code-key-warning');
+    expect(warning).toHaveTextContent("never to a project's .claude/settings.json");
+    expect(warning).toHaveTextContent('headersHelper');
+    // A member who can't edit and sees no bundles gets no bundles section.
+    expect(screen.queryByTestId('skill-claude-code-bundles')).not.toBeInTheDocument();
   });
 
   it('builds the team marketplace settings and mints a skills:read key into them', async () => {

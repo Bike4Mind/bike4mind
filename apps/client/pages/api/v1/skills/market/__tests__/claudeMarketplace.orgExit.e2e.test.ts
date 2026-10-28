@@ -47,7 +47,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
           if (!advanced) return;
         }
       };
-    return { get: compose };
+    return { get: compose, post: compose, delete: compose };
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
@@ -58,6 +58,8 @@ process.env.APP_URL = 'https://app.example.test/';
 
 const { default: feedHandler } = await import('@pages/api/v1/skills/market/claude-marketplace.json');
 const { default: zipHandler } = await import('@pages/api/v1/skills/market/[id]/claude-plugin.zip');
+const { default: searchHandler } = await import('@pages/api/v1/skills/market/listings/index');
+const { default: detailHandler } = await import('@pages/api/v1/skills/market/listings/[id]/index');
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const departureAdapters = {
@@ -86,17 +88,18 @@ afterEach(async () => {
   await mongoose.connection.dropDatabase();
 });
 
+type MarketplaceHandler = typeof feedHandler | typeof zipHandler | typeof searchHandler | typeof detailHandler;
 type MarketplaceRequest = Parameters<typeof feedHandler>[0] & Parameters<typeof zipHandler>[0];
 type MarketplaceResponse = Parameters<typeof feedHandler>[1];
 
 const newUser = (name: string) =>
   User.create({ name, username: `${name}-${new mongoose.Types.ObjectId()}`, password: null, hasUsablePassword: false });
 
-async function call(handler: typeof feedHandler | typeof zipHandler, userId: string, query: Record<string, string>) {
+async function call(handler: MarketplaceHandler, userId: string, query: Record<string, string>) {
   const { req, res } = createMocks<MarketplaceRequest, MarketplaceResponse>({ method: 'GET', query });
   Object.assign(req, { user: await User.findById(userId), logger });
   try {
-    await handler(req, res);
+    await handler(req as never, res);
   } catch (err) {
     const { statusCode } = err as { statusCode?: number };
     if (statusCode === undefined) throw err;
@@ -136,6 +139,8 @@ async function seedOrg(owner: { id: string }, memberId: string, name: string) {
 }
 
 async function seed() {
+  // Detail's similar-listings fallback runs a $text query, and afterEach drops the indexes.
+  await SkillListing.ensureIndexes();
   const owner = await newUser('owner');
   const member = await newUser('member');
   const a = await seedOrg(owner, member.id, 'acme');
@@ -158,6 +163,14 @@ const feedStatus = async (userId: string, orgId: string) => (await call(feedHand
 const zipStatus = async (userId: string, listingId: string) =>
   (await call(zipHandler, userId, { id: listingId })).statusCode;
 
+const searchedNames = async (userId: string) => {
+  const { statusCode, res } = await call(searchHandler, userId, {});
+  expect(statusCode).toBe(200);
+  return (res._getJSONData() as { data: { name: string }[] }).data.map(listing => listing.name);
+};
+const detailStatus = async (userId: string, listingId: string) =>
+  (await call(detailHandler, userId, { id: listingId })).statusCode;
+
 async function expectServingOrg(userId: string, org: Awaited<ReturnType<typeof seedOrg>>) {
   const feed = await call(feedHandler, userId, { orgId: org.orgId });
   expect(feed.statusCode).toBe(200);
@@ -173,6 +186,9 @@ async function expectServingOrg(userId: string, org: Awaited<ReturnType<typeof s
   expect(archiveText).toContain(`skills/${org.skillName}/SKILL.md`);
   expect(archiveText).toContain(`name: ${org.skillName}`);
   expect(archiveText).toContain('Check the diff.');
+
+  expect(await searchedNames(userId)).toContain(org.skillName);
+  expect(await detailStatus(userId, org.listingId)).toBe(200);
 }
 
 describe('skills:read key after its owner exits an org', () => {
@@ -201,6 +217,10 @@ describe('skills:read key after its owner exits an org', () => {
     expect(await keyStatus(memberId)).toBe(ApiKeyStatus.ACTIVE);
     expect(await feedStatus(memberId, a.orgId)).toBe(403);
     expect(await zipStatus(memberId, a.listingId)).toBe(404);
+    expect(await searchedNames(memberId)).not.toContain(a.skillName);
+    // A listing the viewer cannot see is a 404, exactly what a user who was never a member gets.
+    expect(await detailStatus(memberId, a.listingId)).toBe(404);
+    expect(await detailStatus((await newUser('outsider')).id, a.listingId)).toBe(404);
   });
 
   it("keeps serving the user's other org", async () => {
@@ -212,6 +232,8 @@ describe('skills:read key after its owner exits an org', () => {
     expect(await keyStatus(memberId)).toBe(ApiKeyStatus.ACTIVE);
     expect(await feedStatus(memberId, a.orgId)).toBe(403);
     expect(await zipStatus(memberId, a.listingId)).toBe(404);
+    expect(await searchedNames(memberId)).not.toContain(a.skillName);
+    expect(await detailStatus(memberId, a.listingId)).toBe(404);
     await expectServingOrg(memberId, b);
   });
 });

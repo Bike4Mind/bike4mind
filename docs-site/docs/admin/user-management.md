@@ -106,6 +106,8 @@ Click **Filter** to add a filter chip. Each chip shows its current value; click 
 | Organization | One or more organizations, or **No organization** |
 | Tags | One or more tags, including **Admin** for super admins |
 
+The **Signed up** column shows the first provider linked to the account, or Email when none is linked. The **Sign-in method** filter matches any linked provider, and Email matches only accounts with no linked provider. An account created with an email code that later linked Google shows as Google, and appears under the Google filter but not Email.
+
 Filters are applied on the server, so they cover every user, not just the current page. Changing a filter returns to page 1.
 
 ## Grouping by email domain
@@ -214,7 +216,7 @@ The **Export CSV** button exports all users matching the current search and filt
 | Is Admin | Yes/No |
 | Is Banned | Yes/No |
 
-The export includes all matching users, not just the current page, up to 50,000 rows. If the export hits that cap, a warning asks you to narrow the filters to export the rest.
+The export includes all matching users, not just the current page, up to 15,000 rows. If the export hits that cap, a warning asks you to narrow the filters to export the rest.
 
 ## Best Practices
 

@@ -17,6 +17,16 @@ import {
 
 export type ICreditTransactionDocument = ICreditTransaction & IMongoDocument;
 
+/** Transaction types that move a balance other than by usage; see the partial index below. */
+export const CREDIT_BALANCE_EVENT_TYPES = [
+  'purchase',
+  'subscription',
+  'generic_add',
+  'generic_deduct',
+  'transfer_credit',
+  'received_credit',
+] as const;
+
 /**
  * IMPORTANT: When adding a new transaction type, you MUST update:
  * 1. b4m-core/common/src/types/entities/CreditTransactionTypes.ts - Create new schema and add to discriminated union
@@ -119,6 +129,16 @@ CreditTransactionSchema.index({ stripePaymentIntentId: 1 }, { unique: true, spar
 CreditTransactionSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
 CreditTransactionSchema.index({ ownerType: 1, createdAt: -1, type: 1 });
 CreditTransactionSchema.index({ stripeDisputeId: 1 }, { unique: true, sparse: true });
+// Serves the admin user timeline's credit events (userTimeline.ts). Partial on the non-usage types so a
+// page never walks a heavy user's usage rows; a query must repeat the same `type: { $in }` to use it.
+// Built by the 20260921235947 ensure migration.
+CreditTransactionSchema.index(
+  { ownerId: 1, ownerType: 1, createdAt: -1, _id: -1 },
+  {
+    name: 'credit_tx_owner_balance_events',
+    partialFilterExpression: { type: { $in: [...CREDIT_BALANCE_EVENT_TYPES] } },
+  }
+);
 CreditTransactionSchema.index({ stripeRefundId: 1 }, { unique: true, sparse: true });
 CreditTransactionSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
 

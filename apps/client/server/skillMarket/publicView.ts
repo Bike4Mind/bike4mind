@@ -64,15 +64,23 @@ type VersionLike = Pick<ISkillListingVersion, 'id' | 'version' | 'snapshot' | 'c
 
 type SnapshotLike = VersionLike['snapshot'];
 
-/** A snapshot read without its body omits `body`. */
-export function toPublicSnapshot(s: SnapshotLike): PublicSkillListingVersion['snapshot'] {
+/**
+ * A snapshot read without its body omits `body` and `files`. `withFiles: false` is for a snapshot read
+ * with its body but not its files (the review queue's previous version, reviewQueue.ts).
+ */
+export function toPublicSnapshot(
+  s: SnapshotLike,
+  { withFiles = s.body !== undefined }: { withFiles?: boolean } = {}
+): PublicSkillListingVersion['snapshot'] {
   return {
     name: s.name,
     description: s.description,
     ...(s.body !== undefined ? { body: s.body } : {}),
     argument_hint: s.argumentHint ?? null,
     allowed_tools: s.allowedTools ?? [],
+    claude_code_allowed_tools: s.claudeCodeAllowedTools ?? [],
     disable_model_invocation: Boolean(s.disableModelInvocation),
+    ...(withFiles ? { files: (s.files ?? []).map(({ path, content }) => ({ path, content })) } : {}),
   };
 }
 

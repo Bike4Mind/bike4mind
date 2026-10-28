@@ -77,7 +77,7 @@ async function completeValidated<T>(
     } catch (error) {
       if (fallback === undefined) throw error;
       const reason = error instanceof Error ? error.message : String(error);
-      logger?.warn(`[releaseNotes] ${label} repair call failed (${reason}); keeping the first draft`);
+      logger?.warn(`[releaseNotes] ${label} repair call failed (${reason}); keeping the best draft so far`);
       return fallback;
     }
     // Only completed calls are counted; one that throws may have reached the provider uncounted.
@@ -95,7 +95,7 @@ async function completeValidated<T>(
     }
     if (result.ok) return result.value;
 
-    fallback ??= result.fallback;
+    fallback = result.fallback ?? fallback;
     lastErrors = result.errors;
     currentPrompt = [
       prompt,
@@ -107,7 +107,7 @@ async function completeValidated<T>(
     ].join('\n');
   }
   if (fallback !== undefined) {
-    logger?.warn(`[releaseNotes] ${label} repair invalid (${lastErrors.join('; ')}); keeping the first draft`);
+    logger?.warn(`[releaseNotes] ${label} repair invalid (${lastErrors.join('; ')}); keeping the best draft so far`);
     return fallback;
   }
   throw new Error(`[releaseNotes] ${label} output invalid after one repair: ${lastErrors.join('; ')}`);
@@ -198,11 +198,65 @@ const MAX_CUSTOMER_NOTE_CHARS = 600;
 export interface TriageResult {
   /** Customer-facing note per PR number; PRs judged internal are absent. */
   notes: Map<number, string>;
+  /** PRs the model never classified, treated as internal; surfaced to the reviewer of the note. */
+  omitted: number[];
   usage: TokenUsage;
 }
 
-/** Batched triage for PRs with no author-written customer note. Author notes pass through untriaged. */
-export async function triageReleaseNotes(prs: ReleaseNotesJobPr[], complete: CompleteFn): Promise<TriageResult> {
+type TriageEntry = z.infer<typeof TriageSchema>['entries'][number];
+
+/**
+ * One triage call with its repair. A reply that omits or invents PRs still yields the entries for known
+ * PRs, so a few omissions cost the caller a follow-up call instead of failing the release. Throws when
+ * neither reply covers any of the PRs.
+ */
+async function triageBatch(
+  prs: ReleaseNotesJobPr[],
+  complete: CompleteFn,
+  usage: TokenUsage,
+  logger?: Pick<Logger, 'warn'>
+): Promise<TriageEntry[]> {
+  const expected = new Set(prs.map(pr => pr.number));
+  const kept = new Map<number, TriageEntry>();
+  return completeValidated(
+    complete,
+    buildTriagePrompt(prs),
+    raw => {
+      const parsed = TriageSchema.safeParse(raw);
+      if (!parsed.success) return { ok: false, errors: zodErrors(parsed.error) };
+      const seen = new Set(parsed.data.entries.map(e => e.number));
+      const errors = [
+        ...[...expected].filter(n => !seen.has(n)).map(n => `missing entry for pull request ${n}`),
+        ...[...seen].filter(n => !expected.has(n)).map(n => `unknown pull request ${n}`),
+      ];
+      if (!errors.length) return { ok: true, value: parsed.data.entries };
+      // A reply with no known PR is no evidence the model read the batch, so it is never kept.
+      const known = parsed.data.entries.filter(e => expected.has(e.number));
+      // The repair reply may cover PRs the first one skipped, so entries accumulate across attempts.
+      for (const entry of known) kept.set(entry.number, entry);
+      return { ok: false, errors, fallback: kept.size ? [...kept.values()] : undefined };
+    },
+    usage,
+    'triage',
+    logger
+  );
+}
+
+const notTriaged = (prs: ReleaseNotesJobPr[], entries: TriageEntry[]): ReleaseNotesJobPr[] => {
+  const triaged = new Set(entries.map(e => e.number));
+  return prs.filter(pr => !triaged.has(pr.number));
+};
+
+/**
+ * Batched triage for PRs with no author-written customer note. Author notes pass through untriaged. PRs the
+ * model leaves out are triaged once more on their own; any still missing are treated as internal with a
+ * warning, the same degraded-over-failed choice `writeReleaseNotes` makes.
+ */
+export async function triageReleaseNotes(
+  prs: ReleaseNotesJobPr[],
+  complete: CompleteFn,
+  { logger }: { logger?: Pick<Logger, 'warn'> } = {}
+): Promise<TriageResult> {
   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
   const notes = new Map<number, string>();
   const untriaged: ReleaseNotesJobPr[] = [];
@@ -211,30 +265,27 @@ export async function triageReleaseNotes(prs: ReleaseNotesJobPr[], complete: Com
     if (authored) notes.set(pr.number, authored);
     else untriaged.push(pr);
   }
+  if (untriaged.length === 0) return { notes, omitted: [], usage };
 
-  if (untriaged.length > 0) {
-    const expected = new Set(untriaged.map(pr => pr.number));
-    const triage = await completeValidated(
-      complete,
-      buildTriagePrompt(untriaged),
-      raw => {
-        const parsed = TriageSchema.safeParse(raw);
-        if (!parsed.success) return { ok: false, errors: zodErrors(parsed.error) };
-        const seen = new Set(parsed.data.entries.map(e => e.number));
-        const errors = [
-          ...[...expected].filter(n => !seen.has(n)).map(n => `missing entry for pull request ${n}`),
-          ...[...seen].filter(n => !expected.has(n)).map(n => `unknown pull request ${n}`),
-        ];
-        return errors.length ? { ok: false, errors } : { ok: true, value: parsed.data };
-      },
-      usage,
-      'triage'
-    );
-    for (const entry of triage.entries) {
-      if (entry.customerFacing && entry.note.trim()) notes.set(entry.number, entry.note.trim());
+  const entries = await triageBatch(untriaged, complete, usage, logger);
+  const missing = notTriaged(untriaged, entries);
+  if (missing.length > 0) {
+    try {
+      entries.push(...(await triageBatch(missing, complete, usage, logger)));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      logger?.warn(`[releaseNotes] triage retry for omitted pull requests failed (${reason})`);
     }
   }
-  return { notes, usage };
+  const omitted = notTriaged(untriaged, entries).map(pr => pr.number);
+  if (omitted.length > 0) {
+    logger?.warn(`[releaseNotes] triage omitted pull requests ${omitted.join(', ')}; treating them as internal`);
+  }
+
+  for (const entry of entries) {
+    if (entry.customerFacing && entry.note.trim()) notes.set(entry.number, entry.note.trim());
+  }
+  return { notes, omitted, usage };
 }
 
 /**
@@ -287,7 +338,7 @@ export async function writeReleaseNotes(
 
 /**
  * Two LLM passes over the release's PRs: triage, then an editorial pass over every customer-facing
- * note. Each reply is Zod-validated with one repair retry before throwing.
+ * note. Each reply is Zod-validated with one repair retry; see `triageReleaseNotes` for omitted PRs.
  */
 export async function generateReleaseNotes(
   prs: ReleaseNotesJobPr[],

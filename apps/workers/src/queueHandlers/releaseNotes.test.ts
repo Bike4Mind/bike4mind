@@ -72,7 +72,7 @@ describe('releaseNotes queue handler', () => {
     vi.clearAllMocks();
     setConfig({ enabled: false });
     h.createCompleter.mockResolvedValue({ complete: vi.fn(), modelId: 'gpt-4o-mini' });
-    h.triageReleaseNotes.mockResolvedValue({ notes: new Map([[1, 'Search is faster']]), usage });
+    h.triageReleaseNotes.mockResolvedValue({ notes: new Map([[1, 'Search is faster']]), omitted: [], usage });
     h.writeReleaseNotes.mockResolvedValue(draft());
     h.upsertGenerated.mockImplementation(async (note: unknown) => ({ note, preserved: false }));
     h.findWorkspace.mockResolvedValue({ slackBotToken: 'xoxb-test' });
@@ -174,6 +174,7 @@ describe('releaseNotes queue handler', () => {
     expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
     expect(h.writeReleaseNotes.mock.calls[1][3].editorialFeedback).toEqual([expect.stringContaining('acme')]);
     expect(h.triageReleaseNotes).toHaveBeenCalledTimes(1);
+    expect(h.triageReleaseNotes).toHaveBeenCalledWith(validPayload.prs, expect.any(Function), { logger });
     expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
   });
 
@@ -242,6 +243,21 @@ describe('releaseNotes queue handler', () => {
     const { text } = JSON.parse(slackPosts()[0][1].body);
     expect(text).toContain('Hi &lt;!channel&gt; &amp; &lt;https://evil.example|click&gt;');
     expect(text).not.toContain('<!channel>');
+  });
+
+  it('names the PRs triage could not classify in the Slack post', async () => {
+    setConfig(enabledConfig);
+    h.triageReleaseNotes.mockResolvedValue({ notes: new Map([[1, 'Search is faster']]), omitted: [5788, 5806], usage });
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('Triage could not classify PRs #5788, #5806');
+  });
+
+  it('says nothing about omitted PRs when triage classified every PR', async () => {
+    setConfig(enabledConfig);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).not.toContain('could not classify');
   });
 
   it('escapes Slack control characters in the headline', async () => {

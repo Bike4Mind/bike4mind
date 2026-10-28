@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ApiKeyStatus } from '@bike4mind/common';
 import { AdminUsersQuerySchema } from '@client/app/utils/adminUsersFilter';
 import {
   adminUsersSort,
-  apiKeyStages,
   buildAdminUsersMatch,
   organizationNamesOf,
   type AdminUsersQueryContext,
@@ -116,24 +114,20 @@ describe('organizationNamesOf', () => {
   });
 });
 
-describe('apiKeyStages', () => {
-  it('adds nothing without a key filter', () => {
-    expect(apiKeyStages({}, 'userapikeys')).toEqual([]);
+describe('buildAdminUsersMatch hasApiKey', () => {
+  const keyed = { ...context, liveApiKeyUserIds: ['b'.repeat(24), 'not-an-object-id'] };
+
+  it('matches the resolved live-key holders by _id, skipping ids that are not ObjectIds', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ hasApiKey: 'yes' }, keyed))).toEqual([
+      { _id: { $in: [{ objectId: 'b'.repeat(24) }] } },
+    ]);
+    expect(conditionsOf(buildAdminUsersMatch({ hasApiKey: 'no' }, keyed))).toEqual([
+      { _id: { $nin: [{ objectId: 'b'.repeat(24) }] } },
+    ]);
   });
 
-  it('looks up one live key and keeps users with or without one', () => {
-    const [lookup, match, project] = apiKeyStages({ hasApiKey: 'yes' }, 'keys');
-    expect(lookup).toMatchObject({
-      $lookup: {
-        from: 'keys',
-        pipeline: expect.arrayContaining([{ $limit: 1 }]),
-        as: 'liveApiKey',
-      },
-    });
-    expect(JSON.stringify(lookup)).toContain(ApiKeyStatus.DISABLED);
-    expect(match).toEqual({ $match: { liveApiKey: { $ne: [] } } });
-    expect(project).toEqual({ $project: { liveApiKey: 0 } });
-    expect(apiKeyStages({ hasApiKey: 'no' }, 'keys')[1]).toEqual({ $match: { liveApiKey: { $eq: [] } } });
+  it('refuses a key filter whose holders were not resolved', () => {
+    expect(() => buildAdminUsersMatch({ hasApiKey: 'yes' }, context)).toThrow('liveApiKeyUserIds');
   });
 });
 

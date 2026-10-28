@@ -322,7 +322,7 @@ export function DataTable<Row>({
                       onClick={() => changeSort(column.id)}
                     >
                       {column.label}
-                      {sort?.columnId === column.id && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
+                      {sort?.columnId === column.id && (sort.direction === 'asc' ? ' \u2191' : ' \u2193')}
                     </Button>
                   ) : (
                     column.label

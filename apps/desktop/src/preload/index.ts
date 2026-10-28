@@ -22,6 +22,12 @@ import type { CookieImportRequest, CookieImportState } from '@shared/browserCook
 import type { ClaudeImportState } from '@shared/claudeImport';
 import type { DevLogRecord } from '@shared/devLog';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
+import type {
+  ModelServerAddInput,
+  ModelServerProbeInput,
+  ModelServerUpdateInput,
+  ModelServerView,
+} from '@shared/modelServers';
 import type { HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
 import {
   IPC_CHANNELS,
@@ -320,6 +326,20 @@ const api: DesktopApi = {
       const handler = (_event: unknown, state: McpServersState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.mcpServersChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.mcpServersChanged, handler);
+    },
+  },
+  modelServers: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.modelServersList),
+    probe: (input: ModelServerProbeInput) => ipcRenderer.invoke(IPC_CHANNELS.modelServersProbe, input),
+    add: (input: ModelServerAddInput) => ipcRenderer.invoke(IPC_CHANNELS.modelServersAdd, input),
+    update: (id: string, input: ModelServerUpdateInput) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelServersUpdate, id, input),
+    remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersRemove, id),
+    check: (id?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersCheck, id),
+    onChanged: listener => {
+      const handler = (_event: unknown, servers: ModelServerView[]) => listener(servers);
+      ipcRenderer.on(IPC_CHANNELS.modelServersChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelServersChanged, handler);
     },
   },
   tools: {
