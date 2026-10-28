@@ -266,9 +266,6 @@ export const Artifact =
 
 // Repository implementation
 export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
-  // Add shareable property required by interface
-  public shareable: any = {}; // Placeholder for IShareableStaticMethods
-
   constructor(model: Model<IArtifactDocument>) {
     super(model);
   }

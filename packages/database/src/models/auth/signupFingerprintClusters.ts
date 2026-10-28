@@ -2,7 +2,15 @@ import { z } from 'zod';
 import { JA4_PATTERN, ja4FingerprintSchema, type SignupFingerprintCluster } from '@bike4mind/common';
 import { User } from './UserModel';
 
-const querySchema = z
+export interface SignupFingerprintQuery {
+  windowStart: Date;
+  windowEnd: Date;
+  minimumSignups: number;
+  excludedFingerprints: string[];
+  limit: number;
+}
+
+const querySchema: z.ZodType<SignupFingerprintQuery> = z
   .object({
     windowStart: z.date(),
     windowEnd: z.date(),
@@ -14,8 +22,6 @@ const querySchema = z
     q => q.windowStart < q.windowEnd && q.windowEnd.getTime() - q.windowStart.getTime() <= 90 * 24 * 60 * 60_000,
     'Window must be increasing and at most 90 days'
   );
-
-export type SignupFingerprintQuery = z.infer<typeof querySchema>;
 
 /**
  * Counts user records, including retained soft-deleted accounts, rather than auth events.
