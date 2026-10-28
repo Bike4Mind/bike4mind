@@ -101,6 +101,50 @@ describe('KimiBackend reasoning capture', () => {
     expect(frames.at(-1)?.info.toolsUsed?.map(t => t.name)).toEqual(['search']);
   });
 
+  it('replays a parallel round as ONE assistant message carrying every call and the reasoning', async () => {
+    // Moonshot's thinking guide requires the monologue back inside a tool-call
+    // loop. One assistant message per call left every message after the first
+    // without reasoning_content, and the replay dropped it entirely before that.
+    const toolFn = vi.fn().mockResolvedValue('tool output');
+    const { backend, create } = backendReturning([]);
+    create.mockResolvedValueOnce({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: '',
+            reasoning_content: 'search twice',
+            tool_calls: [
+              { id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+              { id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    create.mockResolvedValue({
+      choices: [{ index: 0, message: { content: 'done' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 12, completion_tokens: 6 },
+    });
+
+    await runTurn(backend, ChatModels.KIMI_K3, {
+      tools: [{ toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn }],
+    });
+
+    expect(toolFn).toHaveBeenCalledTimes(2);
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages).toHaveLength(1);
+    expect(toolCallMessages[0].reasoning_content).toBe('search twice');
+    expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
+    expect(secondRequest.messages.slice(-2).map(m => [m.role, m.tool_call_id, m.name])).toEqual([
+      ['tool', 't1', 'search'],
+      ['tool', 't2', 'search'],
+    ]);
+  });
+
   it('throws a diagnosable error when reasoning consumed the whole output budget', async () => {
     // A K3 turn that hits max_completion_tokens mid-reasoning returns empty
     // content, which used to surface as a blank reply with no error at all.
@@ -429,6 +473,49 @@ describe('KimiBackend streaming reasoning', () => {
     expect(joined).toContain('<think>let me search</think>');
     expect(joined).toContain('the answer');
     expect(joined.match(/<think>/g)?.length).toBe(joined.match(/<\/think>/g)?.length);
+  });
+
+  it('replays a streamed parallel round as ONE assistant message carrying the reasoning', async () => {
+    const toolFn = vi.fn().mockResolvedValue('42');
+    const { backend, create } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'search ' } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: 'twice' } }] },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+                  { index: 1, id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'the answer' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 12, completion_tokens: 6 },
+        },
+      ],
+    ]);
+
+    await runStream(backend, ChatModels.KIMI_K3, {
+      tools: [{ toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn }],
+    });
+
+    expect(toolFn).toHaveBeenCalledTimes(2);
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages).toHaveLength(1);
+    // Raw, unescaped and without the <think> wrapper the UI stream gets.
+    expect(toolCallMessages[0].reasoning_content).toBe('search twice');
+    expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
   });
 
   it('keeps the prose from a delta that carries the monologue tail and the answer together', async () => {
