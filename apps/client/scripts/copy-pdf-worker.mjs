@@ -62,6 +62,9 @@ const ASSET_DIRS = ['wasm', 'standard_fonts', 'cmaps', 'iccs'];
 const ASSETS_DIR_PREFIX = 'pdfjs-assets-';
 // pdf.js's scripting sandbox (a JS interpreter), which PdfViewer never enables; not worth serving.
 const UNUSED_WASM_PREFIX = 'quickjs-';
+// License texts ship beside every asset directory. They have no runtime use and no extension,
+// and the hosted asset store does not serve extensionless files.
+const LICENSE_PREFIX = 'LICENSE';
 const TEMP_SUFFIX = '.tmp';
 const TEMP_MAX_AGE_MS = 10 * 60 * 1000;
 const COMPLETE_MARKER = '.complete';
@@ -124,7 +127,10 @@ function main() {
     for (const dir of ASSET_DIRS) {
       cpSync(path.join(pdfjsDir, dir), path.join(tempDir, dir), {
         recursive: true,
-        filter: source => !path.basename(source).startsWith(UNUSED_WASM_PREFIX),
+        filter: source => {
+          const name = path.basename(source);
+          return !name.startsWith(UNUSED_WASM_PREFIX) && !name.startsWith(LICENSE_PREFIX);
+        },
       });
     }
     writeFileSync(path.join(tempDir, COMPLETE_MARKER), '');

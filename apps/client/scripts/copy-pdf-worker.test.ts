@@ -84,8 +84,23 @@ describe('copy-pdf-worker.mjs', () => {
     ]) {
       expect(fs.readFileSync(path.join(dir, ASSETS_NAME, file))).toEqual(fs.readFileSync(path.join(pdfjsDir, file)));
     }
-    const expectedWasm = fs.readdirSync(path.join(pdfjsDir, 'wasm')).filter(f => !f.startsWith('quickjs-'));
+    const expectedWasm = fs
+      .readdirSync(path.join(pdfjsDir, 'wasm'))
+      .filter(f => !f.startsWith('quickjs-') && !f.startsWith('LICENSE'));
     expect(fs.readdirSync(path.join(dir, ASSETS_NAME, 'wasm')).sort()).toEqual(expectedWasm.sort());
+  });
+
+  it('leaves the license texts behind so no extensionless file reaches the assets directory', () => {
+    const dir = makeTempDir();
+
+    const result = run(dir);
+
+    expect(result.status).toBe(0);
+    const copied = ASSET_DIRS.flatMap(sub => fs.readdirSync(path.join(dir, ASSETS_NAME, sub)));
+    expect(copied.filter(f => f.startsWith('LICENSE'))).toEqual([]);
+    expect(copied.filter(f => !f.includes('.'))).toEqual([]);
+    // pdfjs-dist really ships them, so the filter is doing the work.
+    expect(fs.readdirSync(path.join(pdfjsDir, 'cmaps'))).toContain('LICENSE');
   });
 
   it('exits 1 and leaves no assets directory when a pdfjs-dist asset directory is missing', () => {
