@@ -335,7 +335,7 @@ Backfill with a script that only **reads** Stripe (`subscriptions.retrieve` per 
 
 ### 6.2 BillingEvent store
 
-The webhook persists one `BillingEvent` per handled Stripe event:
+The webhook persists one `BillingEvent` per Stripe event this stage owns (the same `metadata.stage` check the handlers already apply, run before the write, so a stage never stores another stage's events from the shared test account):
 
 - `stripeEventId` (unique; the row is upserted on it)
 - `type`
@@ -353,9 +353,9 @@ A nightly cron. This is acceptable under infra principle 5 (cleanup and reconcil
 
 - **Read-only to Stripe.**
 - It compares each non-terminal Mongo Stripe-sourced row with Stripe on status, priceId, quantity, period end, cancel flag and unit amount, and compares `organization.seats` with the billed quantity.
-- It finds two orphan cases in each direction:
-  - Stripe active subscriptions with no Mongo row;
-  - Mongo active rows whose Stripe subscription is gone.
+- It finds one orphan case in each direction:
+  - Stripe active subscriptions with no Mongo row, considering only subscriptions with `metadata.stage === Config.STAGE` (plus stage-less ones in production only, mirroring `isStageCreditPurchase`), because stages share the Stripe test account;
+  - Mongo active rows whose Stripe subscription is gone (already stage-scoped, since it starts from this stage's rows).
 - It writes `BillingMismatch` findings (open/resolved), which feed the banner, the Mismatched view and the Mismatch chip.
 
 "Sync from Stripe" (5.2) resolves a finding by applying the same Stripe-wins rule the worker already uses. Has a DLQ. Pages Stripe with `autoPagingEach` under a time budget, the way `creditPurchaseReconciliation` does.
