@@ -180,6 +180,10 @@ export const deleteAgentContract = defineEndpoint({
 const AUTHORING_SCOPE_NOTE =
   'Requires `agents:write`: the assistants run models on the deployment, which is management of the agent.';
 
+const AUTHORING_FORBIDDEN =
+  `${WRITE_FORBIDDEN} The same status also answers a caller whose account has AI access revoked; that body ` +
+  'carries only `error`, with no `required_scopes`.';
+
 const AUTHORING_400 =
   'The assistant cannot run: the feature is disabled or not configured on this deployment. Nothing is written.';
 
@@ -210,7 +214,7 @@ export const generateAgentAvatarContract = defineEndpoint({
         '(`errorCode: storage_limit_exceeded`). Nothing is written.',
       schema: ApiErrorSchema,
     },
-    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: BODY_422, schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
@@ -240,7 +244,7 @@ export const generateAgentDescriptionContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The generated description.', schema: GenerateAgentDescriptionResponseSchema },
-    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
     502: { description: AUTHORING_502, schema: ApiErrorSchema },
@@ -265,7 +269,7 @@ export const generateAgentSystemPromptContract = defineEndpoint({
   responses: {
     200: { description: 'The saved system prompt.', schema: GenerateAgentSystemPromptResponseSchema },
     400: { description: AUTHORING_400, schema: ApiErrorSchema },
-    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     429: {
       description:
@@ -303,7 +307,7 @@ export const enhanceAgentFieldContract = defineEndpoint({
       description: 'No model is available to run the enhancement on this deployment.',
       schema: ApiErrorSchema,
     },
-    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: BODY_422, schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
