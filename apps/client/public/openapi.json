@@ -12468,8 +12468,34 @@
                       "type": "string"
                     }
                   },
+                  "claude_code_allowed_tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Tools pre-approved when the skill runs in Claude Code."
+                  },
                   "disable_model_invocation": {
                     "type": "boolean"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "content"
+                      ]
+                    },
+                    "description": "Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version."
                   }
                 },
                 "required": [
@@ -12477,6 +12503,7 @@
                   "description",
                   "argument_hint",
                   "allowed_tools",
+                  "claude_code_allowed_tools",
                   "disable_model_invocation"
                 ]
               },
@@ -12889,8 +12916,34 @@
                       "type": "string"
                     }
                   },
+                  "claude_code_allowed_tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Tools pre-approved when the skill runs in Claude Code."
+                  },
                   "disable_model_invocation": {
                     "type": "boolean"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "content"
+                      ]
+                    },
+                    "description": "Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version."
                   }
                 },
                 "required": [
@@ -12898,6 +12951,7 @@
                   "description",
                   "argument_hint",
                   "allowed_tools",
+                  "claude_code_allowed_tools",
                   "disable_model_invocation"
                 ]
               },
@@ -13250,8 +13304,34 @@
                               "type": "string"
                             }
                           },
+                          "claude_code_allowed_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Tools pre-approved when the skill runs in Claude Code."
+                          },
                           "disable_model_invocation": {
                             "type": "boolean"
+                          },
+                          "files": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "path": {
+                                  "type": "string"
+                                },
+                                "content": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "path",
+                                "content"
+                              ]
+                            },
+                            "description": "Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version."
                           }
                         },
                         "required": [
@@ -13259,6 +13339,7 @@
                           "description",
                           "argument_hint",
                           "allowed_tools",
+                          "claude_code_allowed_tools",
                           "disable_model_invocation"
                         ]
                       },
@@ -13619,8 +13700,34 @@
                       "type": "string"
                     }
                   },
+                  "claude_code_allowed_tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Tools pre-approved when the skill runs in Claude Code."
+                  },
                   "disable_model_invocation": {
                     "type": "boolean"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "content"
+                      ]
+                    },
+                    "description": "Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version."
                   }
                 },
                 "required": [
@@ -13628,6 +13735,7 @@
                   "description",
                   "argument_hint",
                   "allowed_tools",
+                  "claude_code_allowed_tools",
                   "disable_model_invocation"
                 ]
               },
@@ -13939,8 +14047,34 @@
                       "type": "string"
                     }
                   },
+                  "claude_code_allowed_tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Tools pre-approved when the skill runs in Claude Code."
+                  },
                   "disable_model_invocation": {
                     "type": "boolean"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "content"
+                      ]
+                    },
+                    "description": "Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version."
                   }
                 },
                 "required": [
@@ -13948,6 +14082,7 @@
                   "description",
                   "argument_hint",
                   "allowed_tools",
+                  "claude_code_allowed_tools",
                   "disable_model_invocation"
                 ]
               },
@@ -14141,8 +14276,34 @@
                             "type": "string"
                           }
                         },
+                        "claude_code_allowed_tools": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Tools pre-approved when the skill runs in Claude Code."
+                        },
                         "disable_model_invocation": {
                           "type": "boolean"
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "content": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "content"
+                            ]
+                          },
+                          "description": "Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version."
                         }
                       },
                       "required": [
@@ -14150,6 +14311,7 @@
                         "description",
                         "argument_hint",
                         "allowed_tools",
+                        "claude_code_allowed_tools",
                         "disable_model_invocation"
                       ]
                     },
@@ -14472,8 +14634,34 @@
                             "type": "string"
                           }
                         },
+                        "claude_code_allowed_tools": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Tools pre-approved when the skill runs in Claude Code."
+                        },
                         "disable_model_invocation": {
                           "type": "boolean"
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "content": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "content"
+                            ]
+                          },
+                          "description": "Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version."
                         }
                       },
                       "required": [
@@ -14481,6 +14669,7 @@
                         "description",
                         "argument_hint",
                         "allowed_tools",
+                        "claude_code_allowed_tools",
                         "disable_model_invocation"
                       ]
                     }
@@ -14553,8 +14742,34 @@
                       "type": "string"
                     }
                   },
+                  "claude_code_allowed_tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Tools pre-approved when the skill runs in Claude Code."
+                  },
                   "disable_model_invocation": {
                     "type": "boolean"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "content"
+                      ]
+                    },
+                    "description": "Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version."
                   }
                 },
                 "required": [
@@ -14562,6 +14777,7 @@
                   "description",
                   "argument_hint",
                   "allowed_tools",
+                  "claude_code_allowed_tools",
                   "disable_model_invocation"
                 ]
               },

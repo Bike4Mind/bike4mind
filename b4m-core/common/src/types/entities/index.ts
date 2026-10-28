@@ -45,6 +45,7 @@ export * from './AnalyticsTypes';
 export * from './FavoriteTypes';
 export * from './CreditTransactionTypes';
 export * from './UsageEventTypes';
+export * from './UsagePatternSignalTypes';
 export * from './ModelPriceTypes';
 export * from './ModelCatalogTypes';
 export * from './ProviderInvoiceTypes';
@@ -130,5 +131,6 @@ export * from './adminActionReason';
 export * from './adminAuditCatalogue';
 export * from './adminAuditQuery';
 export * from './adminUserActivity';
+export * from './adminUserTimeline';
 
 export * from './SignupProtectionTypes';

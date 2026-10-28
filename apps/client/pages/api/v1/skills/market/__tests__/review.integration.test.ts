@@ -277,6 +277,7 @@ describe('/api/v1/skills/market/review-queue', () => {
         body: 'Old.',
         argument_hint: null,
         allowed_tools: [],
+        claude_code_allowed_tools: [],
         disable_model_invocation: false,
       },
     });

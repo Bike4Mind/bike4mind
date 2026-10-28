@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { archFromModelInfo } from '@bike4mind/local-models';
 import { AUTO_LOCAL_CONTEXT, LOCAL_CONTEXT_SIZES } from '@shared/localContextSetting';
-import { cpuMachine, discreteMachine, lowConfidenceMachine } from './fitStub.testHelper';
+import { cpuMachine, discreteMachine, lowConfidenceMachine, unifiedMachine } from './fitStub.testHelper';
 import { chatContextTokens, fitsInMemory, grownContext, loadsInMemory, type LocalModelFootprint } from './localContext';
 
 // The real estimator on shapes Ollama 0.40 reports, so these assert relations that survive its tuning.
@@ -42,9 +42,10 @@ describe('local context sizing with the real fit estimate', () => {
     expect(auto(eightB(lowConfidenceMachine(62)))).toBe(16384);
   });
 
-  it('starts a model that fits at its trained length once the probe reports a CPU-only machine with confidence', () => {
+  it('starts a model that fits at its trained length, at most 32K, once the probe reports a CPU-only machine', () => {
     expect(auto(halfB(cpuMachine(62)))).toBe(32768);
-    expect(auto(eightB(cpuMachine(62)))).toBe(40960);
+    expect(auto(eightB(cpuMachine(62)))).toBe(32768);
+    expect(auto(eightB(unifiedMachine(62)))).toBe(40960);
   });
 
   it('reads a plan that offloads layers as loading but not resident', () => {
@@ -64,8 +65,14 @@ describe('local context sizing with the real fit estimate', () => {
   });
 
   it('grows once to a resident size that holds the prompt, and by one Settings size on the low-confidence profile', () => {
-    const grown = grownContext(eightB(cpuMachine(62)), 20_000, undefined, undefined, 16384);
-    expect(grown).toEqual({ tokens: 40960, slower: false });
+    expect(grownContext(eightB(cpuMachine(62)), 20_000, undefined, undefined, 16384)).toEqual({
+      tokens: 32768,
+      slower: false,
+    });
+    expect(grownContext(eightB(cpuMachine(62)), 33_000, undefined, undefined, 32768)).toEqual({
+      tokens: 40960,
+      slower: false,
+    });
     expect(grownContext(eightB(lowConfidenceMachine(62)), 20_000, undefined, undefined, 16384)).toEqual({
       tokens: 32768,
       slower: false,

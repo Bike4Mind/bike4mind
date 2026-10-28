@@ -17,6 +17,8 @@ const PRIVILEGED = 'Present only for the listing author.';
 
 export const SkillListingVisibilitySchema = z.enum(['public', 'organization', 'unlisted']);
 
+export const PublicSkillFileSchema = z.object({ path: z.string(), content: z.string() });
+
 export const PublicSkillSnapshotSchema = z.object({
   name: z.string(),
   description: z.string(),
@@ -26,7 +28,14 @@ export const PublicSkillSnapshotSchema = z.object({
     .describe('The SKILL.md body. Omitted from marketplace list responses; included in the review queue.'),
   argument_hint: z.string().nullable(),
   allowed_tools: z.array(z.string()),
+  claude_code_allowed_tools: z.array(z.string()).describe('Tools pre-approved when the skill runs in Claude Code.'),
   disable_model_invocation: z.boolean(),
+  files: z
+    .array(PublicSkillFileSchema)
+    .optional()
+    .describe(
+      'Supporting files under scripts/ or references/, sorted by path. Present whenever `body` is, except on a review-queue `previous` version.'
+    ),
 });
 
 export const PublicSkillHonestSummarySchema = z.object({

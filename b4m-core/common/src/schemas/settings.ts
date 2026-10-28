@@ -440,6 +440,8 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'usagePatternSignalsEnabled',
+  'usagePatternSignalsConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -1233,6 +1235,47 @@ export function makeContributedBooleanSetting(
 //     schema: z.array(z.string()).default(config.defaultValue ?? []),
 //   };
 // }
+
+/**
+ * Thresholds and weights for the per-user usage pattern signals
+ * (b4m-core/services/src/userService/usagePatternSignals.ts). The defaults are generic
+ * placeholders; a deployment tunes the real values in admin settings.
+ */
+export const UsagePatternSignalsConfigSchema = z.object({
+  /** Users with usage in this many recent hours are candidates; keep it near the hourly job cadence. */
+  activeWindowHours: z.number().int().min(1).max(720).prefault(2),
+  /** Free-tier users scored per run; the least recently scored go first. */
+  maxUsersPerRun: z.number().int().min(1).max(10_000).prefault(500),
+  /** Window for the cadence and credit-polling signals. */
+  lookbackDays: z.number().int().min(1).max(90).prefault(7),
+  /** Window for the API-only signal. */
+  apiOnlyLookbackDays: z.number().int().min(1).max(365).prefault(30),
+  /** Most recent UsageEvent rows read per user, bounding each user's read. */
+  maxEventsPerUser: z.number().int().min(10).max(50_000).prefault(5000),
+  weights: z
+    .object({
+      apiOnlyUsage: z.number().min(0).max(100).prefault(25),
+      regularCadence: z.number().min(0).max(100).prefault(25),
+      creditPolling: z.number().min(0).max(100).prefault(25),
+      quickApiKey: z.number().min(0).max(100).prefault(25),
+    })
+    .prefault({}),
+  reviewThreshold: z.number().min(1).max(100).prefault(50),
+  apiOnlyMinRequests: z.number().int().min(1).prefault(20),
+  /** Share (0-1) of usage made with an API key at which apiOnlyUsage triggers. */
+  apiOnlyMinShare: z.number().min(0).max(1).prefault(1),
+  /** Requests whose inter-request gaps are measured. */
+  cadenceSampleSize: z.number().int().min(3).max(1000).prefault(30),
+  /** Coefficient of variation of the gaps at or below which regularCadence triggers. */
+  cadenceMaxVariation: z.number().min(0).prefault(0.2),
+  creditPollMinCount: z.number().int().min(1).prefault(20),
+  creditPollMinPerCompletion: z.number().positive().prefault(2),
+  quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(30),
+  /** A first key created up to this many days before verification also triggers quickApiKey. */
+  quickApiKeyMaxDaysBeforeVerification: z.number().int().min(0).max(365).prefault(1),
+});
+
+export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
 
 export enum ServerStatusEnum {
   Live = 'live',
@@ -2230,7 +2273,7 @@ export const API_SERVICE_GROUPS = {
   RATE_LIMITING: {
     id: 'rateLimitingService',
     name: 'API Rate Limiting',
-    description: 'Per-user request rate limits on /chat and /opti, tunable per subscription tier (#9780)',
+    description: 'Per-user request rate limits on every per-user rate-limited API route, tunable per subscription tier',
     icon: 'Speed',
     settings: [
       { key: 'apiRateLimitFreePerMin', order: 1 },
@@ -2301,6 +2344,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'LakeAccessAuditRetentionDays', order: 1 },
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
       { key: 'LakeConfigAuditRetentionDays', order: 3 },
+    ],
+  },
+  USAGE_PATTERN_SIGNALS: {
+    id: 'usagePatternSignalsService',
+    name: 'Usage Pattern Signals',
+    description: 'Hourly read-only analysis of free-tier usage patterns for admin review',
+    icon: 'Security',
+    settings: [
+      { key: 'usagePatternSignalsEnabled', order: 1 },
+      { key: 'usagePatternSignalsConfig', order: 2 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3144,9 +3197,11 @@ export const settingsMap = {
     key: 'apiRateLimitFreePerMin',
     name: 'API Rate Limit — Free (requests/min)',
     defaultValue: 10,
-    min: 1,
+    min: 0,
     max: 100000,
-    description: 'Max /chat and /opti requests per minute for users with no active paid subscription.',
+    int: true,
+    description:
+      'Max requests per minute on tier-limited API routes for Free-tier users: in-app chat, API chat, the whole /api/v1 public API (including non-AI reads and writes of projects, files and artifacts) and MCP connections. Set to 0 to block Free-tier users from all of these and from AI helpers such as optimize-input, rapid-reply and data-lake search. Helpers keep their own fixed caps when this is positive.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 1,
@@ -3157,7 +3212,9 @@ export const settingsMap = {
     defaultValue: 30,
     min: 1,
     max: 100000,
-    description: 'Max /chat and /opti requests per minute for Basic-tier subscribers (e.g. Professional plan).',
+    int: true,
+    description:
+      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Basic-tier subscribers (e.g. Professional plan). AI helper routes keep their own fixed caps.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 2,
@@ -3168,7 +3225,9 @@ export const settingsMap = {
     defaultValue: 60,
     min: 1,
     max: 100000,
-    description: 'Max /chat and /opti requests per minute for Pro-tier subscribers.',
+    int: true,
+    description:
+      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Pro-tier subscribers. AI helper routes keep their own fixed caps.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,
@@ -3697,6 +3756,28 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  usagePatternSignalsEnabled: makeBooleanSetting({
+    key: 'usagePatternSignalsEnabled',
+    name: 'Usage Pattern Signals',
+    defaultValue: false,
+    description:
+      'Runs an hourly job that computes usage pattern signals for recently active free-tier accounts and stores the latest result per account for review. Read-only: it never changes an account, its keys or its credits.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
+    order: 1,
+  }),
+  usagePatternSignalsConfig: makeObjectSetting({
+    key: 'usagePatternSignalsConfig',
+    name: 'Usage Pattern Signals: Thresholds and Weights',
+    defaultValue: UsagePatternSignalsConfigSchema.parse({}),
+    description:
+      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun, maxEventsPerUser), the windows for the API-only signal (apiOnlyLookbackDays) and for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. Unknown fields are ignored.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
+    order: 2,
+    dependsOn: 'usagePatternSignalsEnabled',
+    schema: UsagePatternSignalsConfigSchema,
   }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).

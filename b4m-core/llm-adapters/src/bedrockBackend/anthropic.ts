@@ -39,6 +39,7 @@ import {
   resolveAnthropicEffort,
 } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
+import { ensureToolPairingIntegrity } from '../toolPairingUtils';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
 
 enum ClaudeChunkTypes {
@@ -886,7 +887,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     // Filter and validate messages to ensure content is valid
     // Bedrock/Anthropic rejects "text content blocks must contain non-whitespace text"
-    const filteredMessages = messages
+    const sanitizedMessages = messages
       .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content !== null && m.content !== undefined)
       // Unlike the other backends this one forwards IMessage objects into the request body largely
       // as-is, so control-only fields have to be dropped here rather than left to the invariant that
@@ -935,6 +936,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         return { ...m, content: '' };
       })
       .filter(m => m.content !== '' && (Array.isArray(m.content) ? m.content.length > 0 : true));
+
+    // Dropping role/empty messages above can leave a tool_result with no tool_use right before it,
+    // which Bedrock rejects. Same pass anthropicBackend runs - keep the two in sync.
+    const filteredMessages = ensureToolPairingIntegrity(
+      sanitizedMessages as unknown as IMessage[],
+      Logger.globalInstance
+    ) as unknown as typeof sanitizedMessages;
 
     if (filteredMessages.length === 0) {
       throw new BadRequestError('request must contain at least one non-empty user or assistant message');
