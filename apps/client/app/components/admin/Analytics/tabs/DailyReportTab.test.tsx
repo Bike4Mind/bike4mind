@@ -59,4 +59,28 @@ describe('DailyReportTab', () => {
 
     expect(screen.getByText('Report for 2026-08-01')).toBeTruthy();
   });
+
+  it('renders a per-date error as an error card, not as report text', () => {
+    useAnalyticsData.mockReturnValue({
+      data: {
+        reports: [
+          { date: '2026-08-02', report: '', error: 'Error generating report for 2026-08-02: db down' },
+          { date: '2026-08-01', report: 'Some activity' },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <TestWrapper>
+        <DailyReportTab onRefresh={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('daily-report-error-2026-08-02')).toBeTruthy();
+    expect(screen.queryByText('Report for 2026-08-02')).toBeNull();
+    expect(screen.getByText('Report for 2026-08-01')).toBeTruthy();
+  });
 });
