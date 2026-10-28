@@ -23,6 +23,7 @@ import { LocalContextSettings, localContextSummary, useLocalContextSetting } fro
 import { LocalHistorySettings } from './LocalHistorySettings';
 import type { ModelServerView } from '@shared/modelServers';
 import { ModelServersSettings, modelServersSummary, useModelServers } from './ModelServersSettings';
+import { WorktreesSettings } from './WorktreesSettings';
 import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
 import {
   ArrowLeftIcon,
@@ -170,6 +171,16 @@ function localHistoryEntry(): ConfigEntry {
   };
 }
 
+function worktreesEntry(): ConfigEntry {
+  return {
+    id: 'worktrees',
+    icon: <BranchIcon />,
+    label: 'Worktrees',
+    summary: 'Worktrees the app made for your projects, and the ones no conversation uses any more.',
+    control: <WorktreesSettings />,
+  };
+}
+
 function permissionsEntry(
   state: PermissionsState | null,
   setState: (state: PermissionsState) => void,
@@ -259,7 +270,7 @@ function modelServersEntry(
 }
 
 /** The pages of Settings, in the order the side nav lists them. */
-export const SETTINGS_SECTIONS = ['general', 'servers', 'permissions', 'import'] as const;
+export const SETTINGS_SECTIONS = ['general', 'servers', 'permissions', 'import', 'worktrees'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -274,6 +285,7 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   servers: 'Model servers',
   permissions: 'Permissions',
   import: 'Import',
+  worktrees: 'Worktrees',
 };
 
 const SECTION_ICON: Record<SettingsSection, ReactNode> = {
@@ -281,6 +293,7 @@ const SECTION_ICON: Record<SettingsSection, ReactNode> = {
   servers: <ServerIcon />,
   permissions: <ShieldIcon />,
   import: <FolderIcon />,
+  worktrees: <BranchIcon />,
 };
 
 /**
@@ -320,6 +333,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
     servers: [modelServersEntry(modelServers, setModelServers, modelServersError)],
     permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
     import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport)],
+    worktrees: [worktreesEntry()],
   };
 }
 

@@ -60,6 +60,7 @@ describe('the Settings screen', () => {
   });
 
   it('only takes known page names from the route', () => {
+    expect(isSettingsSection('worktrees')).toBe(true);
     expect(isSettingsSection('import')).toBe(true);
     expect(isSettingsSection('billing')).toBe(false);
     expect(isSettingsSection(undefined)).toBe(false);
