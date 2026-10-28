@@ -153,9 +153,11 @@ describe('generateReleaseNotes', () => {
       .mockResolvedValueOnce(triageReply([{ number: 2, customerFacing: true, note: 'Two.' }]));
     const logger = { warn: vi.fn() };
 
-    const { notes } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
+    const { notes, usage } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
 
     expect(complete).toHaveBeenCalledTimes(3);
+    const prompts: string[] = complete.mock.calls.map(call => call[0]);
+    expect(usage.inputTokens).toBe(prompts.reduce((sum, prompt) => sum + Math.ceil(prompt.length / 4), 0));
     expect(complete.mock.calls[1][0]).toContain('missing entry for pull request 2');
     const retryPrompt: string = complete.mock.calls[2][0];
     expect(retryPrompt).toContain('"number":2');

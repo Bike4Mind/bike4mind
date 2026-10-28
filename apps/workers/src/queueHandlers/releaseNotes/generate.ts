@@ -205,7 +205,8 @@ type TriageEntry = z.infer<typeof TriageSchema>['entries'][number];
 
 /**
  * One triage call with its repair. A reply that omits or invents PRs still yields the entries for known
- * PRs, so a few omissions cost the caller a follow-up call instead of failing the release.
+ * PRs, so a few omissions cost the caller a follow-up call instead of failing the release. Throws when
+ * neither reply covers any of the PRs.
  */
 async function triageBatch(
   prs: ReleaseNotesJobPr[],
@@ -333,7 +334,7 @@ export async function writeReleaseNotes(
 
 /**
  * Two LLM passes over the release's PRs: triage, then an editorial pass over every customer-facing
- * note. Each reply is Zod-validated with one repair retry before throwing.
+ * note. Each reply is Zod-validated with one repair retry; see `triageReleaseNotes` for omitted PRs.
  */
 export async function generateReleaseNotes(
   prs: ReleaseNotesJobPr[],

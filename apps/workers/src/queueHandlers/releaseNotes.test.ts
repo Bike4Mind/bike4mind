@@ -174,6 +174,7 @@ describe('releaseNotes queue handler', () => {
     expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
     expect(h.writeReleaseNotes.mock.calls[1][3].editorialFeedback).toEqual([expect.stringContaining('acme')]);
     expect(h.triageReleaseNotes).toHaveBeenCalledTimes(1);
+    expect(h.triageReleaseNotes).toHaveBeenCalledWith(validPayload.prs, expect.any(Function), { logger });
     expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
   });
 
