@@ -3289,12 +3289,6 @@ export class ChatService {
     const arrivals: MidTurnArrival[] = [];
     const createdAt = new Date().toISOString();
 
-    const relayHops = taken.flatMap(entry => (entry.relay ? [entry.relay.hops] : []));
-    if (relayHops.length > 0) {
-      const hops = Math.max(this.turnRelay.get(sessionId)?.hops ?? 0, ...relayHops);
-      this.turnRelay.set(sessionId, { hops, sends: 0 });
-    }
-
     if (notice) {
       const automatic: ChatAutomaticOrigin = {
         kind: 'background-exit',
@@ -3352,11 +3346,22 @@ export class ChatService {
       this.restoreArrivals(sessionId, taken);
       throw error;
     }
+
+    // Only once every arrival is built: a restored relay is stranded, so its depth must not stick.
+    const relayHops = taken.flatMap(entry => (entry.relay ? [entry.relay.hops] : []));
+    if (relayHops.length > 0) {
+      const hops = Math.max(this.turnRelay.get(sessionId)?.hops ?? 0, ...relayHops);
+      this.turnRelay.set(sessionId, { hops, sends: 0 });
+    }
     if (taken.some(entry => !entry.relay)) this.wake?.attended(sessionId);
     return arrivals;
   }
 
-  /** Keep unaccepted entries available to the failed-turn handback and relay stranding. */
+  /**
+   * Keep unaccepted entries available to the failed-turn handback and relay stranding. They go
+   * back at the head of the queue in their own order, so ahead of any untaken auto-fix or `/skill`
+   * entry that was queued before them; the failure hands the whole queue back at once.
+   */
   private restoreArrivals(sessionId: string, entries: readonly ChatQueuedMessage[]): void {
     for (const entry of [...entries].reverse()) this.deps.queue?.restore(sessionId, entry);
   }
