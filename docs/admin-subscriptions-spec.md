@@ -1,6 +1,6 @@
 # Admin subscriptions revamp: spec
 
-Status: **draft, awaiting approval**. No product code until this is approved.
+Status: **approved**. The section 9 decisions follow the recommendations. Charts were added at approval (5.7).
 
 Scope: the money side of the admin console. That means paid plans, Stripe subscriptions, comped (admin-granted) plans, seats, billing state, invoices, plan-tied credits and failed payments. It extends the admin polish and user-insights work: same layout, same shared toolkit (`apps/client/app/components/admin/shared/`), same rules (`apps/client/app/components/admin/DESIGN_GUIDE.md`).
 
@@ -285,6 +285,36 @@ Shared helper: `shared/formatMoney.ts`, so that every money cell goes through on
 | Stripe not configured (self-host) | Revenue and the Stripe sections show "Stripe isn't configured on this deployment" with a link to the self-host docs. Comps still fully work. |
 | Unknown price id | The row still renders: Plan "Unknown price" (warn), MRR a dash, and it shows in the Mismatched view. |
 
+### 5.7 Charts
+
+Charts are first-class, not decoration: every money page gets at least one.
+
+**Rules:**
+- Recharts, the same library as the profile `SpendChart`.
+- `accent` is the primary series and `inkMuted` at 40% is the comparison (DESIGN_GUIDE "Color").
+- Status-colored series (past due, failed) use the status tokens, never raw hex.
+- Each chart has a title, a one-line takeaway caption, an accessible data-table fallback ("View as table"), and a tooltip with exact values in the money format (5.5).
+- Charts sit in a `SectionCard`.
+- Loading shows a chart-shaped skeleton. An empty or not-enough-history state says when data starts.
+
+| Where | Chart | Type | Data |
+|---|---|---|---|
+| Revenue | **MRR over time**, with paying customers as the comparison line | line, dual series | RevenueSnapshot |
+| Revenue | **MRR movement**: new, expansion, contraction, churned per month, with net as a line | diverging stacked bars (churn and contraction below zero) | RevenueSnapshot (new / churned in v1; expansion and contraction once BillingEvent history exists) |
+| Revenue | **MRR by plan** | stacked area | RevenueSnapshot by plan |
+| Revenue | **Paying customers by owner type** (individual vs org) | stacked bars | RevenueSnapshot |
+| Revenue | **At-risk MRR**: past due plus canceling over time | area, `warn` token | RevenueSnapshot |
+| Subscriptions list | **Sparklines** in the Paying, MRR and Past due tiles (last 30 days) | `StatSparkline` | RevenueSnapshot |
+| Subscription detail | **Payment history**: invoice amount per period, bars toned by status (paid, failed, refunded) | bars | live Stripe invoices |
+| Subscription detail | **Credits per cycle**: granted vs used per billing period | grouped bars | credit ledger |
+| Subscription detail (orgs) | **Seats used vs paid** over time | step line, two series | BillingEvent + org history |
+
+To make this possible, `RevenueSnapshot` (6.4) also stores per day:
+- MRR by plan and by owner type;
+- the paying count;
+- new and churned MRR;
+- past-due and canceling MRR.
+
 ---
 
 ## 6. Data and server work
@@ -396,21 +426,23 @@ Ordered by value. Each item ships on its own behind the existing admin gate. Lab
 | # | Issue | Size | Depends on |
 |---|---|---|---|
 | 1 | **Rename Subscribers to Waitlist**: nav, slug alias redirect, palette, page copy, email audience labels, docs-site with redirect; move Email marketing to People | S | - |
-| 2 | **Close reason/audit gaps on existing money routes**: reason required on credits-per-cycle, remove, seats, revoke, convert-to-paid; block "remove" on live Stripe-billed rows; new reason preset sets | S | - |
+| 2 | **Close reason/audit gaps on existing money routes**: reason required on credits-per-cycle, remove, seats, revoke, convert-to-paid; block "remove" on live Stripe-billed rows; new reason preset sets. The existing Organizations-tab modals get the minimum change needed to send a reason; their redesign belongs to #5772 | S | - |
 | 3 | **Admin subscriptions list API**: `GET /api/admin/subscriptions` + `summary` + `export`, server filters, org subscriptions included, indexes | M | - |
 | 4 | **Subscriptions list page on the shared toolkit**: views, FilterBar, DataTable server mode, StatStrip (counts only), status tone map, money formatter, CSV export | M | 3 |
-| 5 | **Subscription detail page (Mongo-only)**: header, Overview (Plan, Credits, Owner, Seats), Admin log, comp actions moved to ActionDialog (grant, extend, end, edit credits per cycle, remove); profile and org cards link here; delete legacy `UserSubscriptionStatus`, `EditCreditsModal`, `AdjustSeatsModal` | L | 2, 3 |
+| 5 | **Subscription detail page (Mongo-only)**: header, Overview (Plan, Credits, Owner, Seats), Admin log, comp actions moved to ActionDialog (grant, extend, end, edit credits per cycle, remove); profile and org cards link here; delete legacy `UserSubscriptionStatus` and `EditCreditsModal`. The Organizations-tab modals (`AdjustSeatsModal`, revoke) stay with #5772 | L | 2, 3 |
 | 6 | **Mirror price and cancel fields on Subscription** (6.1), plus a read-only backfill script | M | - |
 | 7 | **MRR in the list**: MRR column and tile, Canceling view | S | 4, 6 |
 | 8 | **Detail: live Stripe read**: Payment card, Invoices tab with credits-granted join, Lifetime paid | M | 5 |
 | 9 | **BillingEvent store and Timeline tab** (6.2) | M | 5 |
 | 10 | **Reconciliation cron, Mismatched view, AnomalyBanner, Sync from Stripe** (6.3); replaces Reconcile seats | M | 4, 6 |
-| 11 | **Revenue page** with daily snapshot (5.3, 6.4) | M | 6, 7 |
-| 12 | **Cancel at period end and resume** with the shared Stripe-write guard | M | 5, 2; **D1** |
-| 13 | **Cancel immediately** | S | 12; **D1, D2** |
-| 14 | **Refund** | M | 8, 12; **D2** |
+| 11 | **Revenue page** with daily snapshot (5.3, 6.4): StatStrip, MRR-over-time chart, MRR-by-plan and At-risk tables | M | 6, 7 |
+| 11b | **Revenue charts**: MRR movement, MRR by plan, paying customers by owner type, at-risk MRR; sparklines on the list tiles (5.7) | M | 11 |
+| 11c | **Detail charts**: payment history, credits granted vs used per cycle, seats used vs paid (5.7) | M | 8, 9 |
+| 12 | **Cancel at period end and resume** with the shared Stripe-write guard | M | 5, 2 |
+| 13 | **Cancel immediately** | S | 12; deferred with D2, not filed |
+| 14 | **Refund** | M | deferred (D2), not filed |
 | 15 | Wishes, one issue each, when prioritized: retry payment (D3), plan / billed-seat change (D4), coupons, card-expiry churn signal, expansion and contraction MRR | - | 12 |
-| 16 | **Cleanup**: Credits inner tabs into the URL, remove the duplicate "User credits" adjuster (point to the profile), delete dead `OrganizationProfile.tsx` | S | - |
+| - | The Credits and Organizations tab cleanup (inner tabs in the URL, the duplicate "User credits" adjuster, the dead `OrganizationProfile.tsx`, the legacy org modals) is already in scope of #5772. Not filed again. | - | - |
 
 - **Ship order:** 1 and 2 are immediate and stand alone.
 - **First visible value:** 3, then 4, then 5. That alone answers J1 (minus invoices), J2, J3, J5 and J12, and fixes the "Remove keeps charging" trap.
@@ -421,9 +453,11 @@ Ordered by value. Each item ships on its own behind the existing admin gate. Lab
 
 ---
 
-## 9. Product decisions needed
+## 9. Product decisions
 
-| # | Decision | Recommendation |
+The recommendations below were approved as written.
+
+| # | Decision | Outcome |
 |---|---|---|
 | D1 | Do admins cancel Stripe subscriptions in-app, or keep using the Stripe Dashboard? | In-app **cancel at period end** with resume (low risk, reversible until the period ends). Cancel immediately only together with D2. |
 | D2 | Do admins issue **money refunds** in-app? If yes: full only, or partial; a per-refund cap; a second-admin approval above the cap? | Not in the first release. Link to the invoice in Stripe; our `charge.refunded` webhook already claws back credits. If approved later: full or partial against one invoice, cap (for example $500) above which a second admin must approve, and typed confirm of the amount. |
