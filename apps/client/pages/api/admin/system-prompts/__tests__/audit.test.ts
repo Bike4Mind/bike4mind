@@ -29,6 +29,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain = Object.assign(
       (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
+        // adminApi registers its permission gate here; promptId.delete.test.ts covers the gate.
+        use: () => chain,
         get: () => chain,
         post: (fn: RouteFn) => ((routes.POST = fn), chain),
         put: (fn: RouteFn) => ((routes.PUT = fn), chain),
