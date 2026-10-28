@@ -71,6 +71,7 @@ describe('the Worktrees view', () => {
     const row = rowFor('app/b');
     expect(row).toContain('Has uncommitted changes');
     expect(row).toContain('worktrees-reveal-btn');
+    expect(row).toContain('Show in folder');
     expect(row).not.toContain('worktrees-remove-btn');
   });
 
