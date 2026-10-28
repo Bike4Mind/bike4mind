@@ -116,8 +116,10 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'qa/tests.ts',
   'rate-limits.ts',
   'recalculate-message-counts.ts',
+  'release-notes/[id].ts',
   'release-notes/[id]/status.ts',
   'release-notes/config.ts',
+  'release-notes/index.ts',
   'retrieval-rate.ts',
   'saved-views/[id].ts',
   'saved-views/index.ts',
@@ -126,6 +128,8 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'security-scan-schedule/[scanType].ts',
   'security-scan-schedules/index.ts',
   'session-usage.ts',
+  'sessions/[id]/index.ts',
+  'sessions/[id]/quests.ts',
   'signup-anomaly.ts',
   'signup-domain-holds.ts',
   'signup-timeseries.ts',
@@ -198,6 +202,9 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'whats-new-highlights-preview.ts',
 ]);
 
+// Helpers that gate on the raw flag internally, so a route calling them is raw-gated even
+// though its own source never names isAdmin.
+const RAW_GATE_HELPER = /\b(?:authorizeSupportRead|canAdministerReleaseNotes)\s*\(/;
 const RAW_GATE = /\b(?:req\.user|user)\s*[?!]*\s*\.\s*isAdmin\b|\bensureAdmin\s*\(/;
 const ADMIN_API_CALL = /\badminApi\s*\(/;
 
@@ -205,7 +212,7 @@ const ADMIN_API_CALL = /\badminApi\s*\(/;
 export function usesRawIsAdminGate(source: string): boolean {
   const { code, terminated } = blankStringLiterals(source);
   if (!terminated) throw new Error('source ends inside a string, template or block comment');
-  return RAW_GATE.test(code) && !ADMIN_API_CALL.test(code);
+  return (RAW_GATE.test(code) || RAW_GATE_HELPER.test(code)) && !ADMIN_API_CALL.test(code);
 }
 
 function routeFiles(dir: string): string[] {
@@ -227,6 +234,13 @@ describe('usesRawIsAdminGate', () => {
     ['a local user binding', 'if (!user?.isAdmin) throw new Error();'],
     ['ensureAdmin(', 'ensureAdmin(req.user?.isAdmin);'],
   ])('flags %s', (_label, code) => {
+    expect(usesRawIsAdminGate(`const handler = baseApi().get(async (req) => { ${code} });`)).toBe(true);
+  });
+
+  it.each([
+    ['authorizeSupportRead(', 'const ctx = await authorizeSupportRead(req);'],
+    ['canAdministerReleaseNotes(', 'if (!canAdministerReleaseNotes(req)) throw new Error();'],
+  ])('flags a route gated through the raw-flag helper %s', (_label, code) => {
     expect(usesRawIsAdminGate(`const handler = baseApi().get(async (req) => { ${code} });`)).toBe(true);
   });
 

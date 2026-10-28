@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { FilterQuery } from 'mongoose';
-import { IModalDocument } from '@bike4mind/common';
+import { IModalDocument, hasAdminPermission } from '@bike4mind/common';
 import { extractVariantForViewer, viewerClassifier } from '@bike4mind/services';
 
 const WHATS_NEW_TAG = 'whats-new';
@@ -12,6 +12,8 @@ const handler = baseApi().get(
   asyncHandler(async (req, res) => {
     if (!req.ability) throw new ForbiddenError('Ability not found');
     if (!req.ability.can('read', ModalModel)) throw new ForbiddenError('Permission denied');
+
+    const canManageModals = hasAdminPermission(req.user, 'settings:manage');
 
     const query = req.query as { tags?: string; excludeWhatsNew?: string };
     const { tags, excludeWhatsNew } = query;
@@ -25,20 +27,20 @@ const handler = baseApi().get(
 
     // Exclude What's New modals from general modals list (default behavior for admin)
     // Unless specifically requesting What's New modals via tags query or excludeWhatsNew=false
-    if (excludeWhatsNew === 'true' || (!tags && req.user?.isAdmin && excludeWhatsNew !== 'false')) {
+    if (excludeWhatsNew === 'true' || (!tags && canManageModals && excludeWhatsNew !== 'false')) {
       filter.tags = { $ne: WHATS_NEW_TAG };
     }
 
     // Publication state was only ever enforced in the browser, so a direct GET served Draft
-    // (enabled:false), not-yet-live and expired modals to any authenticated user. Admins keep
-    // the unfiltered list -- the admin tab lists drafts by design.
+    // (enabled:false), not-yet-live and expired modals to any authenticated user. Admins
+    // (and settings:manage delegates) keep the unfiltered list -- the admin tab lists drafts by design.
     // startDate/endDate are usually date-only strings (`YYYY-MM-DD`, from the admin form's
     // `type="date"` inputs), but the admin form (hooks/data/whatsNewModals.ts) writes a
     // full ISO timestamp into the same field. A bare `$lte: today` treats that longer string as greater than the bare date and
     // hides the modal on its own start day, so the upper bound is padded with the
     // highest-sorting UTF-8 char to stay tolerant of any same-day suffix. endDate's `$gte`
     // side needs no padding: a same-day timestamp already sorts above the bare date.
-    if (!req.user?.isAdmin) {
+    if (!canManageModals) {
       const today = new Date().toISOString().slice(0, 10);
       filter.enabled = true;
       filter.$and = [
@@ -55,7 +57,7 @@ const handler = baseApi().get(
     let audienceKey: string;
     try {
       audienceKey = await viewerClassifier.classify({
-        isAdmin: req.user?.isAdmin ?? false,
+        isAdmin: canManageModals,
       } as never);
     } catch (error) {
       audienceKey = viewerClassifier.safeDefaultKey;

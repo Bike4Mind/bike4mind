@@ -96,8 +96,21 @@ describe('GET /api/modals - delegated settings:manage', () => {
     mockRefs.modals = [];
   });
 
-  it('keeps the publication filter for a settings:manage delegate (drafts stay admin-only)', async () => {
+  it('lists drafts and expired modals for a settings:manage delegate', async () => {
     const { req, res } = mocks(false, {}, ['settings:manage']);
+    await mockRefs.getHandler!(req, res);
+    expect(mockRefs.findFilter.enabled).toBeUndefined();
+    expect(mockRefs.findFilter.$and).toBeUndefined();
+  });
+
+  it("excludes What's New from the default list for a delegate, as for a full admin", async () => {
+    const { req, res } = mocks(false, {}, ['settings:manage']);
+    await mockRefs.getHandler!(req, res);
+    expect(mockRefs.findFilter.tags).toEqual({ $ne: 'whats-new' });
+  });
+
+  it('keeps the publication filter for a delegate holding only another permission', async () => {
+    const { req, res } = mocks(false, {}, ['support:read']);
     await mockRefs.getHandler!(req, res);
     expect(mockRefs.findFilter.enabled).toBe(true);
   });

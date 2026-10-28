@@ -16,7 +16,8 @@ import { MODAL_AUDIENCE_KEY_SET, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/servi
  * serve-time leak guard (`extractVariantForViewer`) is deliberately NOT applied
  * here. Because the guard never runs on this route, it MUST require the
  * settings:manage admin permission (authentication alone would expose every
- * variant to any signed-in user). The serving route (`/api/modals`) always applies the guard.
+ * variant to any signed-in user). The serving route (`/api/modals`) always applies the
+ * guard.
  */
 
 const ADMIN_RATE_LIMIT = 20; // requests per minute

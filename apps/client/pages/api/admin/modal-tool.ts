@@ -30,9 +30,9 @@ const requestSchema = z.object({
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req: any, res: any) => {
-    // Silently fail for non-admin users
+    // Silently fail for callers without modal management access (admins and settings:manage delegates)
     if (!req.ability?.can('manage', 'Modal')) {
-      logger.info('Modal tool access denied for non-admin user - returning silent failure');
+      logger.info('Modal tool access denied (no modal management permission) - returning silent failure');
       return res.json({
         success: false,
         message: 'This feature is not available',
