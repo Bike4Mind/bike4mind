@@ -36,9 +36,21 @@ function copyTreeSitterWasm(): Plugin {
  * packaging run injects them here - then a gitignored `.env`/`.env.local` in this
  * directory, which only exists so a local packaging run is one command rather than a long
  * prefix. Absent both, the value is empty and the feature it gates is off.
+ *
+ * An empty shell value counts as unset for the backend, because CI passes an unset repository
+ * variable through as ''. It does not for the feed: an explicit '' is how the ad-hoc macOS
+ * build in desktop-release.yml switches updates off.
  */
 function baked(mode: string, name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL'): string {
-  return process.env[name] ?? loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
+  const shell = process.env[name];
+  if (shell !== undefined && (shell !== '' || name === 'B4M_UPDATE_FEED_URL')) return shell;
+  // loadEnv lets a prefixed shell value override the file's even when that value is empty.
+  delete process.env[name];
+  try {
+    return loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
+  } finally {
+    if (shell !== undefined) process.env[name] = shell;
+  }
 }
 
 export default defineConfig(({ mode }) => {

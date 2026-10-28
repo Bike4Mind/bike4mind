@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { normalizeSelection, resolveEnvironment, validateSelection } from './environment';
+import { migrateSelection, normalizeSelection, resolveEnvironment, validateSelection } from './environment';
 
 const BAKED = 'B4M_DEFAULT_API_URL';
+const HOSTED = 'https://hosted.example.com';
 
 afterEach(() => {
   delete process.env[BAKED];
@@ -42,6 +43,39 @@ describe('resolveEnvironment', () => {
     expect(resolveEnvironment(undefined, false)).toEqual({ status: 'unconfigured' });
   });
 
+  it('starts a packaged build with a baked default on Production when nothing is stored', () => {
+    process.env[BAKED] = HOSTED;
+
+    expect(resolveEnvironment(undefined, false)).toEqual({
+      status: 'configured',
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+    });
+  });
+
+  it('treats an empty baked default as a fork with no hosted option', () => {
+    process.env[BAKED] = '';
+
+    expect(resolveEnvironment(undefined, false)).toEqual({ status: 'unconfigured' });
+  });
+
+  it('resolves a custom pick of the production URL as Production', () => {
+    process.env[BAKED] = HOSTED;
+
+    expect(resolveEnvironment({ preset: 'custom', customUrl: `${HOSTED.toUpperCase()}/` }, false)).toEqual({
+      status: 'configured',
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+    });
+  });
+
+  it('keeps a custom URL that is not the production one', () => {
+    process.env[BAKED] = HOSTED;
+
+    expect(resolveEnvironment({ preset: 'custom', customUrl: 'https://self-hosted.example.com' }, false)).toEqual({
+      status: 'configured',
+      environment: { preset: 'custom', url: 'https://self-hosted.example.com', label: 'Remote' },
+    });
+  });
+
   it('falls back to the dev server for a source run', () => {
     expect(resolveEnvironment(undefined, true)).toMatchObject({
       status: 'configured',
@@ -53,6 +87,28 @@ describe('resolveEnvironment', () => {
     process.env[BAKED] = 'https://b4m.example.com';
 
     expect(resolveEnvironment({ preset: 'custom' }, true)).toEqual({ status: 'unconfigured' });
+  });
+});
+
+describe('migrateSelection', () => {
+  it('turns a custom pick of the production URL into the hosted preset', () => {
+    process.env[BAKED] = HOSTED;
+
+    expect(migrateSelection({ preset: 'custom', customUrl: HOSTED })).toEqual({ preset: 'hosted' });
+  });
+
+  it('returns every other selection unchanged, by reference', () => {
+    process.env[BAKED] = HOSTED;
+    const other = { preset: 'custom' as const, customUrl: 'https://self-hosted.example.com' };
+
+    expect(migrateSelection(other)).toBe(other);
+    expect(migrateSelection(undefined)).toBeUndefined();
+  });
+
+  it('migrates nothing in a fork, where there is no production URL to match', () => {
+    const custom = { preset: 'custom' as const, customUrl: HOSTED };
+
+    expect(migrateSelection(custom)).toBe(custom);
   });
 });
 
@@ -75,6 +131,12 @@ describe('normalizeSelection', () => {
       preset: 'custom',
       customUrl: 'https://b4m.example.com',
     });
+  });
+
+  it('stores a typed-in production URL as the hosted preset', () => {
+    process.env[BAKED] = HOSTED;
+
+    expect(normalizeSelection({ preset: 'custom', customUrl: ` ${HOSTED}/ ` })).toEqual({ preset: 'hosted' });
   });
 
   it('drops a stale custom URL when the preset is not custom', () => {

@@ -1,4 +1,10 @@
-import { LOCAL_DEV_URL, parseApiUrl, selectApiEndpoint, type ApiEndpoint } from '@bike4mind/client-auth';
+import {
+  LOCAL_DEV_URL,
+  normalizeEnvKey,
+  parseApiUrl,
+  selectApiEndpoint,
+  type ApiEndpoint,
+} from '@bike4mind/client-auth';
 import type { EnvironmentSelection, ResolvedEnvironment } from '@shared/auth';
 
 /**
@@ -12,6 +18,23 @@ export function bakedDefaultApiUrl(): string {
 
 export function hostedAvailable(): boolean {
   return bakedDefaultApiUrl() !== '';
+}
+
+/** Compared by token cache key, so a match is guaranteed to keep the user's stored session. */
+function isBakedDefault(url: string): boolean {
+  const baked = bakedDefaultApiUrl();
+  return baked !== '' && normalizeEnvKey(url) === normalizeEnvKey(baked);
+}
+
+/**
+ * A `custom` pick of the baked production URL, which a build released without its baked default
+ * forced users to type in, is really `hosted`: it should say "Production" and follow the default
+ * if that ever moves. Anything else is returned as is.
+ */
+export function migrateSelection<T extends EnvironmentSelection | undefined>(selection: T): T | EnvironmentSelection {
+  if (selection?.preset !== 'custom' || !selection.customUrl) return selection;
+  const parsed = parseApiUrl(selection.customUrl);
+  return 'url' in parsed && isBakedDefault(parsed.url) ? { preset: 'hosted' } : selection;
 }
 
 /**
@@ -36,7 +59,8 @@ export function resolveEnvironment(
   selection: EnvironmentSelection | undefined,
   devFallback: boolean
 ): { status: 'configured'; environment: ResolvedEnvironment } | { status: 'unconfigured' } {
-  const preset = selection?.preset;
+  const migrated = migrateSelection(selection);
+  const preset = migrated?.preset;
 
   // `local` is an explicit pick, so it bypasses the precedence rule entirely - the baked
   // default must not win over a user who deliberately chose the dev server.
@@ -44,7 +68,7 @@ export function resolveEnvironment(
     return { status: 'configured', environment: { preset: 'local', url: LOCAL_DEV_URL, label: 'Local Dev' } };
   }
 
-  const customUrl = preset === 'custom' ? selection?.customUrl : undefined;
+  const customUrl = preset === 'custom' ? migrated?.customUrl : undefined;
   const endpoint = selectApiEndpoint({
     customUrl,
     // A `custom` pick that lost its URL must not silently fall back to the hosted service
@@ -77,5 +101,5 @@ export function normalizeSelection(selection: EnvironmentSelection): Environment
   if (selection.preset !== 'custom') return { preset: selection.preset };
 
   const parsed = parseApiUrl(selection.customUrl ?? '');
-  return { preset: 'custom', customUrl: 'url' in parsed ? parsed.url : selection.customUrl };
+  return migrateSelection({ preset: 'custom', customUrl: 'url' in parsed ? parsed.url : selection.customUrl });
 }

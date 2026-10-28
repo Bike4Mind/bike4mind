@@ -265,8 +265,9 @@ Desktop updates use only the dedicated repository's Latest release. Production r
 automation is unchanged. Keep source desktop release tags intact;
 changing the package version does not override existing release history.
 
-Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
-Without it, users must select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend. In the
+canonical repository the build job fails without it, so a release cannot ship with no
+Production server; a fork still builds, and its users select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
 dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
 `https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
 destinations fail closed. PR builds have no signing credentials and are not published.

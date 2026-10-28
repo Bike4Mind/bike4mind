@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
 import Divider from '@mui/joy/Divider';
@@ -61,10 +62,48 @@ export function SignInCard({ state }: { state: AuthState }) {
             </Button>
           )}
 
-          <Divider />
-          <EnvironmentPicker state={state} disabled={signingIn} />
+          <ServerChoice state={state} disabled={signingIn} />
         </>
       )}
+    </Stack>
+  );
+}
+
+/**
+ * Once a server resolves it is one line, so the default path is a single click on Sign in. The
+ * picker sits behind "Change server", and is open from the start when nothing resolves.
+ */
+function ServerChoice({ state, disabled }: { state: AuthState; disabled: boolean }) {
+  const [changing, setChanging] = useState(false);
+
+  if (changing || state.status === 'unconfigured') {
+    return (
+      <>
+        <Divider />
+        <EnvironmentPicker state={state} disabled={disabled} />
+      </>
+    );
+  }
+
+  return (
+    <Stack direction="row" spacing={1} alignItems="baseline" flexWrap="wrap" useFlexGap>
+      <Typography level="body-sm" textColor="text.tertiary" data-testid="signin-server-text">
+        Server: {state.environment.label}{' '}
+        <Typography component="span" fontFamily="monospace" fontSize="inherit" textColor="inherit">
+          ({state.environment.url})
+        </Typography>
+      </Typography>
+      <Link
+        level="body-sm"
+        component="button"
+        // Joy's `disabled` on a Link blocks the pointer but not a keyboard press.
+        disabled={disabled}
+        aria-disabled={disabled || undefined}
+        onClick={() => !disabled && setChanging(true)}
+        data-testid="signin-change-server-link"
+      >
+        Change server
+      </Link>
     </Stack>
   );
 }
