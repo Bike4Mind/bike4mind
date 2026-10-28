@@ -31,6 +31,7 @@ import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { emitBillingEvent, emitPurchaseEvents } from '@server/analytics/signupEvents';
+import { reverseSubscriptionRewardForRefund } from '@server/referrals/subscriptionReward';
 import {
   creditBuyerForEvents,
   planDetails,
@@ -388,6 +389,13 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       let user = null;
 
       if (paymentIntentId) {
+        await reverseSubscriptionRewardForRefund({
+          paymentIntentId,
+          amountRefunded: dispute.amount,
+          amountCaptured: dispute.amount,
+          reason: 'disputed',
+        });
+
         const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
         if (originalTx) {
           user = await userRepository.findById(originalTx.ownerId);
@@ -535,6 +543,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         req.logger.debug(`charge.refunded has no payment_intent, skipping`);
         break;
       }
+
+      await reverseSubscriptionRewardForRefund({
+        paymentIntentId: refundPaymentIntentId,
+        amountRefunded: charge.amount_refunded,
+        amountCaptured: charge.amount_captured || charge.amount,
+      });
 
       const originalTx = await creditTransactionRepository.findByPaymentIntentId(refundPaymentIntentId);
       if (!originalTx) {
