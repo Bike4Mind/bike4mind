@@ -13,7 +13,7 @@ import type {
 } from '@client/app/utils/adminUsersBulk';
 
 const apiPost = vi.hoisted(() => vi.fn());
-const toastMock = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning: vi.fn() }));
+const toastMock = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: apiPost } }));
 vi.mock('sonner', () => ({ toast: toastMock }));
 
@@ -43,7 +43,7 @@ const executeResult = (overrides: Partial<AdminUsersBulkResult> = {}): AdminUser
   applied: 2,
   skipped: 0,
   failed: [],
-  undoExpiresAt: '',
+  undoExpiresAt: new Date(Date.now() + 30_000).toISOString(),
   partial: false,
   remaining: 0,
   blockedDomains: [],
@@ -53,6 +53,8 @@ const executeResult = (overrides: Partial<AdminUsersBulkResult> = {}): AdminUser
 const undoResult = (overrides: Partial<AdminUsersBulkUndoResult> = {}): AdminUsersBulkUndoResult => ({
   restored: 2,
   failed: [],
+  partial: false,
+  remaining: 0,
   unblockedDomains: [],
   stillBlockedDomains: [],
   ...overrides,
@@ -217,6 +219,64 @@ describe('UsersBulkActionDialog', () => {
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(toastMock.warning).toHaveBeenCalledWith(
       'Stopped after 1 user; 1 user not changed. Run it again for the rest.'
+    );
+  });
+
+  const confirmSuspend = async () => {
+    await screen.findByTestId('admin-users-bulk-dry-run');
+    fireEvent.click(screen.getByTestId('admin-users-bulk-suspend-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('admin-users-bulk-suspend-confirm-btn'));
+  };
+
+  it('subtracts users that already match from the will-change count', async () => {
+    apiPost.mockResolvedValue({ data: preview({ eligible: 10, alreadyApplied: 3 }) });
+    renderDialog('suspend');
+    expect(await screen.findByTestId('admin-users-bulk-dry-run')).toHaveTextContent(
+      '7 users will change; 3 already match and are skipped'
+    );
+  });
+
+  it('says nothing changed, with no undo toast, when no user was applied', async () => {
+    apiPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/preview')) return { data: preview() };
+      return { data: executeResult({ applied: 0, skipped: 2 }) };
+    });
+    const { onDone } = renderDialog('suspend');
+    await confirmSuspend();
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(toastMock.info).toHaveBeenCalledWith('No users were changed.');
+    expect(screen.queryByTestId('undo-toast-message')).toBeNull();
+  });
+
+  it('warns that undo is unavailable when the undo window already closed', async () => {
+    apiPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/preview')) return { data: preview() };
+      return { data: executeResult({ undoExpiresAt: new Date(Date.now() - 1000).toISOString() }) };
+    });
+    const { onDone } = renderDialog('suspend');
+    await confirmSuspend();
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(toastMock.success).toHaveBeenCalled();
+    expect(toastMock.warning).toHaveBeenCalledWith('Undo is not available for this batch.');
+    expect(screen.queryByTestId('undo-toast-message')).toBeNull();
+  });
+
+  it('warns when undo stopped at the time limit before restoring everyone', async () => {
+    apiPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/preview')) return { data: preview() };
+      if (url.endsWith('/execute')) return { data: executeResult() };
+      return { data: undoResult({ restored: 1, partial: true, remaining: 1 }) };
+    });
+    renderDialog('suspend');
+    await confirmSuspend();
+    fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+
+    await waitFor(() =>
+      expect(toastMock.warning).toHaveBeenCalledWith(
+        '1 user not restored before the time limit. Check them on their profiles.'
+      )
     );
   });
 

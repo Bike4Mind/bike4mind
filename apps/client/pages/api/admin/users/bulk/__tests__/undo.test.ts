@@ -17,7 +17,14 @@ vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkUndoDeps: () => ({
 const mockUndo = vi.fn();
 vi.mock('@server/admin/usersBulk/undo', () => ({ undoAdminUsersBulk: (...a: unknown[]) => mockUndo(...a) }));
 
-const UNDO_RESULT = { restored: 2, failed: [], unblockedDomains: [], stillBlockedDomains: [] };
+const UNDO_RESULT = {
+  restored: 2,
+  failed: [],
+  partial: false,
+  remaining: 0,
+  unblockedDomains: [],
+  stillBlockedDomains: [],
+};
 
 import handler from '../undo';
 

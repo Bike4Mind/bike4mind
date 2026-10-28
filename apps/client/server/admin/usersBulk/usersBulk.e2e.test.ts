@@ -157,7 +157,14 @@ describe('users bulk actions on a real replica set', () => {
     expect(entry?.reason).toBe(REASON);
 
     const undone = await undo(adminId, result.batchId);
-    expect(undone).toEqual({ restored: 2, failed: [], unblockedDomains: [], stillBlockedDomains: [] });
+    expect(undone).toEqual({
+      restored: 2,
+      failed: [],
+      partial: false,
+      remaining: 0,
+      unblockedDomains: [],
+      stillBlockedDomains: [],
+    });
     expect(await userState(first)).toMatchObject({ isBanned: false, currentCredits: 100 });
     expect(await userState(second)).toMatchObject({ isBanned: false, currentCredits: 30 });
     const restoredKey = await UserApiKey.findById(firstKey).lean();
@@ -295,6 +302,8 @@ describe('users bulk actions on a real replica set', () => {
       restored: 1,
       failed: [],
       unblockedDomains: [],
+      partial: false,
+      remaining: 0,
       stillBlockedDomains: [],
     });
     expect(await userState(target)).toMatchObject({ isModerated: false });
@@ -315,6 +324,8 @@ describe('users bulk actions on a real replica set', () => {
       restored: 0,
       failed: [{ userId: target, error: SUPERSEDED_MESSAGE }],
       unblockedDomains: [],
+      partial: false,
+      remaining: 0,
       stillBlockedDomains: [],
     });
     expect(await userState(target)).toMatchObject({ isBanned: true });
@@ -325,6 +336,8 @@ describe('users bulk actions on a real replica set', () => {
       restored: 1,
       failed: [],
       unblockedDomains: [],
+      partial: false,
+      remaining: 0,
       stillBlockedDomains: [],
     });
     expect(await UserApiKey.findById(laterKey).lean()).toMatchObject({ status: ApiKeyStatus.DISABLED });
@@ -339,6 +352,8 @@ describe('users bulk actions on a real replica set', () => {
       restored: 1,
       failed: [],
       unblockedDomains: [],
+      partial: false,
+      remaining: 0,
       stillBlockedDomains: [],
     });
     expect(await userState(target)).toMatchObject({ isBanned: false });
@@ -363,9 +378,45 @@ describe('users bulk actions on a real replica set', () => {
       restored: 8,
       failed: [],
       unblockedDomains: [],
+      partial: false,
+      remaining: 0,
       stillBlockedDomains: [],
     });
     expect(await User.countDocuments({ _id: { $in: ids }, isModerated: true })).toBe(0);
+  });
+
+  it('stops an undo at the time budget, then a second undo restores the rest', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const ids: string[] = [];
+    for (let i = 0; i < 10; i++) ids.push(await seedUser());
+    const result = await run(adminId, request(ids, { type: 'suspend' }, ids));
+    expect(result.applied).toBe(10);
+
+    const partial = await undoAdminUsersBulk(result.batchId, adminId, {
+      ...usersBulkUndoDeps(reqFor(adminId)),
+      budgetMs: 0,
+    });
+
+    expect(partial).toEqual({
+      restored: 8,
+      failed: [],
+      partial: true,
+      remaining: 2,
+      unblockedDomains: [],
+      stillBlockedDomains: [],
+    });
+    expect(await User.countDocuments({ _id: { $in: ids.slice(0, 8) }, isBanned: true })).toBe(0);
+    expect(await User.countDocuments({ _id: { $in: ids.slice(8) }, isBanned: true })).toBe(2);
+
+    expect(await undo(adminId, result.batchId)).toEqual({
+      restored: 2,
+      failed: [],
+      partial: false,
+      remaining: 0,
+      unblockedDomains: [],
+      stillBlockedDomains: [],
+    });
+    expect(await User.countDocuments({ _id: { $in: ids }, isBanned: true })).toBe(0);
   });
 
   it('refuses the loser of two concurrent undos with 409', async () => {
@@ -451,6 +502,8 @@ describe('users bulk actions on a real replica set', () => {
         restored: 4,
         failed: [],
         unblockedDomains: ['fresh-campaign.com'],
+        partial: false,
+        remaining: 0,
         stillBlockedDomains: [],
       });
       expect(await blockedList()).toEqual(['listed-parent.com', 'keep.com']);
@@ -495,6 +548,8 @@ describe('users bulk actions on a real replica set', () => {
         restored: 0,
         failed: [],
         unblockedDomains: ['fresh-campaign.com'],
+        partial: false,
+        remaining: 0,
         stillBlockedDomains: [],
       });
       expect(await blockedList()).toEqual([]);
@@ -515,6 +570,8 @@ describe('users bulk actions on a real replica set', () => {
         restored: 1,
         failed: [],
         unblockedDomains: [],
+        partial: false,
+        remaining: 0,
         stillBlockedDomains: ['fresh-campaign.com'],
       });
       expect(await blockedList()).toEqual(['fresh-campaign.com']);

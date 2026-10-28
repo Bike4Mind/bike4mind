@@ -123,4 +123,7 @@ export type AdminUsersBulkUndoResult = {
   unblockedDomains: string[];
   /** Domains still blocked because removing them failed; a retried undo tries again. */
   stillBlockedDomains: string[];
+  /** True when the undo stopped at its time budget; `remaining` users were not attempted. */
+  partial: boolean;
+  remaining: number;
 };

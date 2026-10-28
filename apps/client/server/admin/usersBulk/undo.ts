@@ -2,10 +2,11 @@ import { ConflictError, ForbiddenError, HTTPError, type AuditChange } from '@bik
 import { userService } from '@bike4mind/services';
 import type { AdminUsersBulkUndoResult } from '@client/app/utils/adminUsersBulk';
 import {
+  EXECUTE_BUDGET_MS,
   UNDO_RECORD_GRACE_MS,
+  USERS_BULK_CONCURRENCY,
   UndoRecordSchema,
   errorMessage,
-  inChunks,
   undoKey,
   userOwnerKey,
   type RunInTransaction,
@@ -23,6 +24,8 @@ export type UndoDeps = {
   withTransaction: RunInTransaction;
   /** Strict: called inside the user's transaction. */
   audit: (entry: UsersBulkAuditEntry) => Promise<unknown>;
+  /** ms after the start past which no new chunk is started; defaults to EXECUTE_BUDGET_MS. */
+  budgetMs?: number;
   /** Removes exactly these domains from blockedEmailDomains in one audited write; returns those removed. */
   unblockEmailDomains: (domains: string[], batchId: string) => Promise<string[]>;
   logger?: UsersBulkLogger;
@@ -108,15 +111,19 @@ async function revertUser(snapshot: UserUndoSnapshot, record: UndoRecord, deps: 
  * Reverts a batch within ADMIN_USERS_BULK_UNDO_WINDOW_MS of executing it. Only the admin who ran it
  * may undo it, and the record is taken atomically, so two undos never both run. Refused with 410
  * Gone once the window has passed (or the record is gone), 409 when another undo already took it.
- * Users that fail, and blocked domains that could not be released, are written back as a record of
- * their own, same admin and deadline, so a retry can finish them.
+ * Runs under execute's time budget, so a batch that needed most of it cannot hit the request timeout
+ * here: past the budget no new chunk starts and the result is `partial`. Users that fail or were not
+ * attempted, and blocked domains that could not be released, are written back as a record of their
+ * own, same admin and deadline, so a retry can finish them. The record is written only once the run
+ * stops: rewriting it mid-run would let a second undo take it and revert the same users twice.
  */
 export async function undoAdminUsersBulk(
   batchId: string,
   adminId: string,
   deps: UndoDeps
 ): Promise<AdminUsersBulkUndoResult> {
-  const now = (deps.now ?? (() => new Date()))();
+  const clock = deps.now ?? (() => new Date());
+  const now = clock();
   const key = undoKey(batchId);
   const found = await deps.store.findByKey(key);
   if (!found) throw new HTTPError(HTTP_GONE, EXPIRED_MESSAGE);
@@ -125,31 +132,48 @@ export async function undoAdminUsersBulk(
   if (now.getTime() > new Date(record.undoExpiresAt).getTime()) throw new HTTPError(HTTP_GONE, EXPIRED_MESSAGE);
   if (!(await deps.store.deleteByKeyAndReturn(key))) throw new ConflictError('This bulk action was already undone.');
 
-  const outcomes = await inChunks(record.users, async snapshot => {
-    try {
-      await deps.withTransaction(() => revertUser(snapshot, record, deps));
-      return null;
-    } catch (error) {
-      deps.logger?.error('Users bulk undo failed for user', { userId: snapshot.userId, error });
-      return { snapshot, error: errorMessage(error) };
-    }
-  });
-  const failures = outcomes.flatMap(outcome => (outcome ? [outcome] : []));
+  const deadline = now.getTime() + (deps.budgetMs ?? EXECUTE_BUDGET_MS);
+  const failures: { snapshot: UserUndoSnapshot; error: string }[] = [];
+  let attempted = 0;
+  // The first chunk always runs, so every undo makes progress however slow the database is.
+  while (attempted < record.users.length && (attempted === 0 || clock().getTime() < deadline)) {
+    const chunk = record.users.slice(attempted, attempted + USERS_BULK_CONCURRENCY);
+    const outcomes = await Promise.all(chunk.map(snapshot => revertWithin(snapshot, record, deps)));
+    attempted += chunk.length;
+    failures.push(...outcomes.flatMap(outcome => (outcome ? [outcome] : [])));
+  }
+  const notAttempted = record.users.slice(attempted);
   const stillBlockedDomains = await unblockDomains(record, deps);
-  if (failures.length > 0 || stillBlockedDomains.length > 0)
+  if (failures.length > 0 || notAttempted.length > 0 || stillBlockedDomains.length > 0)
     await storeRetryRecord(
       record,
-      failures.map(failure => failure.snapshot),
+      [...failures.map(failure => failure.snapshot), ...notAttempted],
       stillBlockedDomains,
       deps
     );
   const stillBlocked = new Set(stillBlockedDomains);
   return {
-    restored: record.users.length - failures.length,
+    restored: attempted - failures.length,
     failed: failures.map(failure => ({ userId: failure.snapshot.userId, error: failure.error })),
+    partial: notAttempted.length > 0,
+    remaining: notAttempted.length,
     unblockedDomains: (record.blockedDomains ?? []).filter(domain => !stillBlocked.has(domain)),
     stillBlockedDomains,
   };
+}
+
+async function revertWithin(
+  snapshot: UserUndoSnapshot,
+  record: UndoRecord,
+  deps: UndoDeps
+): Promise<{ snapshot: UserUndoSnapshot; error: string } | null> {
+  try {
+    await deps.withTransaction(() => revertUser(snapshot, record, deps));
+    return null;
+  } catch (error) {
+    deps.logger?.error('Users bulk undo failed for user', { userId: snapshot.userId, error });
+    return { snapshot, error: errorMessage(error) };
+  }
 }
 
 /** Releases the domains the batch blocked. Returns the ones still blocked because the write failed. */

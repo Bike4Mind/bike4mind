@@ -150,7 +150,7 @@ function emailDomainLines({ toBlock, alreadyBlocked, notOwned }: AdminUsersBulkE
 function DryRunSummary({ preview, type }: { preview: AdminUsersBulkPreview; type: AdminUsersBulkActionType }) {
   const excluded = preview.excluded.self + preview.excluded.admins;
   const lines = [
-    `${plural(preview.eligible)} will change${preview.alreadyApplied > 0 ? `; ${preview.alreadyApplied.toLocaleString()} already match and are skipped` : ''}.`,
+    `${plural(preview.eligible - preview.alreadyApplied)} will change${preview.alreadyApplied > 0 ? `; ${preview.alreadyApplied.toLocaleString()} already match and are skipped` : ''}.`,
     excluded > 0 ? `${plural(excluded)} excluded (you and other admins).` : null,
     (type === 'revokeApiKeys' || type === 'contain' || type === 'suspend') && preview.apiKeysToRevoke > 0
       ? `${preview.apiKeysToRevoke.toLocaleString()} active API keys disabled.`
@@ -253,15 +253,31 @@ export function UsersBulkActionDialog({
         toast.warning(
           `Stopped after ${plural(result.applied)}; ${plural(result.remaining)} not changed. Run it again for the rest.`
         );
+      const changed = result.applied > 0 || result.blockedDomains.length > 0;
+      if (!changed) {
+        toast.info('No users were changed.');
+        return;
+      }
+      const message =
+        `${copy.done} ${plural(result.applied)}` +
+        (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : '');
+      // The server sets undoExpiresAt to no later than now when it could not store an undo record.
+      if (Date.parse(result.undoExpiresAt) <= Date.now()) {
+        toast.success(message);
+        toast.warning('Undo is not available for this batch.');
+        return;
+      }
       showUndoToast({
-        message:
-          `${copy.done} ${plural(result.applied)}` +
-          (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : ''),
+        message,
         onUndo: async () => {
           const restored = await undo.mutateAsync(result.batchId);
           if (restored.stillBlockedDomains.length > 0)
             toast.warning(
               `Could not unblock ${domainList(restored.stillBlockedDomains)}. Remove them from the blocked email domains setting.`
+            );
+          if (restored.partial)
+            toast.warning(
+              `${plural(restored.remaining)} not restored before the time limit. Check them on their profiles.`
             );
           if (restored.failed.length > 0)
             toast.warning(`${restored.failed.length.toLocaleString()} users could not be restored.`);

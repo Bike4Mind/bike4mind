@@ -108,13 +108,4 @@ export const idempotencyKey = (adminId: string, key: string) => `admin-users-bul
 // Users run in parallel up to this many at a time; each holds its own transaction.
 export const USERS_BULK_CONCURRENCY = 8;
 
-/** Runs `fn` over `items` in chunks of USERS_BULK_CONCURRENCY, preserving order. */
-export async function inChunks<T, R>(items: readonly T[], fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = [];
-  for (let start = 0; start < items.length; start += USERS_BULK_CONCURRENCY) {
-    results.push(...(await Promise.all(items.slice(start, start + USERS_BULK_CONCURRENCY).map(fn))));
-  }
-  return results;
-}
-
 export const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
