@@ -154,8 +154,8 @@ export interface HubGgufBuild {
   /** Upper-case quant label read from the file name, e.g. `Q4_K_M` or `UD-Q4_K_XL`; `Q4_K_L` and kin are ours. */
   quant: string | null;
   /**
-   * What to show for the build, unique within the repo: `quant`, with the part of the file name that sets it apart
-   * when other builds share that quant (`QAD-Q4_0` next to `Q4_0`), else `id`.
+   * What to show for the build and a tag that names it (see `findHubBuild`), unique ignoring case: `quant`, with the
+   * part of the file name that sets it apart when other builds share that quant (`QAD-Q4_0` next to `Q4_0`), else `id`.
    */
   label: string;
   /** The file, or every shard in order. */
@@ -227,9 +227,10 @@ const OLLAMA_MODEL_LAYER = 'application/vnd.ollama.image.model';
 const REGISTRY_MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json';
 
 const SHARD_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
-// Speculative-decoding drafts (MTP, DFlash, DSpark and EAGLE-3 heads) and importance matrices, which publishers ship
-// beside the model as .gguf files; Hugging Face's Ollama registry skips them as well.
-const AUXILIARY_GGUF_RE = /^(?:mtp|dflash|dspark|eagle3|imatrix)[-_.]|[-_.](?:mtp|dflash|dspark|imatrix)[-_.]/i;
+// Draft heads named so at either end of the stem. The registry skips drafts by GGUF metadata, so a mid-name `-MTP-`
+// build stays listed (GLM-4.5-Air-MTP is a full model) and verifyOllamaRef catches the sidecars among them.
+const DRAFT_GGUF_RE = /^(?:mtp|dflash|dspark|eagle3)[-_.]|[-_.](?:mtp|dflash|dspark|eagle3)$/i;
+const IMATRIX_GGUF_RE = /(?:^|[-_.])imatrix(?:[-_.]|$)/i;
 const LABEL_TOKEN_RE = /[-_. ]+|[^-_. ]+/g;
 const REPO_ID_RE = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,95}$/;
 const REVISION_RE = /^[\w./-]{1,200}$/;
@@ -524,8 +525,36 @@ function distinctMiddles(lists: string[][]): string[] {
   );
 }
 
-/** `HubGgufBuild.label` by build id. */
-function buildLabels(builds: readonly Pick<HubGgufBuild, 'id' | 'quant' | 'files'>[]): Map<string, string> {
+/** The text as a tag `hf.co/<repo>:<tag>` parsers accept. */
+const tagSafe = (text: string) => text.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+
+/** The tag a build answers to: its planned ref's, else its label. `findHubBuild` resolves it back to the build. */
+export function hubBuildTag(build: Pick<HubGgufBuild, 'ollamaRef' | 'label'>): string {
+  return build.ollamaRef ? refTag(build.ollamaRef) : build.label;
+}
+
+const refTag = (ref: string) => ref.slice(ref.lastIndexOf(':') + 1);
+
+/**
+ * The build a tag names, ignoring case: its planned ref's tag, then its label, then its quant label. Labels never equal
+ * another build's ref tag, so every surface that resolves through this agrees.
+ */
+export function findHubBuild<T extends Pick<HubGgufBuild, 'ollamaRef' | 'label' | 'quant'>>(
+  builds: readonly T[],
+  tag: string
+): T | undefined {
+  const wanted = tag.toUpperCase();
+  return (
+    builds.find(build => build.ollamaRef && hubBuildTag(build).toUpperCase() === wanted) ??
+    builds.find(build => build.label.toUpperCase() === wanted) ??
+    builds.find(build => build.quant?.toUpperCase() === wanted)
+  );
+}
+
+/** `HubGgufBuild.label` by build id: unique ignoring case, a valid tag, and never another build's ref tag. */
+function buildLabels(
+  builds: readonly Pick<HubGgufBuild, 'id' | 'quant' | 'files' | 'ollamaRef'>[]
+): Map<string, string> {
   const labels = new Map<string, string>();
   const byQuant = new Map<string, { id: string; before: string[]; after: string[] }[]>();
   const tokens = (text: string) => text.match(LABEL_TOKEN_RE) ?? [];
@@ -533,7 +562,7 @@ function buildLabels(builds: readonly Pick<HubGgufBuild, 'id' | 'quant' | 'files
     const stem = ggufStem(build.files[0]?.path ?? build.id);
     const at = build.quant ? stem.toUpperCase().lastIndexOf(build.quant) : -1;
     if (!build.quant || at < 0) {
-      labels.set(build.id, build.quant ?? build.id);
+      labels.set(build.id, tagSafe(build.quant ?? build.id));
       continue;
     }
     const group = byQuant.get(build.quant) ?? [];
@@ -543,12 +572,25 @@ function buildLabels(builds: readonly Pick<HubGgufBuild, 'id' | 'quant' | 'files
   for (const [quant, group] of byQuant) {
     const before = distinctMiddles(group.map(entry => entry.before));
     const after = distinctMiddles(group.map(entry => entry.after));
-    group.forEach((entry, i) => labels.set(entry.id, [before[i], quant, after[i]].filter(Boolean).join('-')));
+    group.forEach((entry, i) => labels.set(entry.id, tagSafe([before[i], quant, after[i]].filter(Boolean).join('-'))));
   }
-  // The same file name in two folders, or a merged file beside its own shards: only the path tells them apart.
+  const owners = new Map<string, string>();
+  for (const build of builds) if (build.ollamaRef) owners.set(refTag(build.ollamaRef).toUpperCase(), build.id);
   const counts = new Map<string, number>();
   for (const label of labels.values()) counts.set(label.toUpperCase(), (counts.get(label.toUpperCase()) ?? 0) + 1);
-  for (const [id, label] of labels) if ((counts.get(label.toUpperCase()) ?? 0) > 1) labels.set(id, id);
+  const clashes = (id: string, label: string) =>
+    (counts.get(label.toUpperCase()) ?? 0) > 1 || (owners.get(label.toUpperCase()) ?? id) !== id;
+  const clashing = [...labels].filter(([id, label]) => clashes(id, label));
+  for (const [id, label] of labels) if (!clashes(id, label)) owners.set(label.toUpperCase(), id);
+  // The same file name in two folders, a merged file beside its own shards, or a label another build's ref claims:
+  // the path tells them apart.
+  for (const [id] of clashing) {
+    const base = tagSafe(id);
+    let label = base;
+    for (let n = 2; (owners.get(label.toUpperCase()) ?? id) !== id; n++) label = `${base}-${n}`;
+    owners.set(label.toUpperCase(), id);
+    labels.set(id, label);
+  }
   return labels;
 }
 
@@ -574,7 +616,8 @@ function groupGgufFiles(
       projectors.push({ ...file, quant: ggufQuantLabel(entry.path) });
       continue;
     }
-    if (AUXILIARY_GGUF_RE.test(name)) continue;
+    const stem = ggufStem(name);
+    if (DRAFT_GGUF_RE.test(stem) || (IMATRIX_GGUF_RE.test(stem) && !ggufQuantLabel(name))) continue;
     const shard = SHARD_RE.exec(entry.path);
     const id = shard ? entry.path.slice(0, shard.index) : entry.path.replace(/\.gguf$/i, '');
     const key = `${shard ? 'split' : 'single'}:${id}`;
@@ -599,35 +642,35 @@ function groupGgufFiles(
     };
   });
   const plans = planOllamaTags(builds);
-  const labels = buildLabels(builds);
   const repoOk = ollamaAcceptsRepo(repo);
-  const planned = builds
-    .map((build): HubGgufBuild => {
-      const tag = plans.get(build.id)?.tags[0];
-      const issue: OllamaRefIssue | null = !build.complete
-        ? 'incomplete'
-        : build.split
-          ? 'split'
-          : !build.quant
-            ? 'no-quant-label'
-            : !repoOk
-              ? 'unsupported-name'
-              : !tag
-                ? [...REGISTRY_REJECTED_QUANTS].some(rejected => build.quant?.includes(rejected))
-                  ? 'unsupported-quant'
-                  : 'unsupported-name'
-                : pinned
-                  ? 'pinned-revision'
-                  : !plans.get(build.id)?.unique
-                    ? 'ambiguous'
-                    : null;
-      return {
-        ...build,
-        label: labels.get(build.id) ?? build.id,
-        ollamaRef: issue || !tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`,
-        ollamaRefIssue: issue,
-      };
-    })
+  const withRefs = builds.map((build): Omit<HubGgufBuild, 'label'> => {
+    const tag = plans.get(build.id)?.tags[0];
+    const issue: OllamaRefIssue | null = !build.complete
+      ? 'incomplete'
+      : build.split
+        ? 'split'
+        : !build.quant
+          ? 'no-quant-label'
+          : !repoOk
+            ? 'unsupported-name'
+            : !tag
+              ? [...REGISTRY_REJECTED_QUANTS].some(rejected => build.quant?.includes(rejected))
+                ? 'unsupported-quant'
+                : 'unsupported-name'
+              : pinned
+                ? 'pinned-revision'
+                : !plans.get(build.id)?.unique
+                  ? 'ambiguous'
+                  : null;
+    return {
+      ...build,
+      ollamaRef: issue || !tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`,
+      ollamaRefIssue: issue,
+    };
+  });
+  const labels = buildLabels(withRefs);
+  const planned = withRefs
+    .map((build): HubGgufBuild => ({ ...build, label: labels.get(build.id) ?? tagSafe(build.id) }))
     .sort((a, b) => a.sizeBytes - b.sizeBytes || a.id.localeCompare(b.id));
   tagPlans.set(planned, plans);
   return { builds: planned, projectors };

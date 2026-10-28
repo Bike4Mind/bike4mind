@@ -251,7 +251,7 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   }
   const pullable = detail.builds.filter(build => !build.ollamaRefIssue || !UNPULLABLE.has(build.ollamaRefIssue));
   const suggested = pickBuild(pullable, null) ?? pullable.find(build => build.ollamaRef);
-  if (suggested?.quant && !buildTag(suggested).includes('/')) {
+  if (suggested?.quant) {
     deps.log('');
     deps.log(`Pull one with: b4m models pull ${id}:${clean(buildTag(suggested))}`);
   }

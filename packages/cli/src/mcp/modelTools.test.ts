@@ -233,7 +233,7 @@ describe('model tools', () => {
           status: 'confirm-in-terminal',
           downloaded: false,
           model: REPO,
-          quant: 'Q4_K_M',
+          label: 'Q4_K_M',
           sizeBytes: 491_400_032,
           size: '491 MB',
           revision: 'b'.repeat(40),

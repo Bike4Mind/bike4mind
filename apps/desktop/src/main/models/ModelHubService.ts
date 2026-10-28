@@ -161,7 +161,6 @@ function licenseUrl(endpoint: string, detail: HubModelDetail): string {
 function toView(endpoint: string, detail: HubModelDetail): HubModelView {
   const builds: HubBuildView[] = detail.builds.map(build => ({
     id: build.id,
-    quant: build.quant,
     label: build.label,
     sizeBytes: build.sizeBytes,
     ollamaRef: build.ollamaRef,

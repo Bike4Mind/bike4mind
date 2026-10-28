@@ -11,6 +11,8 @@ import {
   ModelNotFoundError,
   OllamaRuntime,
   detectRuntimes,
+  findHubBuild,
+  hubBuildTag,
   isAbliteratedModel,
   isHubRepoId,
   type DetectedRuntime,
@@ -269,24 +271,14 @@ export function parsePullTarget(input: string): PullTarget {
   return { kind: 'hub', repo: path, tag };
 }
 
-/**
- * Matches the tag against each build's planned ref, then its label, then its quant label; no tag or `latest` means
- * Q4_K_M.
- */
+/** The build the tag names, as `findHubBuild` resolves it; no tag or `latest` means Q4_K_M. */
 export function pickBuild(builds: HubGgufBuild[], tag: string | null): HubGgufBuild | undefined {
   // Ollama tags an untagged hf.co pull `latest`, so users copy that form back.
-  const wanted = (tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT).toUpperCase();
-  return (
-    builds.find(build => build.ollamaRef?.slice(build.ollamaRef.lastIndexOf(':') + 1).toUpperCase() === wanted) ??
-    builds.find(build => build.label.toUpperCase() === wanted) ??
-    builds.find(build => build.quant === wanted)
-  );
+  return findHubBuild(builds, tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT);
 }
 
-/** The tag `pickBuild` resolves back to `build`: its planned ref's, else its label. */
-export function buildTag(build: HubGgufBuild): string {
-  return build.ollamaRef ? build.ollamaRef.slice(build.ollamaRef.lastIndexOf(':') + 1) : build.label;
-}
+/** The tag `pickBuild` resolves back to `build`. */
+export const buildTag = hubBuildTag;
 
 export async function resolveRuntimeTarget(
   hosts: { flag?: string; env?: string; config?: string },

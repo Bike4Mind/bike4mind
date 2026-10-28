@@ -81,7 +81,6 @@ export type LicenseKind = 'permissive' | 'restricted';
 
 export interface HubBuildView {
   id: string;
-  quant: string | null;
   /** Unique within the repo: the quant, plus what sets the file apart when other builds share it (`QAD-Q4_0`). */
   label: string;
   sizeBytes: number;

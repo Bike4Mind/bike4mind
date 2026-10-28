@@ -344,10 +344,7 @@ describe('ModelHubService pulls', () => {
     ];
     const { service } = harness({ detail: detail({ builds }) });
     const view = await service.detail(REPO);
-    expect(view.ok && view.model.builds.map(entry => [entry.quant, entry.label])).toEqual([
-      ['Q4_0', 'Q4_0'],
-      ['Q4_0', 'QAD-Q4_0'],
-    ]);
+    expect(view.ok && view.model.builds.map(entry => entry.label)).toEqual(['Q4_0', 'QAD-Q4_0']);
   });
 
   it('blocks a build with an unsupported quant in the detail and on pull', async () => {

@@ -15,7 +15,9 @@ import {
   HuggingFaceHub,
   MAX_VERIFY_TAGS,
   clearHubCache,
+  findHubBuild,
   ggufQuantLabel,
+  hubBuildTag,
   hubResolveUrl,
   type HubModelDetail,
 } from './huggingface';
@@ -587,12 +589,13 @@ describe('HuggingFaceHub.getModel', () => {
       ['odd-Q8_0', null, 'incomplete'],
     ]);
     expect(detail.builds.map(build => build.label)).toEqual([
-      'a/odd-Q2_K',
-      'b/odd-Q2_K',
+      'a-odd-Q2_K',
+      'b-odd-Q2_K',
       'Q4_K_XL',
       'UD-Q4_K_XL',
       '128k-Q4_K_M',
-      'Q4_K_M',
+      // Q4_K_M is the 128k build's ref tag.
+      'odd-Q4_K_M',
       'Q6_K',
       'Q5_0',
       'Q8_0',
@@ -625,18 +628,25 @@ describe('HuggingFaceHub.getModel', () => {
         file('dflash-Qwen3.8-27B-Q4_0.gguf', 1094346080),
         file('dspark-MiniMax-M3.1-Flash-Q8_0.gguf', 2089384768),
         file('mtp-gemma-4-E2B-it.gguf', 97817664),
+        file('gemmable-4-12b-Q4_K_M-mtp.gguf', 7),
+        // The registry serves a mid-name MTP file when its metadata says it is a model, so the name cannot decide.
         file('Ternary-Bonsai-2-27B-MTP-Q8_0.gguf', 1),
+        file('GLM-4.5-Air-MTP-Q4_K_M.gguf', 6),
         file('Qwen_Qwen3.6-35B-A3B-imatrix.gguf', 192223904),
         file('imatrix-qwen3.8-27b.gguf', 2),
         file('imatrix_unsloth.gguf', 463011616),
+        file('Llama-3-8B-Q4_K_M-imatrix.gguf', 5),
         file('v5-Eagle-7B-Q4_K_M.gguf', 3),
         file('Smtp-Relay-1B-Q4_0.gguf', 4),
       ])
     );
     const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
     expect(detail.builds.map(build => build.id)).toEqual([
+      'Ternary-Bonsai-2-27B-MTP-Q8_0',
       'v5-Eagle-7B-Q4_K_M',
       'Smtp-Relay-1B-Q4_0',
+      'Llama-3-8B-Q4_K_M-imatrix',
+      'GLM-4.5-Air-MTP-Q4_K_M',
       'gpt-oss-20b-MXFP4',
     ]);
   });
@@ -684,6 +694,36 @@ describe('HuggingFaceHub.getModel', () => {
       ['Q5_0', 'Q5_0'],
       ['Q5_0-imat', 'Q5_0'],
     ]);
+  });
+
+  it('keeps every label a tag that resolves to its own build and to no other', async () => {
+    const repo = 'someone/clashes-GGUF';
+    const sha = 'f'.repeat(40);
+    const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'a'.repeat(64), size } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('Base-Model-Q4_0.gguf', 1),
+        file('Model-Q4_0.gguf', 2),
+        file('Lilicorr-Nemotron-NVFP4.gguf', 3),
+        file('lilicorr-Nemotron-NVFP4.gguf', 4),
+        file('a b/X-Q8_0.gguf', 5),
+        file('c/X-Q8_0.gguf', 6),
+      ])
+    );
+    const { builds } = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(builds.map(build => [build.label, build.ollamaRef?.split(':')[1] ?? null])).toEqual([
+      ['Base-Q4_0', 'Q4_0'],
+      ['Model-Q4_0', null],
+      ['Lilicorr-Nemotron-NVFP4', 'NVFP4'],
+      ['lilicorr-Nemotron-NVFP4-2', null],
+      ['a-b-X-Q8_0', 'Q8_0'],
+      ['c-X-Q8_0', null],
+    ]);
+    for (const build of builds) {
+      expect(hubBuildTag(build)).toMatch(/^[A-Za-z0-9_.-]+$/);
+      expect(findHubBuild(builds, hubBuildTag(build))).toBe(build);
+      expect(findHubBuild(builds, build.label.toLowerCase())).toBe(build);
+    }
   });
 
   it('labels bartowski _L builds and blocks only the ones the registry rejects as tags', async () => {

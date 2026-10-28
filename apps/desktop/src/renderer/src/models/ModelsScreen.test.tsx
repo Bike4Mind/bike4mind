@@ -62,7 +62,6 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
     builds: [
       {
         id: 'qwen2.5-0.5b-instruct-q4_k_m',
-        quant: 'Q4_K_M',
         label: 'Q4_K_M',
         sizeBytes: 491_400_032,
         ollamaRef: `hf.co/${REPO}:Q4_K_M`,
@@ -302,6 +301,27 @@ describe('ModelsScreen explore', () => {
       acceptLicense: false,
       confirmAccess: false,
     });
+  });
+
+  it('names each build by its label when two share a quant', async () => {
+    const plain = view().builds[0];
+    bridge.detail = {
+      ok: true,
+      model: view({
+        builds: [
+          { ...plain, id: 'LFM2.5-350M-Q4_0', label: 'Q4_0' },
+          { ...plain, id: 'LFM2.5-350M-QAD-Q4_0', label: 'QAD-Q4_0', ollamaRef: `hf.co/${REPO}:QAD-Q4_0` },
+        ],
+      }),
+    };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+
+    const rows = all('models-build-row');
+    expect(rows.map(row => row.textContent?.includes('QAD-Q4_0'))).toEqual([false, true]);
+    await click(rows[1]?.querySelector<HTMLElement>('[data-testid="models-build-pull-btn"]') ?? null);
+    expect(q('models-pull-dialog')?.textContent).toContain('Download QAD-Q4_0?');
   });
 
   it('needs every declared license acknowledged before the download is offered', async () => {
