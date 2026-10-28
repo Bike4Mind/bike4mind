@@ -19,9 +19,10 @@ import { LocalModels } from './LocalModels';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
 
-const BEARER = 'sentinel-bearer-7f3a9c2e41d8';
+// The `/` and `"` reach the echoing server's JSON escaped, as `\/` and `\"`.
+const BEARER = 'sentinel-bearer/7f3a9c2e41d8';
 const HEADER_NAME = 'x-api-key';
-const HEADER_VALUE = 'sentinel-header-b62d0e95a7c3';
+const HEADER_VALUE = 'sentinel-header"b62d0e95a7c3';
 const SENTINELS = [BEARER, HEADER_VALUE];
 
 /** Every form a leak could take: the value, its base64, and its unique tail (a masked or cut copy). */
@@ -87,7 +88,12 @@ function capturedFile(out: Outbound, saved: string | null): StoreFile & { conten
   };
 }
 
-type Mode = 'ok' | 'reject' | 'error' | 'hang' | 'echo-401' | 'echo-500';
+type Mode = 'ok' | 'reject' | 'error' | 'hang' | 'echo-401' | 'echo-500' | 'echo-stream';
+
+/** A server or proxy that quotes the credential it was sent back in its error, escaping `/` as some encoders do. */
+const echoText = (req: http.IncomingMessage) =>
+  `credential ${[req.headers.authorization, req.headers[HEADER_NAME]].filter(Boolean).join(' ')} is not valid here`;
+const echoJson = (value: unknown) => JSON.stringify(value).replaceAll('/', '\\/');
 
 interface Seen {
   method: string;
@@ -115,14 +121,16 @@ async function fakeServer(kind: ModelServerKind) {
       if (state.mode === 'reject') return send(401, { error: 'unauthorized' });
       if (state.mode === 'error') return send(500, { error: 'the model failed to load' });
       if (state.mode === 'echo-401' || state.mode === 'echo-500') {
-        // A server or proxy that quotes the credential it was sent back in its error.
-        const sent = [req.headers.authorization, req.headers[HEADER_NAME]].filter(Boolean).join(' ');
-        res.writeHead(state.mode === 'echo-401' ? 401 : 500, `Rejected ${sent}`, {
+        res.writeHead(state.mode === 'echo-401' ? 401 : 500, `Rejected ${echoText(req)}`, {
           'content-type': 'application/json',
         });
-        return res.end(JSON.stringify({ error: `credential ${sent} is not valid here` }));
+        return res.end(echoJson({ error: echoText(req) }));
       }
       const route = `${req.method} ${req.url}`;
+      if (state.mode === 'echo-stream' && route === 'POST /api/chat')
+        return send(200, `${echoJson({ error: echoText(req) })}\n`, 'application/x-ndjson');
+      if (state.mode === 'echo-stream' && route === 'POST /v1/chat/completions')
+        return send(200, `data: ${echoJson({ error: { message: echoText(req) } })}\n\n`, 'text/event-stream');
       if (kind === 'ollama') {
         if (route === 'GET /api/version') return send(200, { version: '0.12.0' });
         if (route === 'GET /api/tags') return send(200, { models: [{ name: 'qwen2.5:0.5b', size: 1, digest: 'd1' }] });
@@ -329,19 +337,24 @@ async function scenario(kind: ModelServerKind, keyring: boolean, first: 'bearer'
     expect(out.records.some(record => record.where === 'log.warn')).toBe(true);
   }
 
-  // Echoed: the server quotes the credential back in 401 and 500 replies, before and after the edit below.
-  const echoes = async (current: 'bearer' | 'header') => {
-    for (const mode of ['echo-401', 'echo-500'] as const) {
+  // Echoed: the server quotes the credential back in 401 and 500 replies and inside a streamed reply,
+  // before and after the edit below.
+  const echoes = async (current: 'bearer' | 'header', label: string) => {
+    const chatErrors: Record<string, Error | null> = {};
+    for (const mode of ['echo-401', 'echo-500', 'echo-stream'] as const) {
       target.state.mode = mode;
       await invoke(IPC_CHANNELS.modelServersProbe, { address: target.address, credential: credential(current) });
       await invoke(IPC_CHANNELS.modelServersCheck, saved.id);
-      await main.chat(model);
+      chatErrors[mode] = (await main.chat(model)).error;
       await main.listModels();
     }
     target.state.mode = 'ok';
+    const echoed = 'credential [redacted] is not valid here';
+    expect(chatErrors['echo-401']?.name).toBe('ServerCredentialsError');
+    expect(chatErrors['echo-500']?.message).toBe(`${label} returned HTTP 500: ${echoed}`);
+    expect(chatErrors['echo-stream']?.message).toBe(kind === 'ollama' ? echoed : `${label}: ${echoed}`);
   };
-  await echoes(first);
-  expect(out.records.some(record => record.text.includes('[redacted]'))).toBe(true);
+  await echoes(first, 'gpu box');
 
   // Edited: renamed, then the credential replaced with the other kind.
   await invoke(IPC_CHANNELS.modelServersUpdate, saved.id, { name: 'gpu box 2' });
@@ -350,7 +363,7 @@ async function scenario(kind: ModelServerKind, keyring: boolean, first: 'bearer'
   });
   expect(edited.ok).toBe(true);
   expect((await main.chat(model)).events).toContainEqual({ type: 'content', text: 'hello' });
-  await echoes(second);
+  await echoes(second, 'gpu box 2');
 
   // Failures: the server refuses the credential, errors, stops answering, then is gone.
   target.state.mode = 'reject';

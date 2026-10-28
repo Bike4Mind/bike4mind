@@ -1,5 +1,6 @@
 import http, { type IncomingHttpHeaders } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServerFetch, ServerRedirectError, ServerTransportError, type ServerFetchDeps } from './serverFetch';
 
@@ -186,6 +187,53 @@ describe('createServerFetch', () => {
     expect(failed.status).toBe(500);
     const text = await failed.text();
     expect(text).toBe(JSON.stringify({ error: 'bad credential [redacted], token [redacted]' }));
+  });
+
+  it('redacts a Go-escaped echo before the body is parsed', async () => {
+    const target = await serve((req, res) => {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({ error: `bad ${req.headers.authorization}` })
+          .replace(/&/g, '\\u0026')
+          .replace(/</g, '\\u003c')
+          .replace(/>/g, '\\u003e')
+      );
+    });
+    const fetch = createServerFetch(endpoint(target.origin, { authorization: 'Bearer tok&en<1>' }));
+    expect(await (await fetch(`${target.origin}/`)).json()).toEqual({ error: 'bad [redacted]' });
+  });
+
+  it('drops a credential cut at the body limit and marks the body truncated', async () => {
+    const secret = 'sentinel-boundary-abcdef0123';
+    const target = await serve((_req, res) => {
+      res.writeHead(500, { 'content-type': 'text/plain' });
+      res.end(`${'x'.repeat(1024 * 1024 - 10)}${secret}tail`);
+    });
+    const fetch = createServerFetch(endpoint(target.origin, { 'x-api-key': secret }));
+    const text = await (await fetch(`${target.origin}/`)).text();
+    expect(text.endsWith('x[truncated]')).toBe(true);
+    expect(text).not.toContain(secret.slice(0, 10));
+  });
+
+  it('keeps an ordinary error body intact when the credential is a short word', async () => {
+    const target = await serve((_req, res) => {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end('{"error":"model failed to load"}');
+    });
+    const fetch = createServerFetch(endpoint(target.origin, { 'x-org': 'e' }));
+    expect(await (await fetch(`${target.origin}/`)).json()).toEqual({ error: 'model failed to load' });
+  });
+
+  it('passes a compressed error body through untouched', async () => {
+    const zipped = gzipSync('{"error":"x"}');
+    const target = await serve((_req, res) => {
+      res.writeHead(500, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+      res.end(zipped);
+    });
+    const fetch = createServerFetch(endpoint(target.origin));
+    const response = await fetch(`${target.origin}/`);
+    expect(response.headers.get('content-encoding')).toBe('gzip');
+    expect(gunzipSync(Buffer.from(await response.arrayBuffer())).toString()).toBe('{"error":"x"}');
   });
 
   it('reads the credential per request, so a change applies at once', async () => {

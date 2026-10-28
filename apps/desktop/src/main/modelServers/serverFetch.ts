@@ -5,6 +5,7 @@ import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import type { FetchLike } from '@bike4mind/local-models';
 import { scopeOfIp, transportVerdict } from './addressPolicy';
+import { credentialRedactor } from './redact';
 
 /** Refused before anything was sent: wrong origin, or a transport rule (see addressPolicy). */
 export class ServerTransportError extends Error {
@@ -100,7 +101,8 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
     });
 
     const status = response.statusCode ?? 0;
-    const secrets = secretForms(credentials);
+    const redactor = credentialRedactor(credentials);
+    const scrub = (text: string) => redactor?.redact(text) ?? text;
     if (status < 200 || status > 599) {
       response.destroy();
       throw new TypeError(`${endpoint.label} answered with an invalid HTTP status (${status}).`);
@@ -111,11 +113,10 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
       const target = location && URL.canParse(location, url.href) ? new URL(location, url) : null;
       const crossOrigin = !target || target.origin !== endpoint.origin;
       throw new ServerRedirectError(
-        redact(
+        scrub(
           crossOrigin
             ? `${endpoint.label} redirected to ${target?.origin ?? 'another address'}. Desktop does not follow redirects to another address, so its credentials stay with this server. Check the address.`
-            : `${endpoint.label} answered with a redirect to ${target.pathname}. Check the address, including any path.`,
-          secrets
+            : `${endpoint.label} answered with a redirect to ${target.pathname}. Check the address, including any path.`
         ),
         crossOrigin
       );
@@ -127,16 +128,20 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
     const empty = NO_BODY.has(status) || init.method === 'HEAD';
     if (empty) response.resume();
     // Error bodies and status text become error messages, logs and chat history, so a server or proxy
-    // that echoes the credential back must not carry it out of main.
-    if (status >= 400 && secrets.length > 0) {
-      const text = empty ? null : redact(await readCapped(response, ERROR_BODY_LIMIT), secrets);
+    // that echoes the credential back must not carry it out of main. A compressed body is passed through:
+    // no consumer asks for one, and the credential cannot be read inside it.
+    const encoding = (response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
+    if (status >= 400 && redactor && encoding === 'identity') {
+      let text: string | null = null;
+      if (!empty) {
+        const read = await readCapped(response, ERROR_BODY_LIMIT);
+        text = redactor.redact(read.text);
+        // A credential cut at the limit could leave its start behind.
+        if (read.capped) text = `${text.slice(0, Math.max(0, text.length - (redactor.longest - 1)))}[truncated]`;
+      }
       if (init.signal?.aborted) throw init.signal.reason;
       responseHeaders.delete('content-length');
-      return new Response(text, {
-        status,
-        statusText: redact(response.statusMessage ?? '', secrets),
-        headers: responseHeaders,
-      });
+      return new Response(text, { status, statusText: scrub(response.statusMessage ?? ''), headers: responseHeaders });
     }
     return new Response(empty ? null : (Readable.toWeb(response) as ReadableStream<Uint8Array>), {
       status,
@@ -148,38 +153,20 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
 
 const ERROR_BODY_LIMIT = 1024 * 1024;
 
-/** Every credential value as it could appear in a reply: raw, without `Bearer `, and JSON-escaped. Longest first. */
-function secretForms(credentials: Record<string, string> | null): string[] {
-  const forms = new Set<string>();
-  for (const value of Object.values(credentials ?? {})) {
-    const token = /^Bearer\s+(.+)$/i.exec(value)?.[1];
-    for (const secret of token ? [value, token] : [value]) {
-      if (!secret) continue;
-      const escaped = JSON.stringify(secret).slice(1, -1);
-      forms.add(secret).add(escaped).add(escaped.replaceAll('/', '\\/'));
-    }
-  }
-  return [...forms].sort((a, b) => b.length - a.length);
-}
-
-function redact(text: string, secrets: string[]): string {
-  return secrets.reduce((out, secret) => out.replaceAll(secret, '[redacted]'), text);
-}
-
-async function readCapped(response: IncomingMessage, limit: number): Promise<string> {
+async function readCapped(response: IncomingMessage, limit: number): Promise<{ text: string; capped: boolean }> {
   const chunks: Buffer[] = [];
   let size = 0;
   try {
     for await (const chunk of response as AsyncIterable<Buffer>) {
       chunks.push(chunk);
       size += chunk.length;
-      if (size >= limit) break;
+      if (size > limit) break;
     }
   } catch {
     // A body cut short still yields the status and whatever arrived.
   }
   response.destroy();
-  return Buffer.concat(chunks).subarray(0, limit).toString('utf8');
+  return { text: Buffer.concat(chunks).subarray(0, limit).toString('utf8'), capped: size > limit };
 }
 
 function plainHeaders(headers: RequestInit['headers']): Record<string, string> {

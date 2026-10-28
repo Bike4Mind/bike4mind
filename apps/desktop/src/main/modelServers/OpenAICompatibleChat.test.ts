@@ -20,6 +20,7 @@ function chat(fetch: FetchLike, product: 'llama-server' | null = 'llama-server')
     product,
     fetch,
     hasCredentials: () => false,
+    redact: text => text,
   });
 }
 

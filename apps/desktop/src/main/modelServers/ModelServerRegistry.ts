@@ -34,6 +34,7 @@ import {
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
+import { credentialRedactor } from './redact';
 import { createServerFetch, ServerRedirectError, ServerTransportError, type ServerEndpoint } from './serverFetch';
 
 export const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -468,6 +469,7 @@ export class ModelServerRegistry {
     const fetch = this.fetchFor(endpoint);
     const runtimeId = serverRuntimeId(record.id);
     const hasCredentials = () => !!this.deps.store.headers(record);
+    const redact = (text: string) => credentialRedactor(endpoint.credentialHeaders())?.redact(text) ?? text;
     const product = previous?.record.kind === record.kind ? previous.product : null;
     const client: ServerClient =
       record.kind === 'ollama'
@@ -477,6 +479,7 @@ export class ModelServerRegistry {
             label: record.name,
             fetch,
             hasCredentials,
+            redact,
           })
         : new OpenAICompatibleChat({
             runtimeId,
@@ -485,6 +488,7 @@ export class ModelServerRegistry {
             product,
             fetch,
             hasCredentials,
+            redact,
           });
     return {
       record,

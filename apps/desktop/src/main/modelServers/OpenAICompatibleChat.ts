@@ -14,6 +14,8 @@ export interface OpenAICompatibleServer {
   product: OpenAICompatibleProduct | null;
   fetch: FetchLike;
   hasCredentials(): boolean;
+  /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
+  redact: (text: string) => string;
 }
 
 const PROPS_TIMEOUT_MS = 5_000;
@@ -208,7 +210,9 @@ export class OpenAICompatibleChat implements LocalChat {
         }
         if (chunk.error) {
           const detail = (chunk.error as { message?: unknown }).message;
-          failure = new Error(`${this.server.label}: ${typeof detail === 'string' ? detail : 'the reply failed.'}`);
+          failure = new Error(
+            `${this.server.label}: ${typeof detail === 'string' ? this.server.redact(detail) : 'the reply failed.'}`
+          );
           return;
         }
         const choice = chunk.choices?.[0];
