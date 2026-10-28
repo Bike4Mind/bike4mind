@@ -47,22 +47,22 @@ const buildAgentContextPrompt = (agent: IAgent): string => {
   // Agency & purpose dimensions
   context.push(`\n=== AGENCY & PURPOSE (What Makes Them REAL!) ===`);
   if (agent.personality?.personalMission) {
-    context.push(`🎯 Personal Mission: ${agent.personality.personalMission}`);
+    context.push(`\u{1F3AF} Personal Mission: ${agent.personality.personalMission}`);
   }
   if (agent.personality?.activeProject) {
-    context.push(`🚀 Active Project: ${agent.personality.activeProject}`);
+    context.push(`\u{1F680} Active Project: ${agent.personality.activeProject}`);
   }
   if (agent.personality?.secretAmbition) {
-    context.push(`🌟 Secret Ambition: ${agent.personality.secretAmbition}`);
+    context.push(`\u{1F31F} Secret Ambition: ${agent.personality.secretAmbition}`);
   }
   if (agent.personality?.coreValues) {
-    context.push(`💎 Core Values: ${agent.personality.coreValues}`);
+    context.push(`\u{1F48E} Core Values: ${agent.personality.coreValues}`);
   }
   if (agent.personality?.legacyAspiration) {
-    context.push(`🏛️ Legacy Aspiration: ${agent.personality.legacyAspiration}`);
+    context.push(`\u{1F3DB}\u{FE0F} Legacy Aspiration: ${agent.personality.legacyAspiration}`);
   }
   if (agent.personality?.growthChallenge) {
-    context.push(`⚔️ Growth Challenge: ${agent.personality.growthChallenge}`);
+    context.push(`\u2694\u{FE0F} Growth Challenge: ${agent.personality.growthChallenge}`);
   }
 
   // Core Personality
