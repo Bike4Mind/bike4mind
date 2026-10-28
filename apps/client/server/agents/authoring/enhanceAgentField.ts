@@ -2,6 +2,7 @@ import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { IAgent, IMessage } from '@bike4mind/common';
 import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
+import { AuthoringResultError } from '@server/agents/authoring/authoringErrors';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 
@@ -206,7 +207,7 @@ Please enhance this personality field, keeping the user's core idea as the found
   );
 
   if (!enhancedValue.trim()) {
-    throw new BadRequestError('Failed to enhance field. Please try again.');
+    throw new AuthoringResultError('Failed to enhance field. Please try again.');
   }
 
   // Clean up the generated text

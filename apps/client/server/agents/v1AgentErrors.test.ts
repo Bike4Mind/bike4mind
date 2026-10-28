@@ -6,6 +6,7 @@ import { ExpectedImageGenerationError } from '@bike4mind/utils';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { BadGatewayError } from '@bike4mind/server-utils/utils/errors';
 import { SystemPromptRateLimitError } from './systemPromptRateLimit';
+import { AuthoringResultError } from './authoring/authoringErrors';
 import { toV1AgentError, toV1AuthoringError } from './v1AgentErrors';
 
 describe('toV1AgentError', () => {
@@ -48,6 +49,12 @@ describe('toV1AuthoringError', () => {
     );
     expect(mapped).toBeInstanceOf(BadGatewayError);
     expect(mapped.message).not.toContain('Nudity');
+  });
+
+  it('reports an empty model result or a failed save as a 502, not a 400', () => {
+    const mapped = toV1AuthoringError(new AuthoringResultError('Failed to enhance field. Please try again.'));
+    expect(mapped).toBeInstanceOf(BadGatewayError);
+    expect(new AuthoringResultError('x')).toBeInstanceOf(BadRequestError);
   });
 
   it('hides the text of any other failure behind a generic 502', () => {

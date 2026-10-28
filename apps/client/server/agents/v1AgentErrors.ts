@@ -7,6 +7,7 @@ import {
   TooManyRequestsError,
   UnprocessableEntityError,
 } from '@bike4mind/server-utils/utils/errors';
+import { AuthoringResultError } from '@server/agents/authoring/authoringErrors';
 import { SystemPromptRateLimitError } from '@server/agents/systemPromptRateLimit';
 
 /**
@@ -34,6 +35,8 @@ export const v1FieldLabel = (field: string) => V1_FIELD_NAMES[field] ?? field;
 export function toV1AuthoringError(error: unknown): HTTPError {
   // CONVENTIONS section 1: a rate limit is a 429 on /api/v1, where the SPA route keeps its 400.
   if (error instanceof SystemPromptRateLimitError) return new TooManyRequestsError(error.message);
+  // An empty model result or a failed save is the provider side failing, not a bad request.
+  if (error instanceof AuthoringResultError) return new BadGatewayError(error.message);
   if (error instanceof HTTPError) return error;
   if (error instanceof ExpectedImageGenerationError) return new BadGatewayError(error.message);
   if (error instanceof ImageModerationBlockedError) {

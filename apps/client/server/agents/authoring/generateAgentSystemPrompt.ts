@@ -9,7 +9,8 @@ import { IAgent, IMessage } from '@bike4mind/common';
 import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
-import { assertSystemPromptGenerationAllowed } from '@client/server/agents/systemPromptRateLimit';
+import { assertSystemPromptGenerationAllowed } from '@server/agents/systemPromptRateLimit';
+import { AuthoringResultError } from '@server/agents/authoring/authoringErrors';
 
 // Helper function to create the input data for the PromptCrafter
 const createAgentMetadataForPrompt = (agent: IAgent): string => {
@@ -174,7 +175,7 @@ Please create a detailed system prompt that captures this agent's personality, c
   );
 
   if (!generatedSystemPrompt.trim()) {
-    throw new BadRequestError('Failed to generate system prompt. Please try again.');
+    throw new AuthoringResultError('Failed to generate system prompt. Please try again.');
   }
 
   // Clean up the generated system prompt
@@ -188,7 +189,7 @@ Please create a detailed system prompt that captures this agent's personality, c
   });
 
   if (!updatedAgent) {
-    throw new BadRequestError('Failed to save generated system prompt');
+    throw new AuthoringResultError('Failed to save generated system prompt');
   }
 
   // Update usage tracking in settings (if settings exist)
