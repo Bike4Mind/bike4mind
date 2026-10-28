@@ -1,6 +1,7 @@
 import { emailDomain } from '@client/app/utils/signupAnomaly';
 import { type DomainSignupSignal, type SignupSignal, SIGNUP_SIGNALS } from '@client/app/utils/signupSignals';
 import { deliveryMailbox } from '@server/utils/deliveryMailbox';
+import { ipv6Slash64 } from '@server/utils/ipv6Slash64';
 
 /**
  * Deterministic suspected-signup classifier. Every account gets the list of signals it triggered
@@ -194,24 +195,12 @@ export function networkPrefix(ip: string | null | undefined): string | null {
   if (!ip) return null;
   const address = ip
     .trim()
-    .toLowerCase()
-    .replace(/^::ffff:(?=\d+\.)/, '');
+    .split('%')[0]
+    .replace(/^::ffff:(?=\d+\.)/i, '');
   const ipv4 = address.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/);
   if (ipv4)
     return ipv4.slice(1).some(octet => Number(octet) > 255) ? null : `${ipv4.slice(1).map(Number).join('.')}.0/24`;
-  if (!/^[0-9a-f:]+$/.test(address)) return null;
-  const halves = address.split('::');
-  if (halves.length > 2) return null;
-  const head = halves[0] ? halves[0].split(':') : [];
-  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
-  const missing = 8 - head.length - tail.length;
-  if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
-  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...tail];
-  if (groups.some(group => !/^[0-9a-f]{1,4}$/.test(group))) return null;
-  return `${groups
-    .slice(0, 4)
-    .map(group => parseInt(group, 16).toString(16))
-    .join(':')}::/64`;
+  return ipv6Slash64(address);
 }
 
 /**

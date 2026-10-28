@@ -210,6 +210,8 @@ describe('network and inbox clusters', () => {
     expect(networkPrefix('2001:db8:aa:1::5')).toBe('2001:db8:aa:1::/64');
     expect(networkPrefix('2001:0db8:00aa:0001:ffff:0:0:1')).toBe('2001:db8:aa:1::/64');
     expect(networkPrefix('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(networkPrefix('fe80::1%eth0')).toBe('fe80:0:0:0::/64');
+    expect(networkPrefix('::FFFF:198.51.100.23')).toBe('198.51.100.0/24');
     expect(networkPrefix('999.1.1.1')).toBeNull();
     expect(networkPrefix('not-an-ip')).toBeNull();
     expect(networkPrefix(null)).toBeNull();
