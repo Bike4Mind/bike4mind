@@ -421,28 +421,28 @@ Every action fits one row of the DESIGN_GUIDE action table. "Moves money" means 
 
 ## 8. Issue breakdown
 
-Ordered by value. Each item ships on its own behind the existing admin gate. Labels `admin-ux` and `UI/UX`. Children of epic #6026.
+Ordered by value. Each item ships on its own behind the existing admin gate. Labels `admin-ux` and `UI/UX`. Children of epic [#6026](https://github.com/Bike4Mind/bike4mind/issues/6026).
 
 | # | Issue | Size | Depends on |
 |---|---|---|---|
-| 1 (#6012) | **Rename Subscribers to Waitlist**: nav, slug alias redirect, palette, page copy, email audience labels, docs-site with redirect; move Email marketing to People | S | - |
-| 2 (#6013) | **Close reason/audit gaps on existing money routes**: reason required on credits-per-cycle, remove, seats, revoke, convert-to-paid; block "remove" on live Stripe-billed rows; new reason preset sets. The existing Organizations-tab modals get the minimum change needed to send a reason; their redesign belongs to #5772 | S | - |
-| 3 (#6014) | **Admin subscriptions list API**: `GET /api/admin/subscriptions` + `summary` + `export`, server filters, org subscriptions included, indexes | M | - |
-| 4 (#6015) | **Subscriptions list page on the shared toolkit**: views, FilterBar, DataTable server mode, StatStrip (counts only), status tone map, money formatter, CSV export | M | 3 |
-| 5 (#6016) | **Subscription detail page (Mongo-only)**: header, Overview (Plan, Credits, Owner, Seats), Admin log, comp actions moved to ActionDialog (grant, extend, end, edit credits per cycle, remove); profile and org cards link here; delete legacy `UserSubscriptionStatus` and `EditCreditsModal`. The Organizations-tab modals (`AdjustSeatsModal`, revoke) stay with #5772 | L | 2, 3 |
-| 6 (#6017) | **Mirror price and cancel fields on Subscription** (6.1), plus a read-only backfill script | M | - |
-| 7 (#6018) | **MRR in the list**: MRR column and tile, Canceling view | S | 4, 6 |
-| 8 (#6019) | **Detail: live Stripe read**: Payment card, Invoices tab with credits-granted join, Lifetime paid | M | 5 |
-| 9 (#6020) | **BillingEvent store and Timeline tab** (6.2) | M | 5 |
-| 10 (#6021) | **Reconciliation cron, Mismatched view, AnomalyBanner, Sync from Stripe** (6.3); replaces Reconcile seats | M | 4, 6 |
-| 11 (#6022) | **Revenue page** with daily snapshot (5.3, 6.4): StatStrip, MRR-over-time chart, MRR-by-plan and At-risk tables | M | 6, 7 |
-| 11b (#6023) | **Revenue charts**: MRR movement, MRR by plan, paying customers by owner type, at-risk MRR; sparklines on the list tiles (5.7) | M | 11 |
-| 11c (#6024) | **Detail charts**: payment history, credits granted vs used per cycle, seats used vs paid (5.7) | M | 8, 9 |
-| 12 (#6025) | **Cancel at period end and resume** with the shared Stripe-write guard | M | 5, 2 |
+| 1 ([#6012](https://github.com/Bike4Mind/bike4mind/issues/6012)) | **Rename Subscribers to Waitlist**: nav, slug alias redirect, palette, page copy, email audience labels, docs-site with redirect; move Email marketing to People | S | - |
+| 2 ([#6013](https://github.com/Bike4Mind/bike4mind/issues/6013)) | **Close reason/audit gaps on existing money routes**: reason required on credits-per-cycle, remove, seats, revoke, convert-to-paid; block "remove" on live Stripe-billed rows; new reason preset sets. The existing Organizations-tab modals get the minimum change needed to send a reason; their redesign belongs to [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772) | S | - |
+| 3 ([#6014](https://github.com/Bike4Mind/bike4mind/issues/6014)) | **Admin subscriptions list API**: `GET /api/admin/subscriptions` + `summary` + `export`, server filters, org subscriptions included, indexes | M | - |
+| 4 ([#6015](https://github.com/Bike4Mind/bike4mind/issues/6015)) | **Subscriptions list page on the shared toolkit**: views, FilterBar, DataTable server mode, StatStrip (counts only), status tone map, money formatter, CSV export | M | 3 |
+| 5 ([#6016](https://github.com/Bike4Mind/bike4mind/issues/6016)) | **Subscription detail page (Mongo-only)**: header, Overview (Plan, Credits, Owner, Seats), Admin log, comp actions moved to ActionDialog (grant, extend, end, edit credits per cycle, remove); profile and org cards link here; delete legacy `UserSubscriptionStatus` and `EditCreditsModal`. The Organizations-tab modals (`AdjustSeatsModal`, revoke) stay with [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772) | L | 2, 3 |
+| 6 ([#6017](https://github.com/Bike4Mind/bike4mind/issues/6017)) | **Mirror price and cancel fields on Subscription** (6.1), plus a read-only backfill script | M | - |
+| 7 ([#6018](https://github.com/Bike4Mind/bike4mind/issues/6018)) | **MRR in the list**: MRR column and tile, Canceling view | S | 4, 6 |
+| 8 ([#6019](https://github.com/Bike4Mind/bike4mind/issues/6019)) | **Detail: live Stripe read**: Payment card, Invoices tab with credits-granted join, Lifetime paid | M | 5 |
+| 9 ([#6020](https://github.com/Bike4Mind/bike4mind/issues/6020)) | **BillingEvent store and Timeline tab** (6.2) | M | 5 |
+| 10 ([#6021](https://github.com/Bike4Mind/bike4mind/issues/6021)) | **Reconciliation cron, Mismatched view, AnomalyBanner, Sync from Stripe** (6.3); replaces Reconcile seats | M | 4, 6 |
+| 11 ([#6022](https://github.com/Bike4Mind/bike4mind/issues/6022)) | **Revenue page** with daily snapshot (5.3, 6.4): StatStrip, MRR-over-time chart, MRR-by-plan and At-risk tables | M | 6, 7 |
+| 11b ([#6023](https://github.com/Bike4Mind/bike4mind/issues/6023)) | **Revenue charts**: MRR movement, MRR by plan, paying customers by owner type, at-risk MRR; sparklines on the list tiles (5.7) | M | 11 |
+| 11c ([#6024](https://github.com/Bike4Mind/bike4mind/issues/6024)) | **Detail charts**: payment history, credits granted vs used per cycle, seats used vs paid (5.7) | M | 8, 9 |
+| 12 ([#6025](https://github.com/Bike4Mind/bike4mind/issues/6025)) | **Cancel at period end and resume** with the shared Stripe-write guard | M | 5, 2 |
 | 13 | **Cancel immediately** | S | 12; deferred with D2, not filed |
 | 14 | **Refund** | M | deferred (D2), not filed |
 | 15 | Wishes, one issue each, when prioritized: retry payment (D3), plan / billed-seat change (D4), coupons, card-expiry churn signal, expansion and contraction MRR | - | 12 |
-| - | The Credits and Organizations tab cleanup (inner tabs in the URL, the duplicate "User credits" adjuster, the dead `OrganizationProfile.tsx`, the legacy org modals) is already in scope of #5772. Not filed again. | - | - |
+| - | The Credits and Organizations tab cleanup (inner tabs in the URL, the duplicate "User credits" adjuster, the dead `OrganizationProfile.tsx`, the legacy org modals) is already in scope of [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772). Not filed again. | - | - |
 
 - **Ship order:** 1 and 2 are immediate and stand alone.
 - **First visible value:** 3, then 4, then 5. That alone answers J1 (minus invoices), J2, J3, J5 and J12, and fixes the "Remove keeps charging" trap.
