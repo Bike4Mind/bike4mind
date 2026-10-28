@@ -127,9 +127,15 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
   };
 
   const handleConfirm = async () => {
-    await update({ before: tags, tags: nextTags });
+    const savedTags = await update({ before: tags, tags: nextTags });
     onClose();
-    showUndo({ message: 'Tags updated', onUndo: () => update({ before: nextTags, tags }), onViewAudit: onAudit });
+    showUndo({
+      message: 'Tags updated',
+      onUndo: async () => {
+        await update({ before: savedTags, tags });
+      },
+      onViewAudit: onAudit,
+    });
   };
 
   return (

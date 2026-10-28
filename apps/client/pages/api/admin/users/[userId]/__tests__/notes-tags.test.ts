@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import { createMocks } from 'node-mocks-http';
-import { PENDING_FREE_CREDITS_TAG, RESERVED_PARTNER_RULE_TAGS } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG, RESERVED_PARTNER_RULE_TAGS, hasDeveloperUserTag } from '@bike4mind/common';
 import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
 
 const mocks = vi.hoisted(() => ({
@@ -154,6 +154,26 @@ describe('notes and tags route boundaries', () => {
     });
     expect(mocks.update).not.toHaveBeenCalled();
   });
+  it.each([' Developer ', 'DEVELOPER', '  datalake:synthetic-lake  '])(
+    'preserves the exact stored managed token while editing free-form tags: %s',
+    async managedTag => {
+      const before = [managedTag, 'old'];
+      mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ tags: before }) }) });
+      const res = await call('PATCH', 'PATCH', { before, tags: [managedTag, 'pilot'] }, ['settings:manage']);
+      const savedTags = [managedTag, 'pilot'];
+      expect(res._getJSONData()).toEqual({ tags: savedTags });
+      expect(hasDeveloperUserTag(savedTags)).toBe(hasDeveloperUserTag(before));
+      expect(mocks.update).toHaveBeenCalledWith(
+        { _id: USER, tags: before },
+        { $set: { tags: savedTags } },
+        { runValidators: true }
+      );
+      expect(mocks.audit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ changes: [{ field: 'tags', before, after: savedTags }] })
+      );
+    }
+  );
   it('preserves managed tags while updating free-form tags', async () => {
     mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ tags: ['Developer', 'old'] }) }) });
     const res = await call('PATCH', 'PATCH', { before: ['Developer', 'old'], tags: ['Developer', 'pilot'] }, [

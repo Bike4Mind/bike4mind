@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { isAxiosError } from 'axios';
 import { Button, Stack, Textarea, Typography } from '@mui/joy';
 import { ADMIN_NOTE_MAX_LENGTH, hasAdminPermission, type AdminUserNote } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -61,22 +62,35 @@ const UserNotesContent: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState<AdminUserNote | null>(null);
   const [editBody, setEditBody] = useState('');
+  const [editConflict, setEditConflict] = useState(false);
   const [historyId, setHistoryId] = useState<string | null>(null);
   if (!canRead) return null;
 
+  const currentNotes = notes.data?.pages.flatMap(page => page.entries) ?? [];
+  const missingEditedNote = editing !== null && !currentNotes.some(note => note.id === editing.id);
+  const displayedNotes = missingEditedNote && editing ? [...currentNotes, editing] : currentNotes;
+
   const change = async (note: AdminUserNote, input: { body: string } | { deleted: boolean }) => {
-    const saved = await write.mutateAsync({ noteId: note.id, version: note.version, ...input });
-    setEditing(null);
-    showUndo({
-      message: 'Note updated',
-      onUndo: async () => {
-        await write.mutateAsync({
-          noteId: saved.id,
-          version: saved.version,
-          ...('body' in input ? { body: note.body } : { deleted: note.deleted }),
-        });
-      },
-    });
+    try {
+      const saved = await write.mutateAsync({ noteId: note.id, version: note.version, ...input });
+      if (editing?.id === note.id) {
+        setEditing(null);
+        setEditConflict(false);
+      }
+      showUndo({
+        message: 'Note updated',
+        onUndo: async () => {
+          await write.mutateAsync({
+            noteId: saved.id,
+            version: saved.version,
+            ...('body' in input ? { body: note.body } : { deleted: note.deleted }),
+          });
+        },
+      });
+    } catch (error: unknown) {
+      if ('body' in input && isAxiosError(error) && error.response?.status === 409) setEditConflict(true);
+      throw error;
+    }
   };
   const add = async () => {
     const saved = await write.mutateAsync({ body: draft.trim() });
@@ -107,84 +121,91 @@ const UserNotesContent: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
             </Button>
           </Stack>
         )}
-        {notes.data?.pages
-          .flatMap(page => page.entries)
-          .map(note => (
-            <Stack
-              key={note.id}
-              gap={0.75}
-              sx={{ borderBottom: '1px solid', borderColor: 'admin.border', pb: 1.5 }}
-              data-testid="user-note-row"
-            >
-              <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                {note.body}
-              </Typography>
-              <Stack direction="row" gap={0.5} flexWrap="wrap">
-                <Typography level="body-xs">{note.author.name}</Typography>
-                <RelativeTime at={note.createdAt} />
-                {note.version > 1 && <Typography level="body-xs">(edited, version {note.version})</Typography>}
-              </Stack>
-              <Button
-                variant="plain"
-                onClick={() => setHistoryId(historyId === note.id ? null : note.id)}
-                data-testid={`user-note-history-${note.id}-btn`}
-              >
-                View history
-              </Button>
-              {historyId === note.id && <NoteHistory userId={user.id} noteId={note.id} />}
-              {canWrite && (
-                <Stack direction="row" gap={1}>
-                  <Button
-                    variant="plain"
-                    disabled={write.isPending}
-                    onClick={() => {
-                      setEditing(note);
-                      setEditBody(note.body);
-                    }}
-                    data-testid={`user-note-edit-${note.id}-btn`}
-                  >
-                    Edit note
-                  </Button>
-                  <Button
-                    variant="plain"
-                    disabled={write.isPending}
-                    onClick={() => safely(change(note, { deleted: true }))}
-                    data-testid={`user-note-delete-${note.id}-btn`}
-                  >
-                    Delete note
-                  </Button>
-                </Stack>
-              )}
-              {editing?.id === note.id && (
-                <Stack gap={1}>
-                  <Textarea
-                    value={editBody}
-                    onChange={event => setEditBody(event.target.value)}
-                    slotProps={{
-                      textarea: {
-                        maxLength: ADMIN_NOTE_MAX_LENGTH,
-                        'aria-label': 'Edit note',
-                        'data-testid': 'user-note-edit-input',
-                      },
-                    }}
-                  />
-                  <Stack direction="row" gap={1}>
-                    <Button variant="plain" onClick={() => setEditing(null)} data-testid="user-note-cancel-btn">
-                      Cancel
-                    </Button>
-                    <Button
-                      disabled={!editBody.trim() || write.isPending}
-                      onClick={() => safely(change(editing, { body: editBody.trim() }))}
-                      data-testid="user-note-save-btn"
-                    >
-                      Save note
-                    </Button>
-                  </Stack>
-                </Stack>
-              )}
+        {displayedNotes.map(note => (
+          <Stack
+            key={note.id}
+            gap={0.75}
+            sx={{ borderBottom: '1px solid', borderColor: 'admin.border', pb: 1.5 }}
+            data-testid="user-note-row"
+          >
+            <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+              {note.body}
+            </Typography>
+            <Stack direction="row" gap={0.5} flexWrap="wrap">
+              <Typography level="body-xs">{note.author.name}</Typography>
+              <RelativeTime at={note.createdAt} />
+              {note.version > 1 && <Typography level="body-xs">(edited, version {note.version})</Typography>}
             </Stack>
-          ))}
-        {notes.data?.pages[0]?.entries.length === 0 && <Typography level="body-sm">No internal notes yet.</Typography>}
+            <Button
+              variant="plain"
+              onClick={() => setHistoryId(historyId === note.id ? null : note.id)}
+              data-testid={`user-note-history-${note.id}-btn`}
+            >
+              View history
+            </Button>
+            {historyId === note.id && <NoteHistory userId={user.id} noteId={note.id} />}
+            {canWrite && !(missingEditedNote && note.id === editing?.id) && (
+              <Stack direction="row" gap={1}>
+                <Button
+                  variant="plain"
+                  disabled={write.isPending}
+                  onClick={() => {
+                    setEditing(note);
+                    setEditBody(note.body);
+                    setEditConflict(false);
+                  }}
+                  data-testid={`user-note-edit-${note.id}-btn`}
+                >
+                  Edit note
+                </Button>
+                <Button
+                  variant="plain"
+                  disabled={write.isPending}
+                  onClick={() => safely(change(note, { deleted: true }))}
+                  data-testid={`user-note-delete-${note.id}-btn`}
+                >
+                  Delete note
+                </Button>
+              </Stack>
+            )}
+            {editing?.id === note.id && (
+              <Stack gap={1}>
+                {(editConflict || missingEditedNote) && (
+                  <Typography role="alert" level="body-sm">
+                    {missingEditedNote
+                      ? 'This note is no longer available. Your draft is kept here. Copy it before choosing Cancel.'
+                      : 'This note changed. Your draft is kept here. Copy it before choosing Cancel, then Edit note to start from the latest version.'}
+                  </Typography>
+                )}
+                <Textarea
+                  disabled={write.isPending}
+                  value={editBody}
+                  onChange={event => setEditBody(event.target.value)}
+                  slotProps={{
+                    textarea: {
+                      maxLength: ADMIN_NOTE_MAX_LENGTH,
+                      'aria-label': 'Edit note',
+                      'data-testid': 'user-note-edit-input',
+                    },
+                  }}
+                />
+                <Stack direction="row" gap={1}>
+                  <Button variant="plain" onClick={() => setEditing(null)} data-testid="user-note-cancel-btn">
+                    Cancel
+                  </Button>
+                  <Button
+                    disabled={!editBody.trim() || write.isPending || editConflict || missingEditedNote}
+                    onClick={() => safely(change(editing, { body: editBody.trim() }))}
+                    data-testid="user-note-save-btn"
+                  >
+                    Save note
+                  </Button>
+                </Stack>
+              </Stack>
+            )}
+          </Stack>
+        ))}
+        {notes.data && displayedNotes.length === 0 && <Typography level="body-sm">No internal notes yet.</Typography>}
         {notes.hasNextPage && (
           <Button
             variant="outlined"

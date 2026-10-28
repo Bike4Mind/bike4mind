@@ -63,7 +63,7 @@ describe('access dialogs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.currentUser = { id: 'admin-1' };
-    mocks.update.mockResolvedValue(undefined);
+    mocks.update.mockImplementation(async (input: { tags?: string[] }) => input.tags ?? []);
   });
 
   describe('ChangeRoleDialog', () => {
@@ -259,6 +259,18 @@ describe('access dialogs', () => {
       fireEvent.click(confirmButton('manage-tags-dialog'));
       await waitFor(() =>
         expect(mocks.update).toHaveBeenCalledWith({ before: ['original'], tags: ['original', 'draft'] })
+      );
+    });
+    it('uses the persisted normalized snapshot when undoing a tag edit', async () => {
+      mocks.update.mockResolvedValueOnce(['legacy', 'pilot']);
+      renderTags([' legacy ']);
+      fireEvent.change(screen.getByTestId('manage-tags-dialog-input'), { target: { value: 'pilot' } });
+      fireEvent.click(screen.getByTestId('manage-tags-dialog-add-btn'));
+      pickReason('manage-tags-dialog');
+      fireEvent.click(confirmButton('manage-tags-dialog'));
+      fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenLastCalledWith({ before: ['legacy', 'pilot'], tags: [' legacy '] })
       );
     });
   });
