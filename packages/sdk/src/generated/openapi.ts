@@ -5762,11 +5762,11 @@ export interface components {
      *     }
      */
     enhanceAgentFieldRequest: {
-      /** @description The personality field being enhanced, for example `quirk` or `coreValues`. */
+      /** @description The personality field being enhanced, for example `quirk` or `coreValues`. At most 100 characters. */
       field_name: string;
-      /** @description The text to enhance. It stays the basis of the result. */
+      /** @description The text to enhance. It stays the basis of the result. At most 2000 characters. */
       current_value: string;
-      /** @description Overrides the agent's stored name in the prompt. */
+      /** @description Overrides the agent's stored name in the prompt. At most 200 characters. */
       agent_name?: string;
     };
     /**
@@ -17572,7 +17572,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17747,7 +17747,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17945,7 +17945,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -18147,7 +18147,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `agents:write`. */
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
