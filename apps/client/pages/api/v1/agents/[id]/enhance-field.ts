@@ -5,7 +5,8 @@
  */
 import { enhanceAgentFieldContract } from '@bike4mind/common';
 import { enhanceAgentField } from '@server/agents/authoring/enhanceAgentField';
-import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent, perUserRateLimit } from '@server/agents/v1AgentRoute';
+import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
