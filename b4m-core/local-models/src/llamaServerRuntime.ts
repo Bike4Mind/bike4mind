@@ -158,16 +158,19 @@ export class LlamaServerRuntime implements LocalRuntime {
   }
 
   /**
-   * Downloads the build of `ref` (see `parseLlamaServerPullRef`) whose quant label matches, ignoring case. Only this
-   * explicit call downloads. The model then lists as `<repo>/<path in repo>`.
+   * Downloads the build of `ref` (see `parseLlamaServerPullRef`) whose label, or else quant label, matches, ignoring
+   * case. Only this explicit call downloads. The model then lists as `<repo>/<path in repo>`.
    */
   async pull(ref: string, opts: PullOptions = {}): Promise<void> {
     const { repo, quant } = parseLlamaServerPullRef(ref);
     this.#hub ??= new HuggingFaceHub({ fetch: this.#options.fetch });
     const detail = await this.#hub.getModel(repo, { signal: opts.signal });
-    const build = detail.builds.find(entry => entry.quant?.toUpperCase() === quant.toUpperCase());
+    const wanted = quant.toUpperCase();
+    const build =
+      detail.builds.find(entry => entry.label.toUpperCase() === wanted) ??
+      detail.builds.find(entry => entry.quant?.toUpperCase() === wanted);
     if (!build) {
-      const quants = [...new Set(detail.builds.flatMap(entry => (entry.quant ? [entry.quant] : [])))];
+      const quants = detail.builds.flatMap(entry => (entry.quant ? [entry.label] : []));
       throw new ModelNotFoundError(this.id, ref, {
         cause: new Error(`${repo} offers ${quants.length > 0 ? quants.join(', ') : 'no labelled quants'}`),
       });

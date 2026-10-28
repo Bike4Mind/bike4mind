@@ -262,5 +262,50 @@ export const gatedTree = [
   lfsFile('gemma-3-1b-it-q4_0.gguf', 1003541152, '*'.repeat(64)),
 ];
 
+export const flashNextSha = '766911a6b7369840a91dbcd95f9f997acaab6cd6';
+
+/**
+ * `unsloth/Qwen3.8-Flash-Next-GGUF`, most split builds dropped: every model build is split, and the single files are
+ * MTP draft heads, a folder of them plus one at the root, which the registry skips ("only contains sharded GGUF").
+ */
+export const flashNextTree = [
+  { type: 'directory', oid: 'x', size: 0, path: 'MTP' },
+  { type: 'file', oid: 'x', size: 5906, path: 'MTP/README.md' },
+  lfsFile('MTP/mtp-Qwen3.8-Flash-Next-BF16.gguf', 7770760320, `6b6c9988${'0'.repeat(56)}`),
+  lfsFile('MTP/mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf', 2786204800, `8087dbb3${'0'.repeat(56)}`),
+  lfsFile('MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf', 4137429120, `58a47d6a${'0'.repeat(56)}`),
+  lfsFile('MTP/mtp-Qwen3.8-Flash-Next-shared-BF16.gguf', 5227963456, `32473fa7${'0'.repeat(56)}`),
+  lfsFile('MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf', 1907151936, `f521868a${'0'.repeat(56)}`),
+  lfsFile('MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf', 2786568256, `5ff54097${'0'.repeat(56)}`),
+  lfsFile('UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf', 10946624, `44481862${'0'.repeat(56)}`),
+  lfsFile('UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf', 49859583136, `3f342f1c${'0'.repeat(56)}`),
+  lfsFile('UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf', 49376141504, `56758f40${'0'.repeat(56)}`),
+  lfsFile('UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf', 12087983520, `753bda48${'0'.repeat(56)}`),
+  lfsFile('imatrix_unsloth.gguf_file', 580038720, `a5863123${'0'.repeat(56)}`),
+  lfsFile('mmproj-BF16.gguf', 907542944, `2e788f8c${'0'.repeat(56)}`),
+  lfsFile('mmproj-F16.gguf', 904004000, `1f7b7f0b${'0'.repeat(56)}`),
+  lfsFile('mtp-Qwen3.8-Flash-Next-Q8_0.gguf', 4137429120, `58a47d6a${'0'.repeat(56)}`),
+];
+
+export const lfmSha = '657e078c94084481950a2d555a941481f715536b';
+
+/**
+ * `LiquidAI/LFM2.5-350M-GGUF`: a quantization-aware-distilled Q4_0 next to the plain one, and the QAD source
+ * safetensors in a folder. The registry serves `:Q4_0` and `:QAD-Q4_0` as the two different files.
+ */
+export const lfmTree = [
+  { type: 'directory', oid: 'x', size: 0, path: 'qad' },
+  { type: 'file', oid: 'x', size: 10596, path: 'LICENSE' },
+  lfsFile('LFM2.5-350M-BF16.gguf', 711485152, '8da576155e67ae093f49e4ebf638c025a04c0d28d5ec42bd28617ca18a52539d'),
+  lfsFile('LFM2.5-350M-F16.gguf', 711485152, '18e2f6b61045bed8c3e8575c01fa7898b2df5ae884964322dcf49e5d12f6eb79'),
+  lfsFile('LFM2.5-350M-Q4_0.gguf', 219309792, '85e32858daafad55b7bcd6b97a1343ee0661188e8036f9862d14d6b563142f50'),
+  lfsFile('LFM2.5-350M-Q4_K_M.gguf', 229312224, '7e6f72643caafc9a68256686638c4d7916f2cec76d1df478d4c3ddcd95a6aed4'),
+  lfsFile('LFM2.5-350M-Q5_K_M.gguf', 260376288, 'e8985a31d95fab69e894216ce1712b57a55f1561093ec7cf408b781834eb8435'),
+  lfsFile('LFM2.5-350M-Q6_K.gguf', 293381856, '3ed48149a87dd9a0b04688780828854fc0c607d8c241af2b1100045e0d6b45c7'),
+  lfsFile('LFM2.5-350M-Q8_0.gguf', 379217632, 'be036a757295e550098b85e13f6af2735d0fa73b41e1156a40c7d8e8e32a5766'),
+  lfsFile('LFM2.5-350M-QAD-Q4_0.gguf', 219312832, '3d10b6ab8fc91a919534b9558e266255aca0bbc7f6d015963599aa9e74e05b1d'),
+  lfsFile('qad/model.safetensors', 1417952352, `d0f1e2c3${'0'.repeat(56)}`),
+];
+
 export const gatedMessage =
   'Access to model google/gemma-3-1b-it-qat-q4_0-gguf is restricted. You must have access to it and be authenticated to access it. Please log in.';

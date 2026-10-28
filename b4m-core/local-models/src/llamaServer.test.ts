@@ -690,10 +690,11 @@ describe('startLlamaServer', () => {
   });
 });
 
-function build(quant: string, path: string): HubGgufBuild {
+function build(quant: string, path: string, label = quant): HubGgufBuild {
   return {
     id: path.replace(/\.gguf$/, ''),
     quant,
+    label,
     files: [{ path, sizeBytes: GGUF_BYTES.length, sha256: null, url: `https://hub.test/org/repo/resolve/abc/${path}` }],
     sizeBytes: GGUF_BYTES.length,
     split: false,
@@ -994,6 +995,14 @@ describe('LlamaServerRuntime', () => {
     expect(missing).toBeInstanceOf(ModelNotFoundError);
     expect((missing as Error).cause).toMatchObject({ message: 'org/repo offers Q2_K, Q4_K_M' });
     await expect(runtime.pull('not a ref')).rejects.toThrow('is not a Hugging Face model ref');
+  });
+
+  it('pulls a variant by its label when two builds share a quant', async () => {
+    const { hub, downloads } = fakeHub([build('Q4_0', 'm-Q4_0.gguf'), build('Q4_0', 'm-QAD-Q4_0.gguf', 'QAD-Q4_0')]);
+    const runtime = runtimeIn('models-pull-variant', { hub });
+    await runtime.pull('org/repo:qad-q4_0');
+    await runtime.pull('org/repo:Q4_0');
+    expect(downloads).toEqual(['m-QAD-Q4_0.gguf', 'm-Q4_0.gguf']);
   });
 
   it('parses pull refs', () => {

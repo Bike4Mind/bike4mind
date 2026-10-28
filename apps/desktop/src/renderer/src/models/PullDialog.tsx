@@ -47,7 +47,7 @@ export function PullDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog size="md" sx={{ maxWidth: 520 }} data-testid="models-pull-dialog">
-        <DialogTitle>Download {build.quant ?? build.id}?</DialogTitle>
+        <DialogTitle>Download {build.label}?</DialogTitle>
         <DialogContent>
           {/* Joy's checkbox hit area sits 1px outside its box, which otherwise scrolls this content both ways. */}
           <Stack spacing={1.25} sx={{ p: '1px' }}>

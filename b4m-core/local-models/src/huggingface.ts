@@ -153,6 +153,11 @@ export interface HubGgufBuild {
   id: string;
   /** Upper-case quant label read from the file name, e.g. `Q4_K_M` or `UD-Q4_K_XL`; `Q4_K_L` and kin are ours. */
   quant: string | null;
+  /**
+   * What to show for the build, unique within the repo: `quant`, with the part of the file name that sets it apart
+   * when other builds share that quant (`QAD-Q4_0` next to `Q4_0`), else `id`.
+   */
+  label: string;
   /** The file, or every shard in order. */
   files: HubGgufFile[];
   sizeBytes: number;
@@ -161,8 +166,8 @@ export interface HubGgufBuild {
   complete: boolean;
   /**
    * `hf.co/<repo>:<tag>` as planned from the file list. The registry also skips some files the list cannot tell
-   * apart (draft and assistant models), and then the tag fails or falls through to a later file, so confirm with
-   * `HuggingFaceHub.verifyOllamaRef` before pulling.
+   * apart (drafts and assistant models not named as such), and then the tag fails or falls through to a later file,
+   * so confirm with `HuggingFaceHub.verifyOllamaRef` before pulling.
    */
   ollamaRef: string | null;
   ollamaRefIssue: OllamaRefIssue | null;
@@ -222,6 +227,10 @@ const OLLAMA_MODEL_LAYER = 'application/vnd.ollama.image.model';
 const REGISTRY_MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json';
 
 const SHARD_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
+// Speculative-decoding drafts (MTP, DFlash, DSpark and EAGLE-3 heads) and importance matrices, which publishers ship
+// beside the model as .gguf files; Hugging Face's Ollama registry skips them as well.
+const AUXILIARY_GGUF_RE = /^(?:mtp|dflash|dspark|eagle3|imatrix)[-_.]|[-_.](?:mtp|dflash|dspark|imatrix)[-_.]/i;
+const LABEL_TOKEN_RE = /[-_. ]+|[^-_. ]+/g;
 const REPO_ID_RE = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,95}$/;
 const REVISION_RE = /^[\w./-]{1,200}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
@@ -495,6 +504,54 @@ function toGgufInfo(value: unknown): HubGgufInfo | null {
   return { architecture: architecture ?? null, contextLength: context_length ?? null, parameterCount: total ?? null };
 }
 
+const sameToken = (a: string | undefined, b: string | undefined) =>
+  a !== undefined && b !== undefined && a.toUpperCase() === b.toUpperCase();
+
+/** Each token list without the tokens all of them start with, then end with, trimmed of separators at either end. */
+function distinctMiddles(lists: string[][]): string[] {
+  const first = lists[0] ?? [];
+  const shortest = Math.min(...lists.map(list => list.length));
+  let start = 0;
+  while (start < shortest && lists.every(list => sameToken(list[start], first[start]))) start++;
+  let end = 0;
+  const fromEnd = (list: string[]) => list[list.length - 1 - end];
+  while (end < shortest - start && lists.every(list => sameToken(fromEnd(list), fromEnd(first)))) end++;
+  return lists.map(list =>
+    list
+      .slice(start, list.length - end)
+      .join('')
+      .replace(/^[-_. ]+|[-_. ]+$/g, '')
+  );
+}
+
+/** `HubGgufBuild.label` by build id. */
+function buildLabels(builds: readonly Pick<HubGgufBuild, 'id' | 'quant' | 'files'>[]): Map<string, string> {
+  const labels = new Map<string, string>();
+  const byQuant = new Map<string, { id: string; before: string[]; after: string[] }[]>();
+  const tokens = (text: string) => text.match(LABEL_TOKEN_RE) ?? [];
+  for (const build of builds) {
+    const stem = ggufStem(build.files[0]?.path ?? build.id);
+    const at = build.quant ? stem.toUpperCase().lastIndexOf(build.quant) : -1;
+    if (!build.quant || at < 0) {
+      labels.set(build.id, build.quant ?? build.id);
+      continue;
+    }
+    const group = byQuant.get(build.quant) ?? [];
+    group.push({ id: build.id, before: tokens(stem.slice(0, at)), after: tokens(stem.slice(at + build.quant.length)) });
+    byQuant.set(build.quant, group);
+  }
+  for (const [quant, group] of byQuant) {
+    const before = distinctMiddles(group.map(entry => entry.before));
+    const after = distinctMiddles(group.map(entry => entry.after));
+    group.forEach((entry, i) => labels.set(entry.id, [before[i], quant, after[i]].filter(Boolean).join('-')));
+  }
+  // The same file name in two folders, or a merged file beside its own shards: only the path tells them apart.
+  const counts = new Map<string, number>();
+  for (const label of labels.values()) counts.set(label.toUpperCase(), (counts.get(label.toUpperCase()) ?? 0) + 1);
+  for (const [id, label] of labels) if ((counts.get(label.toUpperCase()) ?? 0) > 1) labels.set(id, id);
+  return labels;
+}
+
 function groupGgufFiles(
   repo: string,
   entries: TreeEntry[],
@@ -512,10 +569,12 @@ function groupGgufFiles(
       sha256: SHA256_RE.test(oid) ? oid : null,
       url: url(entry.path),
     };
-    if (/mmproj/i.test(entry.path.replace(/^.*\//, ''))) {
+    const name = entry.path.replace(/^.*\//, '');
+    if (/mmproj/i.test(name)) {
       projectors.push({ ...file, quant: ggufQuantLabel(entry.path) });
       continue;
     }
+    if (AUXILIARY_GGUF_RE.test(name)) continue;
     const shard = SHARD_RE.exec(entry.path);
     const id = shard ? entry.path.slice(0, shard.index) : entry.path.replace(/\.gguf$/i, '');
     const key = `${shard ? 'split' : 'single'}:${id}`;
@@ -540,6 +599,7 @@ function groupGgufFiles(
     };
   });
   const plans = planOllamaTags(builds);
+  const labels = buildLabels(builds);
   const repoOk = ollamaAcceptsRepo(repo);
   const planned = builds
     .map((build): HubGgufBuild => {
@@ -563,6 +623,7 @@ function groupGgufFiles(
                     : null;
       return {
         ...build,
+        label: labels.get(build.id) ?? build.id,
         ollamaRef: issue || !tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`,
         ollamaRefIssue: issue,
       };

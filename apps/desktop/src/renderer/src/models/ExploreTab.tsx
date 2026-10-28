@@ -120,7 +120,7 @@ function BuildRow({
         <LinearProgress
           determinate={pull.phase === 'downloading'}
           value={pullPercent(pull)}
-          aria-label={`Download of ${repo} ${build.quant ?? build.id}`}
+          aria-label={`Download of ${repo} ${build.label}`}
           aria-valuetext={pullLabel(pull)}
         />
         <Typography level="body-xs">{pullLabel(pull)}</Typography>
@@ -168,7 +168,7 @@ function BuildRow({
     >
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography level="body-sm" fontFamily="code" noWrap>
-          {build.quant ?? build.id}
+          {build.label}
         </Typography>
         <Typography level="body-xs" textColor="text.tertiary">
           {formatBytes(build.sizeBytes)}

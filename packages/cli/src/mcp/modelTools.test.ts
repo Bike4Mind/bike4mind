@@ -17,6 +17,7 @@ function build(quant: string, sizeBytes: number): HubGgufBuild {
   return {
     id: path.replace(/\.gguf$/, ''),
     quant,
+    label: quant,
     files: [{ path, sizeBytes, sha256: 'a'.repeat(64), url: `${ENDPOINT}/${REPO}/resolve/main/${path}` }],
     sizeBytes,
     split: false,

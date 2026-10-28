@@ -269,14 +269,23 @@ export function parsePullTarget(input: string): PullTarget {
   return { kind: 'hub', repo: path, tag };
 }
 
-/** Matches the tag against each build's planned ref, then its quant label; no tag or `latest` means Q4_K_M. */
+/**
+ * Matches the tag against each build's planned ref, then its label, then its quant label; no tag or `latest` means
+ * Q4_K_M.
+ */
 export function pickBuild(builds: HubGgufBuild[], tag: string | null): HubGgufBuild | undefined {
   // Ollama tags an untagged hf.co pull `latest`, so users copy that form back.
   const wanted = (tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT).toUpperCase();
   return (
     builds.find(build => build.ollamaRef?.slice(build.ollamaRef.lastIndexOf(':') + 1).toUpperCase() === wanted) ??
+    builds.find(build => build.label.toUpperCase() === wanted) ??
     builds.find(build => build.quant === wanted)
   );
+}
+
+/** The tag `pickBuild` resolves back to `build`: its planned ref's, else its label. */
+export function buildTag(build: HubGgufBuild): string {
+  return build.ollamaRef ? build.ollamaRef.slice(build.ollamaRef.lastIndexOf(':') + 1) : build.label;
 }
 
 export async function resolveRuntimeTarget(
@@ -446,7 +455,7 @@ export async function planPull(
 
   const build = pickBuild(detail.builds, parsed.tag);
   if (!build) {
-    const quants = [...new Set(detail.builds.map(entry => entry.quant).filter(Boolean))].map(clean);
+    const quants = detail.builds.flatMap(entry => (entry.quant ? [clean(entry.label)] : []));
     throw new Error(
       quants.length === 0
         ? `${id} has no GGUF builds.`
@@ -454,7 +463,7 @@ export async function planPull(
     );
   }
   if (build.ollamaRefIssue && UNPULLABLE.has(build.ollamaRefIssue)) {
-    throw new Error(`Ollama cannot pull ${id} ${clean(build.quant)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
+    throw new Error(`Ollama cannot pull ${id} ${clean(build.label)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
   }
 
   const target = await requirePullable(deps);
