@@ -380,16 +380,16 @@ const SUMMARY_SHRINK_RETRIES = 2;
  * MAX_CONCURRENT_SPAWNED draws: a person spending their own attention on each turn is not the
  * runaway this guards against.
  */
-const MAX_MESSAGE_HOPS = 3;
+const MAX_MESSAGE_HOPS = 5;
 
 /**
  * How many messages one turn may send, which bounds the FAN where the hop count bounds the
- * chain. Neither is sufficient alone: without this, each turn in a 3-hop chain could message
+ * chain. Neither is sufficient alone: without this, each turn in a 5-hop chain could message
  * every session in the project and the total would still be "finite".
  *
- * Together they cap one user turn at 2 + 4 + 8 = 14 relayed turns in the worst case. That
- * bound is structural and is the only one: session_send is not held at the approval gate in
- * every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
+ * Together they cap one user turn at 2 + 4 + 8 + 16 + 32 = 62 relayed turns in the worst case.
+ * That bound is structural and is the only one: session_send is not held at the approval gate
+ * in every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
  */
 const MAX_SENDS_PER_TURN = 2;
 
