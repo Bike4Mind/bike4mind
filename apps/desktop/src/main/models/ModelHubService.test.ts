@@ -22,7 +22,13 @@ import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localConte
 import { pullKey, type ModelPull } from '@shared/models';
 import { describe, expect, it, vi } from 'vitest';
 import { loadCuratedManifest } from './loadCuratedManifest';
-import { ModelHubService, toModelHubError, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
+import {
+  ModelHubService,
+  toModelHubError,
+  installedReviewed,
+  type ModelHubPort,
+  type ModelRuntimePort,
+} from './ModelHubService';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const SHA = 'a'.repeat(64);
@@ -123,6 +129,8 @@ function installedAsReviewed(ref: string): Pick<ModelInspection, 'contents' | 'p
       template: templateText(ref),
       license: pins.license ? licenseText(ref) : null,
       modelBlob: libraryOf(reviewed)?.digest ?? reviewed.weights[0].sha256,
+      projectorBlobs: pins.projector ? [pins.projector] : [],
+      draftBlobs: pins.draft ? [pins.draft] : [],
     },
     parameters: pins.numCtx ? `num_ctx ${pins.numCtx}` : null,
   };
@@ -239,6 +247,23 @@ const request = {
   acceptLicense: false,
   confirmAccess: false,
 };
+
+describe('curated draft integrity', () => {
+  it('requires exactly the reviewed draft and rejects missing, changed, unreadable or duplicate drafts', async () => {
+    const reviewed = curatedBuilds().find(build => pinsOf(build)?.draft);
+    if (!reviewed) throw new Error('the bundled list lost its draft build');
+    const inspection = await harness().runtime.inspect(refOf(reviewed));
+    expect(installedReviewed(inspection, reviewed)).toBe(true);
+    for (const draftBlobs of [[], [SHA], [null], [...(inspection.contents?.draftBlobs ?? []), SHA]]) {
+      expect(
+        installedReviewed(
+          { ...inspection, contents: inspection.contents && { ...inspection.contents, draftBlobs } },
+          reviewed
+        )
+      ).toBe(false);
+    }
+  });
+});
 
 describe('ModelHubService pulls', () => {
   it('verifies the ref, then pulls it with progress, and reports the model installed', async () => {
@@ -820,6 +845,12 @@ describe('ModelHubService fit', () => {
     expect(bare.ok && bare.model.builds[0].fit?.detail).toContain('(up to 16K)');
   });
 
+  it('uses a size estimate when a same-sized curated file has different weights', async () => {
+    const { service } = harness({ detail: gsqDetail({ sha256: SHA }) });
+    const view = await service.detail(GSQ_REPO);
+    expect(view.ok && view.model.builds[0].fit?.basis).toBe('size');
+  });
+
   it('rates the reviewed file of a curated repo from the manifest, and any other file by size', async () => {
     const other = build({ id: 'other-q4_k_m', files: [{ ...build().files[0], path: 'other-q4_k_m.gguf' }] });
     const { service } = harness({ detail: gsqDetail({}, { builds: [...gsqDetail().builds, other] }) });
@@ -1248,6 +1279,8 @@ describe('ModelHubService curated library pulls', () => {
       error: { kind: 'unverified', message: expect.stringContaining(`${REF} after downloading it`) },
     });
     expect(result.ok || result.error.message).toContain('It is still installed');
+    expect(result).toMatchObject({ listed: true });
+    expect(setup.service.pulls()).toMatchObject([{ phase: 'failed', ref: REF, error: { kind: 'unverified' } }]);
     expect(readsOf(setup.runtime)).toHaveLength(3);
     expect(setup.runtime.remove).not.toHaveBeenCalled();
     expect(setup.installedChanged).toHaveBeenCalled();
@@ -1269,7 +1302,7 @@ describe('ModelHubService curated library pulls', () => {
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
     expect(readsOf(setup.runtime)).toHaveLength(1);
     expect(setup.runtime.remove).not.toHaveBeenCalled();
-    expect(setup.service.pulls()).toEqual([]);
+    expect(setup.service.pulls()).toMatchObject([{ phase: 'failed', error: { kind: 'unverified' } }]);
   });
 
   it('stops a read in flight when the download is cancelled', async () => {
@@ -1299,11 +1332,23 @@ describe('ModelHubService curated library pulls', () => {
 
     expect(await setup.service.checkCurated(LIBRARY.id, E4B.id)).toEqual({ ok: true });
     expect(readsOf(setup.runtime)).toHaveLength(4);
+    expect(setup.service.pulls()).toEqual([]);
     expect(setup.installedChanged).toHaveBeenCalled();
     expect(await setup.service.checkCurated(LIBRARY.id, 'no-such-build')).toMatchObject({
       ok: false,
       error: { kind: 'not-found' },
     });
+  });
+
+  it('keeps a warning after a failed removal, then clears it when the user removes the model', async () => {
+    const setup = harness();
+    setup.runtime.inspect.mockRejectedValue(showTimedOut());
+    await pulled(setup);
+    setup.runtime.remove.mockRejectedValueOnce(new Error('busy'));
+    expect(await setup.service.remove(REF)).toMatchObject({ ok: false });
+    expect(setup.service.pulls()).toHaveLength(1);
+    expect(await setup.service.remove(REF)).toEqual({ ok: true });
+    expect(setup.service.pulls()).toEqual([]);
   });
 
   it('removes an unverified download that a later check finds unreviewed, when Ollama lacked the tag', async () => {
@@ -1329,6 +1374,8 @@ describe('ModelHubService curated library pulls', () => {
     const message = result.ok ? '' : result.error.message;
     expect(message).toContain(`the unreviewed model ${REF} is still installed`);
     expect(message).not.toContain('removed');
+    expect(result).toMatchObject({ listed: true });
+    expect(setup.service.pulls()).toMatchObject([{ phase: 'failed', error: { message } }]);
     expect(setup.runtime.remove).toHaveBeenCalledWith(REF);
   });
 
@@ -1348,7 +1395,7 @@ describe('ModelHubService curated library pulls', () => {
       error: { kind: 'upstream-changed', message: expect.stringContaining('Bike4Mind removed what Ollama downloaded') },
     });
     expect(setup.runtime.remove).toHaveBeenCalledWith(REF);
-    expect(setup.service.pulls()).toEqual([]);
+    expect(setup.service.pulls()).toMatchObject([{ phase: 'failed', error: { kind: 'upstream-changed' } }]);
   });
 
   it.each([
@@ -1364,12 +1411,36 @@ describe('ModelHubService curated library pulls', () => {
       error: { kind: 'upstream-changed', message: expect.stringContaining(says) },
     });
     expect(setup.runtime.remove).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ listed: true });
+    expect(setup.service.pulls()).toMatchObject([
+      { phase: 'failed', error: { message: expect.stringContaining(says) } },
+    ]);
   });
 
   it.each([
     ['another license', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, license: 'x' } })],
     ['no license', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, license: null } })],
     ['other weights', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, modelBlob: SHA } })],
+    [
+      'another projector',
+      (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, projectorBlobs: [SHA] } }),
+    ],
+    ['no projector', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, projectorBlobs: [] } })],
+    [
+      'an extra projector',
+      (b: ModelInspection) => ({
+        ...b,
+        contents: b.contents && { ...b.contents, projectorBlobs: [...(b.contents.projectorBlobs ?? []), SHA] },
+      }),
+    ],
+    [
+      'an unreadable projector',
+      (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, projectorBlobs: [null] } }),
+    ],
+    [
+      'an unexpected draft',
+      (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, draftBlobs: [SHA] } }),
+    ],
     ['a num_ctx', (b: ModelInspection) => ({ ...b, parameters: 'num_ctx 8192' })],
     ['nothing to compare', (b: ModelInspection) => ({ ...b, contents: undefined })],
   ])('removes the model when Ollama installed %s than was checked', async (_label, installed) => {
@@ -1384,7 +1455,7 @@ describe('ModelHubService curated library pulls', () => {
     expect(await result).toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
     expect(runtime.remove).toHaveBeenCalledWith(REF);
     expect(installedChanged).toHaveBeenCalledTimes(1);
-    expect(service.pulls()).toEqual([]);
+    expect(service.pulls()).toMatchObject([{ phase: 'failed', error: { kind: 'upstream-changed' } }]);
   });
 
   it.each([
@@ -1472,6 +1543,14 @@ describe('ModelHubService curated Hugging Face pulls', () => {
     expect(result.ok && result.build.fit).toEqual(row?.fit);
     expect(hub.getModel).toHaveBeenCalledWith(GSQ.lineage.base, expect.anything());
     expect(hub.ollamaLayers).toHaveBeenCalledWith(GSQ_REPO, 'IQ3_S', expect.anything());
+  });
+
+  it('checks the registry-proven tag when the quant-only tag cannot serve the reviewed file', async () => {
+    const tag = 'Qwen3.8-27B-GSQ-RCO-IQ3_S';
+    const { service, hub } = gsqHarness({ verified: `hf.co/${GSQ_REPO}:${tag}` });
+    hub.ollamaLayers.mockImplementation(async (_repo, candidate) => (candidate === tag ? reviewedLayers(IQ3) : null));
+    expect(await service.curatedPull(GSQ.id, IQ3.id)).toMatchObject({ ok: true });
+    expect(hub.ollamaLayers).toHaveBeenCalledWith(GSQ_REPO, tag, expect.anything());
   });
 
   it('rates the dialog build exactly as its row, from the pinned projector and context, not the live repo', async () => {
@@ -1567,9 +1646,10 @@ describe('ModelHubService curated Hugging Face pulls', () => {
     expect(runtime.remove).not.toHaveBeenCalled();
 
     const again = gsqHarness();
+    const installed = await again.runtime.inspect(IQ3_REF);
     again.runtime.inspect.mockResolvedValueOnce({
-      ...(await again.runtime.inspect(IQ3_REF)),
-      contents: { template: 'a different template', license: null, modelBlob: IQ3_FILE.sha256 },
+      ...installed,
+      contents: installed.contents && { ...installed.contents, template: 'a different template' },
     });
     const removed = again.service.pull(gsqRequest);
     await vi.waitFor(() => expect(again.pulls).toHaveLength(1));

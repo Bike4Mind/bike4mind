@@ -116,6 +116,10 @@ export interface ModelContents {
   license: string | null;
   /** sha256 hex of the weights blob. */
   modelBlob: string | null;
+  /** Projector FROM lines after the weights; null entries name a blob path that could not be read. */
+  projectorBlobs?: (string | null)[];
+  /** DRAFT lines, kept as a list so duplicate or unreadable drafts cannot pass an integrity check. */
+  draftBlobs?: (string | null)[];
 }
 
 export interface InspectOptions {

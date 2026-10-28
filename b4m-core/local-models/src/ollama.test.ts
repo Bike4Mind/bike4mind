@@ -230,12 +230,24 @@ describe('OllamaRuntime.inspect', () => {
     };
     server = await startFakeServer({ 'GET /api/tags': json(tags), 'POST /api/show': json(show) });
     const result = await runtimeFor(server).inspect(fixtureTags.gemma4.name);
-    expect(result.contents).toEqual({ template: '{{ .Prompt }}', license: 'Apache License', modelBlob: blob });
+    expect(result.contents).toEqual({
+      template: '{{ .Prompt }}',
+      license: 'Apache License',
+      modelBlob: blob,
+      projectorBlobs: [projector],
+      draftBlobs: [],
+    });
 
     await server.close();
     server = await startFakeServer({ 'GET /api/tags': json(tags), 'POST /api/show': json(gemma4Show) });
     const bare = await runtimeFor(server).inspect(fixtureTags.gemma4.name);
-    expect(bare.contents).toEqual({ template: null, license: null, modelBlob: null });
+    expect(bare.contents).toEqual({
+      template: null,
+      license: null,
+      modelBlob: null,
+      projectorBlobs: [],
+      draftBlobs: [],
+    });
   });
 
   it.each([
@@ -253,6 +265,24 @@ describe('OllamaRuntime.inspect', () => {
     const show = { ...gemma4Show, modelfile: `FROM /models/blobs/not-sha256-${'e'.repeat(64)}\nFROM gemma4:e4b\n` };
     server = await startFakeServer({ 'GET /api/tags': json(tags), 'POST /api/show': json(show) });
     expect((await runtimeFor(server).inspect(fixtureTags.gemma4.name)).contents?.modelBlob).toBeNull();
+  });
+
+  it('reads draft and projector blobs only from the generated header, retaining malformed paths', async () => {
+    const model = 'a'.repeat(64);
+    const draft = 'b'.repeat(64);
+    const projector = 'c'.repeat(64);
+    const show = {
+      ...gemma4Show,
+      modelfile:
+        `FROM sha256-${model}\nDRAFT /models/sha256-${draft}\nFROM C:\\models\\sha256-${projector}\n` +
+        `FROM unreadable\nTEMPLATE """\nFROM sha256-${draft}\nDRAFT sha256-${model}\n"""\n`,
+    };
+    server = await startFakeServer({ 'POST /api/show': json(show) });
+    expect((await runtimeFor(server).inspect(fixtureTags.gemma4.name, { tags: false })).contents).toMatchObject({
+      modelBlob: model,
+      projectorBlobs: [projector, null],
+      draftBlobs: [draft],
+    });
   });
 
   it('skips the installed list when asked', async () => {

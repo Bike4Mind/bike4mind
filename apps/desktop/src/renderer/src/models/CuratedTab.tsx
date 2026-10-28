@@ -226,14 +226,26 @@ function CuratedBuild({
   context: RowContext;
 }) {
   const { flow, installedNames, pulls, runtimeReady, onOpenInExplore } = context;
-  const error = flow.error?.where === where ? flow.error : null;
+  const pull = pulls.find(candidate => candidate.key === pullKey(build.repo, build.pullBuildId));
+  const failure = pull?.phase === 'failed' ? pull.error : null;
+  // Main owns completed download warnings, so revisiting this tab restores the warning and its recheck action.
+  const error: RowError | null = failure
+    ? {
+        where,
+        text: hubErrorText(failure),
+        repo: failure.kind === 'upstream-changed' && build.ollamaRef.startsWith('hf.co/') ? build.repo : null,
+        recheck: pull?.ref !== null && failure.kind === 'unverified',
+      }
+    : flow.error?.where === where
+      ? flow.error
+      : null;
   const confirming = flow.confirming?.where === where ? flow.confirming : null;
   return (
     <>
       <BuildRow
         repo={build.repo}
         build={rowBuild(build)}
-        pull={pulls.find(pull => pull.key === pullKey(build.repo, build.pullBuildId))}
+        pull={pull}
         installed={installedNames.has(build.ollamaRef.toLowerCase())}
         runtimeReady={runtimeReady}
         preparing={flow.preparing === where}
@@ -416,7 +428,10 @@ export function CuratedTab({
   const [attempt, setAttempt] = useState(0);
   const flow = useCuratedPull(onRecheck);
 
+  const runtimeReachable = status?.reachable;
+  const runtimeVersion = status?.version;
   useEffect(() => {
+    if (runtimeReachable === undefined) return;
     let live = true;
     setLoadFailed(false);
     window.b4m.models.listCurated().then(
@@ -426,14 +441,14 @@ export function CuratedTab({
     return () => {
       live = false;
     };
-  }, [attempt]);
+  }, [attempt, runtimeReachable, runtimeVersion]);
 
   const installedNames = useMemo(
     () => new Set(installed?.ok ? installed.models.map(model => model.name.toLowerCase()) : []),
     [installed]
   );
 
-  if (!list && loadFailed)
+  if (loadFailed)
     return (
       <Alert
         color="danger"

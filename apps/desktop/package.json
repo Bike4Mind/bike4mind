@@ -24,6 +24,7 @@
     "typecheck:fast": "pnpm typecheck:native || pnpm typecheck",
     "test": "node --test scripts/test_package_local.cjs && vitest run",
     "test:watch": "vitest",
+    "check:curated": "vitest run --config vitest.curated.config.ts",
     "lint": "eslint .",
     "clean": "rm -rf node_modules out"
   },

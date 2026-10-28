@@ -24,6 +24,7 @@ import type {
   LocalRuntime,
   ModelCapabilities,
   ModelInspection,
+  ModelContents,
   PullOptions,
   RuntimeHealth,
 } from './types';
@@ -159,10 +160,23 @@ function contextLengthOf(modelInfo: Record<string, unknown> | null | undefined):
   return null;
 }
 
-/** The weights blob a generated Modelfile's first `FROM .../sha256-<hex>` line names; a projector follows it. */
-function modelBlobOf(modelfile: string | null | undefined): string | null {
-  // Ollama prints the blob path unquoted, and it can contain spaces (a Windows profile name, a macOS volume).
-  return /^FROM\s+(?:.*[\\/])?sha256-([0-9a-f]{64})\s*$/m.exec(modelfile ?? '')?.[1] ?? null;
+/** Blob paths in Ollama's generated Modelfile header, before any multiline template or license text. */
+function modelBlobsOf(
+  modelfile: string | null | undefined
+): Pick<ModelContents, 'modelBlob' | 'projectorBlobs' | 'draftBlobs'> {
+  const models: (string | null)[] = [];
+  const drafts: (string | null)[] = [];
+  for (const line of (modelfile ?? '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text || text.startsWith('#')) continue;
+    const command = /^(FROM|DRAFT|ADAPTER)[ \t]+(.+)$/.exec(text);
+    if (!command) break;
+    // Ollama prints paths unquoted; profile names and volume names can contain spaces.
+    const digest = /^(?:.*[\\/])?sha256-([0-9a-f]{64})$/.exec(command[2])?.[1] ?? null;
+    if (command[1] === 'FROM') models.push(digest);
+    if (command[1] === 'DRAFT') drafts.push(digest);
+  }
+  return { modelBlob: models[0] ?? null, projectorBlobs: models.slice(1), draftBlobs: drafts };
 }
 
 /**
@@ -272,7 +286,7 @@ export class OllamaRuntime implements LocalRuntime {
       contents: {
         template: show.template ?? null,
         license: show.license ?? null,
-        modelBlob: modelBlobOf(show.modelfile),
+        ...modelBlobsOf(show.modelfile),
       },
     };
   }

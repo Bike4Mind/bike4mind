@@ -15,6 +15,7 @@ import {
   type InstalledModelsResult,
   type ModelFit,
   type ModelPull,
+  type ModelPullResult,
   type ModelRuntimeStatus,
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -544,6 +545,55 @@ describe('ModelsScreen curated', () => {
     expect(calls.pull).not.toHaveBeenCalled();
   });
 
+  it('restores a post-pull warning and Check again after leaving the tab and screen', async () => {
+    let finish: ((result: ModelPullResult) => void) | undefined;
+    calls.pull.mockImplementationOnce(
+      () =>
+        new Promise<ModelPullResult>(resolve => {
+          finish = resolve;
+        })
+    );
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    await click(q('models-pull-dialog-confirm-btn'));
+    await click(q('models-installed-tab'));
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    bridge.pulls = [
+      {
+        key: pullKey(E4B_REF, E4B.id),
+        repo: E4B_REF,
+        buildId: E4B.id,
+        quant: E4B.quant,
+        ref: E4B_REF,
+        phase: 'failed',
+        completedBytes: E4B.sizeBytes,
+        totalBytes: E4B.sizeBytes,
+        expectedBytes: E4B.sizeBytes,
+        error,
+      },
+    ];
+    await act(async () => {
+      pushPulls(bridge.pulls);
+      finish?.({ ok: false, error, listed: true });
+    });
+    expect(q('models-pull-status')?.textContent).toBe(error.message);
+    act(() => root?.unmount());
+    root = null;
+    host?.remove();
+    await mount(undefined, 'curated');
+    expect(q('models-pull-status')?.textContent).toBe(error.message);
+    expect(q('models-curated-check-again-btn')).not.toBeNull();
+    calls.checkCurated.mockImplementationOnce(async () => {
+      bridge.pulls = [];
+      pushPulls([]);
+      return { ok: true };
+    });
+    await click(q('models-curated-check-again-btn'));
+    expect(calls.checkCurated).toHaveBeenCalledWith('gemma-4-e4b', E4B.id);
+    expect(q('models-pull-list')).toBeNull();
+    expect(q('models-curated-error')).toBeNull();
+  });
+
   it('shows the progress of a curated pull on its pick and its list row', async () => {
     bridge.pulls = [
       {
@@ -645,6 +695,21 @@ describe('ModelsScreen curated', () => {
     await click(pickButton('light'));
     expect(all('models-pull-dialog')).toHaveLength(1);
     expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('refreshes availability when Ollama starts and surfaces a failed refresh until retry', async () => {
+    bridge.status = DOWN;
+    bridge.curated.entries[0].builds = [{ ...E4B, blockedReason: 'Ollama did not report its version' }];
+    await mount(undefined, 'curated');
+    expect(pickButton('fast')).toBeNull();
+    bridge.status = RUNNING;
+    bridge.curated = curatedList();
+    bridge.curatedFailures = 1;
+    await click(q('models-runtime-retry-btn'));
+    expect(q('models-curated-load-error')).not.toBeNull();
+    await click(q('models-curated-retry-btn'));
+    expect(pickButton('fast')?.hasAttribute('disabled')).toBe(false);
+    expect(q('models-build-blocked-reason')?.textContent).not.toContain('did not report');
   });
 
   it('says downloads need Ollama when it is not running', async () => {
@@ -754,6 +819,7 @@ describe('ModelsScreen installed', () => {
             modifiedAt: null,
             capabilities,
             loaded: false,
+            fit: null,
           },
         ],
       };
