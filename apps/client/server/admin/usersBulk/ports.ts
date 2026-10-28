@@ -82,6 +82,8 @@ export const UndoRecordSchema = z.object({
   action: z.string(),
   undoExpiresAt: z.string(),
   users: z.array(UserUndoSnapshotSchema).max(ADMIN_USERS_BULK_MAX),
+  /** Domains this batch added to blockedEmailDomains (not ones already listed), so undo removes only these. */
+  blockedDomains: z.array(z.string()).max(ADMIN_USERS_BULK_MAX).optional(),
 });
 export type UndoRecord = z.infer<typeof UndoRecordSchema>;
 

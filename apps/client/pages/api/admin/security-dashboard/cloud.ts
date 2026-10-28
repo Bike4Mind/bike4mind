@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardFinding } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
@@ -14,12 +14,11 @@ import { ApiKeyScope } from '@bike4mind/common';
 const logger = new Logger({ metadata: { service: 'cloud-scan-api' } });
 const sqsClient = new SQSClient({});
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi<Request, Response>({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
     const snapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'cloud');
 
@@ -30,10 +29,6 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     return res.status(200).json(snapshot);
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
 
     const latest = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'cloud');

@@ -143,6 +143,21 @@ export interface ISkillListingVersion {
   updatedAt: Date;
 }
 
+/** An org's curated set of Organization listings, served as one Claude Code plugin in the org feed. */
+export interface ISkillBundle {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string;
+  /** Claude Code plugin name, unique in the org feed alongside listings' `claudePluginName`. */
+  pluginName: string;
+  /** Member listings in the admin's order; the zip orders skills by directory name instead. */
+  listingIds: string[];
+  createdByUserId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 /** One row per (listing, importer). Also carries the importer's rating, so rating requires an import. */
 export interface ISkillListingImport {
   id: string;

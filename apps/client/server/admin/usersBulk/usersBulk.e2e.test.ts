@@ -9,6 +9,7 @@ import {
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 import { AdminAuditLogModel, Cache, CreditTransaction, User, UserApiKey } from '@bike4mind/database';
+import { AdminSettings } from '@bike4mind/database/infra';
 import {
   ADMIN_USERS_BULK_MAX,
   ADMIN_USERS_BULK_MAX_CREDIT_ADD,
@@ -20,6 +21,12 @@ import { usersBulkExecuteDeps, usersBulkUndoDeps } from './adapters';
 import { executeAdminUsersBulk, type ExecuteDeps } from './execute';
 import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from './undo';
 import { cohortHashOf, type BulkUser } from './resolve';
+
+const invalidateSettingsCache = vi.fn();
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  invalidateSettingsCache: (...args: unknown[]) => invalidateSettingsCache(...args),
+}));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -39,6 +46,7 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  invalidateSettingsCache.mockClear();
   await mongoose.connection.dropDatabase();
 });
 
@@ -108,6 +116,8 @@ const undo = (adminId: string, batchId: string, now?: Date) =>
 
 const userState = async (id: string) => User.findById(id).lean();
 const auditCount = (action: string) => AdminAuditLogModel.countDocuments({ action });
+const blockedList = async () =>
+  (await AdminSettings.findOne({ settingName: 'blockedEmailDomains' }).lean())?.settingValue;
 
 describe('users bulk actions on a real replica set', () => {
   it('contains users: suspends, zeroes credits through the ledger and revokes keys, one audit each', async () => {
@@ -147,7 +157,7 @@ describe('users bulk actions on a real replica set', () => {
     expect(entry?.reason).toBe(REASON);
 
     const undone = await undo(adminId, result.batchId);
-    expect(undone).toEqual({ restored: 2, failed: [] });
+    expect(undone).toEqual({ restored: 2, failed: [], unblockedDomains: [], stillBlockedDomains: [] });
     expect(await userState(first)).toMatchObject({ isBanned: false, currentCredits: 100 });
     expect(await userState(second)).toMatchObject({ isBanned: false, currentCredits: 30 });
     const restoredKey = await UserApiKey.findById(firstKey).lean();
@@ -281,7 +291,12 @@ describe('users bulk actions on a real replica set', () => {
     expect(await userState(target)).toMatchObject({ isModerated: true });
     // Neither refusal consumed the record.
     expect(await Cache.countDocuments({ key: `admin-users-bulk:undo:${result.batchId}` })).toBe(1);
-    expect(await undo(adminId, result.batchId)).toEqual({ restored: 1, failed: [] });
+    expect(await undo(adminId, result.batchId)).toEqual({
+      restored: 1,
+      failed: [],
+      unblockedDomains: [],
+      stillBlockedDomains: [],
+    });
     expect(await userState(target)).toMatchObject({ isModerated: false });
     expect(ADMIN_USERS_BULK_UNDO_WINDOW_MS).toBe(30_000);
   });
@@ -296,12 +311,22 @@ describe('users bulk actions on a real replica set', () => {
     const revoke = await run(adminId, request([target], { type: 'revokeApiKeys' }, [target]));
 
     const blocked = await undo(adminId, suspend.batchId);
-    expect(blocked).toEqual({ restored: 0, failed: [{ userId: target, error: SUPERSEDED_MESSAGE }] });
+    expect(blocked).toEqual({
+      restored: 0,
+      failed: [{ userId: target, error: SUPERSEDED_MESSAGE }],
+      unblockedDomains: [],
+      stillBlockedDomains: [],
+    });
     expect(await userState(target)).toMatchObject({ isBanned: true });
     expect(await UserApiKey.findById(firstKey).lean()).toMatchObject({ status: ApiKeyStatus.DISABLED });
 
     // Undoing the newer batch while the older ban holds keeps its key off, and says why.
-    expect(await undo(adminId, revoke.batchId)).toEqual({ restored: 1, failed: [] });
+    expect(await undo(adminId, revoke.batchId)).toEqual({
+      restored: 1,
+      failed: [],
+      unblockedDomains: [],
+      stillBlockedDomains: [],
+    });
     expect(await UserApiKey.findById(laterKey).lean()).toMatchObject({ status: ApiKeyStatus.DISABLED });
     const kept = await AdminAuditLogModel.findOne({
       action: 'user.bulk.undone',
@@ -310,7 +335,12 @@ describe('users bulk actions on a real replica set', () => {
     expect(kept?.details).toMatchObject({ keysKeptDisabled: { count: 1, blockedBy: ['banned'] } });
 
     // The failed user was written back, so retrying the older undo now finishes it.
-    expect(await undo(adminId, suspend.batchId)).toEqual({ restored: 1, failed: [] });
+    expect(await undo(adminId, suspend.batchId)).toEqual({
+      restored: 1,
+      failed: [],
+      unblockedDomains: [],
+      stillBlockedDomains: [],
+    });
     expect(await userState(target)).toMatchObject({ isBanned: false });
     expect(await UserApiKey.findById(firstKey).lean()).toMatchObject({ status: ApiKeyStatus.ACTIVE });
     expect(await UserApiKey.findById(laterKey).lean()).toMatchObject({ status: ApiKeyStatus.DISABLED });
@@ -329,7 +359,12 @@ describe('users bulk actions on a real replica set', () => {
     const summary = await AdminAuditLogModel.findOne({ action: 'user.bulk.executed' }).lean();
     expect(summary?.details).toMatchObject({ partial: true, remaining: 2, applied: 8 });
     expect(await run(adminId, body)).toEqual(result);
-    expect(await undo(adminId, result.batchId)).toEqual({ restored: 8, failed: [] });
+    expect(await undo(adminId, result.batchId)).toEqual({
+      restored: 8,
+      failed: [],
+      unblockedDomains: [],
+      stillBlockedDomains: [],
+    });
     expect(await User.countDocuments({ _id: { $in: ids }, isModerated: true })).toBe(0);
   });
 
@@ -385,5 +420,107 @@ describe('users bulk actions on a real replica set', () => {
       run(adminId, request(ids, { type: 'adjustCredits', mode: 'add', amount: ADMIN_USERS_BULK_MAX_CREDIT_ADD }, ids))
     ).rejects.toMatchObject({ statusCode: 400 });
     expect(await CreditTransaction.countDocuments({})).toBe(0);
+  });
+
+  describe('contain with blockEmailDomains', () => {
+    const CONTAIN_AND_BLOCK: AdminUsersBulkAction = { type: 'contain', blockEmailDomains: true };
+
+    it('blocks the owned domains only, reports them, and undo removes exactly those', async () => {
+      const adminId = await seedUser({ isAdmin: true });
+      const fresh = await seedUser({ email: 'a@fresh-campaign.com' });
+      const sibling = await seedUser({ email: 'b@Fresh-Campaign.com' });
+      const mailbox = await seedUser({ email: 'c@gmail.com' });
+      const covered = await seedUser({ email: 'd@mail.listed-parent.com' });
+      const ids = [fresh, sibling, mailbox, covered];
+      await AdminSettings.create({
+        settingName: 'blockedEmailDomains',
+        settingValue: ['listed-parent.com', 'keep.com'],
+      });
+
+      const result = await run(adminId, request(ids, CONTAIN_AND_BLOCK, ids));
+
+      expect(result.blockedDomains).toEqual(['fresh-campaign.com']);
+      expect(await blockedList()).toEqual(['listed-parent.com', 'keep.com', 'fresh-campaign.com']);
+      expect(invalidateSettingsCache).toHaveBeenCalledWith('blockedEmailDomains');
+      expect(await auditCount('settings.admin_settings.updated')).toBe(1);
+      const summary = await AdminAuditLogModel.findOne({ action: 'user.bulk.executed' }).lean();
+      expect(summary?.details).toMatchObject({ blockedDomains: ['fresh-campaign.com'] });
+
+      const undone = await undo(adminId, result.batchId);
+      expect(undone).toEqual({
+        restored: 4,
+        failed: [],
+        unblockedDomains: ['fresh-campaign.com'],
+        stillBlockedDomains: [],
+      });
+      expect(await blockedList()).toEqual(['listed-parent.com', 'keep.com']);
+      expect(await auditCount('settings.admin_settings.updated')).toBe(2);
+    });
+
+    it('touches no user and releases the idempotency key when blocking the domains fails', async () => {
+      const adminId = await seedUser({ isAdmin: true });
+      const target = await seedUser({ email: 'a@fresh-campaign.com' });
+      const body = request([target], CONTAIN_AND_BLOCK, [target]);
+
+      await expect(
+        run(adminId, body, { blockEmailDomains: () => Promise.reject(new Error('settings write failed')) })
+      ).rejects.toThrow('settings write failed');
+      expect((await User.findById(target).lean())?.isBanned).toBeFalsy();
+
+      const retried = await run(adminId, body);
+      expect(retried).toMatchObject({ applied: 1, blockedDomains: ['fresh-campaign.com'] });
+    });
+
+    it('does not touch the list when the toggle is off', async () => {
+      const adminId = await seedUser({ isAdmin: true });
+      const target = await seedUser({ email: 'a@fresh-campaign.com' });
+
+      const result = await run(adminId, request([target], { type: 'contain' }, [target]));
+
+      expect(result.blockedDomains).toEqual([]);
+      expect(await blockedList()).toBeUndefined();
+    });
+
+    it('still blocks the domain, undoably, when every user is already contained', async () => {
+      const adminId = await seedUser({ isAdmin: true });
+      const contained = await seedUser({ email: 'a@fresh-campaign.com', isBanned: true, currentCredits: 0 });
+
+      const result = await run(adminId, request([contained], CONTAIN_AND_BLOCK, [contained]));
+
+      expect(result).toMatchObject({ applied: 0, skipped: 1, blockedDomains: ['fresh-campaign.com'] });
+      expect(await blockedList()).toEqual(['fresh-campaign.com']);
+
+      const undone = await undo(adminId, result.batchId);
+      expect(undone).toEqual({
+        restored: 0,
+        failed: [],
+        unblockedDomains: ['fresh-campaign.com'],
+        stillBlockedDomains: [],
+      });
+      expect(await blockedList()).toEqual([]);
+    });
+
+    it('keeps a domain in the retry record when releasing it fails, and a retry finishes it', async () => {
+      const adminId = await seedUser({ isAdmin: true });
+      const target = await seedUser({ email: 'a@fresh-campaign.com' });
+      const result = await run(adminId, request([target], CONTAIN_AND_BLOCK, [target]));
+
+      const failing = await undoAdminUsersBulk(result.batchId, adminId, {
+        ...usersBulkUndoDeps(reqFor(adminId)),
+        unblockEmailDomains: async () => {
+          throw new Error('settings down');
+        },
+      });
+      expect(failing).toEqual({
+        restored: 1,
+        failed: [],
+        unblockedDomains: [],
+        stillBlockedDomains: ['fresh-campaign.com'],
+      });
+      expect(await blockedList()).toEqual(['fresh-campaign.com']);
+
+      expect(await undo(adminId, result.batchId)).toMatchObject({ unblockedDomains: ['fresh-campaign.com'] });
+      expect(await blockedList()).toEqual([]);
+    });
   });
 });

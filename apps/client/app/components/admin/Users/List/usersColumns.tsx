@@ -132,7 +132,7 @@ export function usersColumns({ now, maxSpend }: { now: Date; maxSpend: number })
       width: '8rem',
       render: row => (
         <Muted title={formatAccountCreatedTitle(row.createdAt) ?? undefined}>
-          {`${formatAccountAge(row.createdAt, now) ?? '\u2014'} · ${SIGNUP_METHOD_LABELS[row.signupMethod] ?? row.signupMethod}`}
+          {`${formatAccountAge(row.createdAt, now) ?? '\u2014'} \u00b7 ${SIGNUP_METHOD_LABELS[row.signupMethod] ?? row.signupMethod}`}
         </Muted>
       ),
     },

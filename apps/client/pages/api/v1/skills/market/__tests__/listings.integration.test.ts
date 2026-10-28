@@ -485,6 +485,39 @@ describe('/api/v1/skills/market wire shapes', () => {
     expect(body.my_import).toBeNull();
   });
 
+  it('detail renders the Claude Code tools and supporting files', async () => {
+    const files = [{ path: 'scripts/run.sh', content: '#!/bin/sh\necho hi\n' }];
+    h.detail.mockResolvedValueOnce({
+      ...(await h.detail()),
+      version: {
+        id: VERSION_ID,
+        version: 1,
+        snapshot: { ...VERSION.snapshot, claudeCodeAllowedTools: ['Bash(git:*)'], files },
+        riskTier: 'clean',
+        createdAt: CREATED,
+      },
+    });
+    const body = SkillListingDetailSchema.parse((await ROUTES.detail())._getJSONData());
+    expect(body.version?.snapshot).toMatchObject({ claude_code_allowed_tools: ['Bash(git:*)'], files });
+  });
+
+  it('detail renders a skill with no supporting files as an empty list', async () => {
+    const body = SkillListingDetailSchema.parse((await ROUTES.detail())._getJSONData());
+    expect(body.version?.snapshot).toMatchObject({ claude_code_allowed_tools: [], files: [] });
+  });
+
+  it('mine omits files along with the body of a version preview', async () => {
+    const { body: _body, ...bodiless } = VERSION.snapshot;
+    h.mine.mockResolvedValueOnce({
+      listings: [{ listing: LISTING, versions: [{ ...VERSION, snapshot: bodiless }] }],
+      next: null,
+    });
+    const res = await fire(mineHandler, { method: 'GET', url: '/api/v1/skills/market/listings/mine', query: {} });
+    const [version] = MySkillListingsResponseSchema.parse(res._getJSONData()).data[0].versions;
+    expect(version.snapshot).not.toHaveProperty('body');
+    expect(version.snapshot).not.toHaveProperty('files');
+  });
+
   it.each([
     ['a skills:write key', 'key', [ApiKeyScope.SKILLS_WRITE], true],
     ['a JWT', 'jwt', [], true],

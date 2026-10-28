@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FormControl, FormLabel, Input, Skeleton, Stack, Typography } from '@mui/joy';
+import { Checkbox, FormControl, FormLabel, Input, Skeleton, Stack, Typography } from '@mui/joy';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import {
@@ -8,6 +8,7 @@ import {
   ADMIN_USERS_BULK_MAX_CREDIT_TOTAL,
   type AdminUsersBulkAction,
   type AdminUsersBulkActionType,
+  type AdminUsersBulkEmailDomains,
   type AdminUsersBulkPreview,
   type AdminUsersBulkTarget,
 } from '@client/app/utils/adminUsersBulk';
@@ -19,6 +20,10 @@ import { useUndoToast } from '../../shared/UndoToast';
 import { useAdminUsersBulkExecute, useAdminUsersBulkPreview, useAdminUsersBulkUndo } from './useAdminUsersBulk';
 
 type CreditMode = 'set' | 'add' | 'subtract';
+
+// Domains named in an informational line before it falls back to "and N more". Never applied to the
+// domains a batch would block: the admin confirms every one of those.
+const DOMAINS_SHOWN = 5;
 
 type BulkActionCopy = {
   /** Button and dialog title. */
@@ -110,7 +115,8 @@ function buildAction(
   type: AdminUsersBulkActionType,
   creditMode: CreditMode,
   amount: string,
-  tag: string
+  tag: string,
+  blockEmailDomains: boolean
 ): AdminUsersBulkAction | null {
   if (type === 'adjustCredits') {
     const value = Number(amount);
@@ -122,7 +128,23 @@ function buildAction(
     const trimmed = tag.trim();
     return trimmed ? { type, tag: trimmed } : null;
   }
+  if (type === 'contain' && blockEmailDomains) return { type, blockEmailDomains: true };
   return { type };
+}
+
+function domainList(domains: readonly string[]): string {
+  const shown = domains.slice(0, DOMAINS_SHOWN).join(', ');
+  return domains.length > DOMAINS_SHOWN ? `${shown} and ${domains.length - DOMAINS_SHOWN} more` : shown;
+}
+
+function emailDomainLines({ toBlock, alreadyBlocked, notOwned }: AdminUsersBulkEmailDomains): string[] {
+  return [
+    toBlock.length > 0
+      ? `New signups blocked from ${toBlock.length.toLocaleString()} email domain${toBlock.length === 1 ? '' : 's'}: ${toBlock.join(', ')}.`
+      : 'No new email domains to block.',
+    alreadyBlocked.length > 0 ? `Already blocked: ${domainList(alreadyBlocked)}.` : null,
+    notOwned.length > 0 ? `Skipped as public mail domains: ${domainList(notOwned)}.` : null,
+  ].filter((line): line is string => line !== null);
 }
 
 function DryRunSummary({ preview, type }: { preview: AdminUsersBulkPreview; type: AdminUsersBulkActionType }) {
@@ -136,6 +158,7 @@ function DryRunSummary({ preview, type }: { preview: AdminUsersBulkPreview; type
     preview.creditsDelta !== 0
       ? `${Math.abs(preview.creditsDelta).toLocaleString()} credits ${preview.creditsDelta > 0 ? 'removed' : 'added'} in total.`
       : null,
+    ...(preview.emailDomains ? emailDomainLines(preview.emailDomains) : []),
   ].filter((line): line is string => line !== null);
   return (
     <Stack gap={0.5} data-testid="admin-users-bulk-dry-run">
@@ -173,11 +196,15 @@ export function UsersBulkActionDialog({
   const [creditMode, setCreditMode] = useState<CreditMode>('set');
   const [amount, setAmount] = useState(type === 'adjustCredits' ? '0' : '');
   const [tag, setTag] = useState('');
+  const [blockDomains, setBlockDomains] = useState(false);
   // One key per dialog: a double submit or a retried request replays instead of acting twice.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const showUndoToast = useUndoToast();
 
-  const action = useMemo(() => buildAction(type, creditMode, amount, tag), [type, creditMode, amount, tag]);
+  const action = useMemo(
+    () => buildAction(type, creditMode, amount, tag, blockDomains),
+    [type, creditMode, amount, tag, blockDomains]
+  );
   const debouncedAction = useDebounced(action, PREVIEW_DEBOUNCE_MS);
   const previewRequest = useMemo(
     () => (debouncedAction ? { target, action: debouncedAction } : null),
@@ -227,9 +254,15 @@ export function UsersBulkActionDialog({
           `Stopped after ${plural(result.applied)}; ${plural(result.remaining)} not changed. Run it again for the rest.`
         );
       showUndoToast({
-        message: `${copy.done} ${plural(result.applied)}`,
+        message:
+          `${copy.done} ${plural(result.applied)}` +
+          (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : ''),
         onUndo: async () => {
           const restored = await undo.mutateAsync(result.batchId);
+          if (restored.stillBlockedDomains.length > 0)
+            toast.warning(
+              `Could not unblock ${domainList(restored.stillBlockedDomains)}. Remove them from the blocked email domains setting.`
+            );
           if (restored.failed.length > 0)
             toast.warning(`${restored.failed.length.toLocaleString()} users could not be restored.`);
           else toast.success(`Restored ${plural(restored.restored)}`);
@@ -293,6 +326,14 @@ export function UsersBulkActionDialog({
             />
           </FormControl>
         )}
+        {type === 'contain' && (
+          <Checkbox
+            checked={blockDomains}
+            onChange={event => setBlockDomains(event.target.checked)}
+            label="Also block their email domains for new signups"
+            slotProps={{ input: { 'data-testid': 'admin-users-bulk-block-domains-checkbox' } }}
+          />
+        )}
         {current ? (
           <DryRunSummary preview={current} type={type} />
         ) : action && !preview.isError ? (
@@ -300,7 +341,8 @@ export function UsersBulkActionDialog({
         ) : null}
         {(type === 'contain' || type === 'suspend') && (
           <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-            You can undo this for 30 seconds afterwards. Sessions that were ended stay ended.
+            You can undo this for 30 seconds afterwards
+            {blockDomains ? ', which also unblocks the domains it added' : ''}. Sessions that were ended stay ended.
           </Typography>
         )}
       </Stack>

@@ -3,3 +3,5 @@ export interface NotificationState {
   message: string;
   color: 'success' | 'danger' | 'warning' | 'neutral';
 }
+
+export type CreditChange = { kind: 'delta'; delta: number } | { kind: 'set'; balance: number };

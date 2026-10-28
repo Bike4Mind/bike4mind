@@ -85,6 +85,17 @@ describe('OpenAICompatibleRuntime', () => {
     expect(runtime.capabilities).toEqual({ canPull: false, canRemove: false, canInspect: false, reportsLoaded: false });
   });
 
+  it('takes an explicit id over the address', async () => {
+    const runtime = new OpenAICompatibleRuntime({ baseUrl: 'https://gpu.example:8443/v1', id: 'srv-0f9e8d' });
+    expect(runtime.id).toBe('srv-0f9e8d');
+    expect(runtime.baseUrl).toBe('https://gpu.example:8443');
+    const down = new OpenAICompatibleRuntime({ baseUrl: `http://127.0.0.1:${await closedPort()}`, id: 'srv-0f9e8d' });
+    await expect(down.list()).rejects.toMatchObject({ runtimeId: 'srv-0f9e8d' });
+    expect(() => new OpenAICompatibleRuntime({ baseUrl: 'http://127.0.0.1:8080', id: 'a/b' })).toThrow(
+      'Invalid openai-compatible runtime id'
+    );
+  });
+
   it('lists /v1/models ids, taking llama-server meta.size when present', async () => {
     server = await startFakeServer({ 'GET /v1/models': json(llamaServerModels) });
     const models = await new OpenAICompatibleRuntime({ baseUrl: server.baseUrl }).list();

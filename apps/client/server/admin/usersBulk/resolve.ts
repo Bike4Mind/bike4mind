@@ -6,8 +6,10 @@ import {
   type AdminUsersBulkAction,
   type AdminUsersBulkPreview,
   type AdminUsersBulkTarget,
+  blocksEmailDomains,
 } from '@client/app/utils/adminUsersBulk';
 import type { AdminUsersFilter } from '@client/app/utils/adminUsersFilter';
+import { planEmailDomains } from './emailDomains';
 
 /** The user fields a bulk action reads; resolve projects only these. */
 export type BulkUser = {
@@ -154,6 +156,8 @@ export const exceedsCreditTotal = (netAdded: number) => netAdded > ADMIN_USERS_B
 export type PreviewDeps = {
   /** Keys that still authenticate (status not DISABLED), per user id. */
   countLiveApiKeys: (userIds: string[]) => Promise<Map<string, number>>;
+  /** The blockedEmailDomains list, normalized; read only when the action blocks domains. */
+  blockedEmailDomains: () => Promise<ReadonlySet<string>>;
 };
 
 /** The confirmation-dialog numbers for a resolved cohort. Reads only; writes nothing. */
@@ -187,6 +191,8 @@ export async function previewAdminUsersBulk(
     creditsDelta: 0 - creditsAdded,
     creditsOverCap: exceedsCreditTotal(netCreditsAdded(action, users)),
     cohortHash: cohortHashOf(users),
+    // Over every eligible user, already contained or not: their domains are still blocked.
+    emailDomains: blocksEmailDomains(action) ? planEmailDomains(users, await deps.blockedEmailDomains()) : null,
     sample: users.slice(0, SAMPLE_SIZE).map(user => ({ id: user.id, name: user.name, email: user.email })),
   };
 }

@@ -91,6 +91,10 @@ import { LocalHistory } from './LocalHistory';
 import { registerHistoryIpc } from './historyIpc';
 import { captureHistoryPage } from './captureHistoryPage';
 import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
+import { registerModelServersIpc } from '../modelServers/ipc';
+import { LocalModels } from '../modelServers/LocalModels';
+import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
+import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -424,7 +428,17 @@ export function registerChat(
   const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
   void localHardware.profile();
   const localSizing = localContextSizing({ setting: () => localContext.read() });
-  const local = new OllamaLocal((url, init) => net.fetch(url, init), localSizing);
+  // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
+  const modelServers = new ModelServerRegistry({
+    store: new ModelServerStore(safeStorage, mcpStoreFile(join(userData, 'model-servers.json')), logger),
+    logger,
+    changed: servers => {
+      models.forgetLocal();
+      send(IPC_CHANNELS.modelServersChanged, servers);
+    },
+  });
+  void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
+  const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);
   const models = new ModelCatalog(
     {
       logger,
@@ -602,6 +616,7 @@ export function registerChat(
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
+  registerModelServersIpc(ipcMain, modelServers);
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
   registerLocalContextIpc(ipcMain, {
     preference: localContext,

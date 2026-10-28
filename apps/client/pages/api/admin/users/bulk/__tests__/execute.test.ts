@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
+import { AdminSettings } from '@bike4mind/database/infra';
 
 vi.mock('@server/middlewares/baseApi', async () =>
   (await import('@server/admin/bulkAbuse/__tests__/bulkAbuseRouteMocks')).baseApiMock()
@@ -31,11 +32,20 @@ const BODY = {
   expectedCount: 1,
   cohortHash: 'c'.repeat(64),
 };
-const RESULT = { batchId: 'x', applied: 1, skipped: 0, failed: [], undoExpiresAt: '2026-10-27T00:00:30.000Z' };
+const RESULT = {
+  batchId: 'x',
+  applied: 1,
+  skipped: 0,
+  failed: [],
+  undoExpiresAt: '2026-10-27T00:00:30.000Z',
+  blockedDomains: [],
+};
 
-async function call(body: unknown, user: Record<string, unknown> = ADMIN) {
+const canEditSettings = (allowed: boolean) => ({ can: vi.fn(() => allowed) });
+
+async function call(body: unknown, user: Record<string, unknown> = ADMIN, ability: unknown = canEditSettings(true)) {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user, logger: { error: vi.fn() } });
+  Object.assign(req, { user, ability, logger: { error: vi.fn() } });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -80,6 +90,34 @@ describe('POST /api/admin/users/bulk/execute', () => {
       { id: ADMIN.id, selfIds: [ADMIN.id] },
       { deps: true }
     );
+  });
+
+  describe('blocking email domains', () => {
+    const BLOCKING = { ...BODY, action: { type: 'contain', blockEmailDomains: true } };
+
+    it('refuses with 403 when the admin cannot update admin settings', async () => {
+      const ability = canEditSettings(false);
+      await expect(call(BLOCKING, ADMIN, ability)).rejects.toMatchObject({ statusCode: 403 });
+      expect(ability.can).toHaveBeenCalledWith('update', AdminSettings);
+      expect(mockExecute).not.toHaveBeenCalled();
+    });
+
+    it('executes when the admin can update admin settings', async () => {
+      const res = await call(BLOCKING, ADMIN, canEditSettings(true));
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockExecute).toHaveBeenCalledWith(
+        expect.objectContaining({ action: { type: 'contain', blockEmailDomains: true } }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('does not ask for that permission when the toggle is off', async () => {
+      const ability = canEditSettings(false);
+      const res = await call(BODY, ADMIN, ability);
+      expect(res._getStatusCode()).toBe(200);
+      expect(ability.can).not.toHaveBeenCalled();
+    });
   });
 
   it('propagates a conflict from execute', async () => {

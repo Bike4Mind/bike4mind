@@ -8,7 +8,8 @@ import MenuItem from '@mui/joy/MenuItem';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatModelOption } from '@shared/chat';
-import { parseLocalModelId } from '@shared/chat';
+import { isLocalModel, parseLocalModelId } from '@shared/chat';
+import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME } from '@shared/modelServers';
 import type { NoLocalModels } from './noLocalModels';
 import type { ModelCatalogController } from './useChat';
 
@@ -20,6 +21,33 @@ const MENU_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageUp', 'Pag
 
 function shortLabel(models: readonly ChatModelOption[], modelId: string): string {
   return models.find(model => model.id === modelId)?.name ?? modelId;
+}
+
+interface ModelGroup {
+  key: string;
+  /** Null when there is only one group, which needs no heading. */
+  label: string | null;
+  models: ChatModelOption[];
+}
+
+/**
+ * Hosted models first, then this computer's, then each saved server's in list order. Flat (one
+ * unlabelled group) until a saved server contributes a model.
+ */
+export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] {
+  if (!models.some(model => model.server))
+    return models.length ? [{ key: 'all', label: null, models: [...models] }] : [];
+  const groups = new Map<string, ModelGroup>();
+  const add = (key: string, label: string, model: ChatModelOption) => {
+    const group = groups.get(key) ?? { key, label, models: [] };
+    group.models.push(model);
+    groups.set(key, group);
+  };
+  for (const model of models.filter(model => !isLocalModel(model.id))) add('hosted', 'Hosted', model);
+  for (const model of models.filter(model => isLocalModel(model.id) && !model.server))
+    add(LOCAL_SERVER_ID, LOCAL_SERVER_NAME, model);
+  for (const model of models) if (model.server) add(model.server.id, model.server.name, model);
+  return [...groups.values()];
 }
 
 /** The first model row of the menu the filter box sits in - the one the query narrowed to. */
@@ -100,12 +128,14 @@ export function ModelPicker({
   // Local mode: a hosted id or the placeholder is replaced by main as soon as it sees a list.
   const selecting = missing && local && !parseLocalModelId(modelId);
   const unavailable = missing && !selecting;
+  const serverDown = models.find(model => model.id === modelId)?.unavailable;
 
   const matches = useMemo(() => {
     const query = filter.trim().toLowerCase();
     if (!query) return models;
     return models.filter(model => model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query));
   }, [models, filter]);
+  const groups = useMemo(() => groupByServer(matches), [matches]);
 
   const label =
     noLocal && models.length === 0
@@ -121,14 +151,14 @@ export function ModelPicker({
       <MenuButton
         size="sm"
         variant="plain"
-        color={unavailable ? 'warning' : 'neutral'}
+        color={unavailable || serverDown ? 'warning' : 'neutral'}
         disabled={disabled}
         sx={{ fontWeight: 'normal', minWidth: 0 }}
         slotProps={{ root: { 'data-testid': 'model-picker-btn' } }}
       >
         <Typography level="body-xs" noWrap textColor="inherit">
           {label}
-          {unavailable ? ' (unavailable)' : ''}
+          {unavailable || serverDown ? ' (unavailable)' : ''}
         </Typography>
       </MenuButton>
 
@@ -224,24 +254,57 @@ export function ModelPicker({
           </Typography>
         )}
 
-        {matches.map(model => (
-          <MenuItem
-            key={model.id}
-            selected={model.id === modelId}
-            onClick={() => onSelect(model.id)}
-            data-testid="model-picker-option"
+        {serverDown && (
+          <Typography
+            level="body-xs"
+            textColor="warning.plainColor"
+            sx={{ px: 1.5, py: 0.5, whiteSpace: 'normal' }}
+            data-testid="model-picker-server-down"
           >
-            <Stack sx={{ minWidth: 0 }}>
-              <Typography level="body-sm" noWrap>
-                {model.id === modelId ? '• ' : ''}
-                {model.name}
+            This conversation is set to {modelId}, but {serverDown}. Pick another model, or check the server under
+            Settings, Model servers.
+          </Typography>
+        )}
+
+        {groups.map(group => (
+          <Box key={group.key} data-testid="model-picker-group" data-group={group.key}>
+            {group.label && (
+              <Typography
+                level="body-xs"
+                fontWeight="lg"
+                textColor="text.tertiary"
+                sx={{ px: 1.5, pt: 1, pb: 0.25 }}
+                data-testid="model-picker-group-label"
+              >
+                {group.label}
               </Typography>
-              <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                {model.backend ? `${model.backend} - ` : ''}
-                {model.id}
-              </Typography>
-            </Stack>
-          </MenuItem>
+            )}
+            {group.models.map(model => (
+              <MenuItem
+                key={model.id}
+                selected={model.id === modelId}
+                disabled={!!model.unavailable}
+                onClick={() => onSelect(model.id)}
+                data-testid="model-picker-option"
+                data-unavailable={model.unavailable ? 'true' : undefined}
+              >
+                <Stack sx={{ minWidth: 0 }}>
+                  <Typography level="body-sm" noWrap>
+                    {model.id === modelId ? '• ' : ''}
+                    {model.name}
+                  </Typography>
+                  <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                    {model.unavailable ?? (
+                      <>
+                        {model.server ? '' : model.backend ? `${model.backend} - ` : ''}
+                        {model.id}
+                      </>
+                    )}
+                  </Typography>
+                </Stack>
+              </MenuItem>
+            ))}
+          </Box>
         ))}
 
         {models.length > 0 && matches.length === 0 && (

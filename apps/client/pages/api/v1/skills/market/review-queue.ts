@@ -31,7 +31,7 @@ const handler = nextRouteForContract(listSkillMarketReviewQueueContract).get(asy
         ? {
             id: String(previous.id),
             version: previous.version,
-            snapshot: toPublicSnapshot(previous.snapshot),
+            snapshot: toPublicSnapshot(previous.snapshot, { withFiles: false }),
           }
         : null,
       can_decide: canDecide,

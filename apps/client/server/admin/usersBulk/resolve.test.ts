@@ -104,6 +104,7 @@ describe('creditDeltaFor', () => {
 describe('previewAdminUsersBulk', () => {
   it('counts already-applied users, keys to revoke and credits, writing nothing', async () => {
     const users = [user(1, { isBanned: true, currentCredits: 0 }), user(2, { currentCredits: 40 }), user(3)];
+    const blockedEmailDomains = vi.fn(async () => new Set<string>());
     const countLiveApiKeys = vi.fn(
       async () =>
         new Map([
@@ -114,7 +115,7 @@ describe('previewAdminUsersBulk', () => {
     const preview = await previewAdminUsersBulk(
       { matched: 4, eligible: users, excluded: { self: 1, admins: 0 }, overCap: false },
       { type: 'contain' },
-      { countLiveApiKeys }
+      { countLiveApiKeys, blockedEmailDomains }
     );
     expect(preview).toEqual({
       matched: 4,
@@ -126,6 +127,7 @@ describe('previewAdminUsersBulk', () => {
       creditsDelta: 140,
       creditsOverCap: false,
       cohortHash: cohortHashOf(users),
+      emailDomains: null,
       sample: users.map(row => ({ id: row.id, name: row.name, email: row.email })),
     });
   });
@@ -141,9 +143,49 @@ describe('previewAdminUsersBulk', () => {
             [hexId(1), 4],
             [hexId(2), 1],
           ]),
+        blockedEmailDomains: async () => new Set(),
       }
     );
     expect(preview).toMatchObject({ alreadyApplied: 1, apiKeysToRevoke: 1, creditsDelta: 0 });
+  });
+});
+
+describe('previewAdminUsersBulk email domains', () => {
+  const cohort = (users: BulkUser[]) => ({
+    matched: users.length,
+    eligible: users,
+    excluded: { self: 0, admins: 0 },
+    overCap: false,
+  });
+
+  it('is null and never reads the list unless the action blocks domains', async () => {
+    const blockedEmailDomains = vi.fn(async () => new Set<string>());
+    const preview = await previewAdminUsersBulk(
+      cohort([user(1)]),
+      { type: 'contain' },
+      { countLiveApiKeys: async () => new Map(), blockedEmailDomains }
+    );
+    expect(preview.emailDomains).toBeNull();
+    expect(blockedEmailDomains).not.toHaveBeenCalled();
+  });
+
+  it('plans the domains of every eligible user, including already-contained ones', async () => {
+    const users = [
+      user(1, { email: 'a@acme.com' }),
+      user(2, { email: 'b@gmail.com' }),
+      user(3, { email: 'c@old.com', isBanned: true, currentCredits: 0 }),
+    ];
+    const preview = await previewAdminUsersBulk(
+      cohort(users),
+      { type: 'contain', blockEmailDomains: true },
+      { countLiveApiKeys: async () => new Map(), blockedEmailDomains: async () => new Set(['old.com']) }
+    );
+    expect(preview.alreadyApplied).toBe(1);
+    expect(preview.emailDomains).toEqual({
+      toBlock: ['acme.com'],
+      alreadyBlocked: ['old.com'],
+      notOwned: ['gmail.com'],
+    });
   });
 });
 
@@ -158,7 +200,7 @@ describe('cohort binding and the credit total', () => {
     const preview = await previewAdminUsersBulk(
       { matched: 11, eligible: users, excluded: { self: 0, admins: 0 }, overCap: false },
       { type: 'adjustCredits', mode: 'add', amount: ADMIN_USERS_BULK_MAX_CREDIT_TOTAL / 10 },
-      { countLiveApiKeys: async () => new Map() }
+      { countLiveApiKeys: async () => new Map(), blockedEmailDomains: async () => new Set() }
     );
     expect(preview).toMatchObject({ creditsOverCap: true, creditsDelta: -1_100_000 });
   });

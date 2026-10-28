@@ -192,7 +192,7 @@ const UsersTab: React.FC = () => {
 
   const summary = summaryQuery.data;
   const description = summary
-    ? `${summary.total.toLocaleString()} accounts · ${summary.activeThisWeek.toLocaleString()} active this week`
+    ? `${summary.total.toLocaleString()} accounts \u00b7 ${summary.activeThisWeek.toLocaleString()} active this week`
     : undefined;
 
   return (

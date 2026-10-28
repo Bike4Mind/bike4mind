@@ -23,6 +23,7 @@ export * from './matchSavedView';
 export * from './SegmentedControl';
 export * from './ChangePreview';
 export * from './Kbd';
+export * from './ToggleChipGroup';
 export * from './SaveBar';
 export * from './UnsavedChangesGuard';
 export * from './SettingsSection';

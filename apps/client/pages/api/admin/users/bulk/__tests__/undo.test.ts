@@ -17,6 +17,8 @@ vi.mock('@server/admin/usersBulk/adapters', () => ({ usersBulkUndoDeps: () => ({
 const mockUndo = vi.fn();
 vi.mock('@server/admin/usersBulk/undo', () => ({ undoAdminUsersBulk: (...a: unknown[]) => mockUndo(...a) }));
 
+const UNDO_RESULT = { restored: 2, failed: [], unblockedDomains: [], stillBlockedDomains: [] };
+
 import handler from '../undo';
 
 const ADMIN = { id: 'a'.repeat(24), isAdmin: true };
@@ -32,7 +34,7 @@ async function call(body: unknown, user: Record<string, unknown> = ADMIN) {
 describe('POST /api/admin/users/bulk/undo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUndo.mockResolvedValue({ restored: 2, failed: [] });
+    mockUndo.mockResolvedValue(UNDO_RESULT);
   });
 
   it('requires JWT admin auth and a per-admin rate limit', () => {
@@ -56,7 +58,7 @@ describe('POST /api/admin/users/bulk/undo', () => {
   it('undoes as the calling admin', async () => {
     const res = await call({ batchId: BATCH_ID });
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ restored: 2, failed: [] });
+    expect(res._getJSONData()).toEqual(UNDO_RESULT);
     expect(mockUndo).toHaveBeenCalledWith(BATCH_ID, ADMIN.id, { deps: true });
   });
 });

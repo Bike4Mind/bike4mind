@@ -36,8 +36,11 @@ export const AdminUsersBulkActionSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('revokeApiKeys') }),
   z.object({ type: z.literal('addTag'), tag: z.string().trim().min(1).max(64) }),
-  /** Suspend + set credits to 0 + revoke API keys, as one transaction per user. */
-  z.object({ type: z.literal('contain') }),
+  /**
+   * Suspend + set credits to 0 + revoke API keys, as one transaction per user. `blockEmailDomains`
+   * also adds the users' owned email domains to blockedEmailDomains first, so no new account can sign up on them.
+   */
+  z.object({ type: z.literal('contain'), blockEmailDomains: z.boolean().optional() }),
 ]);
 export type AdminUsersBulkAction = z.infer<typeof AdminUsersBulkActionSchema>;
 export type AdminUsersBulkActionType = AdminUsersBulkAction['type'];
@@ -47,6 +50,20 @@ export const AdminUsersBulkPreviewRequestSchema = z.object({
   action: AdminUsersBulkActionSchema,
 });
 export type AdminUsersBulkPreviewRequest = z.infer<typeof AdminUsersBulkPreviewRequestSchema>;
+
+/** True when the action includes Contain's email-domain step. */
+export const blocksEmailDomains = (action: AdminUsersBulkAction): boolean =>
+  action.type === 'contain' && action.blockEmailDomains === true;
+
+/** The users' distinct email domains, grouped by what Contain's domain step does with them. */
+export type AdminUsersBulkEmailDomains = {
+  /** Would be added to blockedEmailDomains. */
+  toBlock: string[];
+  /** Already blocked, by themselves or through a parent domain. */
+  alreadyBlocked: string[];
+  /** Never blocked: public mailbox providers (gmail.com) and public suffixes. */
+  notOwned: string[];
+};
 
 export type AdminUsersBulkPreview = {
   /** Users the target resolves to, before exclusions. */
@@ -67,6 +84,8 @@ export type AdminUsersBulkPreview = {
   creditsOverCap: boolean;
   /** sha256 of the sorted eligible ids; execute must echo it, so it acts on exactly these users. */
   cohortHash: string;
+  /** Contain's domain step; null when the action does not block domains. */
+  emailDomains: AdminUsersBulkEmailDomains | null;
   sample: { id: string; name: string | null; email: string | null }[];
 };
 
@@ -92,6 +111,8 @@ export type AdminUsersBulkResult = {
   remaining: number;
   /** ISO time after which undo is refused. */
   undoExpiresAt: string;
+  /** Domains this batch added to blockedEmailDomains; undo removes exactly these. */
+  blockedDomains: string[];
 };
 
 export const AdminUsersBulkUndoRequestSchema = z.object({ batchId: z.string().uuid() });
@@ -99,4 +120,7 @@ export const AdminUsersBulkUndoRequestSchema = z.object({ batchId: z.string().uu
 export type AdminUsersBulkUndoResult = {
   restored: number;
   failed: { userId: string; error: string }[];
+  unblockedDomains: string[];
+  /** Domains still blocked because removing them failed; a retried undo tries again. */
+  stillBlockedDomains: string[];
 };

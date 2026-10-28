@@ -18,13 +18,7 @@ import type {
 } from '@client/app/utils/adminUsersFilter';
 import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
-import {
-  LIVE_API_KEY_STATUS,
-  adminUsersSort,
-  apiKeyStages,
-  buildAdminUsersMatch,
-  organizationNamesOf,
-} from './adminUsersQuery';
+import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 const LIST_MAX_TIME_MS = 10_000;
@@ -32,7 +26,11 @@ const SPEND_WINDOW_MS = 30 * 86_400_000;
 
 const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
 
-/** The `$match` plus key stages for a filter, with organization names resolved to ids. */
+/**
+ * The filter as a single leading `$match`, with organization names and live-key holders resolved to
+ * ids. The list, export, domain groups and the bulk resolver all start here, so one filter always
+ * selects the same users.
+ */
 export async function adminUsersPipeline(
   filter: AdminUsersFilter,
   now = new Date()
@@ -46,12 +44,13 @@ export async function adminUsersPipeline(
             .lean()
         ).map(org => org._id)
       : [];
-  const match = buildAdminUsersMatch(filter, { now, organizationIds, toObjectId });
-  // adminUsersQuery builds plain stage objects so it stays mongoose-free and unit-testable.
-  return [
-    { $match: match },
-    ...apiKeyStages(filter, UserApiKey.collection.name),
-  ] as unknown as mongoose.PipelineStage[];
+  // Key rows store userId as a string. One id per keyed user, which stays far below the 16 MB result cap.
+  const liveApiKeyUserIds = filter.hasApiKey
+    ? ((await UserApiKey.distinct('userId', { status: LIVE_API_KEY_STATUS })) as unknown[]).map(String)
+    : undefined;
+  const match = buildAdminUsersMatch(filter, { now, organizationIds, toObjectId, liveApiKeyUserIds });
+  // adminUsersQuery builds plain objects so it stays mongoose-free and unit-testable.
+  return [{ $match: match }] as unknown as mongoose.PipelineStage[];
 }
 
 async function liveApiKeyCounts(userIds: string[]): Promise<Map<string, number>> {
@@ -134,10 +133,13 @@ export async function listAdminUsers(
   };
 }
 
-/** Hard ceiling on one CSV export; the response says when the filter matched more. */
-export const USERS_EXPORT_MAX_ROWS = 50_000;
-// ms. An export reads far more rows than a page, so it gets more time than a list read.
-const EXPORT_MAX_TIME_MS = 60_000;
+/**
+ * Hard ceiling on one CSV export; the response says when the filter matched more. Sized so the JSON
+ * body (~260 bytes per row, ~430 worst case) stays under the 6 MB buffered Lambda response limit.
+ */
+export const USERS_EXPORT_MAX_ROWS = 15_000;
+// ms. Reads more rows than a page, but must finish inside the 60 s server Lambda timeout.
+const EXPORT_MAX_TIME_MS = 45_000;
 
 export type AdminUsersExportRow = Pick<
   IUserObject,

@@ -1,16 +1,15 @@
 import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { active, domains, modelPairId } = req.query as {
       active?: string;
       domains?: string;
@@ -33,10 +32,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(prompts);
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const {
       name,
       description,
