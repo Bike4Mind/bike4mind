@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { getTurnstileToken } from './turnstile';
+import { getTurnstileToken, MAX_CHALLENGE_ATTEMPTS, TurnstileCancelledError, TurnstileError } from './turnstile';
 
 type RenderOptions = {
   callback: (t: string) => void;
-  'error-callback': () => void;
+  'error-callback': (errorCode?: string) => boolean;
   'expired-callback': () => void;
   'before-interactive-callback': () => void;
 };
@@ -34,7 +34,14 @@ describe('getTurnstileToken', () => {
       return 'widget-1';
     });
     await expect(getTurnstileToken('site', 'otc-send')).resolves.toBe('tok-1');
-    expect(render.mock.calls[0][1]).toMatchObject({ sitekey: 'site', action: 'otc-send' });
+    expect(render.mock.calls[0][1]).toMatchObject({
+      sitekey: 'site',
+      action: 'otc-send',
+      retry: 'never',
+      theme: 'light',
+      size: 'normal',
+      'before-interactive-callback': expect.any(Function),
+    });
     expect(remove).toHaveBeenCalledWith('widget-1');
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
   });
@@ -80,7 +87,8 @@ describe('getTurnstileToken', () => {
     opts!['before-interactive-callback']();
     expect(cancel.style.display).toBe('block');
     cancel.click();
-    await expect(pending).rejects.toThrow('turnstile-cancelled');
+    await expect(pending).rejects.toBeInstanceOf(TurnstileCancelledError);
+    expect(render).toHaveBeenCalledTimes(1);
     expect(remove).toHaveBeenCalledWith('widget-1');
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
   });
@@ -261,7 +269,8 @@ describe('getTurnstileToken', () => {
       expect(background.hasAttribute('inert')).toBe(true);
       options!['before-interactive-callback']();
       if (outcome === 'success') options!.callback('tok-1');
-      if (outcome === 'error') options!['error-callback']();
+      // A site configuration error is not retried, so the challenge ends on this attempt.
+      if (outcome === 'error') options!['error-callback']('110200');
       if (outcome === 'expiry') options!['expired-callback']();
       if (outcome === 'timeout') await vi.advanceTimersByTimeAsync(60_000);
       await result;
@@ -347,18 +356,182 @@ describe('getTurnstileToken', () => {
     render.mockImplementation(() => {
       throw new Error('render failed');
     });
-    await expect(getTurnstileToken('site', 'otc-send')).rejects.toThrow('render failed');
+    await expect(getTurnstileToken('site', 'otc-send')).rejects.toThrow('turnstile-render-failed');
     expect(vi.getTimerCount()).toBe(0);
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
   });
 
-  it('rejects when the widget reports an error and still cleans up', async () => {
+  it('retries a widget error with a fresh widget and resolves once one succeeds', async () => {
+    vi.useFakeTimers();
+    render
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => expect(opts['error-callback']('300030')).toBe(true));
+        return 'widget-1';
+      })
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => opts.callback('tok-2'));
+        return 'widget-2';
+      });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(pending).resolves.toBe('tok-2');
+    expect(remove.mock.calls).toEqual([['widget-1'], ['widget-2']]);
+    expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
+  it('gives up after the last attempt with the error code and attempt count', async () => {
+    vi.useFakeTimers();
     render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
-      queueMicrotask(() => opts['error-callback']());
+      queueMicrotask(() => opts['error-callback']('600010'));
       return 'widget-1';
     });
-    await expect(getTurnstileToken('site', 'otc-send')).rejects.toThrow('turnstile-error');
+    const pending = getTurnstileToken('site', 'otc-send').catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const error = await pending;
+    expect(error).toBeInstanceOf(TurnstileError);
+    expect(error).toMatchObject({ reason: 'error', errorCode: '600010', attempts: MAX_CHALLENGE_ATTEMPTS });
+    expect(render).toHaveBeenCalledTimes(MAX_CHALLENGE_ATTEMPTS);
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
+  it('does not retry a site configuration error', async () => {
+    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
+      queueMicrotask(() => opts['error-callback']('110200'));
+      return 'widget-1';
+    });
+    await expect(getTurnstileToken('site', 'otc-send')).rejects.toMatchObject({ reason: 'error', attempts: 1 });
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a challenge timeout error', async () => {
+    vi.useFakeTimers();
+    render
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => opts['error-callback']('110600'));
+        return 'widget-1';
+      })
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => opts.callback('tok-2'));
+        return 'widget-2';
+      });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(pending).resolves.toBe('tok-2');
+  });
+
+  it('does not retry an expired challenge', async () => {
+    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
+      queueMicrotask(() => opts['expired-callback']());
+      return 'widget-1';
+    });
+    await expect(getTurnstileToken('site', 'otc-send')).rejects.toMatchObject({ reason: 'expired' });
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops retrying when the user cancels during the retry delay', async () => {
+    vi.useFakeTimers();
+    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
+      opts['before-interactive-callback']();
+      queueMicrotask(() => opts['error-callback']('300030'));
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send').catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(render).toHaveBeenCalledTimes(1);
+    document.querySelector<HTMLButtonElement>('[data-testid="turnstile-challenge-cancel"]')!.click();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await pending).toBeInstanceOf(TurnstileCancelledError);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
+  });
+
+  it('cancels a retried attempt without starting another one', async () => {
+    vi.useFakeTimers();
+    let options: RenderOptions | undefined;
+    render
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => opts['error-callback']('300030'));
+        return 'widget-1';
+      })
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        options = opts;
+        return 'widget-2';
+      });
+    const pending = getTurnstileToken('site', 'otc-send').catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1_500);
+    options!['before-interactive-callback']();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await pending).toBeInstanceOf(TurnstileCancelledError);
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(remove.mock.calls).toEqual([['widget-1'], ['widget-2']]);
+  });
+
+  it('keeps one card across retry attempts', async () => {
+    vi.useFakeTimers();
+    const page = document.createElement('main');
+    document.body.append(page);
+    const overlays: Element[] = [];
+    render
+      .mockImplementationOnce((el: HTMLElement, opts: RenderOptions) => {
+        overlays.push(el.closest('[data-testid="turnstile-challenge-overlay"]')!);
+        opts['before-interactive-callback']();
+        queueMicrotask(() => opts['error-callback']('300030'));
+        return 'widget-1';
+      })
+      .mockImplementationOnce((el: HTMLElement, opts: RenderOptions) => {
+        overlays.push(el.closest('[data-testid="turnstile-challenge-overlay"]')!);
+        opts['before-interactive-callback']();
+        queueMicrotask(() => opts.callback('tok-2'));
+        return 'widget-2';
+      });
+    const pending = getTurnstileToken('site', 'otc-send');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(page.hasAttribute('inert')).toBe(true);
+    expect(document.querySelectorAll('[data-testid="turnstile-challenge-overlay"]')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(pending).resolves.toBe('tok-2');
+    expect(overlays[0]).toBe(overlays[1]);
+    expect(page.hasAttribute('inert')).toBe(false);
+  });
+
+  it('runs concurrent challenges one at a time, each with its own token', async () => {
+    const solvers: RenderOptions[] = [];
+    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
+      solvers.push(opts);
+      return `widget-${solvers.length}`;
+    });
+    const first = getTurnstileToken('site', 'otc-send');
+    const second = getTurnstileToken('site', 'otc-send');
+    await vi.waitFor(() => expect(solvers).toHaveLength(1));
+    solvers[0]['before-interactive-callback']();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(document.querySelectorAll('[data-testid="turnstile-challenge-overlay"]')).toHaveLength(1);
+    solvers[0].callback('tok-1');
+    await expect(first).resolves.toBe('tok-1');
+    await vi.waitFor(() => expect(solvers).toHaveLength(2));
+    expect(document.querySelectorAll('[data-testid="turnstile-challenge-overlay"]')).toHaveLength(1);
+    solvers[1].callback('tok-2');
+    await expect(second).resolves.toBe('tok-2');
+  });
+
+  it('runs the next challenge after a cancelled one', async () => {
+    const solvers: RenderOptions[] = [];
+    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
+      solvers.push(opts);
+      return `widget-${solvers.length}`;
+    });
+    const first = getTurnstileToken('site', 'otc-send');
+    const second = getTurnstileToken('site', 'otc-send');
+    await vi.waitFor(() => expect(solvers).toHaveLength(1));
+    solvers[0]['before-interactive-callback']();
+    document.querySelector<HTMLButtonElement>('[data-testid="turnstile-challenge-cancel"]')!.click();
+    await expect(first).rejects.toBeInstanceOf(TurnstileCancelledError);
+    await vi.waitFor(() => expect(solvers).toHaveLength(2));
+    solvers[1].callback('tok-2');
+    await expect(second).resolves.toBe('tok-2');
   });
 });
 
@@ -374,27 +547,44 @@ describe('Turnstile script loading', () => {
     document.querySelectorAll('script[src*="challenges.cloudflare.com"]').forEach(script => script.remove());
   });
 
-  it('times out a stalled script and allows another attempt', async () => {
+  const turnstileScript = () => document.querySelector('script[src*="challenges.cloudflare.com"]');
+
+  it('times out a stalled script without a second wait and allows another attempt', async () => {
     const pending = getTurnstileToken('site', 'otc-send');
-    const rejection = expect(pending).rejects.toThrow('turnstile-unavailable');
+    const rejection = expect(pending).rejects.toMatchObject({ reason: 'script-timeout', attempts: 1 });
     await vi.advanceTimersByTimeAsync(60_000);
     await rejection;
-    expect(document.querySelector('script[src*="challenges.cloudflare.com"]')).toBeNull();
+    expect(turnstileScript()).toBeNull();
     const retry = getTurnstileToken('site', 'otc-send');
-    const retryRejection = expect(retry).rejects.toThrow('turnstile-unavailable');
-    document.querySelector('script[src*="challenges.cloudflare.com"]')!.dispatchEvent(new Event('error'));
+    const retryRejection = expect(retry).rejects.toMatchObject({ reason: 'script-error', attempts: 2 });
+    turnstileScript()!.dispatchEvent(new Event('error'));
+    await vi.advanceTimersByTimeAsync(0);
+    turnstileScript()!.dispatchEvent(new Event('error'));
     await retryRejection;
   });
 
   it('retries after the script loads without exposing the API', async () => {
     const pending = getTurnstileToken('site', 'otc-send');
     const rejection = expect(pending).rejects.toThrow('turnstile-unavailable');
-    document.querySelector('script[src*="challenges.cloudflare.com"]')!.dispatchEvent(new Event('load'));
+    turnstileScript()!.dispatchEvent(new Event('load'));
     await rejection;
     const retry = getTurnstileToken('site', 'otc-send');
     const retryRejection = expect(retry).rejects.toThrow('turnstile-unavailable');
-    expect(document.querySelector('script[src*="challenges.cloudflare.com"]')).not.toBeNull();
-    document.querySelector('script[src*="challenges.cloudflare.com"]')!.dispatchEvent(new Event('error'));
+    expect(turnstileScript()).not.toBeNull();
+    turnstileScript()!.dispatchEvent(new Event('load'));
     await retryRejection;
+  });
+
+  it('retries a script that failed to load and solves once it loads', async () => {
+    const render = vi.fn((_el: HTMLElement, opts: RenderOptions) => {
+      queueMicrotask(() => opts.callback('tok-1'));
+      return 'widget-1';
+    });
+    const pending = getTurnstileToken('site', 'otc-send');
+    turnstileScript()!.dispatchEvent(new Event('error'));
+    await vi.advanceTimersByTimeAsync(0);
+    window.turnstile = { render, remove: vi.fn() } as unknown as typeof window.turnstile;
+    turnstileScript()!.dispatchEvent(new Event('load'));
+    await expect(pending).resolves.toBe('tok-1');
   });
 });

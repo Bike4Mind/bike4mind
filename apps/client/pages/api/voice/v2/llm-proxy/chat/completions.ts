@@ -16,7 +16,7 @@ import {
 } from '@bike4mind/services/llm';
 import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
-import { type Logger } from '@bike4mind/observability';
+import { type Logger, describeErrorCause } from '@bike4mind/observability';
 import {
   buildClientToolPassthrough,
   currentTurnUserMessage,
@@ -176,7 +176,8 @@ async function runFullPipeline(
     organizationId,
     // stream:true so the model emits tokens incrementally - ChatCompletionProcess
     // fires onReplyStream on each chunk, and the proxy relays SSE deltas.
-    params: { model: sessionCtx.reasoningModelId, max_tokens: 4096, stream: true },
+    // No max_tokens: ChatCompletionProcess sizes it per model, so a reasoning model keeps room to answer.
+    params: { model: sessionCtx.reasoningModelId, stream: true },
     promptMeta: { session: { id: sessionCtx.sessionId, userId: sessionCtx.userId, organizationId } },
     enableArtifacts: false,
     // Enable the inline built-in tools (web search, RAG, etc.) plus any ElevenLabs
@@ -242,7 +243,11 @@ async function runFullPipeline(
 
   // process() mutates the quest in place. Use the last reply item (the visible
   // answer after any thinking reply) to match what onReplyStream forwarded.
-  return stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
+  const reply = stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
+  // A settled budget error resolves without throwing and its reply never went through onReplyStream,
+  // so speak it here rather than leave the caller in silence.
+  if (processService.terminalError) onReplyStream(reply);
+  return reply;
 }
 
 export const config = {
@@ -428,7 +433,17 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       if (!res.writableEnded) res.end();
       return;
     }
-    req.logger.error({ err }, '[voice-v2/llm-proxy] full pipeline failed');
+    // Flat strings next to `err`: the alert sink prints each field with `${value}`, which turned
+    // the nested error object into `[object Object]`.
+    req.logger.error(
+      {
+        err,
+        errorName: err instanceof Error ? err.name : typeof err,
+        errorMessage: err instanceof Error ? err.message : String(err),
+        errorCause: describeErrorCause(err),
+      },
+      '[voice-v2/llm-proxy] full pipeline failed'
+    );
     try {
       if (res.writableEnded) return;
       // Only speak the fallback if nothing was streamed yet - otherwise the agent

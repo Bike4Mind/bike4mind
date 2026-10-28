@@ -66,6 +66,12 @@ if ! bash scripts/check-no-overlay-lockfile.sh --staged; then
   FINAL_EXIT_CODE=1
 fi
 
+# Check staged sst-env.d.ts files for secrets only an overlay declares
+echo "Running sst-env secret check..."
+if ! node scripts/check-sst-env-core-secrets.mjs --staged; then
+  FINAL_EXIT_CODE=1
+fi
+
 # Check staged source files for raw control bytes (a NUL makes a file binary/ungreppable)
 echo "Running control-byte check..."
 if ! bash scripts/check-no-control-bytes.sh; then

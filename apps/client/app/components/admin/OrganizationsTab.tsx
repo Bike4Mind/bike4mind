@@ -343,8 +343,15 @@ const OrganizationsTab: React.FC = () => {
             <FormLabel sx={{ fontSize: 'sm' }}>Search by name</FormLabel>
             <SearchBar
               handleChange={handleSearchChange}
-              placeHolder="Search organizations..."
-              slotProps={{ input: { 'data-testid': 'admin-organizations-search-input' } }}
+              placeHolder="Search organizations (/)"
+              slotProps={{
+                input: {
+                  'data-testid': 'admin-organizations-search-input',
+                  'data-admin-search': true,
+                  'aria-label': 'Search organizations',
+                  'aria-keyshortcuts': '/',
+                },
+              }}
               debounceTimeout={300}
               endDecorator={isLoading && <CircularProgress size="sm" />}
             />

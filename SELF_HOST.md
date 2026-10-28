@@ -1312,7 +1312,9 @@ Covered shapes (inventory kind in brackets):
 A Function that a covered trigger delivers to is inventoried under that trigger. A declaration
 built inside a named factory with a computed name (for example one log subscription per log
 group) is identified by its factory site; computed queue and schedule names fail, because
-local registrations are matched by that name.
+local registrations are matched by that name. The exception is the queue pairs packages declare
+in `b4mContributions.infraResources`: their constructors are listed by name expression in
+`DATA_NAMED_QUEUES` and skipped, since self-host does not provision contributed queues.
 
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`

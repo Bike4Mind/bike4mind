@@ -99,6 +99,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.sessions.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.session.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
   // Bulk abuse response (apps/client/pages/api/admin/abuse/bulk-*.ts): one strict entry per user and
   // step, written in that user's transaction, plus a summary per execute. The summary is bestEffort
   // because the per-user entries are the record and the work is already committed when it is written.
@@ -227,6 +228,25 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.reg_invite.created': { category: 'access', severity: 'notice', write: 'strict' },
   'user.waitlist_subscriber.deleted': { category: 'support', severity: 'info', write: 'bestEffort' },
   'org.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: telemetry, backfills and health
+  'ops.context_telemetry.deleted': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.context_telemetry.analyzed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.context_telemetry.issue_created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.context_telemetry.test_run': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.mementos.reembedded': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.memory_ledger.reembedded': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.overwatch.first_seen_backfilled': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.spider_job.started': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'system_health.integration_override_set': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'system_health.integration_probe_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
+
+  // Handler coverage: security and trust and safety
+  'security.blocked_ip.added': { category: 'access', severity: 'notice', write: 'strict' },
+  'security.blocked_ip.removed': { category: 'access', severity: 'critical', write: 'strict' }, // critical: removing a block lifts a security control
+  'security.blocked_ip.auto_added': { category: 'access', severity: 'notice', write: 'strict' },
+  'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

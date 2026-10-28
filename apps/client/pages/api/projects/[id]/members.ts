@@ -10,7 +10,8 @@ import { projectService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { ProjectEvents, projectResponseSchema } from '@bike4mind/common';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 
 const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async (req, res) => {
@@ -72,7 +73,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async 
     return project;
   });
 
-  return res.json(result);
+  return respond(res, projectResponseSchema, result);
 });
 
 export const config = {

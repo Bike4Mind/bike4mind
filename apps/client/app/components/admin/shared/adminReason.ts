@@ -10,17 +10,20 @@ import {
  * the server's `parseAdminActionReason`.
  */
 export const ADMIN_REASON_PRESETS = {
-  creditAdjustment: [
-    'Goodwill credit',
-    'Refund for a failed request',
-    'Billing correction',
-    'Promotional grant',
-    'Abuse or bot cleanup',
-  ],
+  creditAdjustment: ['Goodwill credit', 'Refund', 'Support request', 'Abuse / automated signups'],
+  suspension: ['Abuse / automated signups', 'Payment fraud', 'Terms violation', 'Customer request'],
+  reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
+  restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
+  emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
+  apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
+  accountTags: ['Account review', 'Support request', 'Internal testing'],
+  productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
+  systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
   roleChange: ['Joined the admin team', 'Left the admin team', 'Temporary on-call access'],
   subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],
   userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
+  sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],

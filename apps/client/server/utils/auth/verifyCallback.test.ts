@@ -3,11 +3,16 @@ import { AuthStrategy, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { ACCOUNT_LINK_VERIFICATION_REQUIRED, ACCOUNT_LINK_EMAIL_MISMATCH } from './oauthAccountLink';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
+// Linking an account that promotes emailVerified runs applyEmailVerifiedGrants, which rescores.
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 const mockFindOne = vi.fn();
 const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockRevokeAllByUserId = vi.fn();
 const mockUserRepositoryUpdate = vi.fn();
+const mockClearPending = vi.fn();
 const mockEndConnections = vi.fn();
 
 // Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
@@ -26,7 +31,10 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   creditLotRepository: {},
   organizationRepository: {},
-  userRepository: { update: (...args: unknown[]) => mockUserRepositoryUpdate(...args) },
+  userRepository: {
+    update: (...args: unknown[]) => mockUserRepositoryUpdate(...args),
+    clearPendingFreeCreditGrant: (...args: unknown[]) => mockClearPending(...args),
+  },
 }));
 
 const mockEmitVerifiedFunnel = vi.fn();
@@ -82,8 +90,15 @@ vi.mock('./openRegistration', () => ({
   isOpenRegistrationAllowed: () => mockIsOpenRegistrationAllowed(),
 }));
 
+const mockIsSignupNetworkOverLimit = vi.fn();
+const mockCreateSignupRiskCollector = vi.fn();
+vi.mock('@server/auth/signupNetworkLimits', () => ({
+  isSignupNetworkOverLimit: (...args: unknown[]) => mockIsSignupNetworkOverLimit(...args),
+  createSignupRiskCollector: (...args: unknown[]) => mockCreateSignupRiskCollector(...args),
+}));
+
 import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
-import { verifyCallback } from './verifyCallback';
+import { selfServeVerifyCallback, verifyCallback } from './verifyCallback';
 
 const runStandard = (
   strategy: AuthStrategy,
@@ -105,6 +120,8 @@ beforeEach(() => {
   mockRevokeAllUserSessions.mockClear();
   mockUserRepositoryUpdate.mockReset();
   mockUserRepositoryUpdate.mockResolvedValue(undefined);
+  mockClearPending.mockReset();
+  mockClearPending.mockImplementation(async (id: string) => ({ id, tags: [] }));
   mockEmitVerifiedFunnel.mockReset();
   mockReleasePending.mockReset();
   mockReleasePending.mockImplementation(async (user: { tags?: string[] | null }) =>
@@ -133,6 +150,10 @@ beforeEach(() => {
   // Open by default so the pre-existing create-path tests keep exercising creation.
   mockIsOpenRegistrationAllowed.mockReset();
   mockIsOpenRegistrationAllowed.mockResolvedValue(true);
+  mockIsSignupNetworkOverLimit.mockReset();
+  mockIsSignupNetworkOverLimit.mockResolvedValue(false);
+  mockCreateSignupRiskCollector.mockReset();
+  mockCreateSignupRiskCollector.mockImplementation(network => ({ collectorFor: network ?? null }));
 });
 
 // Failure-safe restore of any vi.spyOn() (e.g. console.error) so a throwing
@@ -1162,7 +1183,7 @@ describe('verifyCallback - starter credits on OAuth signup', () => {
         expect.objectContaining({ id: 'new-id', tags: [PENDING_FREE_CREDITS_TAG] }),
         expect.objectContaining({ reason: 'OAuth signup (provider-verified email)' })
       );
-      expect(mockUserRepositoryUpdate).toHaveBeenCalledWith({ id: 'new-id', tags: [], pendingCreditGrant: null });
+      expect(mockClearPending).toHaveBeenCalledWith('new-id');
       expect((user as { signupCreditsGranted?: number }).signupCreditsGranted).toBe(100);
     }
   );
@@ -1216,11 +1237,11 @@ describe('verifyCallback - starter credits on OAuth signup', () => {
     expect(err).toBeNull();
     expect(user).toBeDefined();
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ tags: [PENDING_FREE_CREDITS_TAG] }));
-    expect(mockUserRepositoryUpdate).not.toHaveBeenCalled();
+    expect(mockClearPending).not.toHaveBeenCalled();
   });
 
   it('completes the login when persisting the tag removal fails', async () => {
-    mockUserRepositoryUpdate.mockRejectedValue(new Error('db down'));
+    mockClearPending.mockRejectedValue(new Error('db down'));
 
     const { err, user } = await runStandard(AuthStrategy.Google, verifiedProfile);
 
@@ -1341,11 +1362,7 @@ describe('verifyCallback - pending free credits on account link', () => {
       { id: 'u-pending', tags: ['Customer', PENDING_FREE_CREDITS_TAG], pendingCreditGrant: 250 },
       expect.objectContaining({ reason: 'OAuth account link (email verified)' })
     );
-    expect(mockUserRepositoryUpdate).toHaveBeenCalledWith({
-      id: 'u-pending',
-      tags: ['Customer'],
-      pendingCreditGrant: null,
-    });
+    expect(mockClearPending).toHaveBeenCalledWith('u-pending');
   });
 
   it('does not release on a plain link of an already-verified account', async () => {
@@ -1434,6 +1451,86 @@ describe('verifyCallback - pending free credits on account link', () => {
 
     expect(err).toBeNull();
     expect(user).toBeDefined();
-    expect(mockUserRepositoryUpdate).not.toHaveBeenCalled();
+    expect(mockClearPending).not.toHaveBeenCalled();
+  });
+});
+
+describe('selfServeVerifyCallback - signup network limits', () => {
+  const freshProfile = {
+    id: 'sub-net',
+    displayName: 'Net Person',
+    emails: [{ value: 'net@example.com', verified: true }],
+  };
+  const req = { headers: { 'cloudfront-viewer-address': '203.0.113.9:4444', 'cloudfront-viewer-asn': '64500' } };
+  const runSelfServe = (strategy: AuthStrategy): Promise<{ err: unknown; user: unknown; info: unknown }> =>
+    new Promise(resolve => {
+      const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
+      void selfServeVerifyCallback(strategy)(req, 'access-tok', 'refresh-tok', freshProfile, done);
+    });
+
+  it('declares the arity passport-oauth2 needs to pass the request first', () => {
+    expect(selfServeVerifyCallback(AuthStrategy.Google)).toHaveLength(5);
+  });
+
+  it('refuses a first login whose network is over the signup limit', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+
+    const { user, info } = await runSelfServe(AuthStrategy.Github);
+
+    expect(user).toBeFalsy();
+    expect(info).toMatchObject({ code: 'signup_limited' });
+    expect(mockIsSignupNetworkOverLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: '203.0.113.9', asn: 64500 }),
+      expect.anything()
+    );
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('admits a partner-domain first login without running the network cap check', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'p-id', id: 'p-id' }));
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      ruleId: 'rule-1',
+      domain: 'example.com',
+      entitlements: new Set(),
+      signupCredits: 0,
+      organizationId: null,
+      tags: [],
+      subscription: null,
+    });
+
+    const { user, info } = await runSelfServe(AuthStrategy.Google);
+
+    expect(user).toBeTruthy();
+    expect(info).toBeUndefined();
+    expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
+  });
+
+  it("assesses the new account's staged grant against the request network", async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'new-id', id: 'new-id' }));
+
+    const { user } = await runSelfServe(AuthStrategy.Google);
+
+    expect(user).toBeTruthy();
+    expect(mockCreateSignupRiskCollector).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.9' }));
+    expect(mockReleasePending).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ collectRiskSignals: { collectorFor: expect.objectContaining({ asn: 64500 }) } })
+    );
+  });
+
+  it('does not gate the request-less verifyCallback (SAML wrapper)', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'saml-id', id: 'saml-id' }));
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+
+    const { user } = await runStandard(AuthStrategy.Google, freshProfile);
+
+    expect(user).toBeTruthy();
+    expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
   });
 });

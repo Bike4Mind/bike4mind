@@ -39,7 +39,7 @@ export function decodeCursor(cursor: string, scope: string): string {
 
 const OBJECT_ID = /^[0-9a-f]{24}$/;
 
-/** Position in a list ordered by (timestamp, ObjectId) descending, where timestamps can tie. */
+/** Position in a list ordered by (timestamp, ObjectId), where timestamps can tie. */
 export type TimeIdKeyset = { at: Date; id: string };
 
 export function encodeTimeIdCursor(scope: string, { at, id }: TimeIdKeyset): string {

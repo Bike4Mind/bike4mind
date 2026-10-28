@@ -8,7 +8,9 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
   denySelf: vi.fn(),
   selfOrImpersonator: vi.fn(),
+  protection: { repository: {} },
 }));
+vi.mock('@server/auth/signupProtection', () => ({ signupProtection: h.protection }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config: unknown) => {
     h.config = config;
@@ -47,6 +49,11 @@ const request = () => ({
 });
 
 describe('admin signup unlock', () => {
+  it('passes the shared domain protection to the staged release', async () => {
+    await h.handler!(request(), { json: vi.fn() });
+    expect(h.unlock.mock.calls[0][2].db.signupProtection).toBe(h.protection);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     h.selfOrImpersonator.mockImplementation((user: { id: string; impersonatedBy?: string }, targetId: string) =>

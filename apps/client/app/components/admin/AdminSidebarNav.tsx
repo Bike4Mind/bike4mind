@@ -305,7 +305,7 @@ export const SidebarNav = ({
   useEffect(() => {
     if (collapsed) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.defaultPrevented || event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
       if (isEditableTarget(event.target) || !filterRef.current?.offsetParent) return;
       event.preventDefault();
       filterRef.current.focus();

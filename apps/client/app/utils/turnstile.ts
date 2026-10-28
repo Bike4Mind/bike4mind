@@ -1,5 +1,13 @@
 const SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const CHALLENGE_TIMEOUT_MS = 60_000;
+/** Widget errors are often transient (network blips, a flaky challenge), so a few fresh renders run first. */
+export const MAX_CHALLENGE_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 1_500;
+/**
+ * Site configuration and browser errors (bad site key, domain not allowed, unsupported browser, wrong clock):
+ * retrying cannot help. 1106xx challenge timeouts are retryable, per Cloudflare's client-side error code table.
+ */
+const NON_RETRYABLE_ERROR_CODE = /^(1101|1102|1104|1105|200100|400)/;
 
 type TurnstileApi = {
   render: (
@@ -10,9 +18,10 @@ type TurnstileApi = {
       appearance: 'interaction-only';
       theme: 'light' | 'dark';
       size: 'normal' | 'compact';
+      retry: 'never';
       'before-interactive-callback': () => void;
       callback: (token: string) => void;
-      'error-callback': () => void;
+      'error-callback': (errorCode?: string) => boolean;
       'expired-callback': () => void;
     }
   ) => string;
@@ -25,45 +34,175 @@ declare global {
   }
 }
 
+export type TurnstileFailureReason =
+  'script-error' | 'script-timeout' | 'unavailable' | 'error' | 'expired' | 'timeout' | 'render-failed';
+
+/** Why the challenge could not produce a token; `errorCode` is Cloudflare's client-side error code, when it gave one. */
+export class TurnstileError extends Error {
+  constructor(
+    readonly reason: TurnstileFailureReason,
+    readonly attempts: number,
+    readonly errorCode?: string
+  ) {
+    super(`turnstile-${reason}`);
+    this.name = 'TurnstileError';
+  }
+}
+
+/** The user dismissed the interactive challenge. Not a failure, so it is never retried or reported. */
+export class TurnstileCancelledError extends Error {
+  constructor() {
+    super('turnstile-cancelled');
+    this.name = 'TurnstileCancelledError';
+  }
+}
+
 let scriptPromise: Promise<TurnstileApi> | undefined;
 let challengeCount = 0;
+let challengeInFlight: Promise<unknown> = Promise.resolve();
 
 function loadTurnstile(): Promise<TurnstileApi> {
   if (window.turnstile) return Promise.resolve(window.turnstile);
   scriptPromise ??= new Promise<TurnstileApi>((resolve, reject) => {
     const script = document.createElement('script');
-    const fail = () => {
+    const fail = (reason: TurnstileFailureReason) => {
       clearTimeout(timer);
       script.onload = null;
       script.onerror = null;
       scriptPromise = undefined;
       script.remove();
-      reject(new Error('turnstile-unavailable'));
+      reject(new TurnstileError(reason, 1));
     };
-    const timer = setTimeout(fail, CHALLENGE_TIMEOUT_MS);
+    const timer = setTimeout(() => fail('script-timeout'), CHALLENGE_TIMEOUT_MS);
     script.src = SCRIPT_SRC;
     script.async = true;
     script.onload = () => {
       if (!window.turnstile) {
-        fail();
+        fail('unavailable');
         return;
       }
       clearTimeout(timer);
       resolve(window.turnstile);
     };
-    script.onerror = fail;
+    script.onerror = () => fail('script-error');
     document.head.appendChild(script);
   });
   return scriptPromise;
 }
 
+/** A failed script request is retried once at once; a stalled one already spent the full timeout. */
+async function loadTurnstileWithRetry(): Promise<TurnstileApi> {
+  try {
+    return await loadTurnstile();
+  } catch (error) {
+    if (!(error instanceof TurnstileError) || error.reason !== 'script-error') throw error;
+    try {
+      return await loadTurnstile();
+    } catch (retryError) {
+      if (retryError instanceof TurnstileError) throw new TurnstileError(retryError.reason, 2);
+      throw retryError;
+    }
+  }
+}
+
+const isRetryable = (error: TurnstileError) =>
+  error.reason === 'error' && !(error.errorCode && NON_RETRYABLE_ERROR_CODE.test(error.errorCode));
+
+type WidgetOptions = { sitekey: string; action: string; theme: 'light' | 'dark'; size: 'normal' | 'compact' };
+
+/**
+ * Renders one widget into `container` and settles with its token, always removing the widget.
+ * `onInteractive` runs when Cloudflare needs the user; `signal` aborts the attempt as cancelled.
+ */
+async function solveOnce(
+  turnstile: TurnstileApi,
+  container: HTMLElement,
+  widget: WidgetOptions,
+  attempt: number,
+  signal: AbortSignal,
+  onInteractive: () => void
+): Promise<string> {
+  let widgetId: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      let settled = false;
+      const armTimeout = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => reject(new TurnstileError('timeout', attempt)), CHALLENGE_TIMEOUT_MS);
+      };
+      armTimeout();
+      const settle = (fn: () => void) => {
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
+      onAbort = () => settle(() => reject(new TurnstileCancelledError()));
+      signal.addEventListener('abort', onAbort);
+      try {
+        widgetId = turnstile.render(container, {
+          ...widget,
+          appearance: 'interaction-only',
+          // We retry with a fresh widget below; Cloudflare's own auto-retry would race it.
+          retry: 'never',
+          'before-interactive-callback': () => {
+            if (settled) return;
+            // Give the user the full window to solve the card, not what is left after the invisible attempt.
+            armTimeout();
+            onInteractive();
+          },
+          callback: token => settle(() => resolve(token)),
+          'error-callback': errorCode => {
+            settle(() => reject(new TurnstileError('error', attempt, errorCode)));
+            // Handled: stops Cloudflare from also logging its own console warning.
+            return true;
+          },
+          'expired-callback': () => settle(() => reject(new TurnstileError('expired', attempt))),
+        });
+      } catch {
+        settle(() => reject(new TurnstileError('render-failed', attempt)));
+      }
+    });
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+    if (widgetId !== undefined) turnstile.remove(widgetId);
+  }
+}
+
+function retryDelay(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new TurnstileCancelledError());
+      return;
+    }
+    const timer = setTimeout(resolve, RETRY_DELAY_MS);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(new TurnstileCancelledError());
+      },
+      { once: true }
+    );
+  });
+}
+
 /**
  * Solves a Turnstile challenge and resolves with a single-use token. The widget stays invisible
  * unless Cloudflare needs interaction, in which case it is shown in a card over a dimmed backdrop until solved.
+ * Rejects with a TurnstileError once retries are spent, or a TurnstileCancelledError if the user cancels.
+ * Concurrent calls run one at a time, since each card makes everything else on the page inert.
  */
 export async function getTurnstileToken(siteKey: string, action: string): Promise<string> {
-  const turnstile = await loadTurnstile();
+  const turnstile = await loadTurnstileWithRetry();
+  const challenge = challengeInFlight.then(() => solveChallenge(turnstile, siteKey, action));
+  challengeInFlight = challenge.catch(() => undefined);
+  return challenge;
+}
 
+async function solveChallenge(turnstile: TurnstileApi, siteKey: string, action: string): Promise<string> {
   const dark = document.documentElement.getAttribute('data-joy-color-scheme') === 'dark';
   const overlay = document.createElement('div');
   overlay.setAttribute('data-testid', 'turnstile-challenge-overlay');
@@ -120,7 +259,6 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
     }
   };
   const backgroundObserver = new MutationObserver(makeBackgroundInert);
-  let onKeyDown: ((e: KeyboardEvent) => void) | undefined;
 
   // The overlay stays bare and click-through on the invisible path; the backdrop and card only
   // appear once Cloudflare decides the user must interact, so no empty modal flashes.
@@ -145,13 +283,9 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
       focusBeforeWidget();
     }
   };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let armTimeout = () => {};
   const showChrome = () => {
     if (interactive || finished) return;
     interactive = true;
-    // Give the user the full window to solve the card, not what is left after the invisible attempt.
-    armTimeout();
     overlay.style.background = 'rgba(0,0,0,0.45)';
     overlay.style.pointerEvents = 'auto';
     card.style.cssText = `background:${dark ? '#1f2329' : '#fff'};color:${dark ? '#e6e8eb' : '#1f2329'};padding:20px 24px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);overflow:auto;text-align:center`;
@@ -169,50 +303,38 @@ export async function getTurnstileToken(siteKey: string, action: string): Promis
     card.focus();
   };
 
-  let widgetId: string | undefined;
+  // The backdrop blocks the page, so give the user a way out of a stuck challenge.
+  const cancelling = new AbortController();
+  cancel.onclick = () => cancelling.abort();
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (interactive) handleKeydown(e);
+  };
+  document.addEventListener('keydown', onKeyDown);
+  const widget: WidgetOptions = {
+    sitekey: siteKey,
+    action,
+    theme: dark ? 'dark' : 'light',
+    // The normal widget is 300px wide and overflows the card on narrow screens.
+    size: window.innerWidth < 380 ? 'compact' : 'normal',
+  };
+
+  // One card spans every attempt: each retry renders a fresh widget into the same container.
   try {
-    return await new Promise<string>((resolve, reject) => {
-      armTimeout = () => {
-        clearTimeout(timer);
-        timer = setTimeout(() => reject(new Error('turnstile-timeout')), CHALLENGE_TIMEOUT_MS);
-      };
-      armTimeout();
-      const settle = (fn: () => void) => {
-        clearTimeout(timer);
-        fn();
-      };
-      // The backdrop blocks the page, so give the user a way out of a stuck challenge.
-      const cancelChallenge = () => settle(() => reject(new Error('turnstile-cancelled')));
-      cancel.onclick = cancelChallenge;
-      onKeyDown = e => {
-        if (interactive) handleKeydown(e);
-      };
-      document.addEventListener('keydown', onKeyDown);
-      widgetId = turnstile.render(container, {
-        sitekey: siteKey,
-        action,
-        appearance: 'interaction-only',
-        theme: dark ? 'dark' : 'light',
-        // The normal widget is 300px wide and overflows the card on narrow screens.
-        size: window.innerWidth < 380 ? 'compact' : 'normal',
-        'before-interactive-callback': showChrome,
-        callback: token => settle(() => resolve(token)),
-        'error-callback': () => settle(() => reject(new Error('turnstile-error'))),
-        'expired-callback': () => settle(() => reject(new Error('turnstile-expired'))),
-      });
-    });
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await solveOnce(turnstile, container, widget, attempt, cancelling.signal, showChrome);
+      } catch (error) {
+        if (!(error instanceof TurnstileError) || !isRetryable(error) || attempt >= MAX_CHALLENGE_ATTEMPTS) throw error;
+        await retryDelay(cancelling.signal);
+      }
+    }
   } finally {
     finished = true;
-    clearTimeout(timer);
-    if (onKeyDown) document.removeEventListener('keydown', onKeyDown);
-    try {
-      if (widgetId !== undefined) turnstile.remove(widgetId);
-    } finally {
-      backgroundObserver.disconnect();
-      document.removeEventListener('focusin', containFocus);
-      overlay.remove();
-      for (const el of inertedByUs) el.removeAttribute('inert');
-      if (interactive) previouslyFocused?.focus();
-    }
+    document.removeEventListener('keydown', onKeyDown);
+    backgroundObserver.disconnect();
+    document.removeEventListener('focusin', containFocus);
+    overlay.remove();
+    for (const el of inertedByUs) el.removeAttribute('inert');
+    if (interactive) previouslyFocused?.focus();
   }
 }

@@ -336,6 +336,37 @@ describe('ModelHubService pulls', () => {
     });
   });
 
+  it('blocks a build with an unsupported quant in the detail and on pull', async () => {
+    const unsupported = build({ quant: 'Q4_K_L', ollamaRef: null, ollamaRefIssue: 'unsupported-quant' });
+    const { service, hub, runtime } = harness({ detail: detail({ builds: [unsupported] }) });
+
+    const view = await service.detail(REPO);
+    expect(view.ok && view.model.builds[0].blockedReason).toMatch(/cannot pull this quant/);
+
+    const result = await service.pull(request);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { kind: 'cannot-pull', message: expect.stringMatching(/cannot pull this quant/) },
+    });
+    expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    expect(runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('keeps an ambiguous build pullable through the verified ref', async () => {
+    const ambiguous = build({ ollamaRef: null, ollamaRefIssue: 'ambiguous' });
+    const { service, hub, runtime, pulls } = harness({ detail: detail({ builds: [ambiguous] }) });
+
+    const view = await service.detail(REPO);
+    expect(view.ok && view.model.builds[0].blockedReason).toBeNull();
+
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
+    expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
+    pulls[0].resolve();
+    await expect(result).resolves.toEqual({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
+  });
+
   it('aborts every pull on dispose', async () => {
     const { service, pulls } = harness();
     const result = service.pull(request);

@@ -143,3 +143,27 @@ describe('generateSignedUrl - cached URL reuse', () => {
     );
   });
 });
+
+describe('generateSignedUrl - derived cache expiry', () => {
+  const signedAt = new Date('2026-01-02T03:04:05Z');
+  const sigV4Url = (expiresSeconds: number) =>
+    `https://bucket.example.invalid/owned/file.txt?X-Amz-Date=20260102T030405Z&X-Amz-Expires=${expiresSeconds}`;
+
+  afterEach(() => vi.useRealTimers());
+
+  it('persists the clamped expiry on the FabFile row', async () => {
+    vi.useFakeTimers({ now: signedAt });
+    const adapter = adapters();
+    adapter.db.fabFiles.update = vi.fn();
+    vi.mocked(adapter.storage.generateSignedUrl).mockResolvedValue(sigV4Url(19 * 60));
+    const clampedExpiry = new Date(signedAt.getTime() + 19 * 60 * 1000);
+
+    const result = await generateSignedUrl(fabFile({ filePath: 'owned/file.txt' }), adapter);
+
+    expect(result.fileUrlExpireAt).toEqual(clampedExpiry);
+    expect(adapter.db.fabFiles.update).toHaveBeenCalledWith(
+      { id: 'f1', fileUrl: sigV4Url(19 * 60), fileUrlExpireAt: clampedExpiry },
+      { timestamps: false }
+    );
+  });
+});

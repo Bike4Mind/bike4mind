@@ -101,6 +101,24 @@ describe('projectService - listFiles', () => {
     );
   });
 
+  it('persists the expiry the signer granted, not the requested hour, for a clamped SigV4 URL', async () => {
+    const signedAt = new Date();
+    const amzDate = signedAt.toISOString().replace(/[-:]|\.\d{3}/g, '');
+    const clampedUrl = `https://bucket.example.invalid/doc.pdf?X-Amz-Date=${amzDate}&X-Amz-Expires=600`;
+    (mockStorage.getSignedUrl as Mock).mockResolvedValueOnce(clampedUrl);
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+      { id: 'file-doc', filePath: 'fab-files/doc.pdf', mimeType: 'application/pdf', moderationStatus: 'clean' },
+    ]);
+
+    const result = await listFiles(userId, { projectId }, adapters());
+
+    const expectedExpiry = new Date(Math.floor(signedAt.getTime() / 1000) * 1000 + 600 * 1000);
+    expect(result[0].fileUrlExpireAt).toEqual(expectedExpiry);
+    expect(mockFabFileRepo.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'file-doc', fileUrl: clampedUrl, fileUrlExpireAt: expectedExpiry })
+    );
+  });
+
   // isImageServeable gates on moderationStatus alone now (no mimeType
   // special-case) - a non-image with an unset/pending moderationStatus is held exactly
   // like an image, since the declared mimeType is client-controlled and only corrected by
