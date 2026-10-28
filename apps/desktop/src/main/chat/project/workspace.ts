@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
-import type { WorktreeRemoval } from '@shared/worktreeRemoval';
+import type { AppWorktree, WorktreeRemoval, WorktreeState } from '@shared/worktreeRemoval';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
@@ -401,6 +401,8 @@ async function removeWorktree(projectDirectory: string, path: string): Promise<v
 
 type InspectedWorktreeRemoval = WorktreeRemoval & { preservedRef?: string };
 
+type Inspection = { removal: InspectedWorktreeRemoval; state: WorktreeState };
+
 function containsPath(directory: string, path: string): boolean {
   const within = relative(directory, path);
   return !isAbsolute(within) && within !== '..' && !within.startsWith(`..${sep}`);
@@ -413,41 +415,47 @@ export function hasAppWorkspaceBranch(
   return !!project?.workspaceBranch?.startsWith(BRANCH_PREFIX);
 }
 
-/** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
-export async function inspectWorktreeRemoval(
-  project: ChatProject | undefined,
-  otherProjects: readonly (ChatProject | undefined)[]
-): Promise<InspectedWorktreeRemoval | null> {
-  if (!hasAppWorkspaceBranch(project)) return null;
-  const path = await canonical(project.workingDirectory);
-  if (!path) return null;
-  const container = await containerDirectory(project.directory);
-  const root = await canonical(appWorktreeRoot(container));
-  if (!root || root !== appWorktreeRoot(await realpath(container))) return null;
-  if (root === path || !containsPath(root, path)) return null;
-  const branch = project.workspaceBranch;
-  const entries = await listWorktrees(project.directory);
-  const entry = await registeredAt(entries, path);
-  if (entry?.branch !== branch || (await canonical(project.directory)) === path) return null;
-
-  const result = (reason: string | null): WorktreeRemoval => ({ path, branch, safe: reason === null, reason });
-  for (const other of entries) {
-    const otherPath = (await canonical(other.path)) ?? resolve(other.path);
-    if (otherPath !== path && containsPath(path, otherPath)) return result('Contains another worktree');
-  }
-  for (const other of otherProjects) {
+/** The first conversation project that uses this checkout, by location or by branch in the same repository. */
+async function ownerOf(
+  path: string,
+  branch: string,
+  container: string,
+  projects: readonly (ChatProject | undefined)[]
+): Promise<ChatProject | null> {
+  for (const other of projects) {
     if (!other) continue;
     const otherPath = (await canonical(other.workingDirectory)) ?? resolve(other.workingDirectory);
     const otherDirectory = (await canonical(other.directory)) ?? resolve(other.directory);
-    if (containsPath(path, otherPath) || containsPath(path, otherDirectory)) {
-      return result('Used by another conversation');
-    }
+    if (containsPath(path, otherPath) || containsPath(path, otherDirectory)) return other;
     if (other.workspaceBranch !== branch && other.branch !== branch) continue;
     // A matching branch name in another repository does not share this checkout.
-    if ((await canonical(await containerDirectory(other.directory))) === (await canonical(container))) {
-      return result('Used by another conversation');
-    }
+    if ((await canonical(await containerDirectory(other.directory))) === (await canonical(container))) return other;
   }
+  return null;
+}
+
+/**
+ * Whether one app checkout can go: uncertainty always keeps it. `bases` are the branch names its
+ * commits may be proven preserved on when it has no upstream.
+ */
+async function inspectCheckout(input: {
+  path: string;
+  branch: string;
+  container: string;
+  entries: readonly WorktreeEntry[];
+  others: readonly (ChatProject | undefined)[];
+  bases: readonly string[];
+}): Promise<Inspection> {
+  const { path, branch, container, entries, others, bases } = input;
+  const result = (reason: string | null, state: WorktreeState): Inspection => ({
+    removal: { path, branch, safe: reason === null, reason },
+    state,
+  });
+  for (const other of entries) {
+    const otherPath = (await canonical(other.path)) ?? resolve(other.path);
+    if (otherPath !== path && containsPath(path, otherPath)) return result('Contains another worktree', 'nested');
+  }
+  if (await ownerOf(path, branch, container, others)) return result('Used by another conversation', 'owned');
   const status = await git(path, ['status', '--porcelain', '-z', '--untracked-files=all']);
   if (status) {
     const records = status.split('\0');
@@ -456,7 +464,7 @@ export async function inspectWorktreeRemoval(
       count++;
       if (/^[RC]|^.[RC]/.test(records[index])) index++;
     }
-    return result(`${count} uncommitted file${count === 1 ? '' : 's'}`);
+    return result(`${count} uncommitted file${count === 1 ? '' : 's'}`, 'dirty');
   }
   const upstream = (await git(path, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
   // `branch -d` judges a branch with an upstream against that upstream alone, and a command-local
@@ -464,24 +472,117 @@ export async function inspectWorktreeRemoval(
   // upstream can prove preservation, or `-d` would refuse after the checkout is already gone.
   const references = upstream
     ? [upstream]
-    : project.branch && project.branch !== branch
-      ? [`refs/heads/${project.branch}`, `refs/remotes/origin/${project.branch}`, `refs/remotes/${project.branch}`]
-      : [];
+    : bases
+        .filter(base => base && base !== branch)
+        .flatMap(base => [`refs/heads/${base}`, `refs/remotes/origin/${base}`, `refs/remotes/${base}`]);
   let localOnly: number | null = null;
   for (const reference of references) {
     try {
       const count = Number((await git(path, ['rev-list', '--count', `${reference}..refs/heads/${branch}`])).trim());
-      if (count === 0) return { ...result(null), preservedRef: reference };
+      if (count === 0) {
+        const clean = result(null, 'clean');
+        return { ...clean, removal: { ...clean.removal, preservedRef: reference } };
+      }
       if (Number.isSafeInteger(count) && count > 0) localOnly = Math.min(localOnly ?? count, count);
     } catch {
       // A deleted upstream or base cannot prove that the commits were preserved.
     }
   }
-  return result(
-    localOnly === null
-      ? 'Cannot verify the upstream or base branch'
-      : `${localOnly} commit${localOnly === 1 ? '' : 's'} not pushed or merged`
-  );
+  return localOnly === null
+    ? result('Cannot verify the upstream or base branch', 'unverified')
+    : result(`${localOnly} commit${localOnly === 1 ? '' : 's'} not pushed or merged`, 'unpushed');
+}
+
+/** The container's app root when it is genuinely the canonical `<container>/.b4m/worktrees`. */
+async function canonicalWorktreeRoot(directory: string): Promise<{ container: string; root: string } | null> {
+  const container = await containerDirectory(directory);
+  const root = await canonical(appWorktreeRoot(container));
+  if (!root || root !== appWorktreeRoot(await realpath(container))) return null;
+  return { container, root };
+}
+
+/** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
+export async function inspectWorktreeRemoval(
+  project: ChatProject | undefined,
+  otherProjects: readonly (ChatProject | undefined)[]
+): Promise<InspectedWorktreeRemoval | null> {
+  if (!hasAppWorkspaceBranch(project)) return null;
+  const path = await canonical(project.workingDirectory);
+  if (!path) return null;
+  const location = await canonicalWorktreeRoot(project.directory);
+  if (!location) return null;
+  const { container, root } = location;
+  if (root === path || !containsPath(root, path)) return null;
+  const branch = project.workspaceBranch;
+  const entries = await listWorktrees(project.directory);
+  const entry = await registeredAt(entries, path);
+  if (entry?.branch !== branch || (await canonical(project.directory)) === path) return null;
+  const bases = project.branch ? [project.branch] : [];
+  return (await inspectCheckout({ path, branch, container, entries, others: otherProjects, bases })).removal;
+}
+
+const ORPHAN_BASES = ['main', 'master'];
+
+async function lastCommitOf(path: string): Promise<string | null> {
+  try {
+    return (await git(path, ['log', '-1', '--format=%cI'])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every checkout under the repository's app worktree root, with the conversation that uses it.
+ * Anything outside the root is never listed, and a hand-deleted folder is pruned first.
+ */
+export async function listAppWorktrees(
+  directory: string,
+  projects: readonly (ChatProject | undefined)[]
+): Promise<(AppWorktree & { preservedRef: string | null })[]> {
+  const location = await canonicalWorktreeRoot(directory);
+  if (!location) return [];
+  const { container, root } = location;
+  await git(directory, ['worktree', 'prune']);
+  const entries = await listWorktrees(directory);
+  const listed: (AppWorktree & { preservedRef: string | null })[] = [];
+  for (const entry of entries) {
+    const path = await canonical(entry.path);
+    if (!path || path === root || !containsPath(root, path)) continue;
+    const owner = await ownerOf(path, entry.branch ?? '', container, projects);
+    const lastCommit = await lastCommitOf(path);
+    if (!entry.branch?.startsWith(BRANCH_PREFIX)) {
+      listed.push({
+        path,
+        branch: entry.branch ?? '',
+        safe: false,
+        reason: 'Not a branch this app created',
+        owner: owner?.name ?? null,
+        lastCommit,
+        state: 'foreign',
+        preservedRef: null,
+      });
+      continue;
+    }
+    const { removal, state } = await inspectCheckout({
+      path,
+      branch: entry.branch,
+      container,
+      entries,
+      others: projects,
+      bases: ORPHAN_BASES,
+    });
+    listed.push({
+      path,
+      branch: removal.branch,
+      safe: removal.safe && !!removal.preservedRef,
+      reason: removal.safe && !removal.preservedRef ? 'Cannot verify the upstream or base branch' : removal.reason,
+      owner: owner?.name ?? null,
+      lastCommit,
+      state: removal.safe && !removal.preservedRef ? 'unverified' : state,
+      preservedRef: removal.preservedRef ?? null,
+    });
+  }
+  return listed;
 }
 
 export async function removeSessionWorktree(
