@@ -287,6 +287,41 @@ describe('ModelsScreen installed', () => {
       vi.useRealTimers();
     }
   });
+
+  it('keeps checking after consecutive down responses', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bridge.status = DOWN;
+      await mount();
+      const checks = calls.getStatus.mock.calls.length;
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        // IPC deserializes a fresh status object for each response.
+        bridge.status = { ...DOWN };
+        await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS));
+        expect(calls.getStatus).toHaveBeenCalledTimes(checks + attempt);
+        expect(q('models-runtime-status')?.dataset.state).toBe('down');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops checking when the screen closes while Ollama is down', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bridge.status = DOWN;
+      await mount();
+      const checks = calls.getStatus.mock.calls.length;
+
+      act(() => root?.unmount());
+      root = null;
+      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS * 3));
+      expect(calls.getStatus).toHaveBeenCalledTimes(checks);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('ModelsScreen explore', () => {
