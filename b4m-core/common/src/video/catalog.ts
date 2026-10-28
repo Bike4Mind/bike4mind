@@ -60,7 +60,8 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     defaultEnabled: true,
   },
   // Google shut this preview down on the Gemini API; its GA id is served only on Vertex, which the Veo adapter does
-  // not call.
+  // not call. Still priced so jobs made before then settle: audio is included in the per-second price, and a
+  // blocked clip is documented as not charged.
   'veo-3.1-fast-generate-preview': {
     provider: 'veo',
     displayName: 'Veo 3.1 Fast',
