@@ -106,31 +106,37 @@ export async function recordSubscriptionPaymentReward({
 
     if (await referralSubscriptionRewardRepository.findByInvoiceId(invoice.id)) return;
 
-    const stepsUsed = await referralSubscriptionRewardRepository.countClaimedSteps(payerId);
-    const step: ReferralRewardStep | null =
-      stepsUsed === 0 ? 'first_payment' : stepsUsed === 1 ? 'second_payment' : null;
-    if (!step) return;
-
     const holdDays = getSettingsValue(
       'ReferralHoldDays',
       settings,
       settingsMap.ReferralHoldDays.schema.parse(undefined)
     );
 
-    const reward = await referralSubscriptionRewardRepository.create(
-      {
-        invoiceId: invoice.id,
-        paymentIntentId: invoicePaymentIntentId(invoice),
-        payerId,
-        inviterId,
-        step,
-        credits: step === 'first_payment' ? firstCredits : secondCredits,
-        releaseAt: new Date(now.getTime() + holdDays * DAY_MS),
-      },
-      now
-    );
-    if (reward) {
-      logger.info('[referral] recorded subscription reward', { rewardId: reward.id, step, invoiceId: invoice.id });
+    // A null create means the invoice is taken or a concurrent invoice of this payer took the step; in the
+    // second case the step is recounted and this invoice takes the next one.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const stepsUsed = await referralSubscriptionRewardRepository.countClaimedSteps(payerId);
+      const step: ReferralRewardStep | null =
+        stepsUsed === 0 ? 'first_payment' : stepsUsed === 1 ? 'second_payment' : null;
+      if (!step) return;
+
+      const reward = await referralSubscriptionRewardRepository.create(
+        {
+          invoiceId: invoice.id,
+          paymentIntentId: invoicePaymentIntentId(invoice),
+          payerId,
+          inviterId,
+          step,
+          credits: step === 'first_payment' ? firstCredits : secondCredits,
+          releaseAt: new Date(now.getTime() + holdDays * DAY_MS),
+        },
+        now
+      );
+      if (reward) {
+        logger.info('[referral] recorded subscription reward', { rewardId: reward.id, step, invoiceId: invoice.id });
+        return;
+      }
+      if (await referralSubscriptionRewardRepository.findByInvoiceId(invoice.id)) return;
     }
   } catch (err) {
     logger.error('[referral] recording subscription reward failed', { invoiceId: invoice.id, payerId, err });
