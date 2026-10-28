@@ -224,7 +224,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       render: row => row.creditsSpent.toLocaleString(),
       sortValue: row => row.creditsSpent,
       numeric: true,
-      width: '7rem',
+      width: '8.5rem',
     },
     {
       id: 'apiKeysCreated',
@@ -232,7 +232,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       render: row => row.apiKeysCreated.toLocaleString(),
       sortValue: row => row.apiKeysCreated,
       numeric: true,
-      width: '5.5rem',
+      width: '7rem',
     },
   ];
 
