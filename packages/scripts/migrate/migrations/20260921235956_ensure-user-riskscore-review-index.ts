@@ -13,7 +13,7 @@ import { type MigrationFile } from './index';
  * IndexKeySpecsConflict.
  */
 const migration: MigrationFile = {
-  id: 20260921235957,
+  id: 20260921235956,
   name: 'ensure user riskScore review index',
 
   up: async () => {

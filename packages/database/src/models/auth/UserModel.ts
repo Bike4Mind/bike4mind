@@ -1420,7 +1420,7 @@ UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_i
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
-// 20260921235957 byte-for-byte.
+// 20260921235956 byte-for-byte.
 UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 'user_riskScore_review' });
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
