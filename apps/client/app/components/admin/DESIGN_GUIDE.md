@@ -201,7 +201,7 @@ Definition of done for any admin UI:
 
 - Text contrast at least 4.5:1, muted meta text included, in light and dark themes.
 - Every control is a real button, link or input reachable with Tab.
-- Focus is always visible: a 2 px accent ring.
+- Focus is always visible: one 2 px accent ring per control. A field (input, textarea, select, autocomplete) draws it on its rounded root; the native control inside never adds an outline of its own.
 - Dialogs trap focus, close on Esc and return focus to the button that opened them.
 - Icon-only buttons have an `aria-label`. Status is never shown by color alone.
 - Loading uses a skeleton shaped like the content. Empty, filtered-empty and error states each offer a next step.

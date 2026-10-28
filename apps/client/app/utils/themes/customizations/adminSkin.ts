@@ -54,6 +54,13 @@ export const IN_ADMIN_ROW = `*:where(${surface} :is(tbody tr, [role="row"])) &${
 
 /** `selector` inside the admin root but outside any excluded chrome; a pseudo-element goes last. */
 const inSurface = (selector: string, pseudoElement = '') => `${surface} ${selector}${notExcluded}${pseudoElement}`;
+/** `selector` in the admin root and in the admin dialogs and popups it opens. */
+const inAdminScope = (selector: string, pseudoElement = '') =>
+  [
+    inSurface(selector, pseudoElement),
+    `${adminDialogsMounted} :is(${dialogRoots}) ${selector}${notExcluded}${pseudoElement}`,
+    `${adminPopupsMounted} :is(${popupRoots}) ${selector}${pseudoElement}`,
+  ].join(', ');
 
 const admin = (token: string) => `var(--joy-palette-admin-${token})`;
 const tone = (name: string, part: 'foreground' | 'background') => admin(`status-${name}-${part}`);
@@ -255,7 +262,13 @@ const rootVariables = {
   '--joy-radius-xl': '16px',
 };
 
-const focusable = ':focus-visible:not(input, textarea, .MuiSelect-button)';
+const fieldRoots = '.MuiInput-root, .MuiTextarea-root, .MuiSelect-root, .MuiAutocomplete-root';
+/**
+ * A field has one focus indicator, the ring its root draws (`field` below), so the outline ring skips
+ * the root and the native control inside it. `adminFocusScope` in `admin/shared/adminStyles` reuses this.
+ */
+export const FIELD_FOCUS_PARTS = `input, textarea, .MuiSelect-button, ${fieldRoots}`;
+const focusable = `:focus-visible:not(${FIELD_FOCUS_PARTS})`;
 const helpIcons = ':is([data-testid="HelpOutlineIcon"], [data-testid="HelpIcon"], [data-testid="InfoOutlinedIcon"])';
 
 /**
@@ -295,11 +308,19 @@ export const adminSkinGlobalStyles = (theme: Theme) => ({
   ),
   // The app theme strips Joy's focus outline with !important; the extra specificity of the
   // attribute selector lets the 2px accent ring win back. Fields draw their own ring instead.
-  [`${inSurface(focusable)}, ${adminDialogsMounted} :is(${dialogRoots}) ${focusable}${notExcluded}, ${adminPopupsMounted} :is(${popupRoots}) ${focusable}`]:
-    {
-      outline: `2px solid ${admin('accent')} !important`,
-      outlineOffset: '2px',
-    },
+  [inAdminScope(focusable)]: {
+    outline: `2px solid ${admin('accent')} !important`,
+    outlineOffset: '2px',
+  },
+  // globals.css hides Joy's field ring through `[class*='JoyInput']`-style matches, which hit the
+  // emotion labels of dev builds (and `MuiSelect-root` everywhere); the admin field's ring is its
+  // only focus indicator, so it is restored here. The focus state in each selector outranks the global rule.
+  [inAdminScope('.MuiInput-root:focus-within')]: {
+    '--Input-focusedThickness': '2px !important',
+    '--Input-focusedHighlight': `${admin('accent')} !important`,
+  },
+  [inAdminScope('.MuiSelect-root.Mui-focusVisible')]: { '--Select-focusedHighlight': `${admin('accent')} !important` },
+  [inAdminScope(`:is(${fieldRoots})`, '::before')]: { opacity: '1 !important' },
   // Overlay scrollbars on every admin scroll area; the main frame, sidebar, tables and dialog bodies
   // also reserve the gutter (`adminScrollGutter`).
   [`${inSurface('*')}, ${adminDialogsMounted} :is(${dialogRoots})${notExcluded}, ${adminDialogsMounted} :is(${dialogRoots}) *${notExcluded}`]:
