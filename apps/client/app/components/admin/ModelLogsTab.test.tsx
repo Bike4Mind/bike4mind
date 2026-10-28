@@ -354,6 +354,33 @@ describe('ModelLogsTab', () => {
     expect(screen.getByRole('button', { name, pressed: true })).toBeTruthy();
   });
 
+  it.each(['Start Date', 'End Date'])('updates %s when the URL changes while unfocused', label => {
+    mocks.useModelLogs.mockReturnValue(queryResult({}));
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+    renderTab();
+
+    const input = screen.getByLabelText(label);
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsFrom: '2026-10-01', modelLogsTo: '2026-10-02' }));
+
+    expect(input).toHaveValue(label === 'Start Date' ? '2026-10-01' : '2026-10-02');
+  });
+
+  it.each(['Start Date', 'End Date'])('reconciles a rejected %s draft on blur', label => {
+    mocks.useModelLogs.mockReturnValue(queryResult({}));
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+    renderTab();
+
+    const input = screen.getByLabelText(label);
+    const originalDate = (input as HTMLInputElement).value;
+    act(() => input.focus());
+    // Clearing a date is normalized back to the default by the URL parser.
+    fireEvent.change(input, { target: { value: '' } });
+    expect(input).toHaveValue('');
+
+    act(() => input.blur());
+    expect(input).toHaveValue(originalDate);
+  });
+
   describe('while a filter change refetches', () => {
     // useModelLogs keeps previous data once a load has succeeded, so the filters only lose their
     // data after a failed first load: errored for the first query key, loading for any other.
