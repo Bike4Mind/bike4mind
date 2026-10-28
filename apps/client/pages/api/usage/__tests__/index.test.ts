@@ -158,6 +158,12 @@ describe('GET /api/usage - access', () => {
       expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
     });
 
+    it("keeps a full admin's API key without the ADMIN scope able to read another user's usage", async () => {
+      const { run } = call({ isAdmin: true, scopes: ['chat:read'], query: { ownerType: 'User', ownerId: OTHER_USER } });
+      await run();
+      expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
+    });
+
     it("lets a support:read delegate read another user's usage", async () => {
       const { run } = call({
         isAdmin: false,

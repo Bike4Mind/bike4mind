@@ -64,7 +64,7 @@ const handler = baseApi().get(async (req, res) => {
       await verifyOrgOwner({ id: req.user.id, isAdmin: true }, ownerId);
       viaDelegate = true;
     }
-  } else if (req.user.id !== ownerId) {
+  } else if (req.user.id !== ownerId && !req.user.isAdmin) {
     if (!canReadSupport) throw new ForbiddenError('You can only view your own usage');
     viaDelegate = true;
   }
