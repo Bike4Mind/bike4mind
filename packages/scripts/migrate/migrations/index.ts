@@ -178,6 +178,7 @@ import EnsureLakeSkippedFileIndexes from './20260921235989_ensure-lake-skipped-f
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note-status-index';
+import ReplaceCreditTransactionOwnerIndex from './20260921235957_replace-credit-transaction-owner-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 // Renumbered from 20260921235999 to 20260921235994 to resolve an id collision with
 // UnsetStoredDefaultForcedRetrievalFloor below, which merged into main first.
@@ -384,6 +385,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureLakeSkippedFileIndexes,
   EnsureOAuthGrantClientUserIndex,
   ReplaceReleaseNoteStatusIndex,
+  ReplaceCreditTransactionOwnerIndex,
   EnsureFabFileOwnedKeysetIndex,
   EnsureFabFileFilePathIndex,
   EnsureFabFileDerivedFromIndex,
