@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { HubGgufBuild, HubModelDetail, InstalledModel, LocalRuntime } from '@bike4mind/local-models';
+import type {
+  HardwareProfile,
+  HubGgufBuild,
+  HubModelDetail,
+  InstalledModel,
+  LocalRuntime,
+} from '@bike4mind/local-models';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -11,6 +17,19 @@ import { MODEL_TOOL_NAMES, registerModelTools, type ModelToolsDeps } from './mod
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const ENDPOINT = 'https://huggingface.co';
 const HOST = 'http://127.0.0.1:11500';
+
+const CPU_64: HardwareProfile = {
+  platform: 'linux',
+  arch: 'x64',
+  memoryKind: 'cpu',
+  totalMemoryBytes: 64 * 1024 ** 3,
+  gpuMemoryBytes: null,
+  gpuName: null,
+  gpuCount: 0,
+  chip: null,
+  diskFreeBytes: null,
+  confidence: 'high',
+};
 
 function build(quant: string, sizeBytes: number): HubGgufBuild {
   const path = `qwen2.5-0.5b-instruct-${quant.toLowerCase()}.gguf`;
@@ -114,6 +133,7 @@ async function setup(
     source?: RuntimeTarget['source'];
     registry?: ModelToolsDeps['ollamaRegistry'];
     defaultModel?: string;
+    machine?: ModelToolsDeps['machine'];
   } = {}
 ) {
   const runtime = fakeRuntime();
@@ -123,6 +143,7 @@ async function setup(
     ollamaRegistry: options.registry ?? (async () => manifest()),
     resolveRuntime: async () => ({ runtime, source: options.source ?? 'env' }),
     defaultModel: async () => options.defaultModel ?? 'qwen2.5:0.5b',
+    machine: options.machine ?? (async () => ({ hardware: CPU_64 })),
   };
   const server = new McpServer({ name: 'test', version: '0.0.0' });
   registerModelTools(server, deps);
@@ -156,7 +177,7 @@ describe('model tools', () => {
     const { tools } = await client.listTools();
     expect(tools.map(tool => tool.name)).toEqual([...MODEL_TOOL_NAMES]);
     const pull = tools.find(tool => tool.name === 'models_pull')!;
-    expect(Object.keys(pull.inputSchema.properties ?? {})).toEqual(['ref']);
+    expect(Object.keys(pull.inputSchema.properties ?? {})).toEqual(['ref', 'force']);
     expect(pull.description).toContain('No argument of this tool approves a download');
     const remove = tools.find(tool => tool.name === 'models_remove')!;
     expect(Object.keys(remove.inputSchema.properties ?? {})).toEqual(['name']);
@@ -349,6 +370,61 @@ describe('model tools', () => {
       expect(result.text).toContain(`${REPO} changed since you reviewed it (its license is now llama3.1)`);
       expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
       expect(runtime.pull).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('models_pull fit check', () => {
+    const big = () => fakeHub(detail({ builds: [build('Q4_K_M', 90_000_000_000)] }));
+
+    it('reports the verdict in the preview and the prompt', async () => {
+      const { call, prompts } = await setup({ elicit: accept });
+      const { data } = await call('models_pull', { ref: REPO });
+      expect(data.fit).toEqual({
+        verdict: 'fits',
+        detail: expect.stringContaining('Rough estimate from the file size'),
+      });
+      expect(prompts[0].params.message).toMatch(/\nFit: fits\. Rough estimate from the file size: about \d+ MB/);
+    });
+
+    it('refuses a too-large model before asking unless force is passed', async () => {
+      const { call, runtime, prompts } = await setup({ hub: big(), elicit: accept });
+      const { data } = await call('models_pull', { ref: REPO });
+      expect(data).toEqual(
+        expect.objectContaining({
+          status: 'too-large',
+          downloaded: false,
+          fit: expect.objectContaining({ verdict: 'too-large' }),
+        })
+      );
+      expect(data.message).toContain('force: true only if the user then asks');
+      expect(prompts).toEqual([]);
+      expect(runtime.pull).not.toHaveBeenCalled();
+    });
+
+    it('still asks the user when force is passed for a too-large model', async () => {
+      const { call, runtime, prompts } = await setup({ hub: big(), elicit: accept });
+      const { data } = await call('models_pull', { ref: REPO, force: true });
+      expect(data.status).toBe('pulled');
+      expect(prompts[0].params.message).toContain('Fit: too large.');
+      expect(runtime.pull).toHaveBeenCalled();
+    });
+
+    it('hands the terminal command --force when forced without elicitation', async () => {
+      const { call } = await setup({ hub: big() });
+      const { data } = await call('models_pull', { ref: REPO, force: true });
+      expect(data.command).toBe(`B4M_OLLAMA_HOST=${HOST} b4m models pull ${REPO}:Q4_K_M --force`);
+    });
+
+    it('never refuses on an unknown fit', async () => {
+      const { call, runtime } = await setup({
+        hub: big(),
+        elicit: accept,
+        machine: async () => ({ unknown: "This machine's memory could not be read" }),
+      });
+      const { data } = await call('models_pull', { ref: REPO });
+      expect(data.status).toBe('pulled');
+      expect(data.fit).toEqual({ verdict: 'unknown', detail: "This machine's memory could not be read." });
+      expect(runtime.pull).toHaveBeenCalled();
     });
   });
 
