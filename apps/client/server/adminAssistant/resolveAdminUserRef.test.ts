@@ -36,17 +36,6 @@ describe('resolveAdminUserRef', () => {
     await expect(resolveAdminUserRef({ userId: USER_ID })).resolves.toEqual({ id: USER_ID });
   });
 
-  it('treats null and empty-string fields as absent', async () => {
-    findById.mockResolvedValue({ id: USER_ID });
-
-    await resolveAdminUserRef({ userId: USER_ID, email: null });
-    await resolveAdminUserRef({ userId: USER_ID, email: '' });
-    expect(findById).toHaveBeenCalledTimes(2);
-    expect(findByEmail).not.toHaveBeenCalled();
-
-    await expect(resolveAdminUserRef({ userId: null, email: '' })).resolves.toBeNull();
-  });
-
   it('returns null for an unknown email', async () => {
     findByEmail.mockResolvedValue(null);
 
@@ -62,11 +51,9 @@ describe('AdminUserRefSchema', () => {
     expect(AdminUserRefSchema.safeParse({ email: 'a@example.com' }).success).toBe(true);
   });
 
-  it('accepts null or empty for the unused field and still requires exactly one', () => {
-    expect(AdminUserRefSchema.safeParse({ userId: USER_ID, email: null }).success).toBe(true);
-    expect(AdminUserRefSchema.safeParse({ userId: '', email: 'a@example.com' }).success).toBe(true);
-    expect(AdminUserRefSchema.safeParse({ userId: null, email: '' }).success).toBe(false);
-    expect(AdminUserRefSchema.safeParse({ userId: USER_ID, email: 'a@example.com' }).success).toBe(false);
+  it('rejects null and empty-string refs as invalid input', () => {
+    expect(AdminUserRefSchema.safeParse({ userId: USER_ID, email: null }).success).toBe(false);
+    expect(AdminUserRefSchema.safeParse({ userId: USER_ID, email: '' }).success).toBe(false);
   });
 
   it('tells the model to provide exactly one of userId or email', () => {

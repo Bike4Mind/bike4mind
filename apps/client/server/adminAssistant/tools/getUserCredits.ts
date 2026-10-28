@@ -41,10 +41,10 @@ export const getUserCreditsTool = defineAdminTool({
     });
     const transactions = fetched.slice(0, limit);
 
+    const isAdminAdjustment = (transaction: (typeof transactions)[number]) =>
+      'reason' in transaction && transaction.reason === ADMIN_ADJUSTMENT_REASON;
     const actorIdOf = (transaction: (typeof transactions)[number]) =>
-      'reason' in transaction && transaction.reason === ADMIN_ADJUSTMENT_REASON
-        ? readString(transaction.metadata?.actorId)
-        : undefined;
+      isAdminAdjustment(transaction) ? readString(transaction.metadata?.actorId) : undefined;
     const directory = await buildActorDirectory(
       transactions.map(actorIdOf).filter((id): id is string => id !== undefined)
     );
@@ -55,16 +55,16 @@ export const getUserCreditsTool = defineAdminTool({
         balance: user.currentCredits,
         truncated: fetched.length > limit,
         transactions: transactions.map(transaction => {
-          const isAdminAdjustment = 'reason' in transaction && transaction.reason === ADMIN_ADJUSTMENT_REASON;
+          const adminAdjustment = isAdminAdjustment(transaction);
           const actorId = actorIdOf(transaction);
-          const note = isAdminAdjustment ? readString(transaction.metadata?.note) : undefined;
+          const note = adminAdjustment ? readString(transaction.metadata?.note) : undefined;
           return {
             at: transaction.createdAt.toISOString(),
             type: transaction.type,
             amount: transaction.credits,
             ...('reason' in transaction && transaction.reason ? { reason: transaction.reason } : {}),
             ...(note ? { note } : {}),
-            ...(isAdminAdjustment
+            ...(adminAdjustment
               ? { actorName: actorId ? (directory.get(actorId)?.name ?? 'Unknown admin') : 'Unknown admin' }
               : {}),
           };

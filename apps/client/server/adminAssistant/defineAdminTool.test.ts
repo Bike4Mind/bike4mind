@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
 import { defineAdminTool } from './defineAdminTool';
+import { AdminUserRefFields, withExactlyOneUserRef } from './schemas';
 
 const makeContext = (isAdmin: boolean) => {
   const logger = { error: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
@@ -77,6 +78,21 @@ describe('defineAdminTool', () => {
 
     expect(tool.toolSchema.parameters.required).toEqual(['limit']);
     expect(tool.toolSchema.parameters.properties.days).toMatchObject({ default: 30 });
+  });
+
+  it('emits userId and email as plain string properties with no nested anyOf or const', () => {
+    const { context } = makeContext(true);
+    const tool = defineAdminTool({
+      name: 'admin_get_user',
+      description: 'dummy',
+      input: withExactlyOneUserRef(AdminUserRefFields.extend({ limit: z.number().default(5) })),
+      run: vi.fn(),
+    }).implementation(context, undefined);
+
+    const { properties } = tool.toolSchema.parameters;
+    expect(properties.userId).toMatchObject({ type: 'string' });
+    expect(properties.email).toMatchObject({ type: 'string' });
+    expect(JSON.stringify(tool.toolSchema.parameters)).not.toMatch(/anyOf|"const"|"null"/);
   });
 
   it('returns the run result as JSON for an admin', async () => {
