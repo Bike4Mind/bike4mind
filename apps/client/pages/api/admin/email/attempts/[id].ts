@@ -1,13 +1,12 @@
 import { emailSendAttemptRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const { id } = req.query as { id: string };
 
   const attempt = await emailSendAttemptRepository.findById(id);
