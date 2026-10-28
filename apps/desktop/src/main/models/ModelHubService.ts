@@ -255,6 +255,7 @@ function hubError(kind: ModelHubErrorKind, message: string, retryAfterMs?: numbe
 /** Maps local-models errors, which never carry the Hugging Face token, onto what the screen explains. */
 export function toModelHubError(error: unknown): ModelHubError {
   const fromHub = error instanceof LocalRuntimeError && error.runtimeId.startsWith('huggingface');
+  const fromRegistry = error instanceof LocalRuntimeError && error.runtimeId === 'ollama-registry';
   if (error instanceof HubRateLimitError)
     return hubError('rate-limited', 'Hugging Face is rate limiting this computer.', error.retryAfterMs);
   if (error instanceof HubAccessError)
@@ -266,7 +267,7 @@ export function toModelHubError(error: unknown): ModelHubError {
   if (error instanceof RuntimeConnectionError)
     return fromHub
       ? hubError('hub-unreachable', 'Could not reach Hugging Face. Check your connection and try again.')
-      : hubError('runtime-unavailable', 'Could not reach Ollama.');
+      : hubError('runtime-unavailable', fromRegistry ? 'Could not reach ollama.com.' : 'Could not reach Ollama.');
   if (error instanceof RuntimeHttpError && fromHub && error.status >= 500)
     return hubError('hub-unreachable', `Hugging Face answered with an error (HTTP ${error.status}). Try again later.`);
   if (error instanceof Error) return hubError('failed', error.message);
