@@ -3,6 +3,7 @@ import type { LocalChat } from '../chat/localChat';
 import type { OllamaLocal } from '../chat/OllamaLocal';
 import { credentialInput } from './ipc';
 import { LocalModels } from './LocalModels';
+import { credentialHeaders } from './ModelServerStore';
 
 function chatStub(): LocalChat {
   return {
@@ -41,6 +42,18 @@ describe('LocalModels', () => {
 });
 
 describe('credentialInput', () => {
+  it('keeps an over-long token whole so the store can reject it instead of saving it truncated', () => {
+    const token = 'a'.repeat(5_000);
+    const input = credentialInput({ type: 'bearer', token });
+    expect(input.type === 'bearer' && input.token.length).toBeGreaterThan(4_096);
+    expect(() => credentialHeaders(input)).toThrow(/longer than 4096/);
+    const header = credentialInput({ type: 'header', name: 'X-Key', value: token });
+    expect(() => credentialHeaders(header)).toThrow(/longer than 4096/);
+    expect(() => credentialHeaders(credentialInput({ type: 'header', name: 'x'.repeat(100), value: 'v' }))).toThrow(
+      /header name/
+    );
+  });
+
   it('turns anything malformed from the renderer into no credential', () => {
     expect(credentialInput(undefined)).toEqual({ type: 'none' });
     expect(credentialInput({ type: 'basic', token: 'x' })).toEqual({ type: 'none' });

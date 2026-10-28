@@ -47,7 +47,8 @@ interface StoreDocument extends Record<string, unknown> {
 
 export const MAX_MODEL_SERVERS = 20;
 const MAX_NAME_CHARS = 80;
-const MAX_SECRET_CHARS = 4_096;
+export const MAX_SECRET_CHARS = 4_096;
+export const MAX_HEADER_NAME_CHARS = 64;
 const MAX_LISTED_MODELS = 200;
 
 // RFC 9110 token characters.
@@ -78,7 +79,8 @@ export function credentialHeaders(credential: ModelServerCredentialInput): Recor
   if (credential.type === 'bearer') {
     const token = credential.token.trim();
     if (!token) throw new Error('Enter the token.');
-    if (token.length > MAX_SECRET_CHARS || INVALID_HEADER_VALUE.test(token) || /\s/.test(token)) {
+    if (token.length > MAX_SECRET_CHARS) throw new Error(`The token is longer than ${MAX_SECRET_CHARS} characters.`);
+    if (INVALID_HEADER_VALUE.test(token) || /\s/.test(token)) {
       throw new Error('The token contains a control character, a space or a character HTTP does not allow.');
     }
     return { authorization: `Bearer ${token}` };
@@ -88,7 +90,9 @@ export function credentialHeaders(credential: ModelServerCredentialInput): Recor
   if (!HEADER_NAME.test(name)) throw new Error('Enter a header name made of letters, digits and dashes.');
   if (RESERVED_HEADERS.has(name.toLowerCase())) throw new Error(`${name} cannot carry a credential.`);
   if (!value) throw new Error(`Enter the value for ${name}.`);
-  if (value.length > MAX_SECRET_CHARS || INVALID_HEADER_VALUE.test(value)) {
+  if (value.length > MAX_SECRET_CHARS)
+    throw new Error(`The value for ${name} is longer than ${MAX_SECRET_CHARS} characters.`);
+  if (INVALID_HEADER_VALUE.test(value)) {
     throw new Error(`The value for ${name} contains a control character or a character HTTP does not allow.`);
   }
   return { [name.toLowerCase()]: value };

@@ -11,6 +11,7 @@ import type {
   ModelServerView,
 } from '@shared/modelServers';
 import type { ModelServerRegistry } from './ModelServerRegistry';
+import { MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS } from './ModelServerStore';
 
 const text = (value: unknown, max = 4_096) => (typeof value === 'string' ? value.slice(0, max) : '');
 
@@ -22,11 +23,20 @@ function access(value: unknown): ModelServerAccess | undefined {
   return value === 'chat' || value === 'manage' ? value : undefined;
 }
 
+// One past the limit, so credentialHeaders rejects an over-long value instead of it being saved truncated.
+const credentialText = (value: unknown, max: number) => text(value, max + 1);
+
 /** The renderer is ours, but these reach the network: anything malformed becomes "no credential". */
 export function credentialInput(value: unknown): ModelServerCredentialInput {
   const raw = (value ?? {}) as Record<string, unknown>;
-  if (raw.type === 'bearer') return { type: 'bearer', token: text(raw.token) };
-  if (raw.type === 'header') return { type: 'header', name: text(raw.name, 64), value: text(raw.value) };
+  if (raw.type === 'bearer') return { type: 'bearer', token: credentialText(raw.token, MAX_SECRET_CHARS) };
+  if (raw.type === 'header') {
+    return {
+      type: 'header',
+      name: credentialText(raw.name, MAX_HEADER_NAME_CHARS),
+      value: credentialText(raw.value, MAX_SECRET_CHARS),
+    };
+  }
   return { type: 'none' };
 }
 
