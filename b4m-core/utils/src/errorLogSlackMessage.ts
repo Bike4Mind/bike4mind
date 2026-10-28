@@ -43,6 +43,21 @@ const FIELD_KEYS: { key: string; label: string }[] = [
   { key: 'sessionId', label: 'Session' },
 ];
 
+/** Metadata keys the card already shows or that only repeat the log line. */
+const CONTEXT_EXCLUDED_KEYS = new Set([
+  'message',
+  'msg',
+  'severity',
+  'level',
+  'timestamp',
+  'time',
+  'ts',
+  'error',
+  'stack',
+  'stage',
+]);
+const CONTEXT_RAW_MAX = 1000;
+
 const SEVERITY_STYLE: Record<string, { emoji: string; color: string }> = {
   error: { emoji: ':red_circle:', color: '#E01E5A' },
   fatal: { emoji: ':red_circle:', color: '#E01E5A' },
@@ -71,6 +86,31 @@ interface ErrorDetail {
   stack?: string;
 }
 
+const pick = (source: Record<string, unknown>, ...keys: string[]) => {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value) && value.every(line => typeof line === 'string')) return value.join('\n');
+  }
+  return undefined;
+};
+
+const toErrorDetail = (source: Record<string, unknown>): ErrorDetail => ({
+  code: pick(source, 'code'),
+  name: pick(source, 'name', 'errorType'),
+  message: pick(source, 'message', 'errorMessage'),
+  stack: pick(source, 'stack'),
+});
+
+/** The error the logger attached to the line, for messages that carry no JSON tail. */
+function metadataErrorDetail(metadata: Record<string, unknown>): ErrorDetail | undefined {
+  const error = metadata.error;
+  if (typeof error === 'string') return error ? { message: error } : undefined;
+  if (error && typeof error === 'object' && !Array.isArray(error))
+    return toErrorDetail(error as Record<string, unknown>);
+  return undefined;
+}
+
 /** The Node runtime prefixes unhandled-error lines with "<ts>\t<requestId>\t<LEVEL>\t". */
 const RUNTIME_PREFIX = /^\S+\t\S+\t[A-Z]+\t/;
 
@@ -87,23 +127,7 @@ export function splitErrorDetail(message: string): { headline: string; detail?: 
       const parsed: unknown = JSON.parse(trimmed.slice(brace));
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         const detail = parsed as Record<string, unknown>;
-        const pick = (...keys: string[]) => {
-          for (const key of keys) {
-            const value = detail[key];
-            if (typeof value === 'string') return value;
-            if (Array.isArray(value) && value.every(line => typeof line === 'string')) return value.join('\n');
-          }
-          return undefined;
-        };
-        return {
-          headline: trimmed.slice(0, brace).trim(),
-          detail: {
-            code: pick('code'),
-            name: pick('name', 'errorType'),
-            message: pick('message', 'errorMessage'),
-            stack: pick('stack'),
-          },
-        };
+        return { headline: trimmed.slice(0, brace).trim(), detail: toErrorDetail(detail) };
       }
     } catch {
       // Not JSON after all; the whole message is the headline.
@@ -133,10 +157,27 @@ export function stackFrames(stack: string | undefined): string[] {
     .filter(line => line.startsWith('at '));
 }
 
+/** Scalar metadata the card has no dedicated slot for (ids, status codes, model names), as one line. */
+function leftoverContext(metadata: Record<string, unknown>): string | undefined {
+  const known = new Set(FIELD_KEYS.map(({ key }) => key));
+  const entries: string[] = [];
+  for (const [key, value] of Object.entries(metadata)) {
+    if (known.has(key) || CONTEXT_EXCLUDED_KEYS.has(key)) continue;
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') continue;
+    const text = String(value);
+    if (!text) continue;
+    entries.push(`${key}: ${clip(text, FIELD_MAX)}`);
+  }
+  if (entries.length === 0) return undefined;
+  return clip(escape(clip(entries.join('  |  '), CONTEXT_RAW_MAX)), SECTION_TEXT_MAX);
+}
+
 export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWebhookPayload {
   const severity = input.severity.toLowerCase();
   const style = SEVERITY_STYLE[severity] ?? SEVERITY_STYLE.error;
-  const { headline, detail } = splitErrorDetail(input.message);
+  const split = splitErrorDetail(input.message);
+  const { headline } = split;
+  const detail = split.detail ?? metadataErrorDetail(input.metadata);
   const title = clip(errorTitle(headline, detail), HEADLINE_MAX);
   const route = clip(
     [metadataText(input.metadata, 'method'), metadataText(input.metadata, 'path')].filter(Boolean).join(' '),
@@ -175,6 +216,9 @@ export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWe
     }
     blocks.push(section(stackLines.join('\n')));
   }
+
+  const leftover = leftoverContext(input.metadata);
+  if (leftover) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: leftover }] });
 
   blocks.push({
     type: 'context',

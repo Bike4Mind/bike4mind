@@ -192,6 +192,91 @@ describe('formatErrorLogSlackMessage', () => {
   });
 });
 
+describe('metadata fallbacks', () => {
+  const contextTexts = (payload: ReturnType<typeof render>) =>
+    blocksOf(payload)
+      .filter(b => b.type === 'context')
+      .map(b => b.elements?.[0].text ?? '');
+
+  it('takes title and stack frames from metadata.error when the message has no JSON', () => {
+    const payload = render({
+      message: 'Request failed',
+      metadata: {
+        ...metadata,
+        error: { code: 'E_BOOM', name: 'TypeError', message: 'x is not a function', stack: oktaStack },
+      },
+    });
+    const blocks = blocksOf(payload);
+    expect(blocks[0].text?.text).toContain('Request failed: TypeError: x is not a function');
+    expect(blocks[1].fields?.map(f => f.text)).toContain('*Code*\nE_BOOM');
+    expect(blocks[2].text?.text).toContain('*First frame*');
+    expect(blocks[2].text?.text).toContain('at errorHandler');
+  });
+
+  it('joins a stack given as an array of lines in metadata.error', () => {
+    const payload = render({
+      message: 'Request failed',
+      metadata: { ...metadata, error: { message: 'boom', stack: ['Error: boom', '    at a (/x.js:1:1)'] } },
+    });
+    expect(blocksOf(payload)[2].text?.text).toContain('at a (/x.js:1:1)');
+  });
+
+  it('uses a string metadata.error as the error message', () => {
+    const payload = render({ message: 'Request failed', metadata: { ...metadata, error: 'connection reset' } });
+    expect(blocksOf(payload)[0].text?.text).toContain('Request failed: connection reset');
+  });
+
+  it('prefers the error parsed from the message over metadata.error', () => {
+    const payload = render({ metadata: { ...metadata, error: 'ignored text' } });
+    expect(blocksOf(payload)[0].text?.text).not.toContain('ignored text');
+  });
+
+  it('lists leftover scalar metadata in one context block before the CloudWatch link', () => {
+    const payload = render({
+      metadata: {
+        ...metadata,
+        questId: 'q1',
+        organizationId: 'org<1>',
+        statusCode: 502,
+        model: 'm&n',
+        retried: false,
+        nested: { a: 1 },
+        list: [1],
+        empty: '',
+      },
+    });
+    const contexts = contextTexts(payload);
+    expect(contexts).toHaveLength(2);
+    expect(contexts[0]).toBe(
+      'questId: q1  |  organizationId: org&lt;1&gt;  |  statusCode: 502  |  model: m&amp;n  |  retried: false'
+    );
+    expect(contexts[1]).toContain('Open in CloudWatch');
+  });
+
+  it('leaves out request fields, the log line itself and other excluded keys', () => {
+    const payload = render({
+      metadata: {
+        ...metadata,
+        userId: 'u1',
+        level: 'error',
+        timestamp: 't',
+        time: 't',
+        ts: 1,
+        msg: 'm',
+        stack: 's',
+        error: 'e',
+      },
+    });
+    expect(contextTexts(payload)).toHaveLength(1);
+  });
+
+  it('keeps the leftover block under the Slack context limit', () => {
+    const wide = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`key${i}`, '<&>'.repeat(40)]));
+    const [leftover] = contextTexts(render({ metadata: { ...metadata, ...wide } }));
+    expect(leftover.length).toBeLessThanOrEqual(3000);
+  });
+});
+
 describe('splitErrorDetail', () => {
   it('splits headline and JSON detail', () => {
     const { headline, detail } = splitErrorDetail('Failed {"code":"X","stack":"Error: x\\n    at a (b:1:1)"}');
