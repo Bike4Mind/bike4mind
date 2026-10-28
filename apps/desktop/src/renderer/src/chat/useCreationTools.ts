@@ -45,9 +45,7 @@ export function useCreationTools(
 }
 
 function sameTools(a: readonly CreationTool[], b: readonly CreationTool[]): boolean {
-  return (
-    a.length === b.length && a.every((tool, i) => tool.name === b[i].name && tool.spendsCredits === b[i].spendsCredits)
-  );
+  return a.length === b.length && a.every((tool, i) => tool.name === b[i].name);
 }
 
 /** Test seam: the cache outlives a test's render. */

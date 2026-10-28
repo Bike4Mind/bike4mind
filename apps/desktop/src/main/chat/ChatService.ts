@@ -923,7 +923,7 @@ export class ChatService {
   }
 
   /**
-   * What a turn on `model` would be offered to generate with: the same conditions runTurn reads
+   * What a turn on `model` would be offered to generate with: the same conditions runReply reads
    * for `media`, `video` and a model that takes no tools. Both lists come from the ModelCatalog's
    * caches, so a blank chat asking for this costs no more than the next turn will.
    */
@@ -934,10 +934,7 @@ export class ChatService {
       this.deps.models?.listVideoModels().catch(() => []),
     ]);
     if (catalog?.models.find(option => option.id === model)?.supportsTools === false) return [];
-    return offeredMediaToolNames({ media: true, video: video ?? [] }).map(name => ({
-      name,
-      spendsCredits: spendsCredits(name),
-    }));
+    return offeredMediaToolNames({ media: true, video: video ?? [] }).map(name => ({ name }));
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */

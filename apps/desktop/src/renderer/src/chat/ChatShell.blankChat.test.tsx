@@ -30,7 +30,7 @@ window.ResizeObserver ??= class {
   disconnect() {}
 } as unknown as typeof ResizeObserver;
 
-const tool = (name: string): CreationTool => ({ name, spendsCredits: true });
+const tool = (name: string): CreationTool => ({ name });
 const ALL_TOOLS = [
   'generate_image',
   'generate_speech',

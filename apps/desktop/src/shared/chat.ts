@@ -960,8 +960,6 @@ export interface ChatModelCatalog {
  */
 export interface CreationTool {
   name: string;
-  /** Asks before every call whatever the approval mode; see riskAssessment's spendsCredits. */
-  spendsCredits: boolean;
 }
 
 /**

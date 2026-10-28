@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CreationTool } from '@shared/chat';
 import { blankChatSubline, blankChatSuggestions, pickPrompt } from './blankChatSuggestions';
 
-const tool = (name: string): CreationTool => ({ name, spendsCredits: true });
+const tool = (name: string): CreationTool => ({ name });
 const ALL = ['generate_image', 'generate_speech', 'generate_sound_effect', 'generate_music', 'generate_video'].map(
   tool
 );
