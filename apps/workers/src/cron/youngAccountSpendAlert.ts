@@ -66,6 +66,13 @@ export function formatYoungAccountSpendMessage(
 
 const scheduledEventSchema = z.object({ time: z.iso.datetime() });
 
+// The SST Cron target input is the literal `{}`, with no scheduled timestamp.
+function windowEnd(event: unknown): Date {
+  const hasTime = typeof event === 'object' && event !== null && 'time' in event;
+  if (!hasTime) return new Date(Math.floor(Date.now() / HOUR_MS) * HOUR_MS);
+  return new Date(scheduledEventSchema.parse(event).time);
+}
+
 export async function handler(event: unknown) {
   const logger = new Logger().withMetadata({ cron: 'youngAccountSpendAlert', stage: Resource.App.stage });
 
@@ -75,7 +82,7 @@ export async function handler(event: unknown) {
 
   const thresholds = readYoungAccountSpendThresholds();
   // Event time stays fixed across delayed delivery and retries, so hourly windows stay adjacent.
-  const end = new Date(scheduledEventSchema.parse(event).time);
+  const end = windowEnd(event);
   const start = new Date(end.getTime() - HOUR_MS);
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);

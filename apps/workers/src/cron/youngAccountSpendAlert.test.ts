@@ -134,9 +134,25 @@ describe('young-account spend handler', () => {
     }
   });
 
-  it.each([{}, { time: 'invalid' }])('rejects a malformed scheduled event %j before connecting', async invalidEvent => {
-    await expect(handler(invalidEvent)).rejects.toThrow();
+  it('rejects a malformed scheduled event time before connecting', async () => {
+    await expect(handler({ time: 'invalid' })).rejects.toThrow();
     expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it('queries the previous wall-clock hour when the SST cron event carries no time', async () => {
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-26T11:05:00Z'));
+      expect(await handler({})).toMatchObject({ status: 'ok' });
+      expect(mocks.findYoungAccountSpend).toHaveBeenCalledWith(
+        new Date('2026-10-26T10:00:00Z'),
+        new Date('2026-10-26T11:00:00Z'),
+        10
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('posts to Slack when a ceiling is exceeded', async () => {
