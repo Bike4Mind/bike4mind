@@ -91,6 +91,32 @@ describe('SystemPromptsTab - a pinned file that can no longer be loaded', () => 
     await waitFor(() => expect(screen.queryByTestId('system-prompt-unavailable-row')).toBeNull());
   });
 
+  it('offers removal after a 404 even when a previously loaded file is still cached', async () => {
+    mocks.useGetFabFile.mockImplementation((id: string) => ({
+      data: {
+        id,
+        fileName: id === 'live' ? 'style-guide.md' : 'cached.md',
+        mimeType: 'text/markdown',
+      },
+      isLoading: false,
+      error: id === 'gone' ? httpError(404) : null,
+    }));
+    renderTab();
+
+    expect(screen.getByTestId('system-prompt-unavailable-row')).toBeTruthy();
+    expect(screen.queryByText('cached.md')).toBeNull();
+    expect(screen.getByText('style-guide.md')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('system-prompt-unavailable-remove-btn'));
+
+    await waitFor(() =>
+      expect(mocks.updateUserToServer).toHaveBeenCalledWith('u1', {
+        systemFiles: [{ fileId: 'live', enabled: true }],
+      })
+    );
+    await waitFor(() => expect(screen.queryByTestId('system-prompt-unavailable-row')).toBeNull());
+  });
+
   it.each([
     ['still loading', { data: undefined, isLoading: true, error: null }],
     ['failing with a 500', { data: undefined, isLoading: false, error: httpError(500) }],
