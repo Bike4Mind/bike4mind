@@ -323,18 +323,21 @@ describe('ModelLogsTab', () => {
   });
 
   describe('while a filter change refetches', () => {
-    // Loaded for the first query key, loading for any other, like a fresh TanStack Query key.
-    const loadOnlyFirstKey = () => {
+    // useModelLogs keeps previous data once a load has succeeded, so the filters only lose their
+    // data after a failed first load: errored for the first query key, loading for any other.
+    const failOnlyFirstKey = () => {
       let firstKey: string | undefined;
       mocks.useModelLogs.mockImplementation((options: unknown) => {
         const key = JSON.stringify(options);
         firstKey ??= key;
-        return key === firstKey ? queryResult({}) : queryResult({ data: undefined, isLoading: true, isSuccess: false });
+        return key === firstKey
+          ? queryResult({ data: undefined, isError: true, isSuccess: false })
+          : queryResult({ data: undefined, isLoading: true, isSuccess: false });
       });
     };
 
     it('keeps each typed character and focus in the search box', async () => {
-      loadOnlyFirstKey();
+      failOnlyFirstKey();
       act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
       renderTab();
 
@@ -346,7 +349,7 @@ describe('ModelLogsTab', () => {
     });
 
     it.each(['Start Date', 'End Date'])('keeps each typed year digit and focus in %s', label => {
-      loadOnlyFirstKey();
+      failOnlyFirstKey();
       act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
       renderTab();
 

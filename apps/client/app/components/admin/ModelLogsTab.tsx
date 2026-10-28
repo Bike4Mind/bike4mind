@@ -253,7 +253,6 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
             <Grid xs={12} md={6}>
               <Input
                 placeholder="Search logs..."
-                slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
                 value={searchQuery}
                 slotProps={{ input: { 'data-testid': 'model-logs-search-input' } }}
                 onChange={e => handleSearchChange(e.target.value)}
