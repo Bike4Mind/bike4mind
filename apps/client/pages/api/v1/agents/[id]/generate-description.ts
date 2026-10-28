@@ -5,13 +5,13 @@
  */
 import { generateAgentDescriptionContract } from '@bike4mind/common';
 import { generateAgentDescription } from '@server/agents/authoring/generateAgentDescription';
-import { findOwnedAgent, perUserRateLimit } from '@server/agents/v1AgentRoute';
+import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent, perUserRateLimit } from '@server/agents/v1AgentRoute';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 
 const handler = nextRouteForContract(generateAgentDescriptionContract, {
-  rateLimit: perUserRateLimit('POST /api/v1/agents/[id]/generate-description'),
+  rateLimit: perUserRateLimit(AUTHORING_RATE_LIMIT_BUCKET),
 }).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
   const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
