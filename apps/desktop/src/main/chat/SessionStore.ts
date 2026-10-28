@@ -513,7 +513,7 @@ export class SessionStore {
         .map(entry => join(this.baseDirectory, assertScopeKey(entry.name))),
     ];
     const projects: { project: ChatProject; title: string }[] = [];
-    const schema = z.object({ project: z.unknown().optional(), title: z.string().optional() });
+    const schema = z.object({ project: z.unknown().optional(), title: z.unknown().optional() });
     for (const directory of directories) {
       for (const name of await readdir(directory)) {
         if (!name.endsWith('.json')) continue;
@@ -522,7 +522,7 @@ export class SessionStore {
         if (record.project == null) continue;
         const project = normalizeProject(record.project);
         if (!project) throw new Error('Cannot verify all conversation workspaces');
-        projects.push({ project, title: record.title?.trim() || UNTITLED });
+        projects.push({ project, title: (typeof record.title === 'string' && record.title.trim()) || UNTITLED });
       }
     }
     return projects;

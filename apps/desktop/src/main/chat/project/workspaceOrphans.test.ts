@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -94,6 +94,24 @@ describe('listAppWorktrees', () => {
     );
     expect(byName(listed, 'direct')).toMatchObject({ safe: false, state: 'owned', owner: 'Fix the login bug' });
     expect(byName(listed, 'child')).toMatchObject({ safe: false, state: 'owned', owner: 'Local child' });
+  });
+
+  it('calls an owner with no usable title by the untitled name rather than failing the scan', async () => {
+    const directory = await repo();
+    const held = await addWorktree(directory, 'held');
+    const sessions = await mkdtemp(join(tmpdir(), 'b4m-orphan-sessions-'));
+    roots.push(sessions);
+    const store = new SessionStore(sessions, 'test-model');
+    await store.create('test-model', {
+      project: projectFor(directory, held.path, { workspaceBranch: held.branch }),
+    });
+    for (const name of await readdir(sessions, { recursive: true })) {
+      if (!name.endsWith('.json')) continue;
+      const file = join(sessions, name);
+      const record = JSON.parse(await readFile(file, 'utf8'));
+      if (record.project) await writeFile(file, JSON.stringify({ ...record, title: null }));
+    }
+    expect((await store.workspaceOwnersExcept('')).map(owner => owner.title)).toEqual(['New chat']);
   });
 
   it('holds every checkout while a workspace is being prepared', async () => {

@@ -1624,11 +1624,16 @@ export class ChatService {
     };
     const wanted = await containerOf(directory);
     if (!wanted) return false;
+    const matches = async (candidates: Iterable<string>) => {
+      for (const known of new Set(candidates)) {
+        if ((await containerOf(known)) === wanted) return true;
+      }
+      return false;
+    };
+    // Recent folders first: the Settings view lists exactly those, so the store is rarely read.
+    if (await matches(recentFolders)) return true;
     const owners = await this.deps.store.workspaceOwnersExcept('');
-    for (const known of [...owners.map(owner => owner.project.directory), ...recentFolders]) {
-      if ((await containerOf(known)) === wanted) return true;
-    }
-    return false;
+    return matches(owners.map(owner => owner.project.directory));
   }
 
   async listWorktrees(directory: string): Promise<AppWorktree[]> {
