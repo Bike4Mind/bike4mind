@@ -76,9 +76,16 @@ export type AdminSavedViewCreate = {
 
 export type AdminSavedViewPatch = Partial<Pick<AdminSavedViewRecord, 'name' | 'shared' | 'view'>>;
 
+/** Bounded separately so other admins' shared views can never crowd the owner's own views out. */
+export type AdminSavedViewListLimits = { owned: number; shared: number };
+
 export type IAdminSavedViewRepository = {
-  /** The owner's views plus every other admin's shared views on `surface`, by name. */
-  listVisible: (ownerId: string, surface: AdminSavedViewSurface, limit: number) => Promise<AdminSavedViewRecord[]>;
+  /** The owner's views plus other admins' shared views on `surface`, by name. */
+  listVisible: (
+    ownerId: string,
+    surface: AdminSavedViewSurface,
+    limits: AdminSavedViewListLimits
+  ) => Promise<AdminSavedViewRecord[]>;
   countOwned: (ownerId: string, surface: AdminSavedViewSurface) => Promise<number>;
   /** Throws a duplicate-key error (11000) when the owner already has a view by that name. */
   create: (input: AdminSavedViewCreate) => Promise<AdminSavedViewRecord>;
@@ -92,13 +99,28 @@ export type IAdminSavedViewRepository = {
 class AdminSavedViewRepository implements IAdminSavedViewRepository {
   constructor(private readonly savedViewModel: Model<AdminSavedViewDocumentShape>) {}
 
-  async listVisible(ownerId: string, surface: AdminSavedViewSurface, limit: number): Promise<AdminSavedViewRecord[]> {
-    const documents = await this.savedViewModel
-      .find({ surface, $or: [{ ownerId: new Types.ObjectId(ownerId) }, { shared: true }] })
-      .sort({ name: 1, _id: 1 })
-      .limit(limit)
-      .lean<AdminSavedViewDocumentShape[]>();
-    return documents.map(toRecord);
+  async listVisible(
+    ownerId: string,
+    surface: AdminSavedViewSurface,
+    limits: AdminSavedViewListLimits
+  ): Promise<AdminSavedViewRecord[]> {
+    const owner = new Types.ObjectId(ownerId);
+    const byName = { name: 1, _id: 1 } as const;
+    const [owned, shared] = await Promise.all([
+      this.savedViewModel
+        .find({ ownerId: owner, surface })
+        .sort(byName)
+        .limit(limits.owned)
+        .lean<AdminSavedViewDocumentShape[]>(),
+      this.savedViewModel
+        .find({ surface, shared: true, ownerId: { $ne: owner } })
+        .sort(byName)
+        .limit(limits.shared)
+        .lean<AdminSavedViewDocumentShape[]>(),
+    ]);
+    return [...owned, ...shared]
+      .map(toRecord)
+      .sort((a, b) => (a.name === b.name ? a.id.localeCompare(b.id) : a.name < b.name ? -1 : 1));
   }
 
   async countOwned(ownerId: string, surface: AdminSavedViewSurface): Promise<number> {

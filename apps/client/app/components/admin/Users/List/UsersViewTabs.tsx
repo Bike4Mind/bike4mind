@@ -229,10 +229,13 @@ function SavedViewMenu({
  */
 export function UsersViewTabs({
   params,
+  search,
   summary,
   onApply,
 }: {
   params: UsersListParams;
+  /** The search box's live text; `params.search` trails it by the debounce, so a quick save would miss it. */
+  search: string;
   summary: AdminUsersSummary | undefined;
   /** A patch that carries `search` too, so the caller can mirror it into the search box. */
   onApply: (patch: Partial<UsersListParams> & { search: string }) => void;
@@ -318,7 +321,7 @@ export function UsersViewTabs({
           data-testid="users-save-view-dialog"
           onClose={() => setSaving(false)}
           onSubmit={async ({ name, shared }) => {
-            await createView.mutateAsync({ name, shared, params });
+            await createView.mutateAsync({ name, shared, params: { ...params, search } });
             toast.success(`Saved view "${name}"`);
           }}
         />

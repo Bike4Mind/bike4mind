@@ -2,8 +2,8 @@ import type { AdminSavedViewRecord, IAdminSavedViewRepository } from '@bike4mind
 import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import {
-  ADMIN_SAVED_VIEWS_LIST_LIMIT,
   ADMIN_SAVED_VIEWS_PER_ADMIN_MAX,
+  ADMIN_SAVED_VIEWS_SHARED_LIST_LIMIT,
   parseSavedView,
   type AdminSavedViewResponse,
   type AdminSavedViewSurface,
@@ -63,7 +63,10 @@ export async function listSavedViews(
   surface: AdminSavedViewSurface,
   { repository, logger }: SavedViewsDeps
 ): Promise<AdminSavedViewResponse[]> {
-  const records = await repository.listVisible(adminId, surface, ADMIN_SAVED_VIEWS_LIST_LIMIT);
+  const records = await repository.listVisible(adminId, surface, {
+    owned: ADMIN_SAVED_VIEWS_PER_ADMIN_MAX,
+    shared: ADMIN_SAVED_VIEWS_SHARED_LIST_LIMIT,
+  });
   return records.flatMap(record => toResponse(record, adminId, logger) ?? []);
 }
 

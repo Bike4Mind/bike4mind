@@ -50,7 +50,7 @@ describe('listSavedViews', () => {
     ]);
     const views = await listSavedViews(ADMIN, 'users', deps);
 
-    expect(repository.listVisible).toHaveBeenCalledWith(ADMIN, 'users', 100);
+    expect(repository.listVisible).toHaveBeenCalledWith(ADMIN, 'users', { owned: 50, shared: 50 });
     expect(views.map(view => [view.id[0], view.isOwner])).toEqual([
       ['1', true],
       ['2', false],

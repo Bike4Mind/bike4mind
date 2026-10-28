@@ -19,10 +19,19 @@ describe('AdminSavedViewRepository', () => {
     await create(GRACE, 'Grace shared', true);
     await create(GRACE, 'Grace personal');
 
-    const visible = await adminSavedViewRepository.listVisible(ADA, 'users', 100);
+    const visible = await adminSavedViewRepository.listVisible(ADA, 'users', { owned: 50, shared: 50 });
     expect(visible.map(view => view.name)).toEqual(['Alpha', 'Grace shared', 'Zeta']);
     expect(visible[0]).toMatchObject({ ownerId: ADA, surface: 'users', shared: false, view: VIEW });
-    expect(await adminSavedViewRepository.listVisible(ADA, 'users', 2)).toHaveLength(2);
+  });
+
+  it('keeps the owner views when shared views fill the shared bound', async () => {
+    await create(ADA, 'Zeta', true);
+    await create(GRACE, 'Alpha', true);
+    await create(GRACE, 'Beta', true);
+    await create(GRACE, 'Gamma', true);
+
+    const visible = await adminSavedViewRepository.listVisible(ADA, 'users', { owned: 50, shared: 2 });
+    expect(visible.map(view => view.name)).toEqual(['Alpha', 'Beta', 'Zeta']);
   });
 
   it('rejects a duplicate name for the same owner but not for another admin', async () => {

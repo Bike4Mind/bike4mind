@@ -254,6 +254,7 @@ const UsersTab: React.FC = () => {
         <>
           <UsersViewTabs
             params={params}
+            search={search}
             summary={summary}
             onApply={patch => {
               setSearch(patch.search);

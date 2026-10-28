@@ -14,8 +14,8 @@ export type AdminSavedViewSurface = z.infer<typeof AdminSavedViewSurfaceSchema>;
 export const ADMIN_SAVED_VIEW_NAME_MAX_LENGTH = 60;
 /** Per admin per surface; creating one more answers 400. */
 export const ADMIN_SAVED_VIEWS_PER_ADMIN_MAX = 50;
-/** The list endpoint's bound: an admin's own views plus every shared one. */
-export const ADMIN_SAVED_VIEWS_LIST_LIMIT = 100;
+/** The list endpoint's bound on other admins' shared views; an admin's own views are bounded by PER_ADMIN_MAX. */
+export const ADMIN_SAVED_VIEWS_SHARED_LIST_LIMIT = 50;
 
 export const AdminSavedViewNameSchema = z.string().trim().min(1, 'Name the view').max(ADMIN_SAVED_VIEW_NAME_MAX_LENGTH);
 

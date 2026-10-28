@@ -196,6 +196,23 @@ describe('UsersTab saved views', () => {
     await waitFor(() => expect(screen.queryByTestId(`users-saved-view-chip-${id}`)).toBeNull());
   });
 
+  it('saves the search as typed, even before the debounce reaches the list', async () => {
+    renderTab();
+    fireEvent.change(await screen.findByTestId('admin-users-search-input'), { target: { value: 'ada' } });
+    fireEvent.click(screen.getByTestId('users-save-view-btn'));
+    fireEvent.change(await screen.findByTestId('users-save-view-dialog-name-input'), { target: { value: 'Ada' } });
+    fireEvent.click(screen.getByTestId('users-save-view-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        '/api/admin/saved-views',
+        expect.objectContaining({
+          view: expect.objectContaining({ params: expect.objectContaining({ search: 'ada' }) }),
+        })
+      )
+    );
+  });
+
   it('shows the server message when the name is taken', async () => {
     api.post.mockRejectedValue(
       Object.assign(new Error('409'), {
