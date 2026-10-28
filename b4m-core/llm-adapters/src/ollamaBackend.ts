@@ -6,6 +6,7 @@ import {
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
+  ollamaNumCtx,
   PermissionDeniedError,
   stripToolArtifactMarkup,
   type MessageContentObject,
@@ -63,21 +64,6 @@ function toOllamaToolArguments(args: unknown): Record<string, unknown> {
     // Falls through to the _raw wrapper.
   }
   return { _raw: args };
-}
-
-/**
- * Ceiling on the num_ctx we ask Ollama to allocate. Models advertise windows
- * far larger than a dev box can hold in KV cache (262K on qwen3.5), so the
- * useful value is the model's window capped at something affordable rather
- * than the advertised maximum. Override with OLLAMA_MAX_NUM_CTX.
- */
-const DEFAULT_MAX_NUM_CTX = 32768;
-
-/** The num_ctx OllamaBackend requests for a model reporting a `reported`-token window. */
-export function ollamaNumCtx(reported: number): number {
-  const configuredCap = Number(process.env.OLLAMA_MAX_NUM_CTX);
-  const cap = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : DEFAULT_MAX_NUM_CTX;
-  return Math.min(reported, cap);
 }
 
 export interface OllamaModelInfo {

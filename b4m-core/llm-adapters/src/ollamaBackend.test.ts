@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type IMessage } from '@bike4mind/common';
 import type { ChatRequest } from 'ollama';
-import { OllamaBackend, ollamaNumCtx } from './ollamaBackend';
+import { OllamaBackend } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 import { MAX_RECORDED_TOOL_RESULT_CHARS, TOOL_RESULT_TRUNCATION_NOTICE } from './recordToolResult';
 
@@ -317,22 +317,6 @@ describe('OllamaBackend.complete tool loop', () => {
     expect(toolFn).not.toHaveBeenCalled();
     expect(chat).toHaveBeenCalledTimes(1);
     expect(text).toContain('The math_evaluate tool takes');
-  });
-});
-
-describe('ollamaNumCtx', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it('caps the reported window at 32K unless OLLAMA_MAX_NUM_CTX sets another cap', () => {
-    expect(ollamaNumCtx(262144)).toBe(32768);
-    expect(ollamaNumCtx(Infinity)).toBe(32768);
-    expect(ollamaNumCtx(8192)).toBe(8192);
-    vi.stubEnv('OLLAMA_MAX_NUM_CTX', '65536');
-    expect(ollamaNumCtx(262144)).toBe(65536);
-    vi.stubEnv('OLLAMA_MAX_NUM_CTX', 'nonsense');
-    expect(ollamaNumCtx(262144)).toBe(32768);
   });
 });
 

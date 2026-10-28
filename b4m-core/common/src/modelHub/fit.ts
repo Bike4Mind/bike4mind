@@ -627,6 +627,19 @@ export function contextOptions(input: Omit<FitInput, 'context'>): Array<FitPlan 
     });
 }
 
+/**
+ * Ceiling on the num_ctx the Ollama backend (llm-adapters ollamaBackend.ts) asks Ollama to allocate. Models
+ * advertise windows far larger than a dev box can hold in KV cache (262K on qwen3.5). Override with OLLAMA_MAX_NUM_CTX.
+ */
+export const DEFAULT_MAX_NUM_CTX = 32768;
+
+/** The num_ctx the Ollama backend requests for a model reporting a `reported`-token window. */
+export function ollamaNumCtx(reported: number): number {
+  const configuredCap = Number(process.env.OLLAMA_MAX_NUM_CTX);
+  const cap = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : DEFAULT_MAX_NUM_CTX;
+  return Math.min(reported, cap);
+}
+
 export type SizeFitLevel = 'fits' | 'tight' | 'too-large';
 
 export interface SizeFit {
@@ -634,7 +647,7 @@ export interface SizeFit {
   /** The file plus the compute buffers at `context`; the KV cache is not in it, since the size gives no shape. */
   needBytes: number;
   budgetBytes: number;
-  /** Bytes past the budget that a layer split would move to system RAM; 0 when it all fits. */
+  /** Bytes past the budget, margin included; 0 when it all fits. */
   offloadBytes: number;
   cpuOnly: boolean;
   context: number;

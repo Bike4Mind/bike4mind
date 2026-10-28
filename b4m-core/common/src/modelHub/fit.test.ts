@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { ModelArchSchema, type ModelArch } from '../schemas/modelHub';
 import { MOE_35B_ARCH, machine } from './__fixtures__/hubManifest';
 import {
@@ -17,6 +17,7 @@ import {
   isCpuOnly,
   kvCacheBytes,
   memoryBudgets,
+  ollamaNumCtx,
   type FitInput,
   type HardwareProfile,
 } from './fit';
@@ -629,6 +630,22 @@ describe('memoryBudgets', () => {
       ramPool: 64 * GIB * FIT_CONSTANTS.discreteOffloadRamFraction,
       cpuOnly: false,
     });
+  });
+});
+
+describe('ollamaNumCtx', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('caps the reported window at 32K unless OLLAMA_MAX_NUM_CTX sets another cap', () => {
+    expect(ollamaNumCtx(262144)).toBe(32768);
+    expect(ollamaNumCtx(Infinity)).toBe(32768);
+    expect(ollamaNumCtx(8192)).toBe(8192);
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', '65536');
+    expect(ollamaNumCtx(262144)).toBe(65536);
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', 'nonsense');
+    expect(ollamaNumCtx(262144)).toBe(32768);
   });
 });
 

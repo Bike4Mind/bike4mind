@@ -3,8 +3,7 @@
  * @bike4mind/common, as Desktop rates Hugging Face builds) against this machine's hardware probe.
  */
 
-import { estimateFitFromSize, type HardwareProfile, type SizeFitLevel } from '@bike4mind/common';
-import { ollamaNumCtx } from '@bike4mind/llm-adapters';
+import { estimateFitFromSize, ollamaNumCtx, type HardwareProfile, type SizeFitLevel } from '@bike4mind/common';
 import { probeHardware } from '@bike4mind/local-models';
 import { formatBytes, type PullPlan } from './localModels.js';
 
