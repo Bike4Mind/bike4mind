@@ -429,11 +429,8 @@ export const formatCustomSlackMessage = (
   sections.push('\n👥 *Most Active Users (Last 24H)*');
   if (userActivity.topUsers && userActivity.topUsers.length > 0) {
     const topUsers = userActivity.topUsers.slice(0, 10); // Show top 10 instead of 20 for better readability
-    // Rank by spend; a list where nobody spent (e.g. org-billed usage) falls back to events so
-    // the engagement markers still mean something.
-    const maxCredits = topUsers[0].creditsSpent ?? 0;
-    const engagementByCredits = maxCredits > 0;
-    const maxEngagement = engagementByCredits ? maxCredits : topUsers[0].interactions;
+    // Ranked by events (CounterLogRepository.rankDailyTopUsers), so engagement is relative to the leader's events.
+    const maxEngagement = topUsers[0].interactions;
 
     topUsers.forEach((user, index) => {
       let medal = '  •';
@@ -445,8 +442,7 @@ export const formatCustomSlackMessage = (
       // Slack mrkdwn reserves & < > in both linked and plain text.
       const label = displayName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       const name = appUrl && user._id ? `<${toAbsoluteUrl(appUrl, adminUserProfilePath(user._id))}|${label}>` : label;
-      const engagement = engagementByCredits ? (user.creditsSpent ?? 0) : user.interactions;
-      const engagementLevel = getEngagementLevel(engagement, maxEngagement);
+      const engagementLevel = getEngagementLevel(user.interactions, maxEngagement);
       const spend = `${(user.creditsSpent ?? 0).toLocaleString()} credits`;
       const tag = user.isNew ? ' 🆕' : '';
 

@@ -27,7 +27,7 @@ export function useAnalyticsData(params?: UseAnalyticsDataParams) {
   const {
     activeSubTab,
     selectedOrganizations,
-    excludedOrgs,
+    exclusions,
     dateFilters,
     userActivityFilters,
     metadataFilters,
@@ -46,7 +46,7 @@ export function useAnalyticsData(params?: UseAnalyticsDataParams) {
   const userActivityRequest = buildUserActivityRequest({
     dateFilters,
     selectedOrganizations,
-    excludedOrgs,
+    exclusions,
     userActivityFilters,
     metadataFilters,
   });
@@ -56,11 +56,8 @@ export function useAnalyticsData(params?: UseAnalyticsDataParams) {
       'analytics',
       activeSubTab,
       selectedOrganizations,
-      // Include each excluded org separately in the query key to ensure
-      // the query is refetched when any of them change
-      excludedOrgs.millionOnMars,
-      excludedOrgs.unknown,
-      excludedOrgs.personal,
+      exclusions.noOrg,
+      exclusions.staff,
       // Use params dates if provided, otherwise use dateFilters
       params?.startDate || dateFilters.startDate,
       params?.endDate || dateFilters.endDate,
