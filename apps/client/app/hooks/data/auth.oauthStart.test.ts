@@ -107,7 +107,17 @@ describe('useStartOAuthSignIn', () => {
     await first;
     expect(location.href).toBe('/api/auth/google?turnstileToken=tok-1');
     await result.current('/api/auth/github');
-    expect(solveMock).toHaveBeenCalledTimes(2);
+    expect(solveMock).toHaveBeenCalledTimes(1);
+    expect(location.href).toBe('/api/auth/google?turnstileToken=tok-1');
+  });
+
+  it('allows another start once a challenge has failed', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValueOnce(new TurnstileCancelledError()).mockResolvedValueOnce('tok');
+    const { result } = renderHook(() => useStartOAuthSignIn(), { wrapper });
+    await expect(result.current('/api/auth/google')).rejects.toThrow(/cancelled/i);
+    await result.current('/api/auth/google');
+    expect(location.href).toBe('/api/auth/google?turnstileToken=tok');
   });
 
   it('rejects a cancelled challenge without reporting it or navigating', async () => {

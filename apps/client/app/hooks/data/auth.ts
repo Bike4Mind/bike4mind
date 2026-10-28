@@ -181,8 +181,10 @@ export function useStartOAuthSignIn() {
         : undefined;
       const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
       window.location.href = oauthStartUrl(startUrl, redirectTo, turnstileToken);
-    } finally {
+    } catch (error) {
+      // Only cleared on failure: assigning href does not unload the page synchronously.
       startingRef.current = false;
+      throw error;
     }
   };
 }
