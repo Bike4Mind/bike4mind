@@ -1,5 +1,12 @@
 import type { AdminUsersSummary } from '@client/app/utils/adminUsersFilter';
-import { CLEARED_FILTER_PARAMS, USERS_FILTER_KEYS, type UsersListParams, type UsersListView } from '../usersTabSearch';
+import { matchSavedView, type SavedViewValues } from '../../shared/matchSavedView';
+import {
+  CLEARED_FILTER_PARAMS,
+  DEFAULT_USERS_PARAMS,
+  USERS_FILTER_KEYS,
+  type UsersListParams,
+  type UsersListView,
+} from '../usersTabSearch';
 
 export type UsersBuiltInView = {
   id: 'all' | 'new' | 'highRisk' | 'suspended';
@@ -22,14 +29,21 @@ export const applyUsersView = (view: UsersBuiltInView): Partial<UsersListParams>
   ...view.filters,
 });
 
+const narrowsOrg = (orgSearch: readonly string[]) => orgSearch.length > 0 && !orgSearch.includes('all');
+
 /**
- * The view the current filters are exactly, if any. A view is its filters, not a stored id, so a
- * shared link or a hand-set filter that matches a view lights its tab up too.
+ * What a list view's filters are compared on: the single-choice filters, the tags, and the org
+ * list only when it narrows (an empty list and one holding 'all' both mean every org).
  */
+export const usersFilterValues = (params: UsersListView): SavedViewValues => ({
+  ...Object.fromEntries(USERS_FILTER_KEYS.map(key => [key, params[key]])),
+  tags: params.tags,
+  orgSearch: narrowsOrg(params.orgSearch) ? params.orgSearch : [],
+});
+
+/** The built-in view the current filters are exactly, if any. Sort, page size and grouping are not compared. */
 export function activeUsersView(params: UsersListParams): UsersBuiltInView['id'] | undefined {
-  const narrowsOrgOrTags = params.tags.length > 0 || (params.orgSearch.length > 0 && !params.orgSearch.includes('all'));
-  if (narrowsOrgOrTags) return undefined;
-  return USERS_BUILT_IN_VIEWS.find(view =>
-    USERS_FILTER_KEYS.every(key => params[key] === (view.filters as Partial<UsersListView>)[key])
+  return matchSavedView(USERS_BUILT_IN_VIEWS, usersFilterValues(params), view =>
+    usersFilterValues({ ...DEFAULT_USERS_PARAMS, ...applyUsersView(view) })
   )?.id;
 }

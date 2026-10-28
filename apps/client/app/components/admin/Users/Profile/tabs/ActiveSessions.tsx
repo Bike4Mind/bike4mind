@@ -15,6 +15,7 @@ import {
 } from '../../../shared';
 import { adminUpdateErrorMessage } from '../actions/useAdminUserUpdate';
 import { displayName, type AdminUserProfile } from '../userProfileModel';
+import { SupportAccessHistory } from './SupportAccessHistory';
 
 const CREATED_VIA_LABELS: Readonly<Record<AuthSessionCreatedVia, string>> = {
   otc: 'One-time code',
@@ -117,62 +118,65 @@ export const ActiveSessions: React.FC<{ user: AdminUserProfile }> = ({ user }) =
   };
 
   return (
-    <SectionCard
-      title="Active sessions"
-      body="custom"
-      action={
-        <Button
-          size="sm"
-          variant="outlined"
-          color="danger"
-          onClick={() => setTarget({ kind: 'all' })}
-          data-testid="user-sessions-revoke-all-btn"
-        >
-          Sign out everywhere
-        </Button>
-      }
-      data-testid="user-profile-sessions"
-    >
-      <DataTable
-        rows={sessions.data ?? []}
-        columns={columns}
-        getRowId={row => row.sid}
-        label="Active sessions"
-        loading={sessions.isLoading}
-        error={sessions.isError ? 'Sessions could not be loaded.' : undefined}
-        onRetry={() => void sessions.refetch()}
-        empty={
-          <Typography level="body-sm" sx={{ p: 2, color: 'admin.inkMuted' }}>
-            No active sessions.
-          </Typography>
+    <>
+      <SupportAccessHistory userId={user.id} />
+      <SectionCard
+        title="Active sessions"
+        body="custom"
+        action={
+          <Button
+            size="sm"
+            variant="outlined"
+            color="danger"
+            onClick={() => setTarget({ kind: 'all' })}
+            data-testid="user-sessions-revoke-all-btn"
+          >
+            Sign out everywhere
+          </Button>
         }
-        testId="user-sessions-table"
-        rowTestId={() => 'user-sessions-row'}
-      />
-      <Stack sx={{ px: 2, py: 1.5, borderTop: '1px solid', borderColor: 'admin.border' }}>
-        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-          Signing out one session ends it within minutes; signing out everywhere also forgets trusted devices and takes
-          effect immediately.
-        </Typography>
-      </Stack>
-      {target && (
-        <ActionDialog
-          open
-          onClose={() => setTarget(null)}
-          title={target.kind === 'one' ? `Sign out this session?` : `Sign ${name} out everywhere?`}
-          description={
-            target.kind === 'one'
-              ? `${oneSessionSubject(target.session)} will need to sign in again. Other sessions stay signed in.`
-              : 'Every session ends and trusted devices are forgotten, so the next sign-in asks for two-factor again.'
+        data-testid="user-profile-sessions"
+      >
+        <DataTable
+          rows={sessions.data ?? []}
+          columns={columns}
+          getRowId={row => row.sid}
+          label="Active sessions"
+          loading={sessions.isLoading}
+          error={sessions.isError ? 'Sessions could not be loaded.' : undefined}
+          onRetry={() => void sessions.refetch()}
+          empty={
+            <Typography level="body-sm" sx={{ p: 2, color: 'admin.inkMuted' }}>
+              No active sessions.
+            </Typography>
           }
-          reasonPresets={ADMIN_REASON_PRESETS.sessionRevoke}
-          confirmLabel={target.kind === 'one' ? 'Sign out session' : 'Sign out everywhere'}
-          tone="danger"
-          pending={revoke.isPending}
-          onConfirm={handleConfirm}
-          data-testid="user-sessions-revoke-dialog"
+          testId="user-sessions-table"
+          rowTestId={() => 'user-sessions-row'}
         />
-      )}
-    </SectionCard>
+        <Stack sx={{ px: 2, py: 1.5, borderTop: '1px solid', borderColor: 'admin.border' }}>
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+            Signing out one session ends it within minutes; signing out everywhere also forgets trusted devices and
+            takes effect immediately.
+          </Typography>
+        </Stack>
+        {target && (
+          <ActionDialog
+            open
+            onClose={() => setTarget(null)}
+            title={target.kind === 'one' ? `Sign out this session?` : `Sign ${name} out everywhere?`}
+            description={
+              target.kind === 'one'
+                ? `${oneSessionSubject(target.session)} will need to sign in again. Other sessions stay signed in.`
+                : 'Every session ends and trusted devices are forgotten, so the next sign-in asks for two-factor again.'
+            }
+            reasonPresets={ADMIN_REASON_PRESETS.sessionRevoke}
+            confirmLabel={target.kind === 'one' ? 'Sign out session' : 'Sign out everywhere'}
+            tone="danger"
+            pending={revoke.isPending}
+            onConfirm={handleConfirm}
+            data-testid="user-sessions-revoke-dialog"
+          />
+        )}
+      </SectionCard>
+    </>
   );
 };

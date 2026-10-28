@@ -97,6 +97,9 @@ export async function verifyJwtToken(
     if (decoded.kind === 'oauth') {
       throw new Error('OAuth access tokens are not accepted on this endpoint');
     }
+    if (decoded.impersonatedBy) {
+      throw new ForbiddenError('Impersonated sessions cannot use CLI or completion credentials.');
+    }
 
     // Reject a first-factor-only token: the mfaPending access token (issued pre-2FA, before the
     // second factor) must NOT drive these LLM/CLI surfaces. Mirrors the REST strategy's mfaPending
