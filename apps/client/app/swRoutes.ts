@@ -13,3 +13,17 @@ export function isApiPath(pathname: string): boolean {
   // do NOT match.
   return pathname === '/api' || pathname.startsWith('/api/');
 }
+
+/**
+ * Cloudflare Turnstile loads its script and widget frame from this origin. The service worker must
+ * never answer those requests: a worker fetch is checked against the CSP of the worker script, which
+ * is the policy from whichever build installed it, and `defaultCache` would otherwise proxy every
+ * cross-origin request through NetworkFirst. While a new worker is still precaching after a deploy,
+ * the old worker's policy keeps serving sign-in, so the challenge script is refused and the sign-in
+ * code or OAuth start fails. Letting the browser fetch natively keeps the document's own CSP in charge.
+ */
+export const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+
+export function bypassesServiceWorker(url: URL): boolean {
+  return url.origin === TURNSTILE_ORIGIN;
+}
