@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { getSlackDeps, getSlackDb } from './di/registry';
+import type { ISlackDevWorkspaceDocument } from '@bike4mind/common';
 import type { BaseStatePayload } from './di/types';
 import { getControlledScopes } from './manifestTemplate';
 
@@ -16,10 +17,18 @@ export interface OrgSlackConnectStatePayload extends BaseStatePayload {
  * Get the system's Slack app credentials for org OAuth flow.
  * Reuses the first active SlackDevWorkspace with OAuth credentials.
  */
-export async function getSystemSlackAppCredentials() {
-  const { slackDevWorkspaceRepository } = getSlackDb() as any;
+export async function getSystemSlackAppCredentials(): Promise<{
+  clientId: string;
+  clientSecret: string;
+  signingSecret: string | undefined;
+  appId: string;
+} | null> {
+  // DI types repositories as unknown; the bound implementation is the database SlackDevWorkspace repository.
+  const slackDevWorkspaceRepository = getSlackDb().slackDevWorkspaceRepository as {
+    findAllActiveWithCredentials(): Promise<ISlackDevWorkspaceDocument[]>;
+  };
   const workspaces = await slackDevWorkspaceRepository.findAllActiveWithCredentials();
-  const workspace = workspaces.find((ws: any) => ws.slackClientId && ws.slackClientSecret);
+  const workspace = workspaces.find(ws => ws.slackClientId && ws.slackClientSecret);
 
   if (!workspace || !workspace.slackClientId || !workspace.slackClientSecret) {
     logger.error('[ORG-SLACK] No system Slack app with OAuth credentials found');
