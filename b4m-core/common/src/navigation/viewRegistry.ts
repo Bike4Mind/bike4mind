@@ -384,10 +384,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.subscribers',
     section: 'admin',
-    label: 'Subscribers',
-    description: 'Manage subscriber waitlist and access approvals',
+    label: 'Waitlist',
+    description: 'Manage the waitlist and send invites to people waiting for access',
     navigationType: 'tab',
-    target: '12', // AdminTab.Subscribers
+    target: '12', // AdminTab.Waitlist
     keywords: ['subscribers', 'waitlist', 'approvals', 'signups'],
     requiresAdmin: true,
   },

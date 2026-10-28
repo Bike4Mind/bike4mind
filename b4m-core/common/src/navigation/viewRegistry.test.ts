@@ -37,6 +37,14 @@ describe('VIEW_REGISTRY descriptions', () => {
   });
 });
 
+describe('VIEW_REGISTRY admin waitlist', () => {
+  it('labels the waitlist tab Waitlist and keeps its tab target', () => {
+    const view = getViewById('admin.subscribers');
+    expect(view?.label).toBe('Waitlist');
+    expect(view?.target).toBe('12');
+  });
+});
+
 describe('VIEW_REGISTRY opti family consoles', () => {
   const optiActions = VIEW_REGISTRY.filter(v => v.section === 'opti' && v.navigationType === 'action');
   // Derived from the registry so a new family console cannot be added without its sub-tabs.
