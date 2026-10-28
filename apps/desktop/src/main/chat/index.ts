@@ -911,6 +911,21 @@ export function registerChat(
     if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
     return service.inspectSessionWorktreeRemoval(sessionId);
   });
+  ipcMain.handle(IPC_CHANNELS.chatListWorktrees, (_event, directory: unknown) => {
+    if (typeof directory !== 'string') throw new Error('Invalid project directory');
+    return service.listWorktrees(directory);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRemoveWorktrees, (_event, directory: unknown, paths: unknown) => {
+    if (typeof directory !== 'string') throw new Error('Invalid project directory');
+    if (paths !== undefined && (!Array.isArray(paths) || !paths.every(path => typeof path === 'string'))) {
+      throw new Error('Invalid worktree list');
+    }
+    return service.removeWorktrees(directory, paths);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRevealWorktree, (_event, directory: unknown, path: unknown) => {
+    if (typeof directory !== 'string' || typeof path !== 'string') throw new Error('Invalid worktree');
+    return service.revealWorktree(directory, path, listed => shell.showItemInFolder(listed));
+  });
   ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {
     if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
       throw new Error('Invalid delete request');

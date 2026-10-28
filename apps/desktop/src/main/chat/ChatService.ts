@@ -102,7 +102,10 @@ import { ProjectContextCache } from './project/projectContext';
 import {
   hasAppWorkspaceBranch,
   inspectWorktreeRemoval,
+  listAppWorktrees,
+  removeOrphanWorktree,
   removeSessionWorktree,
+  sweepSafeOrphans,
   prefetchBase,
   resolveWorkspace,
   type SpareWorktrees,
@@ -1587,6 +1590,30 @@ export class ChatService {
       return { ...inspection, safe: false, reason: 'Conversation is still running' };
     }
     return inspection;
+  }
+
+  listWorktrees(directory: string) {
+    return this.withWorkspaceBindings(async () =>
+      listAppWorktrees(directory, await this.deps.store.workspaceProjectsExcept(''))
+    );
+  }
+
+  /** Named paths, or every safe orphan when none are given; each is re-inspected as it is removed. */
+  removeWorktrees(directory: string, paths?: readonly string[]) {
+    return this.withWorkspaceBindings(async () => {
+      const projects = await this.deps.store.workspaceProjectsExcept('');
+      if (!paths) return sweepSafeOrphans(directory, projects);
+      const results = [];
+      for (const path of paths) results.push(await removeOrphanWorktree(directory, path, projects));
+      return results;
+    });
+  }
+
+  /** Only a path that is currently listed for this repository is handed to the file manager. */
+  async revealWorktree(directory: string, path: string, reveal: (path: string) => void): Promise<boolean> {
+    if (!(await this.listWorktrees(directory)).some(item => item.path === path)) return false;
+    reveal(path);
+    return true;
   }
 
   async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {

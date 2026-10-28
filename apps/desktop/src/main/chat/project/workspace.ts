@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
-import type { AppWorktree, WorktreeRemoval, WorktreeState } from '@shared/worktreeRemoval';
+import type { AppWorktree, WorktreeRemoval, WorktreeState, WorktreeSweepItem } from '@shared/worktreeRemoval';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
@@ -593,28 +593,63 @@ export async function removeSessionWorktree(
   if (!inspection?.safe || !inspection.preservedRef) {
     throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
   }
-  await git(project.directory, ['worktree', 'remove', inspection.path]);
+  await removeWorktreeAt(project.directory, inspection.path, inspection.branch, inspection.preservedRef);
+}
+
+/** Removes the checkout, then its branch with `-d` only, judged against the ref that proved it preserved. */
+async function removeWorktreeAt(directory: string, path: string, branch: string, preservedRef: string): Promise<void> {
+  await git(directory, ['worktree', 'remove', path]);
   try {
-    const upstream = (
-      await git(project.directory, ['for-each-ref', '--format=%(upstream)', `refs/heads/${inspection.branch}`])
-    ).trim();
+    const upstream = (await git(directory, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
     // Without an upstream, use the proven base rather than this checkout's possibly stale HEAD.
     // With one, the inspection already proved against that upstream, which is what `-d` checks.
     // Command-local settings never persist.
     const comparison = upstream
       ? []
-      : [
-          '-c',
-          `branch.${inspection.branch}.remote=.`,
-          '-c',
-          `branch.${inspection.branch}.merge=${inspection.preservedRef}`,
-        ];
-    await git(project.directory, [...comparison, 'branch', '-d', '--', inspection.branch]);
+      : ['-c', `branch.${branch}.remote=.`, '-c', `branch.${branch}.merge=${preservedRef}`];
+    await git(directory, [...comparison, 'branch', '-d', '--', branch]);
   } catch (err) {
     throw new Error(
-      `Worktree removed, but branch ${inspection.branch} was kept: ${err instanceof Error ? err.message : String(err)}`
+      `Worktree removed, but branch ${branch} was kept: ${err instanceof Error ? err.message : String(err)}`
     );
   }
+}
+
+/** Re-inspects at call time, so a checkout that became owned, dirty or unpushed since listing is skipped. */
+export async function removeOrphanWorktree(
+  directory: string,
+  path: string,
+  projects: readonly (ChatProject | undefined)[]
+): Promise<WorktreeSweepItem> {
+  const wanted = (await canonical(path)) ?? resolve(path);
+  const current = (await listAppWorktrees(directory, projects)).find(item => item.path === wanted);
+  if (!current) return { path, branch: '', status: 'skipped', message: 'No longer listed' };
+  const { branch, preservedRef } = current;
+  if (!current.safe || !preservedRef) {
+    return { path, branch, status: 'skipped', message: current.reason ?? 'Cannot verify the upstream or base branch' };
+  }
+  try {
+    await removeWorktreeAt(directory, current.path, branch, preservedRef);
+    return { path, branch, status: 'removed', message: null };
+  } catch (err) {
+    return { path, branch, status: 'failed', message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Removes every safe orphan; the rest are reported as skipped with their reason. */
+export async function sweepSafeOrphans(
+  directory: string,
+  projects: readonly (ChatProject | undefined)[]
+): Promise<WorktreeSweepItem[]> {
+  const results: WorktreeSweepItem[] = [];
+  for (const item of await listAppWorktrees(directory, projects)) {
+    results.push(
+      item.safe
+        ? await removeOrphanWorktree(directory, item.path, projects)
+        : { path: item.path, branch: item.branch, status: 'skipped', message: item.reason }
+    );
+  }
+  return results;
 }
 
 /**
