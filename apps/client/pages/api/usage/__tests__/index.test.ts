@@ -49,13 +49,14 @@ const ORG = '6650000000000000000000aa';
 const SELF = 'user-1';
 const OTHER_USER = 'user-2';
 
-function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object }) {
+function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object; adminPermissions?: string[] }) {
   const { req, res } = createMocks({
     method: 'GET',
     query: options.query ?? { ownerType: 'Organization', ownerId: ORG },
   });
   if (options.hasUser !== false) {
-    (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+    (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
+      adminPermissions: options.adminPermissions,
       isAdmin: options.isAdmin ?? false,
       id: SELF,
     };
@@ -148,6 +149,31 @@ describe('GET /api/usage - access', () => {
       const { run } = call({ isAdmin: true, query: { ownerType: 'User', ownerId: OTHER_USER } });
       await run();
       expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
+    });
+
+    it("lets a support:read delegate read another user's usage", async () => {
+      const { run } = call({
+        isAdmin: false,
+        adminPermissions: ['support:read'],
+        query: { ownerType: 'User', ownerId: OTHER_USER },
+      });
+      await run();
+      expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
+    });
+
+    it("refuses a delegate holding a different permission another user's usage", async () => {
+      const { run } = call({
+        isAdmin: false,
+        adminPermissions: ['settings:manage'],
+        query: { ownerType: 'User', ownerId: OTHER_USER },
+      });
+      await expect(run()).rejects.toThrow(/your own usage/i);
+    });
+
+    it('passes the org check as read-only platform access for a support:read delegate', async () => {
+      const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
+      await run();
+      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: true }, ORG);
     });
   });
 });

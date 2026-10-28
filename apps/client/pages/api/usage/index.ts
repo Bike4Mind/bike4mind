@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, creditTransactionRepository, userApiKeyRepository } from '@bike4mind/database';
 import {
   CreditHolderType,
+  hasAdminPermission,
   type IUsageDashboardResponse,
   type NamedApiKeyUsage,
   type UsageOwnerType,
@@ -46,9 +47,12 @@ const handler = baseApi().get(async (req, res) => {
 
   const { ownerType, ownerId, days = 30 } = QuerySchema.parse(req.query);
 
+  const canReadSupport = hasAdminPermission(req.user, 'support:read');
+
   if (ownerType === CreditHolderType.Organization) {
-    await verifyOrgOwner(req.user, ownerId);
-  } else if (!req.user.isAdmin && req.user.id !== ownerId) {
+    // Read-only allowance scoped to this route: the shared owner check is left untouched.
+    await verifyOrgOwner({ id: req.user.id, isAdmin: req.user.isAdmin || canReadSupport }, ownerId);
+  } else if (!canReadSupport && req.user.id !== ownerId) {
     throw new ForbiddenError('You can only view your own usage');
   }
 
