@@ -454,8 +454,8 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.whats_new',
     section: 'admin',
-    label: 'What&apos;s New',
-    description: 'Manage What&apos;s New release notes and changelogs',
+    label: "What's New",
+    description: "Manage What's New release notes and changelogs",
     navigationType: 'tab',
     target: '32', // AdminTab.WhatsNewModals
     keywords: ['whats new', 'release notes', 'changelog', 'updates'],
