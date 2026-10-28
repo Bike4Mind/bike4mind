@@ -130,9 +130,20 @@ export const EnhanceAgentFieldRequestSchema = z
     field_name: z
       .string()
       .min(1)
-      .describe('The personality field being enhanced, for example `quirk` or `coreValues`.'),
-    current_value: z.string().trim().min(1).describe('The text to enhance. It stays the basis of the result.'),
-    agent_name: z.string().min(1).optional().describe("Overrides the agent's stored name in the prompt."),
+      .max(100)
+      .describe('The personality field being enhanced, for example `quirk` or `coreValues`. At most 100 characters.'),
+    current_value: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2000)
+      .describe('The text to enhance. It stays the basis of the result. At most 2000 characters.'),
+    agent_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe("Overrides the agent's stored name in the prompt. At most 200 characters."),
   })
   .strict();
 export type EnhanceAgentFieldRequest = z.infer<typeof EnhanceAgentFieldRequestSchema>;
