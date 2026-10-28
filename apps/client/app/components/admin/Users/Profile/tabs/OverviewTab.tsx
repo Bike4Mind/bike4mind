@@ -167,11 +167,15 @@ const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileA
   );
 };
 
-const RecentActivityCard: React.FC<{ userId: string; onViewAll: () => void }> = ({ userId, onViewAll }) => {
+const RecentActivityCard: React.FC<{ userId: string; onViewAll: () => void; onOpenCredits: () => void }> = ({
+  userId,
+  onViewAll,
+  onOpenCredits,
+}) => {
   const timeline = useUserTimeline(userId, { types: USER_TIMELINE_TYPES }, { pageSize: RECENT_ACTIVITY_COUNT });
   const [selected, setSelected] = useState<AuditEntry | null>(null);
   const items = (timeline.data?.pages[0]?.entries ?? []).map(entry =>
-    timelineItem(entry, { onOpenAudit: setSelected, onOpenCredits: onViewAll })
+    timelineItem(entry, { onOpenAudit: setSelected, onOpenCredits })
   );
 
   const body = () => {
@@ -307,10 +311,11 @@ type OverviewTabProps = {
   user: AdminUserProfile;
   onAction: (action: ProfileAction) => void;
   onViewActivity: () => void;
+  onViewCredits: () => void;
 };
 
 /** Two columns of cards that collapse to one below ~700 px (DESIGN_GUIDE.md section 5). */
-export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onViewActivity }) => (
+export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onViewActivity, onViewCredits }) => (
   <Box
     sx={{
       display: 'grid',
@@ -339,7 +344,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onView
       </SectionCard>
     </Stack>
     <Stack gap={2}>
-      <RecentActivityCard userId={user.id} onViewAll={onViewActivity} />
+      <RecentActivityCard userId={user.id} onViewAll={onViewActivity} onOpenCredits={onViewCredits} />
       <NotesCard user={user} />
     </Stack>
   </Box>

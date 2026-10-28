@@ -198,7 +198,14 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   const panel = () => {
     switch (tab) {
       case 'overview':
-        return <OverviewTab user={user} onAction={setAction} onViewActivity={() => onTabChange('activity')} />;
+        return (
+          <OverviewTab
+            user={user}
+            onAction={setAction}
+            onViewActivity={() => onTabChange('activity')}
+            onViewCredits={() => onTabChange('credits')}
+          />
+        );
       case 'activity':
         return <ActivityTab userId={user.id} onOpenCredits={() => onTabChange('credits')} />;
       case 'credits':

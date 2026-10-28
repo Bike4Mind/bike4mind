@@ -37,10 +37,17 @@ const creditRow = {
 
 const renderTab = () => {
   const onViewActivity = vi.fn();
-  render(<OverviewTab user={buildProfile()} onAction={vi.fn()} onViewActivity={onViewActivity} />, {
-    wrapper: ProfileTestWrapper,
-  });
-  return { onViewActivity };
+  const onViewCredits = vi.fn();
+  render(
+    <OverviewTab
+      user={buildProfile()}
+      onAction={vi.fn()}
+      onViewActivity={onViewActivity}
+      onViewCredits={onViewCredits}
+    />,
+    { wrapper: ProfileTestWrapper }
+  );
+  return { onViewActivity, onViewCredits };
 };
 
 beforeEach(() => {
@@ -57,16 +64,17 @@ describe('OverviewTab recent activity', () => {
     expect(rows[1]).toHaveTextContent('Bought credits');
   });
 
-  it('opens the audit drawer for an admin row and goes to Activity for a credit row', async () => {
+  it('opens the audit drawer for an admin row and the Credits tab for a credit row', async () => {
     mocks.get.mockResolvedValue({ data: { entries: [adminRow, creditRow], nextCursor: null } });
-    const { onViewActivity } = renderTab();
+    const { onViewActivity, onViewCredits } = renderTab();
 
     const [adminLink, creditLink] = await screen.findAllByTestId('user-profile-recent-activity-row-open-btn');
     fireEvent.click(adminLink);
     expect(await screen.findByTestId('audit-drawer')).toBeInTheDocument();
 
     fireEvent.click(creditLink);
-    expect(onViewActivity).toHaveBeenCalledTimes(1);
+    expect(onViewCredits).toHaveBeenCalledTimes(1);
+    expect(onViewActivity).not.toHaveBeenCalled();
   });
 
   it('says so when the timeline fails to load', async () => {
