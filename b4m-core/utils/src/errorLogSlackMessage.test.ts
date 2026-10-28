@@ -177,6 +177,16 @@ describe('formatErrorLogSlackMessage', () => {
     expect(stack.length).toBeLessThanOrEqual(3000);
   });
 
+  it('never loses the closing fence or splits an entity when an escape-heavy stack is clipped', () => {
+    const frames = Array.from({ length: 10 }, (_, i) => `    at f${i} (${'<&>'.repeat(300)}:${i}:1)`);
+    const message = `Boom ${JSON.stringify({ stack: ['Error: boom', ...frames].join('\n') })}`;
+    const stack = blocksOf(render({ message }))[2].text?.text ?? '';
+    expect(stack.length).toBeLessThanOrEqual(3000);
+    expect(stack.endsWith('...```')).toBe(true);
+    expect(stack).not.toMatch(/&[a-z]{0,3}\.\.\.```$/);
+    expect(stack.match(/```/g)).toHaveLength(2);
+  });
+
   it('coerces non-string metadata values instead of throwing', () => {
     const payload = render({ metadata: { ...metadata, requestId: 12345, userId: { id: 'u1' }, sessionId: null } });
     const fields = blocksOf(payload)[1].fields?.map(f => f.text) ?? [];

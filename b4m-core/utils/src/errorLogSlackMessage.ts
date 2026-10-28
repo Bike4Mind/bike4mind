@@ -70,8 +70,17 @@ const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').rep
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 3)}...` : s);
 
+/** Clips already-escaped text without leaving a half-cut entity such as "&am" at the end. */
+const clipEscaped = (s: string, max: number) => {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 3).replace(/&[a-z]{0,3}$/, '')}...`;
+};
+
 /** Escaping expands text after it was clipped, so the Slack limits are enforced on the escaped result. */
-const section = (text: string) => ({ type: 'section', text: { type: 'mrkdwn', text: clip(text, SECTION_TEXT_MAX) } });
+const section = (text: string) => ({
+  type: 'section',
+  text: { type: 'mrkdwn', text: clipEscaped(text, SECTION_TEXT_MAX) },
+});
 
 const metadataText = (metadata: Record<string, unknown>, key: string): string | undefined => {
   const value = metadata[key];
@@ -169,7 +178,7 @@ function leftoverContext(metadata: Record<string, unknown>): string | undefined 
     entries.push(`${key}: ${clip(text, FIELD_MAX)}`);
   }
   if (entries.length === 0) return undefined;
-  return clip(escape(clip(entries.join('  |  '), CONTEXT_RAW_MAX)), SECTION_TEXT_MAX);
+  return clipEscaped(escape(clip(entries.join('  |  '), CONTEXT_RAW_MAX)), SECTION_TEXT_MAX);
 }
 
 export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWebhookPayload {
@@ -212,7 +221,10 @@ export function formatErrorLogSlackMessage(input: ErrorLogMessageInput): SlackWe
         .map(line => clip(line, STACK_FRAME_MAX))
         .join('\n');
       const more = rest.length > STACK_LINES_MAX ? `\n... ${rest.length - STACK_LINES_MAX} more` : '';
-      stackLines.push(`\`\`\`${escape(clip(folded + more, STACK_BLOCK_MAX))}\`\`\``);
+      // Budget the escaped body so the closing fence is never the part that gets clipped off.
+      const prefixLength = `${stackLines.join('\n')}\n\`\`\``.length;
+      const body = clipEscaped(escape(clip(folded + more, STACK_BLOCK_MAX)), SECTION_TEXT_MAX - prefixLength - 3);
+      stackLines.push(`\`\`\`${body}\`\`\``);
     }
     blocks.push(section(stackLines.join('\n')));
   }
