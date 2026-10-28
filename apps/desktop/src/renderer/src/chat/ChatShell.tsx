@@ -240,7 +240,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     !opening && activeId && conversation.session?.mode === 'chat' && conversation.messages.length === 0
       ? activeId
       : null;
-  const creationTools = useCreationTools(`${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}`, blankChatId);
+  const creationTools = useCreationTools(
+    `${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}`,
+    blankChatId,
+    conversation.session?.model
+  );
   // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
   const [composerFill, setComposerFill] = useState<{ id: number; text: string } | null>(null);
   const fillSeq = useRef(0);

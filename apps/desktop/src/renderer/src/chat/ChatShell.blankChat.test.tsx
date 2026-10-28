@@ -39,11 +39,14 @@ const ALL_TOOLS = [
   'generate_video',
 ].map(tool);
 
-const summary = (mode: 'chat' | 'code'): ChatSessionSummary =>
+const HOSTED = 'claude-opus-4-5-20251101';
+
+const summary = (mode: 'chat' | 'code', model: string): ChatSessionSummary =>
   ({
     id: 'blank-1',
     title: 'New conversation',
     mode,
+    model,
     messageCount: 0,
     createdAt: '2026-10-01T00:00:00.000Z',
     updatedAt: '2026-10-01T00:00:00.000Z',
@@ -63,17 +66,21 @@ function quietBridge(overrides: Record<string, unknown>) {
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 const sendMessage = vi.fn(async () => ({ ok: true }));
+const listCreationTools = vi.fn();
 
 function stubBridge({
   tools,
   mode = 'chat',
   messages = [],
+  model = HOSTED,
 }: {
   tools: CreationTool[];
   mode?: 'chat' | 'code';
   messages?: ChatMessage[];
+  model?: string;
 }) {
-  const session = summary(mode);
+  const session = summary(mode, model);
+  listCreationTools.mockImplementation(async () => tools);
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
@@ -82,7 +89,8 @@ function stubBridge({
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
-        listCreationTools: async () => tools,
+        listCreationTools,
+        listArtifacts: async () => ({ artifacts: [], total: 0 }),
         sendMessage,
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
@@ -113,6 +121,7 @@ beforeEach(() => {
   );
   resetCreationToolsCache();
   sendMessage.mockClear();
+  listCreationTools.mockReset();
 });
 
 afterEach(() => {
@@ -223,7 +232,22 @@ describe('the blank chat', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it('does not render once the conversation has messages', async () => {
+  it("asks for the tools of the conversation's own model", async () => {
+    stubBridge({ tools: ALL_TOOLS });
+    await openBlankSession();
+
+    expect(listCreationTools).toHaveBeenCalledWith(HOSTED);
+  });
+
+  it('shows no media cards on a local model, without asking main', async () => {
+    stubBridge({ tools: ALL_TOOLS, model: 'local:ollama:qwen3:8b' });
+    await openBlankSession();
+
+    expect(cards().map(card => card.dataset.category)).toEqual(['write', 'ask']);
+    expect(listCreationTools).not.toHaveBeenCalled();
+  });
+
+  it('does not render, or ask for tools, once the conversation has messages', async () => {
     stubBridge({
       tools: ALL_TOOLS,
       messages: [{ id: 'm1', role: 'user', content: 'Hello', createdAt: '2026-10-01T00:00:01.000Z' }],
@@ -233,6 +257,7 @@ describe('the blank chat', () => {
     expect(document.querySelector('[data-testid="chat-thread"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="chat-empty-greeting"]')).toBeNull();
     expect(cards()).toHaveLength(0);
+    expect(listCreationTools).not.toHaveBeenCalled();
   });
 
   it('leaves the Code blank state as it was', async () => {
@@ -240,6 +265,10 @@ describe('the blank chat', () => {
     await openBlankSession();
 
     expect(cards()).toHaveLength(0);
-    expect(document.querySelector('[data-testid="chat-thread-empty"]')?.textContent).toContain('Send a message');
+    expect(document.querySelector('[data-testid="chat-empty-greeting"]')).toBeNull();
+    expect(document.querySelector('[data-testid="chat-code-workspace-setup"]')?.textContent).toContain(
+      'Set up this workspace'
+    );
+    expect(listCreationTools).not.toHaveBeenCalled();
   });
 });

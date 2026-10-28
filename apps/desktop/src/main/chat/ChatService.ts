@@ -923,14 +923,21 @@ export class ChatService {
   }
 
   /**
-   * What a turn would be offered to generate with: the same `media` and `video` conditions the
-   * turn's toolsForRequest call reads. The video list is the ModelCatalog's short cache, so a
-   * blank chat asking for this costs no more than the next turn will.
+   * What a turn on `model` would be offered to generate with: the same conditions runTurn reads
+   * for `media`, `video` and a model that takes no tools. Both lists come from the ModelCatalog's
+   * caches, so a blank chat asking for this costs no more than the next turn will.
    */
-  async listCreationTools(): Promise<CreationTool[]> {
-    if (!this.deps.media || !this.deps.getApiClient()) return [];
-    const video = (await this.deps.models?.listVideoModels().catch(() => [])) ?? [];
-    return offeredMediaToolNames({ media: true, video }).map(name => ({ name, spendsCredits: spendsCredits(name) }));
+  async listCreationTools(model: string): Promise<CreationTool[]> {
+    if (!this.deps.media || !this.deps.getApiClient() || isLocalModel(model)) return [];
+    const [catalog, video] = await Promise.all([
+      this.deps.models?.list().catch(() => undefined),
+      this.deps.models?.listVideoModels().catch(() => []),
+    ]);
+    if (catalog?.models.find(option => option.id === model)?.supportsTools === false) return [];
+    return offeredMediaToolNames({ media: true, video: video ?? [] }).map(name => ({
+      name,
+      spendsCredits: spendsCredits(name),
+    }));
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */

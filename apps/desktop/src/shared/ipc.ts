@@ -639,8 +639,8 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
-    /** The generation tools a Chat turn would be offered now; empty when signed out or unsupported. */
-    listCreationTools(): Promise<CreationTool[]>;
+    /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
+    listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
