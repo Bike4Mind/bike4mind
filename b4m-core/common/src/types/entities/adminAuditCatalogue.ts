@@ -56,6 +56,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
   'user.impersonation.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
 
