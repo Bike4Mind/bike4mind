@@ -145,6 +145,63 @@ describe('KimiBackend reasoning capture', () => {
     ]);
   });
 
+  it('hands the reasoning to executeTools:false callers so an agent replay keeps it', async () => {
+    // Agent loops (ReActAgent) run the tools themselves and replay each call through
+    // pushToolMessages(info.thinking); without `thinking` on the emit every replayed
+    // tool-call message lacked reasoning_content.
+    const { backend, create } = backendReturning([]);
+    create.mockResolvedValueOnce({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: '',
+            reasoning_content: 'search twice',
+            tool_calls: [
+              { id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+              { id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    create.mockResolvedValue({
+      choices: [{ index: 0, message: { content: 'done' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 12, completion_tokens: 6 },
+    });
+    const tools = [
+      { toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn: vi.fn() },
+    ];
+
+    const messages = userMessages();
+    let info: CompletionInfo | undefined;
+    await backend.complete(
+      ChatModels.KIMI_K3,
+      messages,
+      { stream: false, tools, executeTools: false },
+      async (_t, i) => {
+        info = i;
+      }
+    );
+    expect(info?.thinking).toEqual(['search twice']);
+
+    for (const used of info!.toolsUsed!) {
+      backend.pushToolMessages(
+        messages,
+        { id: used.id!, name: used.name, parameters: used.arguments as string },
+        'out',
+        info!.thinking
+      );
+    }
+    await backend.complete(ChatModels.KIMI_K3, messages, { stream: false, tools, executeTools: false }, async () => {});
+
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages.map(m => m.reasoning_content)).toEqual(['search twice', 'search twice']);
+  });
+
   it('throws a diagnosable error when reasoning consumed the whole output budget', async () => {
     // A K3 turn that hits max_completion_tokens mid-reasoning returns empty
     // content, which used to surface as a blank reply with no error at all.
@@ -516,6 +573,38 @@ describe('KimiBackend streaming reasoning', () => {
     // Raw, unescaped and without the <think> wrapper the UI stream gets.
     expect(toolCallMessages[0].reasoning_content).toBe('search twice');
     expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
+  });
+
+  it('hands the raw streamed reasoning to executeTools:false callers', async () => {
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'search ' } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: 'twice' } }] },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const info = (
+      await runStream(backend, ChatModels.KIMI_K3, {
+        tools: [
+          { toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn: vi.fn() },
+        ],
+        executeTools: false,
+      })
+    ).at(-1)!.info;
+
+    expect(info.thinking).toEqual(['search twice']);
   });
 
   it('keeps the prose from a delta that carries the monologue tail and the answer together', async () => {

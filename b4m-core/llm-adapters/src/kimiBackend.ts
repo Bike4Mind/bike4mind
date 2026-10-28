@@ -541,6 +541,8 @@ export class KimiBackend implements ICompletionBackend {
                 response.usage?.completion_tokens || 0
               ),
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+              // Agent loops replay this through pushToolMessages(thinkingBlocks[0]).
+              ...(reasoningContent ? { thinking: [reasoningContent] } : {}),
             });
             return;
           }
@@ -886,6 +888,7 @@ export class KimiBackend implements ICompletionBackend {
           outputTokens: accumOutputTokens + outputTokens,
           turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+          ...(streamedReasoning ? { thinking: [streamedReasoning] } : {}),
         });
       }
     }
