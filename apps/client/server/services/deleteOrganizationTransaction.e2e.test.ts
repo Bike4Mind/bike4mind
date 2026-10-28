@@ -8,9 +8,15 @@ import {
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
+  DataLakeAccessGrantModel,
+  DataLakeModel,
   Group,
+  LakeConfigChangeEventModel,
   Organization,
   User,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  lakeConfigChangeEventRepository,
   organizationRepository,
   groupRepository,
   userRepository,
@@ -44,6 +50,9 @@ const adapters = {
     organizations: organizationRepository,
     groups: groupRepository,
     users: userRepository,
+    dataLakes: dataLakeRepository,
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    lakeConfigChangeEvents: lakeConfigChangeEventRepository,
   },
 };
 
@@ -150,5 +159,75 @@ describe('deleteOrganization - transaction participation (replica set)', () => {
     expect(await pointerOf(owner.id)).toBeNull();
     expect(await pointerOf(memberId)).toBeNull();
     expect(String(await pointerOf(bystanderId))).toBe(otherOrgId);
+  });
+});
+
+describe('deleteOrganization - data-lake access lapse (replica set)', () => {
+  const createLake = async (name: string, organizationId: string, createdByUserId: string) => {
+    const doc = await DataLakeModel.create({
+      name,
+      slug: name,
+      fileTagPrefix: `${name}:`,
+      datalakeTag: `datalake:${name}`,
+      createdByUserId,
+      organizationId,
+      status: 'active',
+    });
+    return String(doc._id);
+  };
+  const grantOf = (dataLakeId: string, principalId: string) =>
+    DataLakeAccessGrantModel.collection.findOne({ dataLakeId, principalType: 'user', principalId });
+
+  const seedLakes = async () => {
+    const { owner, orgId, memberId, otherOrgId } = await seed();
+    await Organization.updateOne({ _id: orgId }, { $set: { users: [{ userId: memberId, permissions: [] }] } });
+    const orgLake = await createLake('org-lake', orgId, memberId);
+    const otherLake = await createLake('other-lake', otherOrgId, owner.id);
+    const grant = (dataLakeId: string, principalId: string, role: 'owner' | 'curator' | 'reader') =>
+      dataLakeAccessGrantRepository.upsertGrant({
+        dataLakeId,
+        principalType: 'user',
+        principalId,
+        role,
+        grantedByUserId: owner.id,
+        expiresAt: null,
+      });
+    await grant(orgLake, memberId, 'curator');
+    await grant(orgLake, 'outsider', 'reader');
+    await grant(otherLake, memberId, 'reader');
+    return { owner, orgId, memberId, orgLake, otherLake };
+  };
+
+  it("expires members' grants on the org's lakes, hands created lakes to the billing owner, and leaves the rest", async () => {
+    const { owner, orgId, memberId, orgLake, otherLake } = await seedLakes();
+
+    await withTransaction(() => organizationService.deleteOrganization(owner as any, { id: orgId }, adapters as any));
+
+    expect((await grantOf(orgLake, memberId))?.expiresAt).toBeInstanceOf(Date);
+    expect((await grantOf(orgLake, 'outsider'))?.expiresAt).toBeNull();
+    expect((await grantOf(otherLake, memberId))?.expiresAt).toBeNull();
+    expect(await grantOf(orgLake, owner.id)).toEqual(expect.objectContaining({ role: 'owner', expiresAt: null }));
+    expect(await LakeConfigChangeEventModel.countDocuments({ dataLakeId: orgLake })).toBe(2);
+    expect(
+      (await DataLakeModel.collection.findOne({ _id: new mongoose.Types.ObjectId(orgLake) }))?.lastUpdatedByUserId
+    ).toBe(owner.id);
+  });
+
+  it('rolls the lapse back with the rest when the transaction aborts', async () => {
+    const { owner, orgId, memberId, orgLake } = await seedLakes();
+
+    await expect(
+      withTransaction(async () => {
+        await organizationService.deleteOrganization(owner as any, { id: orgId }, adapters as any);
+        throw new Error('post-delete failure');
+      })
+    ).rejects.toThrow('post-delete failure');
+
+    expect((await grantOf(orgLake, memberId))?.expiresAt).toBeNull();
+    expect(await grantOf(orgLake, owner.id)).toBeNull();
+    expect(await LakeConfigChangeEventModel.countDocuments({ dataLakeId: orgLake })).toBe(0);
+    const lakeDoc = await DataLakeModel.collection.findOne({ _id: new mongoose.Types.ObjectId(orgLake) });
+    expect(lakeDoc).not.toBeNull();
+    expect(lakeDoc!.lastUpdatedByUserId ?? null).toBeNull();
   });
 });

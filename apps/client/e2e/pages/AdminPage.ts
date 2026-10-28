@@ -165,9 +165,15 @@ export class AdminPage extends BasePage {
     return this.page.locator('tr[data-testid^="admin-users-row-"]').filter({ hasText: text });
   }
 
-  /** Clicking a row opens the /admin/users/$userId profile page. */
+  /**
+   * Opens the /admin/users/$userId profile page by activating the row from the keyboard: at 1280x720
+   * the Users page header (signups chart, filters) leaves the scrolling list almost no height, so the
+   * bottom pager covers the row and a pointer click never lands.
+   */
   async openUserProfile(name: string) {
-    await this.getUserRow(name).locator('[data-testid^="admin-users-name-"]').click();
+    const row = this.getUserRow(name);
+    await row.focus();
+    await row.press('Enter');
     await expect(this.page.getByTestId('user-profile-view')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 

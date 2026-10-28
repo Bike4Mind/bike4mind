@@ -58,6 +58,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   IUserApiKeyDocument,
+  ApiKeyScope,
   ApiKeyScopeValue,
   getMeContract,
   getCreditBalanceContract,
@@ -170,7 +171,8 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
 
   const scopeValues = scopes.map(s => s.value);
   const readScopes = scopeValues.filter(value => value.endsWith(':read'));
-  const writeScopes = scopeValues.filter(value => value.endsWith(':write'));
+  // Publishing to the Skill Market is outward-facing, so it is never implied by a preset short of Full access.
+  const writeScopes = scopeValues.filter(value => value.endsWith(':write') && value !== ApiKeyScope.SKILLS_WRITE);
   return {
     scopeValues,
     groups: [...groups.values()],

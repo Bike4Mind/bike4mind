@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
+import { useUserLogout } from '@client/app/hooks/data/user';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
@@ -56,6 +57,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // Dismissing the verification prompt is a choice, not a failure: offer to continue instead.
   const setupVerificationCancelled = setupMFAIsError && isStepUpCancelled(setupMFAError);
   const verifyMFASetup = useVerifyMFASetup();
+  const { mutate: logout, isPending: logoutIsPending } = useUserLogout();
 
   // Shared by the auto-start effect and the manual retry button (see the enforced-block
   // screen). Calling mutate() clears the mutation's error state, so a retry re-opens the path
@@ -302,6 +304,18 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             We&apos;re setting up MFA for your account. Please wait...
           </Typography>
         )}
+
+        {/* An older session must pass an emailed "Confirm it's you" check before setup; a fresh
+            sign-in skips it (see setup.ts), so this is the way out for a user stuck at that check. */}
+        <Button
+          data-testid="mfa-enforcement-sign-out-btn"
+          variant="plain"
+          color="neutral"
+          onClick={() => logout(undefined, { onError: () => toast.error("Couldn't sign out. Please try again.") })}
+          loading={logoutIsPending}
+        >
+          Sign out and sign in again
+        </Button>
 
         {/* MFA Setup Modal */}
         {showMFASetup && setupMFAData && (

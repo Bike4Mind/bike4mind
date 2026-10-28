@@ -576,10 +576,20 @@ export function SkillUploadDialog({
             Ignored (not supported in Bike4Mind skills): {preview.dropped.join(', ')}
           </Alert>
         )}
+        {fields.files?.length ? (
+          <Alert color="neutral" variant="soft" data-testid="skill-upload-files">
+            Also uploads {fields.files.length} supporting {fields.files.length === 1 ? 'file' : 'files'}:{' '}
+            {fields.files.map(f => f.path).join(', ')}
+            {fields.files.some(f => f.path.startsWith('scripts/'))
+              ? '. Scripts run on the user\u2019s machine, so a person reviews them before the skill is shared.'
+              : ''}
+          </Alert>
+        ) : null}
         {preview.extraFileCount > 0 && (
           <Alert color="warning" variant="soft" data-testid="skill-upload-extra-files">
-            Only SKILL.md is uploaded; {preview.extraFileCount} other {preview.extraFileCount === 1 ? 'file' : 'files'}{' '}
-            in this folder {preview.extraFileCount === 1 ? 'is' : 'are'} not: {preview.extraFiles.join(', ')}
+            Only SKILL.md, scripts/ and references/ are uploaded; {preview.extraFileCount} other{' '}
+            {preview.extraFileCount === 1 ? 'file' : 'files'} in this folder{' '}
+            {preview.extraFileCount === 1 ? 'is' : 'are'} not: {preview.extraFiles.join(', ')}
             {preview.extraFileCount > preview.extraFiles.length ? ', ...' : ''}
           </Alert>
         )}
