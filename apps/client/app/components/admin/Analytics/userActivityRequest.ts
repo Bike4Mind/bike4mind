@@ -1,5 +1,5 @@
 import { METADATA_FIELD } from '@server/analytics/metadataFilterContract';
-import { ALL_VALUE } from './store';
+import { isAllOrganizations } from './store';
 import type { AnalyticsState, MetadataFilter } from './types';
 
 /** Display names as denormalised onto CounterLog.userOrganization. */
@@ -38,7 +38,7 @@ export function buildUserActivityRequest({
   userActivityFilters,
   metadataFilters,
 }: UserActivityRequestState): UserActivityRequest {
-  const isAllSelected = selectedOrganizations.includes(ALL_VALUE);
+  const isAllSelected = isAllOrganizations(selectedOrganizations);
 
   // "Add Filter" seeds a blank field when the current page carries no metadata to suggest from,
   // and the dropdown itself can suggest a key the allowlist rejects (leading digit/underscore,

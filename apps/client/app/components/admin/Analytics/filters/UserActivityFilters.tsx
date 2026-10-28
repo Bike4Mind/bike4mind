@@ -37,12 +37,7 @@ export const UserActivityFilters: React.FC<UserActivityFiltersProps> = ({ rows =
         Advanced Filters
       </Typography>
       <Stack spacing={2}>
-        <DateFilterComponent
-          startDate={dateFilters.startDate}
-          endDate={dateFilters.endDate}
-          onStartDateChange={value => setDateFilters({ ...dateFilters, startDate: value })}
-          onEndDateChange={value => setDateFilters({ ...dateFilters, endDate: value })}
-        />
+        <DateFilterComponent value={dateFilters} onChange={setDateFilters} />
 
         <Divider />
 

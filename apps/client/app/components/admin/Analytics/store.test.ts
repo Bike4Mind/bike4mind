@@ -53,6 +53,12 @@ describe('analytics store - page reset', () => {
     expect(page()).toBe(1);
   });
 
+  it('falls back to "All" when the last organization is deselected', () => {
+    useAnalyticsStore.getState().setSelectedOrganizations(['Acme']);
+    useAnalyticsStore.getState().setSelectedOrganizations([]);
+    expect(useAnalyticsStore.getState().selectedOrganizations).toEqual([ALL_VALUE]);
+  });
+
   it('returns to the first page when metadata filters change', () => {
     onPage(4);
     useAnalyticsStore.getState().setMetadataFilters([{ field: 'source', operator: 'exists' }]);

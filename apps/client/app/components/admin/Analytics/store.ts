@@ -1,14 +1,15 @@
 import { create } from 'zustand';
-import dayjs from 'dayjs';
 import { DEFAULT_PAGE_SIZE } from '@server/analytics/metadataFilterContract';
 import { AnalyticsState, AnalyticsSubTab } from './types';
-
-const getLocalDate = (daysOffset = 0) => {
-  const now = dayjs();
-  return now.add(daysOffset, 'day').format('YYYY-MM-DD');
-};
+import { DEFAULT_PRESET_DAYS, getPresetRange } from './dateRange';
 
 export const ALL_VALUE = 'all';
+
+/**
+ * An empty selection would filter on nothing, so it means "All": the label, the enabled
+ * exclusion checkboxes and the request then all describe the same state.
+ */
+export const isAllOrganizations = (selected: string[]) => selected.length === 0 || selected.includes(ALL_VALUE);
 
 export { DEFAULT_PAGE_SIZE };
 
@@ -26,10 +27,7 @@ export const useAnalyticsStore = create<AnalyticsState>(set => ({
     unknown: true,
     personal: true,
   },
-  dateFilters: {
-    startDate: getLocalDate(-7),
-    endDate: getLocalDate(),
-  },
+  dateFilters: getPresetRange(DEFAULT_PRESET_DAYS),
   userActivityFilters: {
     counterNameSearch: '',
     userEmailSearch: '',
@@ -39,7 +37,8 @@ export const useAnalyticsStore = create<AnalyticsState>(set => ({
   limit: DEFAULT_PAGE_SIZE,
   showUserActivityAdvancedFilters: false,
   setActiveSubTab: tab => set({ activeSubTab: tab, page: 1 }),
-  setSelectedOrganizations: orgs => set({ selectedOrganizations: orgs, page: 1 }),
+  setSelectedOrganizations: orgs =>
+    set({ selectedOrganizations: isAllOrganizations(orgs) ? [ALL_VALUE] : orgs, page: 1 }),
   toggleExcludedOrg: key =>
     set(state => ({
       excludedOrgs: {

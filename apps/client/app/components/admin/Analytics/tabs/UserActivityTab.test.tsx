@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -9,11 +9,12 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * genuinely empty result - that is why the outage went unnoticed. A failure must look like
  * a failure, and the row count must come from the server total, not the page length.
  */
-vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations: () => ({ data: [] }) }));
+const useGetAllOrganizations = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 import { UserActivityTab } from './UserActivityTab';
-import { useAnalyticsStore } from '../store';
+import { useAnalyticsStore, ALL_VALUE } from '../store';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -34,6 +35,7 @@ const renderTab = (props: Partial<React.ComponentProps<typeof UserActivityTab>> 
 
 describe('UserActivityTab', () => {
   beforeEach(() => {
+    useGetAllOrganizations.mockReturnValue({ data: [] });
     useAnalyticsStore.setState({ page: 1, limit: 25 });
   });
 
@@ -94,5 +96,25 @@ describe('UserActivityTab', () => {
     renderTab({ total: 4210, isFetching: false });
 
     expect(screen.getByTestId('user-activity-results')).toHaveStyle({ opacity: '1' });
+  });
+
+  it('falls back to All Organizations, with the exclusions enabled, when the last organization is deselected', () => {
+    useGetAllOrganizations.mockReturnValue({ data: [{ name: 'Acme' }] });
+    useAnalyticsStore.setState({ selectedOrganizations: [ALL_VALUE] });
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('user-activity-org-menu-btn'));
+    fireEvent.click(screen.getByTestId('user-activity-org-option-Acme'));
+    expect(screen.getByTestId('user-activity-org-menu-btn')).toHaveTextContent('Acme');
+
+    // Choosing an item closes the menu, so reopen it to deselect.
+    fireEvent.click(screen.getByTestId('user-activity-org-menu-btn'));
+    fireEvent.click(screen.getByTestId('user-activity-org-option-Acme'));
+
+    expect(useAnalyticsStore.getState().selectedOrganizations).toEqual([ALL_VALUE]);
+    expect(screen.getByTestId('user-activity-org-menu-btn')).toHaveTextContent('All Organizations');
+    const exclusions = within(screen.getByTestId('user-activity-exclude-orgs')).getAllByRole('checkbox');
+    expect(exclusions.length).toBeGreaterThan(0);
+    exclusions.forEach(checkbox => expect(checkbox).toBeEnabled());
   });
 });

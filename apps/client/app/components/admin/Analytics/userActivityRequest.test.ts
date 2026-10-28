@@ -30,6 +30,13 @@ describe('buildUserActivityRequest', () => {
     expect(buildUserActivityRequest(state).orgs).toBeNull();
   });
 
+  it('treats an empty organization selection as "all", keeping the exclusions', () => {
+    const request = buildUserActivityRequest({ ...state, selectedOrganizations: [] });
+
+    expect(request.orgs).toBeNull();
+    expect(request.excludeOrgs).toEqual(buildUserActivityRequest(state).excludeOrgs);
+  });
+
   it('omits blank searches so the server does not filter on an empty string', () => {
     const request = buildUserActivityRequest(state);
 
