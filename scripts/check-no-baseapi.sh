@@ -33,7 +33,7 @@ allowed=$(grep -v '^#' "$ALLOWLIST" | grep -v '^$' | sed 's/[[:space:]]*#.*//' |
 new_violators=$(comm -23 <(echo "$violators") <(echo "$allowed") | grep -v '^$' || true)
 
 if [ -n "$new_violators" ]; then
-  echo "❌ ERROR: The following API files do not use baseApi() and are not on the allowlist:"
+  echo "❌ ERROR: The following API files do not use an authenticated route factory (baseApi/adminApi/nextRouteForContract) and are not on the allowlist:"
   echo ""
   echo "$new_violators" | sed 's/^/  /'
   echo ""
