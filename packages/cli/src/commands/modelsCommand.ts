@@ -1,15 +1,24 @@
 /**
- * External models command (b4m models ls|search|show|pull|rm|use).
+ * External models command (b4m models ls|search|show|curated|pull|rm|use).
  * Finds, downloads and selects local models on the configured Ollama runtime, with Hugging Face GGUF
  * repos resolved through @bike4mind/local-models. Runs outside the interactive CLI session.
  */
 
 import { createInterface } from 'readline';
+import type { CuratedSlot, HubBuild, HubEntry, HubManifest, HubTier } from '@bike4mind/common';
 import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
+  curatedListing,
+  curatedParamsLabel,
+  curatedPicks,
+  curatedSource,
   isAbliteratedModel,
   isHubRepoId,
+  isPermissiveEntry,
+  loadCuratedManifest,
+  probeHardware,
+  type HardwareProfile,
   type HubGated,
 } from '@bike4mind/local-models';
 import { ConfigStore } from '../storage/ConfigStore.js';
@@ -72,6 +81,10 @@ export interface ModelsDeps extends ModelSourceDeps {
   log: (line: string) => void;
   /** Rewrites one terminal line; only used when `isTTY`. */
   progress: { update: (line: string) => void; end: () => void };
+  /** The Curated list bundled with the CLI, the same one Desktop's Curated tab shows. */
+  curated: () => HubManifest;
+  /** This computer's memory, which picks its tier of the Curated list. */
+  hardware: () => Promise<HardwareProfile>;
 }
 
 export interface ModelsOptions {
@@ -254,6 +267,174 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
     deps.log('');
     deps.log(`Pull one with: b4m models pull ${id}:${clean(suggested.quant)}`);
   }
+  return 0;
+}
+
+const SLOT_LABELS: Record<CuratedSlot, string> = {
+  best: 'Best',
+  fast: 'Fast',
+  'long-context': 'Long context',
+  light: 'Light',
+};
+const TOOL_RATINGS = { weak: 'weak', ok: 'good', strong: 'strong' } as const;
+
+const formatGiB = (bytes: number) => {
+  const gib = bytes / 1024 ** 3;
+  return `${gib >= 100 ? Math.round(gib) : Number(gib.toFixed(1))} GiB`;
+};
+
+function machineText(hw: HardwareProfile): string {
+  const memory = formatGiB(hw.totalMemoryBytes);
+  if (hw.memoryKind === 'unified') return `This computer has ${memory} of memory, shared with its GPU.`;
+  if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes)
+    return `This computer has ${memory} of RAM and ${formatGiB(hw.gpuMemoryBytes)} of GPU memory${
+      hw.gpuName ? ` (${clean(hw.gpuName)})` : ''
+    }.`;
+  return `This computer has ${memory} of RAM and no GPU memory was detected, so its picks assume the CPU.`;
+}
+
+function tierText(tier: HubTier): string {
+  if (tier.memoryKind === 'cpu') return 'CPU only';
+  return `${tier.minGiB} GiB+ ${tier.memoryKind === 'discrete' ? 'GPU memory' : 'unified memory'}`;
+}
+
+function curatedTags(entry: HubEntry): string[] {
+  const { rating } = entry.toolUse;
+  const tools = !entry.capabilities.tools
+    ? 'no tools'
+    : rating === 'unrated'
+      ? 'tools'
+      : `tools: ${TOOL_RATINGS[rating]}`;
+  return [
+    entry.capabilities.vision && 'vision',
+    entry.capabilities.thinking && 'thinking',
+    entry.roles.includes('code') && 'code',
+    tools,
+  ].filter((tag): tag is string => Boolean(tag));
+}
+
+function curatedBuildJson(build: HubBuild) {
+  const { ollamaRef, sizeBytes } = curatedSource(build);
+  return {
+    id: build.id,
+    quant: build.quant.label,
+    ref: ollamaRef,
+    sizeBytes,
+    ollamaMin: build.runtimeMin?.ollama ?? null,
+  };
+}
+
+function curatedEntryJson(entry: HubEntry) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    params: curatedParamsLabel(entry),
+    why: entry.why,
+    license: {
+      id: entry.license.id,
+      kind: isPermissiveEntry(entry) ? 'permissive' : 'restricted',
+      url: entry.license.source,
+    },
+    vision: entry.capabilities.vision,
+    thinking: entry.capabilities.thinking,
+    code: entry.roles.includes('code'),
+    tools: entry.capabilities.tools,
+    toolUse: { rating: entry.toolUse.rating, note: entry.toolUse.note ?? null },
+  };
+}
+
+function licenseCell(entry: HubEntry): string {
+  const id = clean(entry.license.id);
+  return isPermissiveEntry(entry) ? id : `restricted: ${id}`;
+}
+
+/** Lists the Curated models without contacting any runtime; downloading one is always a separate `pull`. */
+export async function listCurated(deps: ModelsDeps, opts: ModelsOptions): Promise<number> {
+  const manifest = deps.curated();
+  const hardware = await abortable(deps.hardware(), deps.signal);
+  const listing = curatedListing(manifest);
+  const { tier, picks } = curatedPicks(manifest, hardware);
+
+  if (opts.json) {
+    deps.log(
+      JSON.stringify(
+        {
+          updatedAt: manifest.updatedAt,
+          machine: {
+            memoryKind: hardware.memoryKind,
+            totalMemoryBytes: hardware.totalMemoryBytes,
+            gpuMemoryBytes: hardware.gpuMemoryBytes,
+            gpuName: hardware.gpuName,
+          },
+          tier: tier && { memoryKind: tier.memoryKind, minGiB: tier.minGiB },
+          picks: picks.map(({ pick, entry, build }) => ({
+            slot: pick.slot,
+            entryId: entry.id,
+            name: entry.name,
+            build: curatedBuildJson(build),
+          })),
+          entries: listing.map(({ entry, builds }) => ({
+            ...curatedEntryJson(entry),
+            builds: builds.map(curatedBuildJson),
+          })),
+        },
+        null,
+        2
+      )
+    );
+    return 0;
+  }
+
+  deps.log(`Curated list from ${clean(manifest.updatedAt.slice(0, 10))}. ${machineText(hardware)}`);
+  if (listing.length === 0) {
+    deps.log('The Curated list has no models. Search Hugging Face with: b4m models search <query>');
+    return 0;
+  }
+  const refOf = (build: HubBuild) => clean(curatedSource(build).ollamaRef);
+  const sizeOf = (build: HubBuild) => formatBytes(curatedSource(build).sizeBytes);
+
+  deps.log('');
+  if (!tier || picks.length === 0) {
+    deps.log("For this computer: the list has no picks for this computer's memory yet.");
+  } else {
+    deps.log(`For this computer (${tierText(tier)}):`);
+    const lines = table([
+      ['SLOT', 'MODEL', 'REF', 'SIZE', 'LICENSE', 'TAGS'],
+      ...picks.map(({ pick, entry, build }) => [
+        SLOT_LABELS[pick.slot],
+        clean(entry.name),
+        refOf(build),
+        sizeOf(build),
+        licenseCell(entry),
+        curatedTags(entry).join(', '),
+      ]),
+    ]);
+    for (const line of lines) deps.log(`  ${line}`);
+  }
+
+  deps.log('');
+  deps.log('All curated models, smallest first:');
+  const lines = table([
+    ['MODEL', 'PARAMS', 'REF', 'SIZE', 'LICENSE', 'TAGS'],
+    ...listing.flatMap(({ entry, builds }) =>
+      builds.map(build => [
+        clean(entry.name),
+        clean(curatedParamsLabel(entry)),
+        refOf(build),
+        sizeOf(build),
+        licenseCell(entry),
+        curatedTags(entry).join(', '),
+      ])
+    ),
+  ]);
+  for (const line of lines) deps.log(`  ${line}`);
+
+  if (listing.some(({ entry }) => !isPermissiveEntry(entry))) {
+    deps.log('');
+    deps.log('A restricted license is not a permissive open-source license; pull asks you to accept it first.');
+  }
+  deps.log('');
+  deps.log(`Pull one with: b4m models pull ${refOf(picks[0]?.build ?? listing[0].builds[0])}`);
   return 0;
 }
 
@@ -441,6 +622,8 @@ export async function runModelsCommand(
         return await searchModels(positional(argv.query, 'b4m models search <query>'), deps, opts);
       case 'show':
         return await showModel(positional(argv.repo, 'b4m models show <owner/repo>'), deps, opts);
+      case 'curated':
+        return await listCurated(deps, opts);
       case 'pull': {
         const result = await pullModel(positional(argv.ref, 'b4m models pull <ref | owner/repo[:quant]>'), deps, opts);
         if (result === 'declined') deps.log('Aborted');
@@ -548,6 +731,8 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
         update: line => process.stdout.write(`\r\x1b[2K${line}`),
         end: () => process.stdout.write('\n'),
       },
+      curated: () => loadCuratedManifest(message => console.error(message)),
+      hardware: () => probeHardware(),
       signal: controller.signal,
     });
   } finally {

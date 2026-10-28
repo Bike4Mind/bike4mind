@@ -5,7 +5,12 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   HubAccessError,
   ModelNotFoundError,
+  curatedListing,
+  curatedPicks,
+  curatedSource,
+  loadCuratedManifest,
   type DetectedRuntime,
+  type HardwareProfile,
   type HubGgufBuild,
   type HubModelDetail,
   type InstalledModel,
@@ -171,6 +176,24 @@ function fakeHub(overrides: Partial<HubClient> = {}): HubClient {
   };
 }
 
+const GIB = 1024 ** 3;
+
+function machine(overrides: Partial<HardwareProfile> = {}): HardwareProfile {
+  return {
+    platform: 'linux',
+    arch: 'x64',
+    memoryKind: 'discrete',
+    totalMemoryBytes: 64 * GIB,
+    gpuMemoryBytes: 24 * GIB,
+    gpuName: 'Test GPU',
+    gpuCount: 1,
+    chip: null,
+    diskFreeBytes: null,
+    confidence: 'high',
+    ...overrides,
+  };
+}
+
 interface Harness {
   deps: ModelsDeps;
   lines: string[];
@@ -190,6 +213,8 @@ function harness(
     registry?: ModelsDeps['ollamaRegistry'];
     resolveRuntime?: ModelsDeps['resolveRuntime'];
     confirm?: ModelsDeps['confirm'];
+    curated?: ModelsDeps['curated'];
+    hardware?: ModelsDeps['hardware'];
     answers?: boolean[];
     isTTY?: boolean;
     source?: RuntimeTarget['source'];
@@ -227,6 +252,8 @@ function harness(
     isTTY: options.isTTY ?? true,
     log: line => lines.push(line),
     progress: { update: line => progress.push(line), end: () => progress.push('<end>') },
+    curated: options.curated ?? (() => loadCuratedManifest(() => {})),
+    hardware: options.hardware ?? (async () => machine()),
     signal: controller.signal,
   };
   return { deps, lines, questions, progress, saved, runtime, hub, registry, controller };
@@ -571,6 +598,125 @@ describe('models show', () => {
     const h = harness({ hub });
     await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
     expect(h.lines).toContain('  License:   llama3.2 (https://example.com/license)');
+  });
+});
+
+describe('models curated', () => {
+  const bundled = () => structuredClone(loadCuratedManifest(() => {}));
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const offline = () => {
+    const resolveRuntime = vi.fn<ModelsDeps['resolveRuntime']>().mockRejectedValue(new Error('no runtime'));
+    const getModel = vi.fn();
+    return { resolveRuntime, getModel, h: harness({ resolveRuntime, hub: fakeHub({ getModel }) }) };
+  };
+
+  it("lists this computer's picks in slot order, then every build, without contacting a runtime", async () => {
+    const { resolveRuntime, getModel, h } = offline();
+    expect(await runModelsCommand('curated', { _: [] }, h.deps)).toBe(0);
+    expect(resolveRuntime).not.toHaveBeenCalled();
+    expect(getModel).not.toHaveBeenCalled();
+    expect(h.registry).not.toHaveBeenCalled();
+
+    const manifest = bundled();
+    const { tier, picks } = curatedPicks(manifest, machine());
+    expect(tier).not.toBeNull();
+    expect(h.lines[0]).toBe(
+      `Curated list from ${manifest.updatedAt.slice(0, 10)}. This computer has 64 GiB of RAM and 24 GiB of GPU ` +
+        'memory (Test GPU).'
+    );
+    expect(h.lines).toContain(`For this computer (${tier?.minGiB} GiB+ GPU memory):`);
+    const pickStart = h.lines.findIndex(line => line.startsWith('  SLOT'));
+    expect(h.lines[pickStart]).toMatch(/^ {2}SLOT\s+MODEL\s+REF\s+SIZE\s+LICENSE\s+TAGS$/);
+    picks.forEach(({ pick, entry, build }, index) => {
+      const ref = escape(curatedSource(build).ollamaRef);
+      const slot = { best: 'Best', fast: 'Fast', 'long-context': 'Long context', light: 'Light' }[pick.slot];
+      expect(h.lines[pickStart + 1 + index]).toMatch(
+        new RegExp(
+          `^ {2}${escape(slot)}\\s+${escape(entry.name)}\\s+${ref}\\s+[\\d.]+ (GB|MB)\\s+${escape(entry.license.id)}\\s+`
+        )
+      );
+    });
+
+    const allStart = h.lines.indexOf('All curated models, smallest first:');
+    expect(h.lines[allStart + 1]).toMatch(/^ {2}MODEL\s+PARAMS\s+REF\s+SIZE\s+LICENSE\s+TAGS$/);
+    const rows = curatedListing(manifest).flatMap(({ builds }) => builds.map(build => curatedSource(build).ollamaRef));
+    expect(rows.length).toBeGreaterThan(0);
+    rows.forEach((ref, index) => expect(h.lines[allStart + 2 + index]).toContain(ref));
+    expect(h.lines[h.lines.length - 1]).toBe(
+      `Pull one with: b4m models pull ${curatedSource(picks[0].build).ollamaRef}`
+    );
+  });
+
+  it('tags tool support from the catalog', async () => {
+    const manifest = bundled();
+    const [first, second] = manifest.entries;
+    first.toolUse = { rating: 'strong' };
+    second.capabilities.tools = false;
+    second.toolUse = { rating: 'unrated' };
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    const rowOf = (name: string) => h.lines.filter(line => line.includes(name)).pop();
+    expect(rowOf(first.name)).toMatch(/tools: strong$/);
+    expect(rowOf(second.name)).toMatch(/no tools$/);
+  });
+
+  it('flags a restricted license and never lists an abliterated entry', async () => {
+    const manifest = bundled();
+    const [restricted, abliterated] = manifest.entries;
+    restricted.license.class = 'restricted-commercial';
+    abliterated.flags.abliterated = true;
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    const text = h.lines.join('\n');
+    expect(text).toMatch(new RegExp(`${escape(restricted.name)}.*restricted: ${escape(restricted.license.id)}`));
+    expect(text).toContain('pull asks you to accept it first');
+    expect(text).not.toContain(abliterated.name);
+    for (const build of abliterated.builds) expect(text).not.toContain(curatedSource(build).ollamaRef);
+  });
+
+  it('says so when the list has no picks for this computer', async () => {
+    const manifest = bundled();
+    manifest.tiers = [];
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    expect(h.lines).toContain("For this computer: the list has no picks for this computer's memory yet.");
+    expect(h.lines).toContain('All curated models, smallest first:');
+    const smallest = curatedListing(manifest)[0].builds[0];
+    expect(h.lines[h.lines.length - 1]).toBe(`Pull one with: b4m models pull ${curatedSource(smallest).ollamaRef}`);
+  });
+
+  it('describes a CPU-only machine', async () => {
+    const h = harness({ hardware: async () => machine({ gpuMemoryBytes: null, gpuName: null }) });
+    await runModelsCommand('curated', { _: [] }, h.deps);
+    expect(h.lines[0]).toMatch(/64 GiB of RAM and no GPU memory was detected, so its picks assume the CPU\.$/);
+    expect(h.lines).toContain('For this computer (CPU only):');
+  });
+
+  it('prints the picks and entries as JSON', async () => {
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [], 'output-format': 'json' }, h.deps);
+    const out = JSON.parse(h.lines.join('\n'));
+    const manifest = bundled();
+    const { picks } = curatedPicks(manifest, machine());
+    expect(out.updatedAt).toBe(manifest.updatedAt);
+    expect(out.machine).toEqual({
+      memoryKind: 'discrete',
+      totalMemoryBytes: 64 * GIB,
+      gpuMemoryBytes: 24 * GIB,
+      gpuName: 'Test GPU',
+    });
+    expect(out.tier).toEqual({ memoryKind: 'discrete', minGiB: 24 });
+    expect(out.picks.map((pick: { slot: string; build: { ref: string } }) => [pick.slot, pick.build.ref])).toEqual(
+      picks.map(({ pick, build }) => [pick.slot, curatedSource(build).ollamaRef])
+    );
+    expect(out.entries).toHaveLength(curatedListing(manifest).length);
+    const [entry] = out.entries;
+    expect(entry).toMatchObject({ license: { kind: 'permissive' }, toolUse: { rating: expect.any(String) } });
+    expect(entry.builds[0]).toMatchObject({
+      ref: expect.any(String),
+      sizeBytes: expect.any(Number),
+      ollamaMin: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+    });
   });
 });
 

@@ -143,7 +143,7 @@ b4m update                                # Check for and install CLI updates
 b4m doctor                                # Diagnose the CLI installation (Node, registry, ripgrep, native modules)
 b4m skills push <path>                    # Create a skill from a folder, SKILL.md, or commands/*.md
 b4m skills push <path> --update           # Update your skill with the same name without a prompt
-b4m models ls | search | show | pull | rm | use   # Find, download and use local models (see below)
+b4m models ls | search | show | curated | pull | rm | use   # Find, download and use local models (see below)
 ```
 
 ### Local models
@@ -154,6 +154,7 @@ b4m models ls | search | show | pull | rm | use   # Find, download and use local
 b4m models ls --ollama-host http://127.0.0.1:11434   # list installed models; a host that answers is saved
 b4m models search qwen2.5 0.5b                       # Hugging Face GGUF repos: downloads, likes, license, gated
 b4m models show Qwen/Qwen2.5-0.5B-Instruct-GGUF      # builds with size, quant and Ollama ref, license, gating
+b4m models curated                                   # Bike4Mind's picks for this computer, then every curated build
 b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
 b4m models pull qwen2.5:0.5b                         # Ollama registry names (model[:tag], ollama.com/owner/model)
 b4m models use hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M   # default model for chat
@@ -162,7 +163,9 @@ b4m models rm qwen2.5:0.5b
 
 `search` hides abliterated and uncensored builds and prints how many it hid; `--include-abliterated` lists them last, labelled as not recommended.
 
-Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license texts, and only unmodified Apache-2.0 or MIT texts count as permissive. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes. Without a saved host, `b4m models` uses the first local runtime it detects; a scheme-less host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search` and `show` as JSON. With a saved host, `b4m -p` fails instead of switching to another model when the model picked with `b4m models use` is not available, or Ollama does not answer.
+`curated` lists the same Curated list the Desktop app shows, bundled with the CLI: the picks for this computer's memory first, then every build with the ref to pull, its size, license and tags. It contacts no runtime and downloads nothing; pull a row with `b4m models pull <ref>`. Abliterated builds are never on it, and a license that is not permissive is shown as `restricted: <license>`.
+
+Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license texts, and only unmodified Apache-2.0 or MIT texts count as permissive. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes. Without a saved host, `b4m models` uses the first local runtime it detects; a scheme-less host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search`, `show` and `curated` as JSON. With a saved host, `b4m -p` fails instead of switching to another model when the model picked with `b4m models use` is not available, or Ollama does not answer.
 
 `b4m mcp serve` (stdio only) offers the same operations to MCP clients as `models_list`, `models_search`, `models_pull` and `models_remove`, with the same checks. Pull and remove act only on the user's own approval. A client that supports elicitation asks the user directly, showing the size and every license, with a separate tick for a license that is not all permissive. With any other client nothing changes: the tool returns the preview and the `b4m models pull` or `b4m models rm` command for the user to run in a terminal, where the CLI asks them. `models_search` leaves abliterated and uncensored builds out unless `includeAbliterated` is true, and then lists them last, labelled `notRecommended`; `b4m models search` lists them in Hugging Face's order. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`. `b4m mcp serve --local` serves these four tools alone and needs no Bike4Mind backend.
 
