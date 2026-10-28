@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   sendJsonMessage: vi.fn(),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
-  accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false },
+  accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false, impersonating: false },
 }));
 
 // Capture the url + options react-use-websocket is called with on every render (esp.
@@ -80,6 +80,24 @@ import {
 import { WS_CHUNK_TTL_MS } from '@client/app/utils/wsChunkReassembler';
 
 const base = { openedThisAttempt: false, accessToken: 'tok', mfaPending: false, pathname: '/new' };
+
+describe('WebsocketProvider - impersonation', () => {
+  afterEach(() => {
+    h.accessTokenState.impersonating = false;
+  });
+
+  it('disconnects while impersonating and resumes on return to the admin', () => {
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.impersonating = true;
+    const element = React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'));
+    const rendered = render(element);
+    expect(h.capturedUrl.current).toBeNull();
+
+    h.accessTokenState.impersonating = false;
+    rendered.rerender(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    expect(typeof h.capturedUrl.current).toBe('function');
+  });
+});
 
 const stubVisibility = (state: DocumentVisibilityState) =>
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: state });

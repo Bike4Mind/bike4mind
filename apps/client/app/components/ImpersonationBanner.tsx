@@ -101,7 +101,7 @@ export function ImpersonationBanner() {
           onClose={() => setDialog(false)}
           title="Allow changes"
           confirmLabel="Allow changes"
-          description="Allows changes for the remaining support session. Identity, credentials, billing and account deletion stay blocked."
+          description="Allows notebook, message and file edits for the remaining support session. Identity, credentials, billing, account deletion, agent changes, integrations and automated tool execution stay blocked."
           reasonPresets={ADMIN_REASON_PRESETS.impersonation}
           data-testid="impersonation-escalate-dialog"
           onConfirm={async reason => {

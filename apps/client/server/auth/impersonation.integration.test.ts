@@ -8,9 +8,27 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { SupportAccess, AuthSessionModel, withTransaction } from '@bike4mind/database';
-const h = vi.hoisted(() => ({ audit: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionForActor: h.audit }));
+const h = vi.hoisted(() => ({
+  audit: vi.fn(),
+  escalate: undefined as ((req: Request, res: import('express').Response) => Promise<unknown>) | undefined,
+}));
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionForActor: h.audit,
+  recordAdminActionFromRequest: h.audit,
+  parseAdminActionReason: (reason: string) => reason,
+}));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => ({
+    get: () => ({
+      post: (fn: typeof h.escalate) => {
+        h.escalate = fn;
+        return fn;
+      },
+    }),
+  }),
+}));
 import { endImpersonation } from './impersonation';
+import '../../pages/api/auth/impersonation';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let db: MongoMemoryReplSet;
@@ -53,6 +71,19 @@ beforeEach(async () => {
   });
 });
 describe('support access transaction boundaries', () => {
+  it('rolls escalation back when its audit cannot commit', async () => {
+    const expiresAt = new Date(Date.now() + 60000);
+    await AuthSessionModel.updateOne({ sid: 'sid' }, { $set: { impersonationExpiresAt: expiresAt } });
+    await SupportAccess.updateOne({ sid: 'sid' }, { $set: { expiresAt } });
+    h.audit.mockRejectedValue(new Error('audit unavailable'));
+    const req = {
+      user: { id: 'customer', sid: 'sid', impersonatedBy: 'admin', name: 'Customer' },
+      body: { reason: 'Investigate bug' },
+    } as Request;
+    await expect(h.escalate!(req, {} as import('express').Response)).rejects.toThrow('audit unavailable');
+    expect((await AuthSessionModel.findOne({ sid: 'sid' }))?.impersonationWriteEnabled).toBe(false);
+    expect((await SupportAccess.findOne({ sid: 'sid' }))?.escalatedAt).toBeNull();
+  });
   it('rolls end and revocation back when audit fails', async () => {
     h.audit.mockRejectedValue(new Error('audit unavailable'));
     await expect(endImpersonation({} as Request, 'sid', actor)).rejects.toThrow('audit unavailable');

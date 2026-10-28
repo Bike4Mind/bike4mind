@@ -21,6 +21,12 @@ describe('impersonation route policy', () => {
     '/api/stripe/start-payment',
     '/api/oauth/authorize',
     '/api/users/u/%75pdate',
+    '/api/email/verify-change',
+    '/api/google-drive/token',
+    '/api/mcp-connections/connection/api-key',
+    '/api/auth/mfa/passkey/register-options',
+    '/api/ai/v1/completions',
+    '/api/secret-rotations/renewed',
   ])('always refuses %s even after escalation', path => {
     for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']) {
       expect(impersonationDecision(method, path, true)).toBe('sensitive');
@@ -34,5 +40,38 @@ describe('impersonation route policy', () => {
     expect(impersonationDecision('POST', '/api/files', false)).toBe('readonly');
     expect(impersonationDecision('POST', '/api/files', true)).toBe('allow');
     expect(impersonationDecision('POST', '/api/auth/impersonation', false)).toBe('allow');
+  });
+  it.each([
+    '/api/sessions/shared',
+    '/api/sessions/count',
+    '/api/sessions/favorites',
+    '/api/sessions/012345678901234567890123/chat',
+    '/api/sessions/012345678901234567890123/chat/012345678901234567890124',
+    '/api/sessions/012345678901234567890123/agents',
+    '/api/settings/fetch',
+    '/api/modals',
+    '/api/organizations',
+  ])('admits notebook navigation without enabling writes: %s', path => {
+    expect(impersonationDecision('GET', path, false)).toBe('allow');
+    expect(impersonationDecision('POST', path, false)).toBe('readonly');
+  });
+  it.each([
+    '/api/sessions/create',
+    '/api/v1/sessions',
+    '/api/v1/sessions/012345678901234567890123/clone',
+    '/api/sessions/012345678901234567890123/chat',
+    '/api/sessions/012345678901234567890123/favorite',
+  ])('admits content operations only after escalation: %s', path => {
+    expect(impersonationDecision('POST', path, false)).toBe('readonly');
+    expect(impersonationDecision('POST', path, true)).toBe('allow');
+  });
+  it('classifies operations by effects rather than the HTTP verb', () => {
+    expect(impersonationDecision('POST', '/api/agents', true)).toBe('sensitive');
+    expect(impersonationDecision('PATCH', '/api/agents/012345678901234567890123', true)).toBe('sensitive');
+    expect(impersonationDecision('POST', '/api/briefcase/catalog', false)).toBe('allow');
+    expect(impersonationDecision('GET', '/api/google-drive/token', false)).toBe('sensitive');
+    expect(impersonationDecision('GET', '/api/notebooks/download', false)).toBe('readonly');
+    expect(impersonationDecision('POST', '/api/notebooks/export', false)).toBe('readonly');
+    expect(impersonationDecision('POST', '/api/unknown', true)).toBe('readonly');
   });
 });
