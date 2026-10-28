@@ -56,19 +56,14 @@ const handler = baseApi().get(async (req, res) => {
 
   let viaDelegate = false;
   if (ownerType === CreditHolderType.Organization) {
-    try {
-      await verifyOrgOwner({ id: req.user.id, isAdmin: req.user.isAdmin }, ownerId);
-    } catch (error) {
-      if (!canReadSupport) throw error;
-      // Re-run as platform admin only to load the org / reject a bad id; this route's read-only allowance.
-      await verifyOrgOwner({ id: req.user.id, isAdmin: true }, ownerId);
-      viaDelegate = true;
-    }
+    // A support:read delegate is checked as platform admin: read-only access to any org, minus key names.
+    const org = await verifyOrgOwner({ id: req.user.id, isAdmin: req.user.isAdmin || canReadSupport }, ownerId);
+    viaDelegate = !req.user.isAdmin && org.userId !== req.user.id;
   } else if (req.user.id !== ownerId && !req.user.isAdmin) {
     if (!canReadSupport) throw new ForbiddenError('You can only view your own usage');
     viaDelegate = true;
   }
-  const showKeyIdentifiers = !viaDelegate || req.user.isAdmin;
+  const showKeyIdentifiers = !viaDelegate;
 
   // Usage cuts come from UsageEventModel (frozen COGS + per-member attribution);
   // by-API-key and by-source come from the ledger, the only source carrying

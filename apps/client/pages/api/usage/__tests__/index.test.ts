@@ -82,7 +82,7 @@ const emptySummary = {
 describe('GET /api/usage - access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyOrgOwner.mockResolvedValue({ id: ORG });
+    mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: SELF });
     mockOwnerUsageSummary.mockResolvedValue(emptySummary);
     mockApiKeyUsageForOwner.mockResolvedValue([]);
     mockSourceUsageForOwner.mockResolvedValue([]);
@@ -183,15 +183,16 @@ describe('GET /api/usage - access', () => {
       await expect(run()).rejects.toThrow(/your own usage/i);
     });
 
-    it('passes the org check as read-only platform access for a support:read delegate', async () => {
-      mockVerifyOrgOwner.mockRejectedValueOnce(new NotFoundError('Organization not found'));
+    it('passes the org check once as read-only platform access for a support:read delegate', async () => {
+      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
       const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
       await run();
-      expect(mockVerifyOrgOwner).toHaveBeenLastCalledWith({ id: SELF, isAdmin: true }, ORG);
+      expect(mockVerifyOrgOwner).toHaveBeenCalledTimes(1);
+      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: true }, ORG);
     });
 
     it('omits key names and prefixes from a delegate org view', async () => {
-      mockVerifyOrgOwner.mockRejectedValueOnce(new NotFoundError('Organization not found'));
+      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
       mockApiKeyUsageForOwner.mockResolvedValue([
         { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
       ]);
@@ -207,6 +208,27 @@ describe('GET /api/usage - access', () => {
       const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
       await expect(run()).rejects.toThrow(/not found/i);
       expect(mockOwnerUsageSummary).not.toHaveBeenCalled();
+    });
+
+    it('keeps key names for a delegate who owns the org', async () => {
+      mockApiKeyUsageForOwner.mockResolvedValue([
+        { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
+      ]);
+      mockFindByOrganizationId.mockResolvedValue([{ id: 'key-1', name: 'Org Key', keyPrefix: 'b4m_live_abcd' }]);
+      const { res, run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
+      await run();
+      expect(res._getJSONData().byApiKey[0]).toMatchObject({ keyName: 'Org Key', keyPrefix: 'b4m_live_abcd' });
+    });
+
+    it('keeps key names for a full admin', async () => {
+      mockVerifyOrgOwner.mockResolvedValue({ id: ORG, userId: 'someone-else' });
+      mockApiKeyUsageForOwner.mockResolvedValue([
+        { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
+      ]);
+      mockFindByOrganizationId.mockResolvedValue([{ id: 'key-1', name: 'Org Key', keyPrefix: 'b4m_live_abcd' }]);
+      const { res, run } = call({ isAdmin: true });
+      await run();
+      expect(res._getJSONData().byApiKey[0]).toMatchObject({ keyName: 'Org Key' });
     });
 
     it('denies a delegate API key without the ADMIN scope on both owner types', async () => {
