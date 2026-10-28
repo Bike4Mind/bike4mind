@@ -160,8 +160,8 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
     expect(await field.inputValue(), 'focus must clear the field, not reveal a value').toBe('');
 
     // Before the guard this path wrote '' straight over the stored key. The shortcut is the one
-    // save path still reachable from a focused field with nothing staged (SaveBar and
-    // adminKeyboard both listen for it).
+    // save path still reachable from a focused field with nothing staged (SaveBar listens for it
+    // on window regardless of what is staged).
     await page.keyboard.press('ControlOrMeta+s');
     await page.waitForTimeout(TIMEOUTS.POST_ACTION);
 
