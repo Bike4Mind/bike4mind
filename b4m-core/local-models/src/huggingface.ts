@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { downloadFile, type DownloadOptions, type DownloadResult } from './download';
 import {
@@ -41,6 +42,8 @@ const MAX_REDIRECTS = 3;
 const MAX_TAGS = 30;
 const MAX_BASE_MODELS = 10;
 const MAX_LICENSES = 10;
+export const HUB_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 200;
 
 export type HubSort = 'downloads' | 'likes' | 'trending' | 'updated';
 
@@ -63,6 +66,8 @@ export interface HubSearchOptions {
   limit?: number;
   /** `nextCursor` of the previous page, sent with the same query and sort. */
   cursor?: string;
+  /** Skip the 10-minute cache and store the fresh answer. */
+  refresh?: boolean;
   signal?: AbortSignal;
 }
 
@@ -98,6 +103,8 @@ export interface HubModelOptions {
    * Ollama refs always pull from `main`, so any other revision gets `ollamaRefIssue: 'pinned-revision'`.
    */
   revision?: string;
+  /** Skip the 10-minute cache and store the fresh answer; use it before acting on what a user reviewed. */
+  refresh?: boolean;
   signal?: AbortSignal;
 }
 
@@ -566,6 +573,33 @@ function retryAfterMs(headers: Headers): number | null {
 
 class BodyTooLargeError extends Error {}
 
+// Shared by every client, so a new instance (say, after a token change) still hits; keys carry the endpoint and a
+// token hash, so one token's answers never reach another.
+const hubCache = new Map<string, { expires: number; value: unknown }>();
+
+function cacheGet<T>(key: string): T | undefined {
+  const entry = hubCache.get(key);
+  if (!entry) return undefined;
+  hubCache.delete(key);
+  if (entry.expires <= Date.now()) return undefined;
+  hubCache.set(key, entry);
+  return structuredClone(entry.value) as T;
+}
+
+function cachePut(key: string, value: unknown): void {
+  hubCache.delete(key);
+  hubCache.set(key, { expires: Date.now() + HUB_CACHE_TTL_MS, value: structuredClone(value) });
+  for (const oldest of hubCache.keys()) {
+    if (hubCache.size <= MAX_CACHE_ENTRIES) break;
+    hubCache.delete(oldest);
+  }
+}
+
+/** Drops every cached search and model answer, for every client. */
+export function clearHubCache(): void {
+  hubCache.clear();
+}
+
 async function readText(response: Response, maxBytes: number): Promise<string> {
   if (Number(response.headers.get('content-length')) > maxBytes) throw new BodyTooLargeError();
   if (!response.body) return '';
@@ -598,6 +632,7 @@ export class HuggingFaceHub {
   readonly #token: string | undefined;
   readonly #client: HttpClient;
   readonly #requestTimeoutMs: number;
+  readonly #cacheScope: string;
 
   constructor(options: HuggingFaceHubOptions = {}) {
     this.endpoint = hubEndpoint(options.endpoint ?? DEFAULT_HUGGING_FACE_ENDPOINT);
@@ -608,6 +643,7 @@ export class HuggingFaceHub {
     this.#token = options.token?.trim() || undefined;
     if (this.#token) assertHeaderValues({ authorization: `Bearer ${this.#token}` }, this.id);
     this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.#cacheScope = `${this.endpoint}\n${this.#token ? `token:${createHash('sha256').update(this.#token).digest('hex')}` : 'anonymous'}`;
     this.#client = { runtimeId: this.id, baseUrl: this.endpoint, fetch: options.fetch ?? fetch };
   }
 
@@ -621,16 +657,21 @@ export class HuggingFaceHub {
     params.set('limit', String(limit));
     for (const field of SUMMARY_FIELDS) params.append('expand[]', field);
     if (options.cursor) params.set('cursor', options.cursor);
+    const cacheKey = `${this.#cacheScope}\nsearch\n${params}`;
+    const cached = options.refresh ? undefined : cacheGet<HubSearchPage>(cacheKey);
+    if (cached) return cached;
     const { data, headers } = await this.#getJson(`/api/models?${params}`, z.array(z.unknown()), {
       signal: options.signal,
     });
-    return {
+    const page: HubSearchPage = {
       models: data.slice(0, limit).flatMap(raw => {
         const entry = modelEntrySchema.safeParse(raw);
         return entry.success && isHubRepoId(entry.data.id) ? [toSummary(entry.data)] : [];
       }),
       nextCursor: nextCursor(headers),
     };
+    cachePut(cacheKey, page);
+    return page;
   }
 
   /**
@@ -642,7 +683,16 @@ export class HuggingFaceHub {
     assertRepoId(repo);
     const requested = options.revision ?? 'main';
     assertRevision(requested);
-    const context = { signal: options.signal, repo, revision: requested };
+    const cacheKey = `${this.#cacheScope}\nmodel\n${repo}\n${requested}`;
+    const cached = options.refresh ? undefined : cacheGet<HubModelDetail>(cacheKey);
+    if (cached) return cached;
+    const detail = await this.#fetchModel(repo, requested, options.signal);
+    cachePut(cacheKey, detail);
+    return detail;
+  }
+
+  async #fetchModel(repo: string, requested: string, signal: AbortSignal | undefined): Promise<HubModelDetail> {
+    const context = { signal, repo, revision: requested };
     const params = new URLSearchParams();
     for (const field of DETAIL_FIELDS) params.append('expand[]', field);
     const { data: info } = await this.#getJson(
@@ -656,7 +706,7 @@ export class HuggingFaceHub {
     // A renamed repo redirects to its new id, which is the one Ollama refs and resolve URLs need.
     const canonical = info.id;
     const revision = info.sha;
-    const tree = await this.#listTree(canonical, revision, options.signal);
+    const tree = await this.#listTree(canonical, revision, signal);
     const { builds, projectors } = groupGgufFiles(
       canonical,
       tree,
@@ -679,7 +729,7 @@ export class HuggingFaceHub {
       gguf: toGgufInfo(info.gguf),
       builds,
       projectors,
-      canDownload: await this.#canDownload(canonical, revision, summary.gated, probe?.path, options.signal),
+      canDownload: await this.#canDownload(canonical, revision, summary.gated, probe?.path, signal),
       ollamaNeedsSshKey: summary.gated !== false || summary.private,
     };
   }
