@@ -21,21 +21,29 @@ import {
 } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { TrashIcon } from '../chat/icons';
+import type { ModelTarget } from './modelTarget';
 
-/** Ollama names of the local models chats point at, so removing one can warn first. */
-export interface ModelsInUse {
-  /** The open conversation's model, when it is a local one. */
-  active: string | null;
-  /** One entry per conversation that uses a local model, archived ones left out. */
-  conversations: readonly string[];
+/** A device-side model a chat points at: its Ollama name and the server it runs on. */
+export interface ModelInUse {
+  serverId: string;
+  name: string;
 }
 
-function inUseWarning(model: LocalModelEntry, inUse: ModelsInUse | undefined): string | null {
+/** The device-side models chats point at, so removing one can warn first. */
+export interface ModelsInUse {
+  /** The open conversation's model, when it is a device-side one. */
+  active: ModelInUse | null;
+  /** One entry per conversation that uses a device-side model, archived ones left out. */
+  conversations: readonly ModelInUse[];
+}
+
+function inUseWarning(model: LocalModelEntry, serverId: string, inUse: ModelsInUse | undefined): string | null {
   const lines: string[] = [];
-  if (inUse?.active === model.name)
+  const same = (entry: ModelInUse | null) => entry?.serverId === serverId && entry.name === model.name;
+  if (same(inUse?.active ?? null))
     lines.push('The open conversation uses this model. Pick another model there before your next message.');
   else {
-    const count = inUse?.conversations.filter(name => name === model.name).length ?? 0;
+    const count = inUse?.conversations.filter(same).length ?? 0;
     if (count > 0)
       lines.push(
         `${count} ${count === 1 ? 'conversation uses' : 'conversations use'} this model. ` +
@@ -53,7 +61,7 @@ const CAPABILITY_LABELS: [keyof LocalModelEntry['capabilities'], string][] = [
   ['embeddings', 'Embeddings'],
 ];
 
-function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: () => void }) {
+function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (() => void) | null }) {
   return (
     <Sheet
       variant="outlined"
@@ -93,28 +101,32 @@ function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (
           ))}
         </Stack>
       </Box>
-      <Button
-        size="sm"
-        variant="plain"
-        color="danger"
-        startDecorator={<TrashIcon />}
-        onClick={onRemove}
-        data-testid="models-installed-remove-btn"
-      >
-        Remove
-      </Button>
+      {onRemove && (
+        <Button
+          size="sm"
+          variant="plain"
+          color="danger"
+          startDecorator={<TrashIcon />}
+          onClick={onRemove}
+          data-testid="models-installed-remove-btn"
+        >
+          Remove
+        </Button>
+      )}
     </Sheet>
   );
 }
 
 export function InstalledTab({
   status,
+  target,
   installed,
   inUse,
   onRetry,
   onExplore,
 }: {
   status: ModelRuntimeStatus | null;
+  target: ModelTarget;
   installed: InstalledModelsResult | null;
   inUse?: ModelsInUse;
   onRetry: () => void;
@@ -123,15 +135,33 @@ export function InstalledTab({
   const [confirming, setConfirming] = useState<LocalModelEntry | null>(null);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const canManage = target.management === 'allowed';
 
   const remove = async (model: LocalModelEntry) => {
     setRemoving(true);
-    const result = await window.b4m.models.remove(model.name);
+    const result = await window.b4m.models.remove(model.name, target.local ? undefined : target.id);
     setRemoving(false);
     setConfirming(null);
     setRemoveError(result.ok ? null : result.error.message);
   };
 
+  if (status && !status.reachable && !target.local)
+    return (
+      <Stack
+        alignItems="center"
+        spacing={1}
+        sx={{ py: 6, textAlign: 'center' }}
+        data-testid="models-installed-runtime-down"
+      >
+        <Typography level="title-md">{target.name} is not reachable</Typography>
+        <Typography level="body-sm" sx={{ maxWidth: 440 }}>
+          {status.error ?? `Desktop could not reach ${target.name}.`}
+        </Typography>
+        <Button size="sm" variant="outlined" color="neutral" onClick={onRetry}>
+          Check again
+        </Button>
+      </Stack>
+    );
   if (status && !status.reachable)
     return (
       <Stack
@@ -167,7 +197,7 @@ export function InstalledTab({
     );
 
   const total = installed.models.reduce((sum, model) => sum + (model.sizeBytes ?? 0), 0);
-  const warning = confirming ? inUseWarning(confirming, inUse) : null;
+  const warning = confirming ? inUseWarning(confirming, target.id, inUse) : null;
   return (
     <Stack spacing={1}>
       {removeError && (
@@ -177,19 +207,27 @@ export function InstalledTab({
       )}
       {installed.models.length === 0 ? (
         <Stack alignItems="center" spacing={1} sx={{ py: 6, textAlign: 'center' }} data-testid="models-installed-empty">
-          <Typography level="title-md">No local models yet</Typography>
-          <Typography level="body-sm">Find an open model on Hugging Face and download it here.</Typography>
-          <Button size="sm" onClick={onExplore} data-testid="models-installed-explore-btn">
-            Explore models
-          </Button>
+          <Typography level="title-md">
+            {target.local ? 'No local models yet' : `No models on ${target.name} yet`}
+          </Typography>
+          {canManage && (
+            <>
+              <Typography level="body-sm">Find an open model on Hugging Face and download it here.</Typography>
+              <Button size="sm" onClick={onExplore} data-testid="models-installed-explore-btn">
+                Explore models
+              </Button>
+            </>
+          )}
         </Stack>
       ) : (
         <>
           <Typography level="body-xs" textColor="text.tertiary" data-testid="models-installed-summary">
-            {installed.models.length} {installed.models.length === 1 ? 'model' : 'models'}, {formatBytes(total)} on disk
+            {installed.models.length} {installed.models.length === 1 ? 'model' : 'models'}
+            {target.local || total > 0 ? `, ${formatBytes(total)} on disk` : ''}
+            {target.local ? '' : ` on ${target.name}`}
           </Typography>
           {installed.models.map(model => (
-            <InstalledRow key={model.name} model={model} onRemove={() => setConfirming(model)} />
+            <InstalledRow key={model.name} model={model} onRemove={canManage ? () => setConfirming(model) : null} />
           ))}
         </>
       )}
@@ -198,8 +236,9 @@ export function InstalledTab({
         <ModalDialog size="sm" role="alertdialog" data-testid="models-remove-dialog">
           <DialogTitle>Remove {confirming?.name}?</DialogTitle>
           <DialogContent>
-            This deletes it from Ollama and frees {formatBytes(confirming?.sizeBytes ?? null)}. You can download it
-            again later.
+            This deletes it from Ollama{target.local ? '' : ` on ${target.name}`} and frees{' '}
+            {formatBytes(confirming?.sizeBytes ?? null)}
+            {target.local ? '' : ' there'}. You can download it again later.
             {warning && (
               <Alert color="warning" variant="soft" sx={{ mt: 1 }} data-testid="models-remove-dialog-in-use">
                 {warning}

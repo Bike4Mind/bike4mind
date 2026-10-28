@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
+import type { ModelServerView } from '@shared/modelServers';
 import type {
   HubDetailResult,
   HubModelView,
@@ -46,6 +47,41 @@ const DOWN: ModelRuntimeStatus = {
   error: 'refused',
   ...COMPUTER,
 };
+
+function server(id: string, name: string, extra: Partial<ModelServerView> = {}): ModelServerView {
+  return {
+    id,
+    name,
+    local: id === 'local',
+    kind: 'ollama',
+    address: id === 'local' ? 'http://127.0.0.1:11434' : `http://192.168.1.${id.length}:11434`,
+    access: 'manage',
+    auth: { type: 'none' },
+    credentialsPersisted: true,
+    credentialsMissing: false,
+    unencrypted: id !== 'local',
+    health: { state: 'online', version: '0.40.11', latencyMs: 3, checkedAt: null, error: null },
+    models: [],
+    ...extra,
+  };
+}
+
+const THIS_COMPUTER = server('local', 'This computer');
+const GPU_BOX = server('gpu', 'gpu box');
+const SHARED_BOX = server('shared', 'shared box', { access: 'chat' });
+
+function remoteStatus(view: ModelServerView, extra: Partial<ModelRuntimeStatus> = {}): ModelRuntimeStatus {
+  return {
+    reachable: true,
+    version: '0.40.11',
+    url: view.address,
+    error: null,
+    serverId: view.id,
+    serverName: view.name,
+    management: view.access === 'manage' ? 'allowed' : 'chat-only',
+    ...extra,
+  };
+}
 const capabilities = { tools: true, vision: false, thinking: false, embeddings: false, completion: true };
 
 function card(id: string, extra: Partial<HubModelView> = {}) {
@@ -91,6 +127,9 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
 interface Bridge {
   status: ModelRuntimeStatus;
   installed: InstalledModelsResult;
+  /** Per saved server; this computer reads `status` and `installed`. */
+  remote: Record<string, { status: ModelRuntimeStatus; installed: InstalledModelsResult }>;
+  servers: ModelServerView[];
   search: HubSearchResult;
   detail: HubDetailResult;
   pulls: ModelPull[];
@@ -101,31 +140,43 @@ let pushPulls: (pulls: ModelPull[]) => void = () => {};
 const calls = {
   pull: vi.fn(),
   cancelPull: vi.fn(),
+  resumePull: vi.fn(),
   remove: vi.fn(),
   search: vi.fn(),
   getDetail: vi.fn(),
   getStatus: vi.fn(),
+  listInstalled: vi.fn(),
 };
 
 beforeEach(() => {
   bridge = {
     status: RUNNING,
     installed: { ok: true, models: [] },
+    remote: {},
+    servers: [THIS_COMPUTER],
     search: { ok: true, models: [card(REPO)], nextCursor: null },
     detail: { ok: true, model: view() },
     pulls: [],
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
+  calls.resumePull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.remove.mockResolvedValue({ ok: true });
   (window as unknown as { b4m: unknown }).b4m = {
     shell: { openExternal: vi.fn() },
+    modelServers: {
+      list: async () => bridge.servers,
+      onChanged: () => () => {},
+    },
     models: {
-      getStatus: async () => {
-        calls.getStatus();
-        return bridge.status;
+      getStatus: async (serverId?: string) => {
+        calls.getStatus(serverId);
+        return (serverId && bridge.remote[serverId]?.status) || bridge.status;
       },
-      listInstalled: async () => bridge.installed,
+      listInstalled: async (serverId?: string) => {
+        calls.listInstalled(serverId);
+        return (serverId && bridge.remote[serverId]?.installed) || bridge.installed;
+      },
       search: async (request: unknown) => {
         calls.search(request);
         return bridge.search;
@@ -137,6 +188,7 @@ beforeEach(() => {
       listPulls: async () => bridge.pulls,
       pull: calls.pull,
       cancelPull: calls.cancelPull,
+      resumePull: calls.resumePull,
       dismissPull: vi.fn(),
       remove: calls.remove,
       onPullsChanged: (listener: (pulls: ModelPull[]) => void) => {
@@ -225,13 +277,25 @@ describe('ModelsScreen installed', () => {
     expect(calls.remove).not.toHaveBeenCalled();
     expect(q('models-remove-dialog-in-use')?.textContent).toBe('Ollama has it loaded right now.');
     await click(q('models-remove-dialog-confirm-btn'));
-    expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
+    expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', undefined);
   });
 
+  const onComputer = (name: string) => ({ serverId: 'local', name });
   it.each([
-    [{ active: 'qwen2.5:0.5b', conversations: ['qwen2.5:0.5b'] }, 'The open conversation uses this model.'],
-    [{ active: null, conversations: ['qwen2.5:0.5b', 'qwen2.5:0.5b', 'llama'] }, '2 conversations use this model.'],
-  ])('warns before removing a model a conversation uses: %j', async (inUse, text) => {
+    [{ active: onComputer('qwen2.5:0.5b'), conversations: [onComputer('qwen2.5:0.5b')] }, 'The open conversation'],
+    [
+      {
+        active: null,
+        conversations: [
+          onComputer('qwen2.5:0.5b'),
+          onComputer('qwen2.5:0.5b'),
+          { serverId: 'gpu', name: 'qwen2.5:0.5b' },
+          onComputer('llama'),
+        ],
+      },
+      '2 conversations use this model.',
+    ],
+  ])('warns before removing a model a conversation on the same server uses: %j', async (inUse, text) => {
     bridge.installed = {
       ok: true,
       models: [
@@ -557,5 +621,144 @@ describe('ModelsScreen explore', () => {
     await click(q('models-explore-search-btn'));
     expect(calls.search).toHaveBeenLastCalledWith({ query: 'nothing-here' });
     expect(q('models-explore-empty')?.textContent).toBe('No GGUF models match "nothing-here".');
+  });
+});
+
+describe('ModelsScreen servers', () => {
+  const qwen = {
+    name: 'qwen2.5:0.5b',
+    sizeBytes: 397_000_000,
+    quantization: 'Q4_K_M',
+    family: 'qwen2',
+    parameterSize: '494M',
+    modifiedAt: null,
+    capabilities,
+    loaded: false,
+  };
+
+  beforeEach(() => {
+    bridge.servers = [THIS_COMPUTER, GPU_BOX, SHARED_BOX];
+    bridge.remote = {
+      gpu: { status: remoteStatus(GPU_BOX), installed: { ok: true, models: [qwen] } },
+      shared: { status: remoteStatus(SHARED_BOX), installed: { ok: true, models: [qwen] } },
+    };
+  });
+
+  // The screen remembers the server across visits, and so across tests.
+  afterEach(async () => {
+    if (q('models-server-select')) await pickServer('local');
+  });
+
+  async function pickServer(id: string) {
+    await click(q('models-server-select'));
+    await click(q(`models-server-option-${id}`));
+  }
+
+  it('offers no switcher until a model server is saved', async () => {
+    bridge.servers = [THIS_COMPUTER];
+    await mount();
+    expect(q('models-server-select')).toBeNull();
+  });
+
+  it('lists, pulls to and removes from a server set to Chat and manage', async () => {
+    await mount();
+    expect(q('models-server-select')?.textContent).toContain('This computer');
+    await pickServer('gpu');
+
+    expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
+    expect(calls.listInstalled).toHaveBeenLastCalledWith('gpu');
+    expect(q('models-runtime-status')?.textContent).toContain('on gpu box at 192.168.1.3:11434');
+    expect(q('models-installed-summary')?.textContent).toContain('on gpu box');
+    await click(q('models-installed-remove-btn'));
+    expect(q('models-remove-dialog')?.textContent).toContain('from Ollama on gpu box');
+    await click(q('models-remove-dialog-confirm-btn'));
+    expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
+
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-server')?.textContent).toContain('Free space on gpu box: unknown');
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ repo: REPO, serverId: 'gpu' }));
+  });
+
+  it('shows no pull or remove controls for a Chat only server', async () => {
+    await mount();
+    await pickServer('shared');
+
+    expect(q('models-manage-note')?.textContent).toContain('shared box is set to Chat only');
+    expect(all('models-installed-row')).toHaveLength(1);
+    expect(q('models-installed-remove-btn')).toBeNull();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-build-row')).not.toBeNull();
+    expect(q('models-build-pull-btn')).toBeNull();
+  });
+
+  it('says which server is down and keeps the others usable', async () => {
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX, {
+      reachable: false,
+      version: null,
+      error: 'Could not reach gpu box: connection refused',
+    });
+    await mount();
+    await pickServer('gpu');
+    expect(q('models-runtime-status')?.dataset.state).toBe('down');
+    expect(q('models-runtime-status')?.textContent).toContain('Could not reach gpu box: connection refused');
+    expect(q('models-runtime-download-link')).toBeNull();
+    expect(q('models-installed-runtime-down')?.textContent).toContain('gpu box is not reachable');
+
+    await pickServer('local');
+    expect(q('models-runtime-status')?.dataset.state).toBe('running');
+  });
+
+  it('shows a pull to a server as paused with Resume, and asks to keep the app open while it runs', async () => {
+    await mount();
+    const remotePull: ModelPull = {
+      key: `gpu/${REPO}#q`,
+      serverId: 'gpu',
+      serverName: 'gpu box',
+      repo: REPO,
+      buildId: 'q',
+      quant: 'Q4_K_M',
+      ref: `hf.co/${REPO}:Q4_K_M`,
+      phase: 'downloading',
+      completedBytes: 100_000_000,
+      totalBytes: 400_000_000,
+      expectedBytes: 400_000_000,
+      error: null,
+    };
+    act(() => pushPulls([remotePull]));
+    expect(q('models-pull-row')?.textContent).toContain('to gpu box');
+    expect(q('models-pull-keep-open')).not.toBeNull();
+    expect(q('models-pull-resume-btn')).toBeNull();
+
+    act(() =>
+      pushPulls([
+        {
+          ...remotePull,
+          phase: 'paused',
+          error: { kind: 'connection-lost', message: 'Paused: lost the connection to gpu box.' },
+        },
+      ])
+    );
+    await flush();
+    expect(q('models-pull-status')?.textContent).toBe('Paused at 100 MB of 400 MB (25%)');
+    expect(q('models-pull-paused-note')?.textContent).toContain('lost the connection to gpu box');
+    expect(q('models-pull-keep-open')).toBeNull();
+    await click(q('models-pull-resume-btn'));
+    expect(calls.resumePull).toHaveBeenCalledWith(`gpu/${REPO}#q`);
+  });
+
+  it("names the server's own Ollama key in the access steps", async () => {
+    bridge.detail = { ok: true, model: view({ gated: 'auto', needsAccess: true }) };
+    await mount();
+    await pickServer('gpu');
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-access-server-key')?.textContent).toContain('public key of Ollama on gpu box');
+    expect(q('models-access-server-key')?.textContent).toContain('/usr/share/ollama/.ollama/id_ed25519.pub');
+    await click(q('models-build-pull-btn'));
+    expect(document.body.textContent).toContain('added the Ollama key of gpu box to Hugging Face');
   });
 });

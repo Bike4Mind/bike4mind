@@ -25,6 +25,7 @@ import {
 import { ExternalLink } from '../chat/ExternalLink';
 import { SearchIcon } from '../chat/icons';
 import { AccessSteps } from './AccessSteps';
+import type { ModelTarget } from './modelTarget';
 import { PullDialog, type PullConsent } from './PullDialog';
 import { pullLabel, pullPercent } from './pullDisplay';
 
@@ -104,6 +105,7 @@ function BuildRow({
   pull,
   installed,
   runtimeReady,
+  canPull,
   onPull,
 }: {
   repo: string;
@@ -111,14 +113,15 @@ function BuildRow({
   pull: ModelPull | undefined;
   installed: boolean;
   runtimeReady: boolean;
+  canPull: boolean;
   onPull: () => void;
 }) {
-  let action;
+  let action = null;
   if (pull && pull.phase !== 'failed') {
     action = (
       <Stack spacing={0.5} sx={{ minWidth: 160 }} data-testid="models-build-progress">
         <LinearProgress
-          determinate={pull.phase === 'downloading'}
+          determinate={pull.phase === 'downloading' || pull.phase === 'paused'}
           value={pullPercent(pull)}
           aria-label={`Download of ${repo} ${build.quant ?? build.id}`}
           aria-valuetext={pullLabel(pull)}
@@ -143,7 +146,7 @@ function BuildRow({
         {build.blockedReason}
       </Typography>
     );
-  } else {
+  } else if (canPull) {
     action = (
       <Button
         size="sm"
@@ -182,12 +185,14 @@ function BuildRow({
 function ModelDetail({
   repo,
   status,
+  target,
   installedNames,
   pulls,
   onRecheck,
 }: {
   repo: string;
   status: ModelRuntimeStatus | null;
+  target: ModelTarget;
   installedNames: Set<string>;
   pulls: ModelPull[];
   onRecheck: () => void;
@@ -231,6 +236,7 @@ function ModelDetail({
 
   const model = detail.model;
   const runtimeReady = status?.reachable === true;
+  const canPull = target.management === 'allowed';
   const start = async (build: HubBuildView, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
@@ -240,6 +246,7 @@ function ModelDetail({
       revision: model.revision,
       sizeBytes: build.sizeBytes,
       ...consent,
+      ...(target.local ? {} : { serverId: target.id }),
     });
     if (result.ok) return;
     if (result.error.kind === 'runtime-unavailable') onRecheck();
@@ -307,7 +314,7 @@ function ModelDetail({
       {model.needsAccess && (
         <Alert color="warning" variant="soft" data-testid="models-detail-access">
           <Box>
-            <AccessSteps model={model} />
+            <AccessSteps model={model} server={target.local ? null : target.name} />
             <Typography level="body-xs" sx={{ mt: 0.75 }}>
               Bike4Mind cannot check gated files without a Hugging Face token, so their builds cannot be downloaded from
               here yet.
@@ -315,9 +322,11 @@ function ModelDetail({
           </Box>
         </Alert>
       )}
-      {!runtimeReady && (
+      {canPull && !runtimeReady && (
         <Alert color="neutral" variant="soft" data-testid="models-detail-runtime-down">
-          Downloads need Ollama running on this computer.
+          {target.local
+            ? 'Downloads need Ollama running on this computer.'
+            : `Downloads need ${target.name} to be reachable.`}
         </Alert>
       )}
       {pullError && (
@@ -338,9 +347,10 @@ function ModelDetail({
               key={build.id}
               repo={model.id}
               build={build}
-              pull={pulls.find(entry => entry.key === pullKey(model.id, build.id))}
+              pull={pulls.find(entry => entry.key === pullKey(model.id, build.id, target.id))}
               installed={!!build.ollamaRef && installedNames.has(build.ollamaRef.toLowerCase())}
               runtimeReady={runtimeReady}
+              canPull={canPull}
               onPull={() => setConfirming(build)}
             />
           ))
@@ -356,6 +366,7 @@ function ModelDetail({
         <PullDialog
           model={model}
           build={confirming}
+          target={target}
           onClose={() => setConfirming(null)}
           onConfirm={consent => void start(confirming, consent)}
         />
@@ -366,11 +377,13 @@ function ModelDetail({
 
 export function ExploreTab({
   status,
+  target,
   installed,
   pulls,
   onRecheck,
 }: {
   status: ModelRuntimeStatus | null;
+  target: ModelTarget;
   installed: InstalledModelsResult | null;
   pulls: ModelPull[];
   onRecheck: () => void;
@@ -462,6 +475,9 @@ export function ExploreTab({
         <Stack direction="row" alignItems="center" spacing={1}>
           <Typography level="body-xs" textColor="text.tertiary" sx={{ flex: 1 }}>
             Searches Hugging Face from this computer. Only GGUF repos are listed.
+            {!target.local &&
+              target.management === 'allowed' &&
+              ` Downloads go to ${target.name}, which fetches them from Hugging Face itself.`}
           </Typography>
           <Typography component="label" level="body-xs" sx={{ display: 'flex', gap: 1 }}>
             Show abliterated models
@@ -527,6 +543,7 @@ export function ExploreTab({
             key={selected}
             repo={selected}
             status={status}
+            target={target}
             installedNames={installedNames}
             pulls={pulls}
             onRecheck={onRecheck}
