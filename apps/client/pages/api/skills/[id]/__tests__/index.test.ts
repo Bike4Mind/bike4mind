@@ -138,6 +138,27 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', description: 'new' }, { new: true });
   });
 
+  it('replaces supporting files sorted, clears them on null, and rejects a bad path', async () => {
+    const files = [
+      { path: 'scripts/run.py', content: 'print(1)' },
+      { path: 'references/notes.md', content: '' },
+    ];
+    const set = makeReqRes('PUT', OWNER, { files });
+    await handler(set.req, set.res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenLastCalledWith(
+      { id: 'skill-1', files: [files[1], files[0]] },
+      { new: true }
+    );
+
+    const clear = makeReqRes('PUT', OWNER, { files: null });
+    await handler(clear.req, clear.res);
+    expect(mockUpdateIfNonGlobal).toHaveBeenLastCalledWith({ id: 'skill-1', files: [] }, { new: true });
+
+    const bad = makeReqRes('PUT', OWNER, { files: [{ path: '../evil.sh', content: 'x' }] });
+    await expect(handler(bad.req, bad.res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledTimes(2);
+  });
+
   it('allows a share-recipient with update permission to edit', async () => {
     const { req, res } = makeReqRes('PUT', SHARED_UPDATE, { description: 'new' });
     await handler(req, res);

@@ -71,6 +71,7 @@ const EditSkillPage: FC = () => {
             argumentHint: skill.argumentHint,
             claudeCodeAllowedTools: skill.claudeCodeAllowedTools,
             disableModelInvocation: skill.disableModelInvocation,
+            files: skill.files,
           }}
           submitLabel="Save changes"
           submitting={updateSkill.isPending}

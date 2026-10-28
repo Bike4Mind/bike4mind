@@ -67,6 +67,12 @@ describe('ClaudeCodeExportDialog', () => {
     expect(screen.queryByTestId('skill-claude-code-b4m-only')).not.toBeInTheDocument();
     expect(screen.queryByText(/third-party skill/)).not.toBeInTheDocument();
     expect(screen.queryByTestId('skill-claude-code-import-hint')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('skill-claude-code-files-not-included')).not.toBeInTheDocument();
+  });
+
+  it('warns that supporting files are not exported', () => {
+    renderDialog({ skill: { ...skill, files: [{ path: 'scripts/run.py', content: 'x' }] } });
+    expect(screen.getByTestId('skill-claude-code-files-not-included')).toHaveTextContent('1 supporting file');
   });
 
   it('warns about Bike4Mind-only tools and agents, third-party text, and a missing import', () => {
@@ -146,6 +152,50 @@ describe('ClaudeCodeExportDialog', () => {
     fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
     expect(screen.queryByTestId('skill-claude-code-marketplace-install')).not.toBeInTheDocument();
     expect(screen.getByText(/to browse every skill/)).toBeInTheDocument();
+  });
+
+  it('names the skill in the title only without the marketplace tab', () => {
+    const { unmount } = renderDialog();
+    expect(screen.getByTestId('skill-claude-code-title')).toHaveTextContent('Use /review-pr in Claude Code');
+    unmount();
+    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'foo-a1b2c3' } });
+    expect(screen.getByTestId('skill-claude-code-title')).toHaveTextContent(/^Use in Claude Code$/);
+  });
+
+  it('explains marketplace setup, the plugin invocation and manual updates', () => {
+    renderDialog({
+      marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'hello-team-abc123', skillName: 'Hello Team' },
+    });
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    const setup = screen.getByTestId('skill-claude-code-marketplace-setup');
+    expect(setup).toHaveTextContent('claude -p "hi"');
+    expect(setup).toHaveTextContent('not found');
+    expect(setup).toHaveTextContent('claude plugin marketplace add <url>');
+    expect(screen.getByTestId('skill-claude-code-marketplace-install-shell')).toHaveTextContent(
+      `claude plugin install hello-team-abc123@b4m-org-${ORG_ID}`
+    );
+    expect(screen.getByTestId('skill-claude-code-marketplace-invoke')).toHaveTextContent(
+      /^\/hello-team-abc123:hello-team$/
+    );
+    const update = screen.getByTestId('skill-claude-code-marketplace-update');
+    expect(update).toHaveTextContent(`claude plugin marketplace update b4m-org-${ORG_ID}`);
+    expect(update).toHaveTextContent(`claude plugin update hello-team-abc123@b4m-org-${ORG_ID}`);
+    expect(update).toHaveTextContent('/reload-plugins');
+  });
+
+  it('omits the invocation without a skill name', () => {
+    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, pluginName: 'hello-team-abc123' } });
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(screen.queryByTestId('skill-claude-code-marketplace-invoke')).not.toBeInTheDocument();
+  });
+
+  it('omits the invocation without a stored plugin name', () => {
+    renderDialog({ marketplace: { org: { id: ORG_ID, name: 'Acme Labs' }, skillName: 'Hello Team' } });
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(screen.queryByTestId('skill-claude-code-marketplace-invoke')).not.toBeInTheDocument();
+    expect(screen.getByTestId('skill-claude-code-marketplace-update')).toHaveTextContent(
+      `claude plugin update <plugin>@b4m-org-${ORG_ID}`
+    );
   });
 
   it('downloads the stamped SKILL.md', () => {
