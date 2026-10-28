@@ -308,10 +308,10 @@ async function updateQuestAndReturnMarkdown(
 
 export const imageEditTool: ToolDefinition = {
   name: 'edit_image',
-  implementation: (context, config: GenerateImageToolCall) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async val => {
       // Get imageConfig from config (shared with image_generation tool)
-      const imageConfig = config;
+      const imageConfig = config as GenerateImageToolCall | undefined;
 
       const {
         image: toolImage,

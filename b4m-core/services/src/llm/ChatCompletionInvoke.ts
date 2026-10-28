@@ -5,6 +5,8 @@ import {
   ChatCompletionInvokeParamsSchema,
   isPromptMetaModelType,
   isSupportedEmbeddingModel,
+  IOrganizationDocument,
+  ISessionDocument,
   IUserDocument,
   LLMModelConfig,
   ModelInfo,
@@ -42,9 +44,9 @@ export class ChatCompletionInvoke {
   private invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   /** Session fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
-  public prefetchedSession: any | null = null;
+  public prefetchedSession: ISessionDocument | null = null;
   /** Organization fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
-  public prefetchedOrganization: any | null = null;
+  public prefetchedOrganization: IOrganizationDocument | null = null;
 
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;

@@ -1,6 +1,7 @@
 import {
   IFabFileRepository,
   IMessage,
+  IResearchTask,
   IResearchDataRepository,
   IResearchTaskJobs,
   IResearchTaskRepository,
@@ -12,6 +13,7 @@ import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueu
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { createSendStatusUpdate } from './utils';
 import axios from 'axios';
+import type mongoose from 'mongoose';
 import { z } from 'zod';
 import plimit from 'p-limit';
 import pLimit from 'p-limit';
@@ -24,7 +26,7 @@ type IResearchTaskProcessDiscoveredLinks = z.infer<typeof researchTaskProcessDis
 
 interface IResearchTaskProcessDiscoveredLinksAdapters {
   db: {
-    withTransaction: (fn: (session: any) => Promise<void>) => Promise<void>;
+    withTransaction: (fn: (session: mongoose.ClientSession) => Promise<void>) => Promise<void>;
     researchTasks: IResearchTaskRepository;
     fabFiles: IFabFileRepository;
     researchDatas: IResearchDataRepository;
@@ -38,7 +40,7 @@ interface IResearchTaskProcessDiscoveredLinksAdapters {
   jobs: {
     researchTasks: IResearchTaskJobs & {
       sendToClient: (
-        researchTask: any,
+        researchTask: IResearchTask,
         update: { status: string; currentStep: string; progress: number }
       ) => Promise<void>;
     };

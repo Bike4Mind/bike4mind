@@ -45,7 +45,7 @@ export interface ToolExecutionRequest {
   /** Name of the tool to execute */
   toolName: ServerToolName;
   /** Tool input matching Anthropic tool input schema */
-  input: Record<string, any>;
+  input: Record<string, unknown>;
   /** User ID for logging and rate limiting */
   userId: string;
 }
@@ -57,7 +57,7 @@ export interface ToolExecutionResult {
   /** Whether the tool executed successfully */
   success: boolean;
   /** Tool result content (if successful) */
-  content?: any;
+  content?: unknown;
   /** Error message (if failed) */
   error?: string;
   /** Error category for analytics (if failed) */

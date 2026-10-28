@@ -1,4 +1,11 @@
-import { IArtifactRepository, IArtifactContentRepository, IArtifactVersionRepository } from '@bike4mind/common';
+import {
+  IArtifactDocument,
+  IArtifactContentDocument,
+  IArtifactVersionDocument,
+  IArtifactRepository,
+  IArtifactContentRepository,
+  IArtifactVersionRepository,
+} from '@bike4mind/common';
 import { secureParameters, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -42,7 +49,11 @@ export const get = async (userId: string, parameters: GetArtifactParameters, ada
     throw new UnauthorizedError('Access denied');
   }
 
-  const result: any = { artifact };
+  const result: {
+    artifact: IArtifactDocument;
+    content?: IArtifactContentDocument | null;
+    versions?: IArtifactVersionDocument[];
+  } = { artifact };
 
   // Include content if requested
   if (includeContent) {

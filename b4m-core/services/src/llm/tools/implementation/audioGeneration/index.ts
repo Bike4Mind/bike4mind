@@ -62,9 +62,9 @@ const audioArgsSchema = z.object({
  */
 export const audioGenerationTool: ToolDefinition = {
   name: 'audio_generation',
-  implementation: (context, config: AudioGenerationToolCall) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async val => {
-      const audioConfig = config ?? {};
+      const audioConfig = (config ?? {}) as AudioGenerationToolCall;
       const parsedArgs = audioArgsSchema.safeParse(val);
       if (!parsedArgs.success) {
         return 'Error: audio_generation received invalid arguments.';

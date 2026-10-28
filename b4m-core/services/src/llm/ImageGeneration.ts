@@ -6,6 +6,7 @@ import {
   ISessionDocument,
   OpenAIImageGenerationInput,
   IUserDocument,
+  LLMEventPayload,
   LLMEvents,
   ImageModels,
   BFLSafetyToleranceSchema,
@@ -182,7 +183,10 @@ interface IImageGenerationServiceOptions {
   creditHolds: ImageCreditHolds;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
-  logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
+  logEvent: (
+    event: LLMEventPayload,
+    options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
+  ) => Promise<void>;
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
@@ -1455,7 +1459,12 @@ export class ImageGenerationService {
       const userAbility = this.abilityGetter(user);
 
       await this.logEvent(
-        { userId, type: LLMEvents.QUEUE_HANDLER_IMAGE_GENERATE, metadata: { questId: quest.id, modelId: model } },
+        // as unknown: payload lacks the event type's required metadata and sends modelId, not model; typing it would change analytics
+        {
+          userId,
+          type: LLMEvents.QUEUE_HANDLER_IMAGE_GENERATE,
+          metadata: { questId: quest.id, modelId: model },
+        } as unknown as LLMEventPayload,
         { ability: userAbility }
       );
 

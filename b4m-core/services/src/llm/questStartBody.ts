@@ -12,6 +12,7 @@
  */
 import { z } from 'zod';
 import {
+  MessageContentObject,
   ChatCompletionCreateInputSchema,
   DashboardParamsSchema,
   PromptMetaZodSchema,
@@ -92,14 +93,14 @@ export const QuestStartBodySchema = z
         maxDepth: z.number().int().min(1).max(DEEP_RESEARCH_MAX_DEPTH).optional(),
         duration: z.number().positive().max(DEEP_RESEARCH_MAX_DURATION_MIN).optional(),
         // searchers are passed via ToolContext, not through this API schema
-        searchers: z.array(z.any()).optional(),
+        searchers: z.array(z.unknown()).optional(),
       })
       .optional(),
     extraContextMessages: z
       .array(
         z.object({
           role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
-          content: z.union([z.string(), z.array(z.any())]),
+          content: z.union([z.string(), z.array(z.custom<MessageContentObject>())]),
           fabFileIds: z.array(z.string()).optional(),
           /** See the same field on the public request schema: send in the current user turn. */
           perTurn: z.boolean().optional(),

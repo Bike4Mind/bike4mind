@@ -214,12 +214,10 @@ export interface ToolBuilderCallbacks {
   onStatusUpdate: (changes: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;
 
   /** Called before a tool executes (e.g., credit validation for image tools) */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onToolStart: (toolName: string, data: any) => Promise<void>;
+  onToolStart: (toolName: string, data: unknown) => Promise<void>;
 
   /** Called after a tool finishes (e.g., deep research state, image paths) */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  onToolFinish: (toolName: string, data: any) => Promise<void>;
+  onToolFinish: (toolName: string, data: unknown) => Promise<void>;
 
   /** Called when navigate_view extracts navigation intents */
   onNavigationIntents?: (intents: unknown[]) => Promise<void>;
@@ -315,8 +313,7 @@ export interface BuildSharedToolsOptions {
    */
   sessionDisabledTools?: readonly string[];
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  config?: { [key in LlmTools]?: any };
+  config?: { [key in LlmTools]?: unknown };
   agentOnlyMcpServers?: string[];
   getAbortSignal?: () => AbortSignal | undefined;
   externalTools?: Record<string, ToolDefinition>;

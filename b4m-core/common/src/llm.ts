@@ -18,7 +18,7 @@ export const DashboardParamsSchema = z.object({
   dashboardDataSources: z.array(
     z.object({
       sourceName: z.string(),
-      data: z.any(),
+      data: z.unknown(),
     })
   ),
   promptName: z.string().optional(),
