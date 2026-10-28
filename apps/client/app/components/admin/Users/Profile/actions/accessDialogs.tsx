@@ -1,4 +1,5 @@
 import React, { useId, useState } from 'react';
+import { AdminUserTagsSchema } from '@bike4mind/common';
 import { Button, Chip, ChipDelete, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserTags } from '@client/app/hooks/data/user';
@@ -108,14 +109,19 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
   const nextTags = [...managed, ...custom];
   const diff = diffTags(tags, nextTags);
   const unchanged = diff.added.length === 0 && diff.removed.length === 0;
+  const validTags = AdminUserTagsSchema.safeParse(nextTags).success;
 
   const addFromInput = () => {
+    const seen = new Set(custom.map(tag => tag.toLowerCase()));
     const fresh = input
       .split(',')
       .map(tag => tag.trim())
-      .filter(
-        tag => tag && !isManagedTag(tag) && !custom.some(existing => existing.toLowerCase() === tag.toLowerCase())
-      );
+      .filter(tag => {
+        const normalized = tag.toLowerCase();
+        if (!tag || isManagedTag(tag) || seen.has(normalized)) return false;
+        seen.add(normalized);
+        return true;
+      });
     if (fresh.length > 0) setCustom(previous => [...previous, ...fresh]);
     setInput('');
   };
@@ -135,7 +141,13 @@ export const ManageTagsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
       reasonPresets={ADMIN_REASON_PRESETS.accountTags}
       reasonAudited={false}
       confirmLabel="Save tags"
-      blockedReason={unchanged ? 'Add or remove a tag first.' : null}
+      blockedReason={
+        unchanged
+          ? 'Add or remove a tag first.'
+          : !validTags
+            ? 'Use up to 100 distinct tags of 1 to 64 characters.'
+            : null
+      }
       onConfirm={handleConfirm}
       data-testid="manage-tags-dialog"
     >

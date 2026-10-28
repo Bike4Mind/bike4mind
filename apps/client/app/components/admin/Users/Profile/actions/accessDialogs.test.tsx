@@ -210,6 +210,23 @@ describe('access dialogs', () => {
         expect(mocks.update).toHaveBeenCalledWith({ before: ['Developer', 'vip'], tags: ['Developer'] })
       );
     });
+    it('deduplicates comma-separated input case-insensitively before saving', async () => {
+      renderTags([]);
+      fireEvent.change(screen.getByTestId('manage-tags-dialog-input'), { target: { value: 'pilot,PILOT,pilot' } });
+      fireEvent.click(screen.getByTestId('manage-tags-dialog-add-btn'));
+      pickReason('manage-tags-dialog');
+      fireEvent.click(confirmButton('manage-tags-dialog'));
+      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ before: [], tags: ['pilot'] }));
+    });
+    it('explains the tag length limit before submitting an invalid replacement', () => {
+      renderTags([]);
+      fireEvent.change(screen.getByTestId('manage-tags-dialog-input'), { target: { value: 'x'.repeat(65) } });
+      fireEvent.click(screen.getByTestId('manage-tags-dialog-add-btn'));
+      pickReason('manage-tags-dialog');
+      expect(confirmButton('manage-tags-dialog')).toBeDisabled();
+      expect(screen.getByTestId('manage-tags-dialog-hint')).toHaveTextContent('1 to 64 characters');
+      expect(mocks.update).not.toHaveBeenCalled();
+    });
 
     it('is blocked again when an added tag is removed before saving', () => {
       renderTags([]);

@@ -2,9 +2,11 @@ import {
   AdminUserTagsChangeSchema,
   BadRequestError,
   ConflictError,
+  ForbiddenError,
   assertCanActOnAdminTarget,
 } from '@bike4mind/common';
 import { User, withTransaction } from '@bike4mind/database';
+import { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import { adminApi } from '@server/middlewares/adminApi';
 import { noteSubject } from '@server/users/adminUserNotes';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -17,6 +19,11 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { PATCH: 'settings
     await withTransaction(async () => {
       const { userId, user } = await noteSubject(req, 'settings:manage');
       assertCanActOnAdminTarget(req.user, user, 'change tags on');
+      const managedBefore = (user.tags ?? []).filter(isManagedTag).sort();
+      const managedAfter = tags.filter(isManagedTag).sort();
+      if (JSON.stringify(managedBefore) !== JSON.stringify(managedAfter)) {
+        throw new ForbiddenError('Use the role or product access action to change managed tags');
+      }
       const result = await User.updateOne(
         { _id: userId, tags: before.length ? before : { $in: [null, []] } },
         { $set: { tags } },

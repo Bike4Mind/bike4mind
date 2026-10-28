@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 import { createMocks } from 'node-mocks-http';
+import { PENDING_FREE_CREDITS_TAG, RESERVED_PARTNER_RULE_TAGS } from '@bike4mind/common';
+import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
 
 const mocks = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, (req: Request, res: Response) => Promise<unknown>>>,
@@ -101,6 +103,19 @@ describe('notes and tags route boundaries', () => {
     });
     expect(mocks.audit).not.toHaveBeenCalled();
   });
+  it('preserves legacy tags verbatim in the concurrency condition and audit', async () => {
+    const before = [' vip ', 'pilot', 'PILOT', 'x'.repeat(65), ...Array.from({ length: 101 }, (_, i) => `tag${i}`)];
+    await call('PATCH', 'PATCH', { before, tags: ['vip'] }, ['settings:manage']);
+    expect(mocks.update).toHaveBeenCalledWith(
+      { _id: USER, tags: before },
+      { $set: { tags: ['vip'] } },
+      { runValidators: true }
+    );
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'tags', before, after: ['vip'] }] })
+    );
+  });
   it('rejects unbounded and duplicate tags before writing', async () => {
     for (const tags of [['x'.repeat(65)], Array.from({ length: 101 }, (_, i) => `tag${i}`), ['pilot', 'PILOT']]) {
       await expect(call('PATCH', 'PATCH', { before: [], tags }, ['settings:manage'])).rejects.toMatchObject({
@@ -115,5 +130,35 @@ describe('notes and tags route boundaries', () => {
       statusCode: 403,
     });
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it.each([
+    PENDING_FREE_CREDITS_TAG,
+    ...RESERVED_PARTNER_RULE_TAGS,
+    ...allKnownEntitlementKeys(),
+    'datalake:synthetic-lake',
+    ...allKnownEntitlementKeys().flatMap(key => {
+      const tag = grantTagForEntitlement(key);
+      return tag ? [tag] : [];
+    }),
+  ])('refuses managed tag grants through the free-form endpoint: %s', async tag => {
+    await expect(call('PATCH', 'PATCH', { before: [], tags: [tag] }, ['settings:manage'])).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+  it('refuses managed tag removal even when the caller forges the before snapshot', async () => {
+    mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ tags: ['Developer'] }) }) });
+    await expect(call('PATCH', 'PATCH', { before: [], tags: ['pilot'] }, ['settings:manage'])).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('preserves managed tags while updating free-form tags', async () => {
+    mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ tags: ['Developer', 'old'] }) }) });
+    const res = await call('PATCH', 'PATCH', { before: ['Developer', 'old'], tags: ['Developer', 'pilot'] }, [
+      'settings:manage',
+    ]);
+    expect(res._getJSONData()).toEqual({ tags: ['Developer', 'pilot'] });
   });
 });

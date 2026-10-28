@@ -126,6 +126,22 @@ describe('admin user notes storage, service and timeline', () => {
     );
     expect(await AdminUserNoteModel.countDocuments()).toBe(0);
   });
+  it('rejects impersonated note writes without persisting text or audit entries', async () => {
+    const req = request('POST', { body: 'Must not be saved' });
+    req.user.impersonatedBy = ADMIN;
+    await expect(writeAdminUserNote(req)).rejects.toMatchObject({ statusCode: 403 });
+    expect(await AdminUserNoteModel.countDocuments()).toBe(0);
+    expect(await AdminUserNoteRevisionModel.countDocuments()).toBe(0);
+    expect(await AdminAuditLogModel.countDocuments()).toBe(0);
+  });
+  it('rejects deletion and bulk rewriting of revision history', async () => {
+    const note = await writeAdminUserNote(request('POST', { body: 'Retained history' }));
+    await expect(AdminUserNoteRevisionModel.deleteMany({ noteId: note.id })).rejects.toThrow('immutable');
+    await expect(
+      AdminUserNoteRevisionModel.bulkWrite([{ deleteMany: { filter: { noteId: note.id } } }])
+    ).rejects.toThrow('immutable');
+    expect(await AdminUserNoteRevisionModel.countDocuments({ noteId: note.id })).toBe(1);
+  });
   it('bounds text, pagination and target ids and scopes every note to its subject', async () => {
     await expect(writeAdminUserNote(request('POST', { body: 'x'.repeat(2001) }))).rejects.toMatchObject({
       statusCode: 400,
@@ -165,5 +181,15 @@ describe('admin user notes storage, service and timeline', () => {
     vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('Synthetic tag audit failure'));
     await expect(writeTags(['pilot'], ['must-not-stick'])).rejects.toThrow('Synthetic tag audit failure');
     expect((await User.findById(USER).lean())?.tags).toEqual(['pilot']);
+  });
+  it('replaces raw legacy tag snapshots without weakening stale-write protection', async () => {
+    const before = [' vip ', 'pilot', 'PILOT', 'x'.repeat(65), ...Array.from({ length: 101 }, (_, i) => `tag${i}`)];
+    await User.updateOne({ _id: USER }, { $set: { tags: before } });
+    const { res } = createMocks();
+    await routes.patch!(request('PATCH', { before, tags: ['vip'] }), res as unknown as Response);
+    expect((await User.findById(USER).lean())?.tags).toEqual(['vip']);
+    await expect(
+      routes.patch!(request('PATCH', { before, tags: [] }), res as unknown as Response)
+    ).rejects.toMatchObject({ statusCode: 409 });
   });
 });

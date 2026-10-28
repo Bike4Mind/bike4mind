@@ -42,4 +42,4 @@ export const AdminUserTagsSchema = z
   .array(z.string().trim().min(1).max(64))
   .max(100)
   .refine(tags => new Set(tags.map(tag => tag.toLowerCase())).size === tags.length, 'Tags must not repeat');
-export const AdminUserTagsChangeSchema = z.object({ before: AdminUserTagsSchema, tags: AdminUserTagsSchema }).strict();
+export const AdminUserTagsChangeSchema = z.object({ before: z.array(z.string()), tags: AdminUserTagsSchema }).strict();
