@@ -1,17 +1,17 @@
-import { z } from 'zod';
 import { userUsagePatternSignalsRepository } from '@bike4mind/database';
 import { defineAdminTool } from '../defineAdminTool';
-
-const inputSchema = z.object({
-  userId: z.string().regex(/^[a-f0-9]{24}$/i, 'userId must be a 24-character hex ObjectId'),
-});
+import { resolveAdminUserRef } from '../resolveAdminUserRef';
+import { AdminUserRefSchema } from '../schemas';
 
 export const getUsageSignalsTool = defineAdminTool({
   name: 'admin_get_usage_signals',
   description:
     'Read the stored usage pattern signals for one user: the risk score, whether it needs review, and each signal with its value, weight and explanation.',
-  input: inputSchema,
-  run: async ({ userId }) => {
+  input: AdminUserRefSchema,
+  run: async ref => {
+    const user = await resolveAdminUserRef(ref);
+    if (!user) return { ok: false, error: 'not_found', message: 'No user matches that id or email.' };
+    const userId = user.id;
     const stored = await userUsagePatternSignalsRepository.findByUserId(userId);
     if (!stored) {
       return {

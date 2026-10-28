@@ -6,6 +6,10 @@ vi.mock('@bike4mind/database', () => ({
   userUsagePatternSignalsRepository: { findByUserId: (...args: unknown[]) => findByUserId(...args) },
 }));
 
+vi.mock('../resolveAdminUserRef', () => ({
+  resolveAdminUserRef: vi.fn(async (ref: { userId?: string }) => (ref.userId ? { id: ref.userId } : null)),
+}));
+
 import { getUsageSignalsTool } from './getUsageSignals';
 
 const USER_ID = '65f1a2b3c4d5e6f708192a3b';
