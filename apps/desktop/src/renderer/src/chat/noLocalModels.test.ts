@@ -5,8 +5,21 @@ import { describe, expect, it } from 'vitest';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 
 const model: ChatModelOption = { id: localModelId('ollama', 'qwen2.5:0.5b'), name: 'qwen2.5:0.5b' };
-const up: ModelRuntimeStatus = { reachable: true, version: '0.9.0', url: 'http://127.0.0.1:11434', error: null };
-const down: ModelRuntimeStatus = { reachable: false, version: null, url: 'http://127.0.0.1:11434', error: 'refused' };
+const computer = { serverId: 'local', serverName: 'This computer', management: 'allowed' } as const;
+const up: ModelRuntimeStatus = {
+  reachable: true,
+  version: '0.9.0',
+  url: 'http://127.0.0.1:11434',
+  error: null,
+  ...computer,
+};
+const down: ModelRuntimeStatus = {
+  reachable: false,
+  version: null,
+  url: 'http://127.0.0.1:11434',
+  error: 'refused',
+  ...computer,
+};
 
 describe('noLocalModels', () => {
   it('says nothing while a model exists and Ollama answers, or the list is still loading', () => {

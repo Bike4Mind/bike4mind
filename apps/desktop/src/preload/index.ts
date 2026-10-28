@@ -64,15 +64,16 @@ const api: DesktopApi = {
     },
   },
   models: {
-    getStatus: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus),
-    listInstalled: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled),
+    getStatus: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus, serverId),
+    listInstalled: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled, serverId),
     search: (request: HubSearchRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsSearch, request),
     getDetail: (repo: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo),
     listPulls: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListPulls),
     pull: (request: ModelPullRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsPull, request),
     cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),
+    resumePull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsResumePull, key),
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
-    remove: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name),
+    remove: (name: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name, serverId),
     onPullsChanged: listener => {
       const handler = (_event: unknown, pulls: ModelPull[]) => listener(pulls);
       ipcRenderer.on(IPC_CHANNELS.modelsPullsChanged, handler);

@@ -309,6 +309,8 @@ export const IPC_CHANNELS = {
   /** Starts a download; resolves when it finishes, fails or is cancelled. */
   modelsPull: 'models:pull',
   modelsCancelPull: 'models:cancel-pull',
+  /** Continues a pull paused by a dropped connection; resolves like `modelsPull`. */
+  modelsResumePull: 'models:resume-pull',
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
   /** main -> renderer push of every pull in flight or failed. */
@@ -560,16 +562,18 @@ export interface DesktopApi {
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
   };
+  /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */
   models: {
-    getStatus(): Promise<ModelRuntimeStatus>;
-    listInstalled(): Promise<InstalledModelsResult>;
+    getStatus(serverId?: string): Promise<ModelRuntimeStatus>;
+    listInstalled(serverId?: string): Promise<InstalledModelsResult>;
     search(request: HubSearchRequest): Promise<HubSearchResult>;
     getDetail(repo: string): Promise<HubDetailResult>;
     listPulls(): Promise<ModelPull[]>;
     pull(request: ModelPullRequest): Promise<ModelPullResult>;
     cancelPull(key: string): Promise<void>;
+    resumePull(key: string): Promise<ModelPullResult>;
     dismissPull(key: string): Promise<void>;
-    remove(name: string): Promise<ModelRemoveResult>;
+    remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
     onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
     onInstalledChanged(listener: () => void): () => void;
   };

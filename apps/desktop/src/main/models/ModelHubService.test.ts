@@ -354,6 +354,29 @@ describe('ModelHubService pulls', () => {
     expect(runtime.pull).not.toHaveBeenCalled();
   });
 
+  it('pulls a gated repo by its huggingface.co name, which Ollama can sign for', async () => {
+    const { service, runtime, pulls } = harness({ detail: detail({ gated: 'auto', ollamaNeedsSshKey: true }) });
+    const view = await service.detail(REPO);
+    expect(view.ok && view.model.builds[0].ollamaRef).toBe(`huggingface.co/${REPO}:Q4_K_M`);
+
+    const result = service.pull({ ...request, confirmAccess: true });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    expect(runtime.pull).toHaveBeenCalledWith(`huggingface.co/${REPO}:Q4_K_M`, expect.anything());
+    pulls[0].resolve();
+    await expect(result).resolves.toEqual({ ok: true, ref: `huggingface.co/${REPO}:Q4_K_M` });
+  });
+
+  it('names the computer that ran out of disk space', async () => {
+    const { service, pulls } = harness();
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].reject(new LocalRuntimeError('ollama could not pull x: write blob: no space left on device', 'ollama'));
+    await expect(result).resolves.toMatchObject({
+      ok: false,
+      error: { kind: 'failed', message: expect.stringContaining('This computer ran out of disk space') },
+    });
+  });
+
   it('does not start when Ollama is not running, and keeps the failure in the list', async () => {
     const { service, hub, runtime } = harness({ healthy: false });
     const result = await service.pull(request);

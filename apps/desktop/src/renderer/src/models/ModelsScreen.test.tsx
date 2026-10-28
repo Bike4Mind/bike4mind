@@ -31,8 +31,21 @@ window.matchMedia ??= ((query: string) => ({
 })) as typeof window.matchMedia;
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
-const RUNNING: ModelRuntimeStatus = { reachable: true, version: '0.40.11', url: 'http://127.0.0.1:11434', error: null };
-const DOWN: ModelRuntimeStatus = { reachable: false, version: null, url: 'http://127.0.0.1:11434', error: 'refused' };
+const COMPUTER = { serverId: 'local', serverName: 'This computer', management: 'allowed' } as const;
+const RUNNING: ModelRuntimeStatus = {
+  reachable: true,
+  version: '0.40.11',
+  url: 'http://127.0.0.1:11434',
+  error: null,
+  ...COMPUTER,
+};
+const DOWN: ModelRuntimeStatus = {
+  reachable: false,
+  version: null,
+  url: 'http://127.0.0.1:11434',
+  error: 'refused',
+  ...COMPUTER,
+};
 const capabilities = { tools: true, vision: false, thinking: false, embeddings: false, completion: true };
 
 function card(id: string, extra: Partial<HubModelView> = {}) {
@@ -430,6 +443,8 @@ describe('ModelsScreen explore', () => {
       pushPulls([
         {
           key: `${REPO}#qwen2.5-0.5b-instruct-q4_k_m`,
+          serverId: 'local',
+          serverName: 'This computer',
           repo: REPO,
           buildId: 'qwen2.5-0.5b-instruct-q4_k_m',
           quant: 'Q4_K_M',
@@ -484,6 +499,8 @@ describe('ModelsScreen explore', () => {
       pushPulls([
         {
           key: `${REPO}#q`,
+          serverId: 'local',
+          serverName: 'This computer',
           repo: REPO,
           buildId: 'q',
           quant: 'Q4_K_M',

@@ -1,5 +1,9 @@
 /** The Models screen's IPC types and the pure rules main and the renderer share. */
 
+import { LOCAL_SERVER_ID, type ModelServerManagement } from './modelServers';
+
+export type { ModelServerManagement };
+
 export const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
 
 export type ModelHubErrorKind =
@@ -15,6 +19,9 @@ export type ModelHubErrorKind =
   | 'cannot-pull'
   | 'changed'
   | 'interrupted'
+  | 'connection-lost'
+  | 'not-allowed'
+  | 'credentials'
   | 'cancelled'
   | 'invalid'
   | 'failed';
@@ -31,6 +38,10 @@ export interface ModelRuntimeStatus {
   version: string | null;
   url: string;
   error: string | null;
+  /** `local` for this computer, otherwise a saved model server's id (see @shared/modelServers). */
+  serverId: string;
+  serverName: string;
+  management: ModelServerManagement;
 }
 
 export interface LocalModelCapabilities {
@@ -116,12 +127,17 @@ export interface ModelPullRequest {
   sizeBytes: number;
   acceptLicense: boolean;
   confirmAccess: boolean;
+  /** The server to pull to; omitted means this computer. */
+  serverId?: string;
 }
 
-export type ModelPullPhase = 'verifying' | 'downloading' | 'finishing' | 'failed';
+/** `paused`: the connection to a model server dropped mid-download; resuming continues from its partial file. */
+export type ModelPullPhase = 'verifying' | 'downloading' | 'finishing' | 'paused' | 'failed';
 
 export interface ModelPull {
   key: string;
+  serverId: string;
+  serverName: string;
   repo: string;
   buildId: string;
   quant: string | null;
@@ -138,8 +154,8 @@ export type ModelPullResult = { ok: true; ref: string } | { ok: false; error: Mo
 
 export type ModelRemoveResult = { ok: true } | { ok: false; error: ModelHubError };
 
-export function pullKey(repo: string, buildId: string): string {
-  return `${repo}#${buildId}`;
+export function pullKey(repo: string, buildId: string, serverId: string = LOCAL_SERVER_ID): string {
+  return serverId === LOCAL_SERVER_ID ? `${repo}#${buildId}` : `${serverId}/${repo}#${buildId}`;
 }
 
 const PERMISSIVE_LICENSES = new Set([

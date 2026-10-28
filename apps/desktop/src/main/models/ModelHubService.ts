@@ -34,7 +34,11 @@ import {
   type ModelPullResult,
   type ModelRemoveResult,
   type ModelRuntimeStatus,
+  type ModelServerManagement,
 } from '@shared/models';
+import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME } from '@shared/modelServers';
+import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/errors';
+import { ServerRedirectError, ServerTransportError } from '../modelServers/serverFetch';
 
 export interface ModelRuntimePort {
   readonly baseUrl: string;
@@ -56,11 +60,26 @@ export interface ModelHubPort {
   ): Promise<string | null>;
 }
 
-export interface ModelHubServiceDeps {
+/**
+ * A saved model server, read fresh for every call so a changed access setting applies at once. Its runtime
+ * reports a dropped connection as ServerUnreachableError and a 401 or 403 as ServerCredentialsError.
+ */
+export interface ModelHubServer {
+  name: string;
+  management: ModelServerManagement;
   runtime: ModelRuntimePort;
+}
+
+export interface ModelHubServiceDeps {
+  /** This computer's Ollama. */
+  runtime: ModelRuntimePort;
+  /** A saved model server by id; null when none is saved under it. */
+  server?: (id: string) => ModelHubServer | null;
   hub: ModelHubPort;
   onPullsChanged: (pulls: ModelPull[]) => void;
-  onInstalledChanged: () => void;
+  onInstalledChanged: (serverId: string) => void;
+  /** True while a download to a saved server runs: that server's Ollama stops it if this computer sleeps. */
+  keepAwake?: (on: boolean) => void;
   /** Minimum gap between progress pushes (ms). */
   progressIntervalMs?: number;
 }
@@ -68,10 +87,19 @@ export interface ModelHubServiceDeps {
 const DEFAULT_PROGRESS_INTERVAL_MS = 250;
 const SEARCH_LIMIT = 30;
 
+interface Target extends ModelHubServer {
+  id: string;
+  local: boolean;
+}
+
 interface PullEntry {
   view: ModelPull;
   controller: AbortController;
+  /** The verified name Ollama pulls; a resume asks for the same one. */
+  ref: string | null;
 }
+
+const SERVER_GONE = 'That model server is no longer saved. Pick another under Models.';
 
 function hubError(kind: ModelHubErrorKind, message: string, retryAfterMs?: number | null): ModelHubError {
   return retryAfterMs === undefined ? { kind, message } : { kind, message, retryAfterMs };
@@ -79,6 +107,10 @@ function hubError(kind: ModelHubErrorKind, message: string, retryAfterMs?: numbe
 
 /** Maps local-models errors, which never carry the Hugging Face token, onto what the screen explains. */
 export function toModelHubError(error: unknown): ModelHubError {
+  if (error instanceof ServerCredentialsError) return hubError('credentials', error.message);
+  if (error instanceof ServerUnreachableError) return hubError('runtime-unavailable', error.message);
+  if (error instanceof ServerTransportError || error instanceof ServerRedirectError)
+    return hubError('failed', error.message);
   const fromHub = error instanceof LocalRuntimeError && error.runtimeId.startsWith('huggingface');
   if (error instanceof HubRateLimitError)
     return hubError('rate-limited', 'Hugging Face is rate limiting this computer.', error.retryAfterMs);
@@ -117,6 +149,34 @@ function pullEofError(error: unknown, ref: string): ModelHubError | null {
       'Ollama lost its connection to Hugging Face. Check your connection, then download again.'
     );
   return null;
+}
+
+function diskFullError(error: unknown, target: Target): ModelHubError | null {
+  if (!(error instanceof Error) || !/no space left on device/i.test(error.message)) return null;
+  return hubError('failed', `${target.name} ran out of disk space for this download. Free some space, then retry.`);
+}
+
+function manageRefusal(target: Target): ModelHubError | null {
+  if (target.management === 'chat-only')
+    return hubError(
+      'not-allowed',
+      `${target.name} is set to Chat only, so Desktop does not download to it or remove its models. ` +
+        'Change that under Settings, Model servers.'
+    );
+  if (target.management === 'unsupported')
+    return hubError(
+      'not-allowed',
+      `${target.name} is not an Ollama server, so Desktop cannot download to it or remove its models.`
+    );
+  return null;
+}
+
+/**
+ * The name Ollama pulls a gated or private repo by. Ollama refuses to sign a pull whose auth realm (huggingface.co)
+ * is not the host it asked (hf.co redirects there), so these are pulled by their huggingface.co name instead.
+ */
+export function signedPullRef(ref: string): string {
+  return ref.replace(/^hf\.co\//, 'huggingface.co/');
 }
 
 function toCard(model: HubModelSummary): HubModelCard {
@@ -163,7 +223,7 @@ function toView(endpoint: string, detail: HubModelDetail): HubModelView {
     id: build.id,
     quant: build.quant,
     sizeBytes: build.sizeBytes,
-    ollamaRef: build.ollamaRef,
+    ollamaRef: build.ollamaRef && detail.ollamaNeedsSshKey ? signedPullRef(build.ollamaRef) : build.ollamaRef,
     blockedReason: blockedReason(detail, build),
   }));
   const url = licenseUrl(endpoint, detail);
@@ -188,29 +248,67 @@ function phaseOf(status: string): ModelPull['phase'] {
     : 'downloading';
 }
 
-/** Installed models, Hugging Face search and pulls for the Ollama daemon Desktop chats with. */
+/**
+ * Installed models, Hugging Face search and pulls for the Ollama daemon Desktop chats with, and for each saved
+ * model server set to "Chat and manage". Every call names its server; omitted means this computer.
+ */
 export class ModelHubService {
   readonly #deps: ModelHubServiceDeps;
   readonly #pulls = new Map<string, PullEntry>();
   readonly #progressIntervalMs: number;
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
+  #awake = false;
 
   constructor(deps: ModelHubServiceDeps) {
     this.#deps = deps;
     this.#progressIntervalMs = deps.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS;
   }
 
-  async status(): Promise<ModelRuntimeStatus> {
-    const health = await this.#deps.runtime.health();
-    return { reachable: health.ok, version: health.version, url: this.#deps.runtime.baseUrl, error: health.error };
+  #target(serverId: string | undefined): Target | null {
+    if (serverId === undefined || serverId === LOCAL_SERVER_ID)
+      return {
+        id: LOCAL_SERVER_ID,
+        name: LOCAL_SERVER_NAME,
+        local: true,
+        management: 'allowed',
+        runtime: this.#deps.runtime,
+      };
+    const server = this.#deps.server?.(serverId);
+    return server ? { ...server, id: serverId, local: false } : null;
   }
 
-  async installed(): Promise<InstalledModelsResult> {
+  async status(serverId?: string): Promise<ModelRuntimeStatus> {
+    const target = this.#target(serverId);
+    if (!target)
+      return {
+        reachable: false,
+        version: null,
+        url: '',
+        error: SERVER_GONE,
+        serverId: serverId ?? LOCAL_SERVER_ID,
+        serverName: 'Model server',
+        management: 'unsupported',
+      };
+    const health = await target.runtime.health();
+    return {
+      reachable: health.ok,
+      version: health.version,
+      url: target.runtime.baseUrl,
+      error: health.error,
+      serverId: target.id,
+      serverName: target.name,
+      management: target.management,
+    };
+  }
+
+  async installed(serverId?: string): Promise<InstalledModelsResult> {
+    const target = this.#target(serverId);
+    if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE) };
     try {
       const [models, loaded] = await Promise.all([
-        this.#deps.runtime.list(),
-        this.#deps.runtime.loaded().catch(() => [] as LoadedModel[]),
+        target.runtime.list(),
+        target.runtime.loaded().catch(() => [] as LoadedModel[]),
       ]);
       const loadedNames = new Set(loaded.map(entry => entry.name));
       return {
@@ -250,18 +348,28 @@ export class ModelHubService {
     return [...this.#pulls.values()].map(entry => ({ ...entry.view }));
   }
 
-  /** Resolves when the pull finishes, fails or is cancelled; progress arrives through `onPullsChanged`. */
+  /**
+   * Resolves when the pull finishes, fails, pauses or is cancelled; progress arrives through `onPullsChanged`.
+   * Refused for a server the user did not set to "Chat and manage".
+   */
   async pull(request: ModelPullRequest): Promise<ModelPullResult> {
-    const key = pullKey(request.repo, request.buildId);
+    const target = this.#target(request.serverId);
+    if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE), listed: false };
+    const refusal = manageRefusal(target);
+    if (refusal) return { ok: false, error: refusal, listed: false };
+    const key = pullKey(request.repo, request.buildId, target.id);
     const existing = this.#pulls.get(key);
-    if (existing && existing.view.phase !== 'failed')
+    if (existing && existing.view.phase !== 'failed' && existing.view.phase !== 'paused')
       return { ok: false, error: hubError('already-pulling', 'This model is already downloading.'), listed: true };
 
     const controller = new AbortController();
     const entry: PullEntry = {
       controller,
+      ref: null,
       view: {
         key,
+        serverId: target.id,
+        serverName: target.name,
         repo: request.repo,
         buildId: request.buildId,
         quant: null,
@@ -297,12 +405,22 @@ export class ModelHubService {
         return refuse(hubError('access-required', 'Confirm the Hugging Face access steps before downloading.'));
       entry.view = { ...entry.view, quant: build.quant, expectedBytes: build.sizeBytes };
 
-      const health = await this.#deps.runtime.health();
+      const health = await target.runtime.health();
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       if (!health.ok)
-        return this.#fail(key, entry, hubError('runtime-unavailable', 'Ollama is not running. Start it, then retry.'));
+        return this.#fail(
+          key,
+          entry,
+          hubError(
+            'runtime-unavailable',
+            target.local
+              ? 'Ollama is not running. Start it, then retry.'
+              : (health.error ?? `Could not reach ${target.name}. Check it, then retry.`)
+          )
+        );
       // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
       ref = await this.#deps.hub.verifyOllamaRef(detail, build, { signal: controller.signal });
+      if (ref && detail.ollamaNeedsSshKey) ref = signedPullRef(ref);
     } catch (error) {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       return this.#fail(key, entry, toModelHubError(error));
@@ -318,11 +436,31 @@ export class ModelHubService {
         )
       );
 
-    entry.view = { ...entry.view, ref, phase: 'downloading' };
+    entry.ref = ref;
+    return this.#download(key, entry, target);
+  }
+
+  /** Continues a paused pull of the same verified name; Ollama picks up its partial file. */
+  async resume(key: string): Promise<ModelPullResult> {
+    const entry = this.#pulls.get(key);
+    if (!entry || entry.view.phase !== 'paused' || !entry.ref)
+      return { ok: false, error: hubError('invalid', 'That download is not paused.'), listed: false };
+    const target = this.#target(entry.view.serverId);
+    if (!target) return this.#fail(key, entry, hubError('not-found', SERVER_GONE));
+    const refusal = manageRefusal(target);
+    if (refusal) return this.#fail(key, entry, refusal);
+    entry.controller = new AbortController();
+    return this.#download(key, entry, target);
+  }
+
+  async #download(key: string, entry: PullEntry, target: Target): Promise<ModelPullResult> {
+    const ref = entry.ref as string;
+    const { signal } = entry.controller;
+    entry.view = { ...entry.view, ref, phase: 'downloading', error: null };
     this.#push(true);
     try {
-      await this.#deps.runtime.pull(ref, {
-        signal: controller.signal,
+      await target.runtime.pull(ref, {
+        signal,
         onProgress: (progress: PullProgress) => {
           const phase = phaseOf(progress.status);
           const changed = phase !== entry.view.phase;
@@ -336,31 +474,43 @@ export class ModelHubService {
         },
       });
     } catch (error) {
-      if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
-      return this.#fail(key, entry, pullEofError(error, ref) ?? toModelHubError(error));
+      if (signal.aborted) {
+        this.#drop(key, entry);
+        return { ok: false, error: hubError('cancelled', 'Download cancelled.'), listed: false };
+      }
+      if (!target.local && error instanceof ServerUnreachableError) return this.#pause(key, entry, target);
+      return this.#fail(key, entry, pullEofError(error, ref) ?? diskFullError(error, target) ?? toModelHubError(error));
     }
     this.#drop(key, entry);
-    this.#deps.onInstalledChanged();
+    this.#deps.onInstalledChanged(target.id);
     return { ok: true, ref };
   }
 
+  /** Cancels a running pull; a paused one has nothing running, so it is cleared. */
   cancel(key: string): void {
-    this.#pulls.get(key)?.controller.abort();
+    const entry = this.#pulls.get(key);
+    if (entry?.view.phase === 'paused') this.#drop(key, entry);
+    else entry?.controller.abort();
   }
 
-  /** Clears a failed pull from the list; active pulls are cancelled instead. */
+  /** Clears a failed or paused pull from the list; active pulls are cancelled instead. */
   dismiss(key: string): void {
     const entry = this.#pulls.get(key);
-    if (entry?.view.phase === 'failed') this.#drop(key, entry);
+    if (entry?.view.phase === 'failed' || entry?.view.phase === 'paused') this.#drop(key, entry);
   }
 
-  async remove(name: string): Promise<ModelRemoveResult> {
+  /** Refused for a server the user did not set to "Chat and manage". */
+  async remove(name: string, serverId?: string): Promise<ModelRemoveResult> {
+    const target = this.#target(serverId);
+    if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE) };
+    const refusal = manageRefusal(target);
+    if (refusal) return { ok: false, error: refusal };
     try {
-      await this.#deps.runtime.remove(name);
+      await target.runtime.remove(name);
     } catch (error) {
       return { ok: false, error: toModelHubError(error) };
     }
-    this.#deps.onInstalledChanged();
+    this.#deps.onInstalledChanged(target.id);
     return { ok: true };
   }
 
@@ -368,6 +518,21 @@ export class ModelHubService {
     for (const entry of this.#pulls.values()) entry.controller.abort();
     if (this.#pushTimer) clearTimeout(this.#pushTimer);
     this.#pushTimer = null;
+    if (this.#awake) this.#deps.keepAwake?.(false);
+    this.#awake = false;
+  }
+
+  #pause(key: string, entry: PullEntry, target: Target): ModelPullResult {
+    const error = hubError(
+      'connection-lost',
+      `Paused: lost the connection to ${target.name}. Resume continues from the part it already downloaded. ` +
+        `If Ollama on ${target.name} restarts after more than an hour paused, the download starts over.`
+    );
+    if (this.#pulls.get(key) === entry) {
+      entry.view = { ...entry.view, phase: 'paused', error };
+      this.#push(true);
+    }
+    return { ok: false, error, listed: true };
   }
 
   #fail(key: string, entry: PullEntry, error: ModelHubError): ModelPullResult {
@@ -385,6 +550,13 @@ export class ModelHubService {
   }
 
   #push(now: boolean): void {
+    const awake = [...this.#pulls.values()].some(
+      ({ view }) => view.serverId !== LOCAL_SERVER_ID && view.phase !== 'paused' && view.phase !== 'failed'
+    );
+    if (awake !== this.#awake) {
+      this.#awake = awake;
+      this.#deps.keepAwake?.(awake);
+    }
     const elapsed = Date.now() - this.#lastPush;
     if (now || elapsed >= this.#progressIntervalMs) {
       if (this.#pushTimer) clearTimeout(this.#pushTimer);

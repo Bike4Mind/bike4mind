@@ -1,9 +1,12 @@
 import dns from 'node:dns';
 import { isIP } from 'node:net';
 import {
+  OllamaRuntime,
+  OpenAICompatibleRuntime,
   RuntimeConnectionError,
   RuntimeHttpError,
   type FetchLike,
+  type LocalRuntime,
   type OpenAICompatibleProduct,
 } from '@bike4mind/local-models';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
@@ -11,6 +14,7 @@ import {
   LOCAL_SERVER_ID,
   LOCAL_SERVER_NAME,
   serverIdOfRuntime,
+  serverManagement,
   serverRuntimeId,
   type ModelServerAddInput,
   type ModelServerHealth,
@@ -22,6 +26,7 @@ import {
 } from '@shared/modelServers';
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal } from '../chat/OllamaLocal';
+import type { ModelHubServer } from '../models/ModelHubService';
 import {
   leastTrusted,
   parseServerAddress,
@@ -59,6 +64,8 @@ interface Entry {
   scope: AddressScope | null;
   fetch: FetchLike;
   client: ServerClient;
+  /** What the Models screen lists, pulls and removes through, over the same fetch as chat. */
+  runtime: LocalRuntime;
   health: ModelServerHealth;
   product: OpenAICompatibleProduct | null;
 }
@@ -325,6 +332,33 @@ export class ModelServerRegistry {
     };
   }
 
+  /**
+   * The Models screen's handle on a saved server, null when none is saved under `id`. Health is this
+   * registry's check, and failures update the server's health and name it, as chat's do.
+   */
+  hubServer(id: string): ModelHubServer | null {
+    const entry = this.entries.get(id);
+    if (!entry) return null;
+    const { record } = entry;
+    return {
+      name: record.name,
+      management: serverManagement({ local: false, kind: record.kind, access: record.access }),
+      runtime: {
+        baseUrl: record.transport.baseUrl,
+        health: async () => {
+          const health = (await this.check(id)).find(server => server.id === id)?.health;
+          return health?.state === 'online'
+            ? { ok: true, version: health.version, error: null }
+            : { ok: false, version: null, error: health?.error ?? `${record.name} did not answer.` };
+        },
+        list: () => this.run(id, undefined, current => current.runtime.list()),
+        loaded: () => this.run(id, undefined, current => current.runtime.loaded()),
+        pull: (ref, options) => this.run(id, options?.signal, current => current.runtime.pull(ref, options)),
+        remove: model => this.run(id, undefined, current => current.runtime.remove(model)),
+      },
+    };
+  }
+
   private async run<T>(id: string, signal: AbortSignal | undefined, task: (entry: Entry) => Promise<T>): Promise<T> {
     await this.load();
     const entry = this.entries.get(id);
@@ -435,7 +469,9 @@ export class ModelServerRegistry {
     if (outcome.product && outcome.product !== entry.product) {
       entry.product = outcome.product;
       // The chat client reads the product once, so rebuild it to start using what the probe learned.
-      entry.client = this.build(entry.record, entry).client;
+      const rebuilt = this.build(entry.record, entry);
+      entry.client = rebuilt.client;
+      entry.runtime = rebuilt.runtime;
     }
     this.setHealth(entry, {
       state: 'online',
@@ -494,12 +530,17 @@ export class ModelServerRegistry {
             hasCredentials,
             redact: redactServerResponse,
           });
+    const runtime: LocalRuntime =
+      record.kind === 'ollama'
+        ? new OllamaRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch })
+        : new OpenAICompatibleRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch, product });
     return {
       record,
       parsed,
       scope: previous?.scope ?? (isIP(parsed.host) ? scopeOfIp(parsed.host) : null),
       fetch,
       client,
+      runtime,
       health: previous && previous.record.kind === record.kind ? previous.health : { ...UNKNOWN_HEALTH },
       product,
     };

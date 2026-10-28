@@ -271,6 +271,8 @@ export interface RegisteredChat {
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
   spareWorktrees: SpareWorktrees;
+  /** Saved model servers, which the Models screen also pulls to and removes from. */
+  modelServers: ModelServerRegistry;
 }
 
 /**
@@ -1235,7 +1237,7 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees };
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, modelServers };
 }
 
 export { ChatService } from './ChatService';
