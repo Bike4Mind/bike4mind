@@ -194,6 +194,17 @@ describe('resolveCustomMcpContext', () => {
     expect((await resolveCustomMcpContext('u1')).enabled).toBe(false);
   });
 
+  it("refuses a member's next call once one of their orgs sets mode off, with no other member affected", async () => {
+    state.orgIds = ['org-a'];
+    await expect(assertCustomMcpEnabled({ id: 'member' })).resolves.toMatchObject({ enabled: true });
+
+    state.orgPolicies = { 'org-a': { mode: 'off' } };
+    await expect(assertCustomMcpEnabled({ id: 'member' })).rejects.toBeInstanceOf(ForbiddenError);
+
+    state.orgIds = ['org-b'];
+    await expect(assertCustomMcpEnabled({ id: 'outsider' })).resolves.toMatchObject({ enabled: true });
+  });
+
   it('applies one policy per membership org, and the platform policy for a user in none', async () => {
     const solo = await resolveCustomMcpContext('u1');
     expect(solo.policies).toHaveLength(1);

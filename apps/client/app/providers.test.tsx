@@ -39,6 +39,9 @@ vi.mock('@client/app/components/AgentExecutionSubscriber', () => ({ default: non
 vi.mock('@client/app/components/stripe/StripeCheckoutSuccessHandler', () => ({ default: none }));
 vi.mock('@client/app/components/stripe/StripePaymentReturnHandler', () => ({ default: none }));
 vi.mock('@client/app/components/CookieConsentBanner', () => ({ CookieConsentBanner: none }));
+vi.mock('@client/app/components/ImpersonationBanner', () => ({
+  ImpersonationBanner: () => <div data-testid="impersonation-banner" />,
+}));
 vi.mock('@client/app/components/QuestPreparationOverlay', () => ({ QuestPreparationOverlay: none }));
 vi.mock('@client/app/utils/localStorageCleanup', () => ({ runLocalStorageCleanup: vi.fn() }));
 vi.mock('@client/app/utils/sessionBootstrap', () => ({
@@ -64,6 +67,7 @@ describe('ClientProviders mounts the outdated-client banner', () => {
   it('shows nothing until a deploy is detected', () => {
     mount();
     expect(screen.queryByTestId('client-outdated-banner')).toBeNull();
+    expect(screen.getByTestId('impersonation-banner')).toBeTruthy();
   });
 
   it('shows the banner once the client is marked outdated', () => {

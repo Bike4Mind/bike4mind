@@ -6,6 +6,7 @@ import { deployRevision } from '@server/middlewares/deployRevision';
 import errorHandler from '@server/middlewares/errorHandler';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { oauthRouteGate } from '@server/middlewares/oauthRouteGate';
+import { impersonationGate, impersonationAnonymousGate } from './impersonationGate';
 import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetection';
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
@@ -215,6 +216,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     router.use(middleware);
   }
 
+  if (!resolvedOptions.auth) router.use(impersonationAnonymousGate);
   if (resolvedOptions.auth) {
     // 'jwtOnly' skips the whole api-key chain, so a presented key is never
     // validated/metered/billed - it simply isn't a credential this route knows,
@@ -240,6 +242,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
 
     // Apply JWT authentication middleware (will be skipped if already authenticated via API key)
     router.use(auth);
+    router.use(impersonationGate);
 
     // Default-deny relying-party OAuth tokens: a no-op for first-party sessions and API keys,
     // and 403 for an OAuth token unless this route opted in via `oauthScopes`.

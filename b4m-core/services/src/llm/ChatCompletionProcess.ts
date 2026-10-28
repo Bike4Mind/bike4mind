@@ -293,6 +293,8 @@ import {
   shouldOfferSkillTool,
 } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
+import { resolveAdminAssistantTools } from './adminAssistantGate';
+import { withAdminAssistantPrompt } from './adminAssistantPrompt';
 import {
   ContextTelemetryAlertsSchema,
   sanitizeTelemetryError,
@@ -783,12 +785,14 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
 export function resolveDeniedTools(
   sessionDisabledTools: unknown,
   requestDeniedTools?: string[],
-  surfaceDeniedTools?: readonly string[]
+  surfaceDeniedTools?: readonly string[],
+  adminAssistantDeniedTools?: readonly string[]
 ): string[] | undefined {
   const merged = new Set([
     ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
     ...(requestDeniedTools ?? []),
     ...(surfaceDeniedTools ?? []),
+    ...(adminAssistantDeniedTools ?? []),
   ]);
   return merged.size > 0 ? [...merged] : undefined;
 }
@@ -2288,12 +2292,22 @@ export class ChatCompletionProcess {
       // fetchAndProcessPreviousMessages `includeReplyChoices`); voice reads the raw stream aloud.
       // Research Mode is excluded because its early return never reaches applyReplyChoices.
       const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
+      // Evaluated fresh every turn from the session surface and the server-loaded user (never from
+      // the request or sticky session state). Closed, it denies every admin tool name through the
+      // same denylist the post-buildTools pass enforces; see adminAssistantGate.ts.
+      const adminAssistantPlan = resolveAdminAssistantTools({
+        surface: session.surface,
+        isAdmin: this.user.isAdmin,
+        availableToolNames: new Set(Object.keys(externalTools ?? {})),
+      });
+      const adminAssistantGateOpen = adminAssistantPlan.open;
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
       const deniedTools = resolveDeniedTools(
         session.disabledTools,
         parsedBody.deniedTools,
-        resolveWorkspaceDeniedTools(session.surface, this.workspaceDeniedTools)
+        resolveWorkspaceDeniedTools(session.surface, this.workspaceDeniedTools),
+        adminAssistantPlan.deny
       );
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
@@ -2397,6 +2411,10 @@ export class ChatCompletionProcess {
         skipAutoOffers,
       });
       enabledTools.splice(0, enabledTools.length, ...resolvedTools);
+      // Added per turn, never persisted to session.autoAddedTools; still subject to the denylist.
+      for (const tool of adminAssistantPlan.enable) {
+        if (!enabledTools.includes(tool) && !deniedTools?.includes(tool)) enabledTools.push(tool);
+      }
 
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
@@ -2481,11 +2499,14 @@ export class ChatCompletionProcess {
       // the id to its CURRENT content HERE - not in an entry-point route - so it injects on EVERY
       // path (chat, llm, queue, slack) via SessionPromptFeature, and admin edits take effect with no
       // deploy. Raw text wins if both are somehow set. The injector enforces the activatable allowlist.
-      const sessionSystemPrompt = session.systemPromptText?.trim()
-        ? session.systemPromptText
-        : session.systemPromptId && this.loadSystemPromptById
-          ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
-          : undefined;
+      const sessionSystemPrompt = withAdminAssistantPrompt(
+        session.systemPromptText?.trim()
+          ? session.systemPromptText
+          : session.systemPromptId && this.loadSystemPromptById
+            ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
+            : undefined,
+        adminAssistantGateOpen
+      );
       // Hoisted out of the buildOptimizedFeatures argument it used to be inlined into: the
       // offeredTools site further down stamps this onto promptMeta.retrieval.mode, and the two
       // must be the same value - a telemetry field that recomputes its own answer is a field that

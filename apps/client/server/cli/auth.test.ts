@@ -424,10 +424,11 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
     });
   });
 
-  it('passes the impersonation claim through to the enrollment gate', async () => {
+  it('rejects impersonation on alternate completion credentials', async () => {
     vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
-    await verifyJwtToken(jwt.sign({ id: 'u1', impersonatedBy: 'admin-1' }, 'test-secret'));
-    expect(mockIsMfaEnrollmentOwed).toHaveBeenLastCalledWith(expect.anything(), { impersonatedBy: 'admin-1' });
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', impersonatedBy: 'admin-1' }, 'test-secret'))).rejects.toThrow(
+      'Impersonated sessions cannot use CLI or completion credentials'
+    );
   });
 
   it('fails closed when the enforcement read fails', async () => {

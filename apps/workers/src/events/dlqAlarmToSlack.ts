@@ -8,19 +8,23 @@
  * ALARM transitions get the full explanation; OK (resolved) transitions are posted
  * as a short resolved line. INSUFFICIENT_DATA is skipped.
  * Alarms go to SLACK_ALARMS_WEBHOOK_URL when set, otherwise the error-reporting channel.
+ * Production page-level alarms carry the mention token from the per-stage SSM parameter.
  */
 
 import type { SNSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 
 import {
+  appUrlFromEnv,
   formatAlarmSlackMessage,
   isCloudWatchAlarm,
   postAlarmToSlack,
   resolveAlarmWebhookUrl,
 } from './alarmSlackMessage';
+import { readAlarmMention } from './alarmSlackMention';
 
 export const handler = async (event: SNSEvent): Promise<void> => {
+  const options = { appUrl: appUrlFromEnv(), mention: await readAlarmMention() };
   for (const record of event.Records) {
     let payload: unknown;
     try {
@@ -31,7 +35,7 @@ export const handler = async (event: SNSEvent): Promise<void> => {
     }
     if (!isCloudWatchAlarm(payload)) continue;
 
-    const message = formatAlarmSlackMessage(payload, Resource.App.stage);
+    const message = formatAlarmSlackMessage(payload, Resource.App.stage, options);
     if (!message) continue;
 
     await postAlarmToSlack(resolveAlarmWebhookUrl(Resource), message);
