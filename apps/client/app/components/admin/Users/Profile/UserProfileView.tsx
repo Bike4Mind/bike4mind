@@ -19,6 +19,7 @@ import {
   ResetMfaDialog,
   RestrictDialog,
   SendMessageDialog,
+  ShadowTierDialog,
 } from './actions/accountDialogs';
 import { useAdminUserUpdate } from './actions/useAdminUserUpdate';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
@@ -53,6 +54,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <SuspendDialog {...props} />;
     case 'restrict':
       return <RestrictDialog {...props} />;
+    case 'shadowTier':
+      return <ShadowTierDialog {...props} />;
     case 'role':
       return <ChangeRoleDialog {...props} />;
     case 'productAccess':

@@ -23,6 +23,7 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   'divider',
   { action: 'compliance', label: 'Compliance record' },
   { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict AI features' },
+  { action: 'shadowTier', label: user.throttle?.tier === 'shadow' ? 'Remove limited tier' : 'Move to limited tier' },
   { action: 'delete', label: 'Delete user', danger: true },
 ];
 
@@ -76,6 +77,9 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
       status={
         <>
           <StatusChip tone={status.tone} label={status.label} dot data-testid="user-profile-status-chip" />
+          {user.throttle?.tier === 'shadow' && (
+            <StatusChip tone="neutral" label="Limited tier" data-testid="user-profile-shadow-tier-chip" />
+          )}
           {level && <StatusChip tone="info" label={level} data-testid="user-profile-level-chip" />}
           {org && <StatusChip tone="neutral" label={org} data-testid="user-profile-org-chip" />}
         </>

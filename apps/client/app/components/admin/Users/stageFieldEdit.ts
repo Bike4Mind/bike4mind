@@ -1,7 +1,7 @@
 import isEqual from 'lodash/isEqual';
-import { resolveUserStorageLimit } from '@bike4mind/common';
+import { resolveUserStorageLimit, type IUserDocument } from '@bike4mind/common';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
-import type { AdminFieldKey, EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
+import type { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 
 /**
  * Whether a staged value still matches what the server gave us. `null` and
@@ -15,16 +15,6 @@ import type { AdminFieldKey, EditedFieldsState } from '@client/app/components/ad
 const matchesSavedValue = (staged: unknown, saved: unknown): boolean =>
   (staged == null && saved == null) || isEqual(staged, saved);
 
-const savedFieldValue = (key: AdminFieldKey, savedUser: AdminUserListItem): unknown => {
-  if (key === 'throttleTier') return savedUser.throttle?.tier ?? 'none';
-  if (key === 'throttleReason') return '';
-  if (key === 'storageLimitOverride' && savedUser.storageLimitOverride === undefined) {
-    const savedStorage = resolveUserStorageLimit(savedUser);
-    return savedStorage.source === 'override' ? savedStorage.limitMb : null;
-  }
-  return (savedUser as Record<string, unknown>)[key];
-};
-
 /**
  * Records a field edit as "differs from what is saved" rather than "was touched".
  * Typing into a field and undoing it, or adding a tag and removing it again, leaves
@@ -32,11 +22,17 @@ const savedFieldValue = (key: AdminFieldKey, savedUser: AdminUserListItem): unkn
  */
 export const stageFieldEdit = (
   editedFields: EditedFieldsState,
-  key: AdminFieldKey,
+  key: keyof IUserDocument,
   value: unknown,
   savedUser: AdminUserListItem
 ): EditedFieldsState => {
-  const savedValue = savedFieldValue(key, savedUser);
+  const savedStorage = resolveUserStorageLimit(savedUser);
+  const savedValue =
+    key === 'storageLimitOverride' && savedUser.storageLimitOverride === undefined
+      ? savedStorage.source === 'override'
+        ? savedStorage.limitMb
+        : null
+      : (savedUser as Record<string, unknown>)[key];
   return {
     ...editedFields,
     // savedUser is the list projection, which is narrower than the fields admins edit

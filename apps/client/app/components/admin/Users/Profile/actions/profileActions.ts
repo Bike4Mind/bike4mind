@@ -5,6 +5,7 @@ export type ProfileAction =
   | 'credits'
   | 'suspend'
   | 'restrict'
+  | 'shadowTier'
   | 'role'
   | 'productAccess'
   | 'tags'

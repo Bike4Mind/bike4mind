@@ -45,7 +45,7 @@ import UserPermissions from '../UserPermissions';
 import ProductAccess from '../ProductAccess';
 import SystemMessageModal from '../SystemMessageModal';
 import { useDeleteUser, useUpdateUser, useLoginAsUser } from '@client/app/hooks/data/user';
-import { IUserDocument, UserLevelType, isValidAdminActionReason } from '@bike4mind/common';
+import { IUserDocument, UserLevelType } from '@bike4mind/common';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from '@client/app/components/admin/shared/adminReason';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
@@ -88,14 +88,11 @@ const describeDangerChanges = (editedFields: EditedFieldsState, formState: Admin
   return changes;
 };
 
-// throttleTier/throttleReason are request-only fields the update route routes through setThrottleTier.
-export type AdminFieldKey = keyof IUserDocument | 'throttleTier' | 'throttleReason';
-
 // Keyed by IUserDocument, not the narrower list-projection row: admins edit fields the
 // list endpoint does not read back (e.g. emailVerifiedAt), and the PATCH body is a
 // Partial<IUserDocument>.
 export type EditedFieldsState = {
-  [key in AdminFieldKey]?: boolean;
+  [key in keyof Partial<IUserDocument>]: boolean;
 };
 
 export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
@@ -134,17 +131,9 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
     setEditedFields({});
   }, [user]);
 
-  const handleFormFieldChange = (key: AdminFieldKey, value: unknown) => {
-    setFormState(prev => ({
-      ...prev,
-      [key]: value,
-      ...(key === 'throttleTier' ? { throttleReason: '' } : {}),
-    }));
-    setEditedFields(prev => {
-      const next = stageFieldEdit(prev, key, value, user);
-      // A reason is only meaningful while the tier change it explains is staged.
-      return key === 'throttleTier' && !next.throttleTier ? { ...next, throttleReason: false } : next;
-    });
+  const handleFormFieldChange = (key: keyof IUserDocument, value: unknown) => {
+    setFormState(prev => ({ ...prev, [key]: value }));
+    setEditedFields(prev => stageFieldEdit(prev, key, value, user));
   };
 
   const handleDeleteUser = async (userId: string, reason: string) => {
@@ -159,10 +148,6 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
     loginAsUser.mutate({ id: user.id, mfaToken: loginAsMfaToken.trim(), reason });
     closeLoginAsModal();
   };
-
-  const throttleReasonMissing =
-    !!editedFields.throttleTier &&
-    !isValidAdminActionReason((formState as { throttleReason?: string }).throttleReason ?? '');
 
   const getNextLevel = (currentLevel: string) => {
     switch (currentLevel) {
@@ -413,7 +398,6 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
           startDecorator={<SaveIcon />}
           onClick={handleUpdateClick}
           loading={updateUser.isPending}
-          disabled={throttleReasonMissing}
           data-testid="user-update-btn"
           sx={{ width: { xs: '100%', sm: 'auto' } }}
         >
