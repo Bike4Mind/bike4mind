@@ -95,7 +95,7 @@ async function completeValidated<T>(
     }
     if (result.ok) return result.value;
 
-    fallback ??= result.fallback;
+    fallback = result.fallback ?? fallback;
     lastErrors = result.errors;
     currentPrompt = [
       prompt,
@@ -217,6 +217,7 @@ async function triageBatch(
   logger?: Pick<Logger, 'warn'>
 ): Promise<TriageEntry[]> {
   const expected = new Set(prs.map(pr => pr.number));
+  const kept = new Map<number, TriageEntry>();
   return completeValidated(
     complete,
     buildTriagePrompt(prs),
@@ -231,7 +232,9 @@ async function triageBatch(
       if (!errors.length) return { ok: true, value: parsed.data.entries };
       // A reply with no known PR is no evidence the model read the batch, so it is never kept.
       const known = parsed.data.entries.filter(e => expected.has(e.number));
-      return { ok: false, errors, fallback: known.length ? known : undefined };
+      // The repair reply may cover PRs the first one skipped, so entries accumulate across attempts.
+      for (const entry of known) kept.set(entry.number, entry);
+      return { ok: false, errors, fallback: kept.size ? [...kept.values()] : undefined };
     },
     usage,
     'triage',

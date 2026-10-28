@@ -171,6 +171,22 @@ describe('generateReleaseNotes', () => {
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('treating them as internal'));
   });
 
+  it('keeps the entries of a partial repair reply that covers more than the first reply', async () => {
+    const entry = (number: number) => ({ number, customerFacing: true, note: `Note ${number}.` });
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([entry(1)]))
+      .mockResolvedValueOnce(triageReply([entry(1), entry(2), entry(3)]))
+      .mockResolvedValueOnce(triageReply([entry(4)]));
+    const logger = { warn: vi.fn() };
+
+    const { notes } = await triageReleaseNotes([pr(1), pr(2), pr(3), pr(4)], complete, { logger });
+
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete.mock.calls[2][0]).not.toContain('"number":3');
+    expect([...notes.keys()]).toEqual([1, 2, 3, 4]);
+  });
+
   it('drops a PR the model keeps omitting with a warning and ships the rest', async () => {
     const complete = vi.fn(async (prompt: string) =>
       prompt.includes('"number":1')
