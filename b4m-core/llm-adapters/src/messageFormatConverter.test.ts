@@ -233,4 +233,16 @@ describe('convertOpenAIToolHistoryToCanonical', () => {
       { role: 'tool', content: '{"result":"B"}', tool_call_id: 't2' },
     ]);
   });
+
+  it("folds Gemini's role: 'tool' messages, which already carry tool_result blocks, into a user turn", () => {
+    const messages = [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'search', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'r' }] },
+    ] as unknown as IMessage[];
+
+    const [assistant, results] = convertOpenAIToolHistoryToCanonical(messages);
+
+    expect(assistant).toBe(messages[0]);
+    expect(results).toEqual({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'r' }] });
+  });
 });

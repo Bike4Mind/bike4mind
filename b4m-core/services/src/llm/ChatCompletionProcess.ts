@@ -5661,7 +5661,7 @@ export class ChatCompletionProcess {
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
               // The failed attempt left its tool rounds in outboundMessages in its own provider's
-              // shape; another backend cannot read OpenAI-shape tool_calls.
+              // shape, which another backend may not read (OpenAI-shape tool_calls reach Anthropic as null).
               if (currentModel.backend !== failedModel.backend) {
                 outboundMessages = convertOpenAIToolHistoryToCanonical(outboundMessages);
               }

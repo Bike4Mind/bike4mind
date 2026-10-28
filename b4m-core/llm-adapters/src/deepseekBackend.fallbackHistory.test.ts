@@ -55,9 +55,7 @@ describe('DeepSeek tool history on a fallback hop to Anthropic', () => {
     return messages;
   }
 
-  it('produces a message array Anthropic accepts', async () => {
-    const history = convertOpenAIToolHistoryToCanonical(await deepSeekHistoryAfterMidLoopFailure());
-
+  function anthropicCapturing() {
     const create = vi.fn(async () => ({
       content: [{ type: 'text', text: 'ok' }],
       usage: { input_tokens: 1, output_tokens: 1 },
@@ -65,16 +63,24 @@ describe('DeepSeek tool history on a fallback hop to Anthropic', () => {
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const anthropic = new AnthropicBackend('test-key', logger as never);
     (anthropic as unknown as { _api: unknown })._api = { messages: { create } };
+    const send = async (history: IMessage[], options: Record<string, unknown> = {}) => {
+      await anthropic.complete(
+        ChatModels.CLAUDE_4_8_OPUS,
+        history,
+        { stream: false, tools: searchTools(), executeTools: false, ...options } as never,
+        async () => {}
+      );
+      return (create.mock.calls.at(-1) as unknown as [Record<string, unknown>])[0];
+    };
+    return { send };
+  }
 
-    await anthropic.complete(
-      ChatModels.CLAUDE_4_8_OPUS,
-      history,
-      { stream: false, tools: searchTools(), executeTools: false } as never,
-      async () => {}
-    );
+  it('produces a message array Anthropic accepts', async () => {
+    const history = convertOpenAIToolHistoryToCanonical(await deepSeekHistoryAfterMidLoopFailure());
 
-    const sent = (create.mock.calls[0] as unknown as [{ messages: Array<{ role: string; content: unknown }> }])[0]
-      .messages;
+    const request = await anthropicCapturing().send(history);
+
+    const sent = request.messages as Array<{ role: string; content: unknown }>;
     expect(sent.map(m => m.role)).toEqual(['user', 'assistant', 'user']);
     for (const m of sent) expect(m.content === null || m.content === undefined).toBe(false);
     expect(sent[1].content).toEqual([
@@ -87,5 +93,21 @@ describe('DeepSeek tool history on a fallback hop to Anthropic', () => {
         ['tool_result', 't2'],
       ]
     );
+  });
+
+  it('skips thinking for the hop, which the API refuses on a tool turn with no thinking block', async () => {
+    const history = convertOpenAIToolHistoryToCanonical(await deepSeekHistoryAfterMidLoopFailure());
+
+    const request = await anthropicCapturing().send(history, { thinking: { enabled: true, budget_tokens: 2048 } });
+
+    expect(request.thinking).toBeUndefined();
+  });
+
+  it('keeps thinking on for a history that does not continue a tool turn', async () => {
+    const request = await anthropicCapturing().send([{ role: 'user', content: 'hi' }] as IMessage[], {
+      thinking: { enabled: true, budget_tokens: 2048 },
+    });
+
+    expect(request.thinking).toBeDefined();
   });
 });

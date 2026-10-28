@@ -170,8 +170,26 @@ export function convertMessagesToOpenAIFormat(
   return messages.flatMap(msg => convertMessageToOpenAIFormat(msg, options));
 }
 
-function isOpenAIToolMessage(msg: IMessage): msg is IMessage & { tool_call_id: string } {
-  return (msg.role as string) === 'tool' && typeof (msg as { tool_call_id?: unknown }).tool_call_id === 'string';
+function isToolRoleMessage(msg: IMessage): boolean {
+  return (msg.role as string) === 'tool';
+}
+
+/**
+ * The tool_result blocks a `role: 'tool'` message carries: one built from an OpenAI-shape
+ * `tool_call_id` message, or the blocks Gemini pushes under that role as-is.
+ */
+function toolResultsOf(msg: IMessage): MessageContentToolResult[] {
+  const toolCallId = (msg as { tool_call_id?: unknown }).tool_call_id;
+  if (typeof toolCallId === 'string') {
+    return [
+      {
+        type: 'tool_result',
+        tool_use_id: toolCallId,
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+      },
+    ];
+  }
+  return Array.isArray(msg.content) ? (msg.content as MessageContentObject[]).filter(isToolResultBlock) : [];
 }
 
 function parseToolArguments(raw: string): MessageContentToolUse['input'] {
@@ -206,19 +224,21 @@ function toolCallsToCanonical(msg: IMessage & { tool_calls: OpenAIToolCall[] }):
 
 /**
  * The inverse of convertMessagesToOpenAIFormat for tool history: rewrites OpenAI-shape
- * assistant `tool_calls` and `role: 'tool'` messages into canonical tool_use / tool_result
- * blocks, folding each run of consecutive tool messages into one user message.
+ * assistant `tool_calls` and every `role: 'tool'` message (OpenAI's, and Gemini's, which
+ * already holds tool_result blocks) into canonical tool_use / tool_result blocks, folding each
+ * run of consecutive tool messages into one user message.
  *
- * OpenAI-compatible backends push their tool rounds onto the caller's array in their own
- * shape, and ChatCompletionProcess hands that same array to the fallback hop. Canonical is
- * the one shape every backend accepts (the OpenAI family converts it back on the way out),
- * so normalizing before a hop to another backend lets a turn cross providers mid tool loop.
+ * Backends push their tool rounds onto the caller's array in their own shape, and
+ * ChatCompletionProcess hands that same array to the fallback hop. Canonical is B4M's own
+ * shape: the Anthropic adapters read it directly and the OpenAI family converts it back on
+ * the way out, so normalizing before a hop to another backend lets a turn cross providers
+ * mid tool loop.
  *
- * Returns the input array itself when it holds no OpenAI-shape tool history, and keeps
+ * Returns the input array itself when it holds no foreign tool history, and keeps
  * every untouched message by reference so per-message cache anchors survive.
  */
 export function convertOpenAIToolHistoryToCanonical(messages: IMessage[]): IMessage[] {
-  if (!messages.some(msg => hasToolCalls(msg) || isOpenAIToolMessage(msg))) return messages;
+  if (!messages.some(msg => hasToolCalls(msg) || isToolRoleMessage(msg))) return messages;
 
   const result: IMessage[] = [];
   let pendingResults: MessageContentToolResult[] = [];
@@ -229,12 +249,8 @@ export function convertOpenAIToolHistoryToCanonical(messages: IMessage[]): IMess
   };
 
   for (const msg of messages) {
-    if (isOpenAIToolMessage(msg)) {
-      pendingResults.push({
-        type: 'tool_result',
-        tool_use_id: msg.tool_call_id,
-        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-      });
+    if (isToolRoleMessage(msg)) {
+      pendingResults.push(...toolResultsOf(msg));
       continue;
     }
     flushResults();

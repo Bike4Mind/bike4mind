@@ -216,6 +216,20 @@ function readToolDuration(error: unknown): number | undefined {
   return toolDurationsByError.get(error);
 }
 
+/**
+ * True when the array ends in tool results answering an assistant tool_use message that does not
+ * open with a thinking block - the one shape the API refuses while thinking is on.
+ */
+function continuesToolTurnWithoutThinking(messages: IMessage[]): boolean {
+  const last = messages.at(-1);
+  const previous = messages.at(-2);
+  if (last?.role !== 'user' || previous?.role !== 'assistant') return false;
+  if (!Array.isArray(last.content) || !last.content.some(block => block.type === 'tool_result')) return false;
+  if (!Array.isArray(previous.content) || !previous.content.some(block => block.type === 'tool_use')) return false;
+  const leadingType: unknown = previous.content[0]?.type;
+  return leadingType !== 'thinking' && leadingType !== 'redacted_thinking';
+}
+
 export class AnthropicBackend implements ICompletionBackend {
   private _api: Anthropic;
   private logger: Logger;
@@ -1291,7 +1305,16 @@ export class AnthropicBackend implements ICompletionBackend {
     // brings its own record, so a new Claude gets the right thinking shape
     // (buildThinkingParams reads thinkingStyle) instead of none at all.
     // `currentModelInfo` is resolved above, where max_tokens needs it too.
-    if (currentModelInfo?.can_think) {
+    // A history handed in mid tool turn by a fallback hop off another provider carries no signed
+    // thinking block, and the API rejects thinking on a tool turn whose assistant message does not
+    // open with one. Only the first round is checked: later rounds replay this adapter's own blocks.
+    const continuesForeignToolTurn = toolCallCount === 0 && continuesToolTurnWithoutThinking(filteredMessages);
+    if (continuesForeignToolTurn && currentModelInfo?.can_think) {
+      this.logger.warn('[AnthropicBackend] Thinking skipped: history continues a tool turn with no thinking block', {
+        model,
+      });
+    }
+    if (currentModelInfo?.can_think && !continuesForeignToolTurn) {
       // questMaster / thinking are Anthropic-specific extras layered onto the generic
       // completion options; view them through a typed lens rather than `any`.
       const thinkingOptions = options as Partial<ICompletionOptions> & {
