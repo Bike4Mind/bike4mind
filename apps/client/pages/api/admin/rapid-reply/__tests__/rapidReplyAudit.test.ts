@@ -468,6 +468,7 @@ describe('rapid reply admin audit on failed writes', () => {
     ['mapping PUT', () => call(mappingById, 'PUT', { isAdmin: false, id: 'm1', body: {} })],
     ['mapping DELETE', () => call(mappingById, 'DELETE', { isAdmin: false, id: 'm1' })],
     ['mappings bulk', () => call(mappingsBulk, 'POST', { isAdmin: false, body: { operations: [] } })],
+    ['test run', () => call(testRun, 'POST', { isAdmin: false, body: { mainModelId: 'm' } })],
   ])('records nothing for a non-admin on %s', async (_name, run) => {
     await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
     expect(h.audit).not.toHaveBeenCalled();
