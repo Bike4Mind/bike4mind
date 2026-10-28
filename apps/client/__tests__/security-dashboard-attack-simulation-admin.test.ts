@@ -70,6 +70,7 @@ import postHandler from '../pages/api/admin/security-dashboard/run-attack-simula
 
 const adminUser = { id: 'admin-1', isAdmin: true } as { id: string; isAdmin: boolean };
 const nonAdminUser = { id: 'user-1', isAdmin: false } as { id: string; isAdmin: boolean };
+const supportReader = { id: 'user-2', isAdmin: false, adminPermissions: ['support:read'] };
 
 const makeRes = () => {
   const json = vi.fn();
@@ -92,6 +93,13 @@ describe('GET /api/admin/security-dashboard/attack-simulation', () => {
     const { res } = makeRes();
     await expect(getHandler(req, res)).rejects.toThrow(/missing permission/i);
     expect(mockFindRecentByStage).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegated support:read holder read', async () => {
+    const req = { method: 'GET', user: supportReader } as unknown as Request;
+    const { res } = makeRes();
+    await getHandler(req, res);
+    expect(res.status).toHaveBeenCalledWith(200);
   });
 
   it('rejects requests with no user with ForbiddenError', async () => {
@@ -132,6 +140,13 @@ describe('POST /api/admin/security-dashboard/run-attack-simulation', () => {
     const req = { method: 'POST', user: nonAdminUser } as unknown as Request;
     const { res } = makeRes();
     await expect(postHandler(req, res)).rejects.toThrow(/missing permission/i);
+    expect(mockLambdaSend).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delegated support:read holder with the settings:manage requirement', async () => {
+    const req = { method: 'POST', user: supportReader } as unknown as Request;
+    const { res } = makeRes();
+    await expect(postHandler(req, res)).rejects.toThrow(/settings:manage/);
     expect(mockLambdaSend).not.toHaveBeenCalled();
   });
 
