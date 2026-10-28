@@ -23,6 +23,9 @@ export function BlankChatGreeting({ line, children }: { line: string; children?:
     <Box
       sx={{
         width: '100%',
+        // A grid item of the thread's centering host: without this its min-content width wins and
+        // a narrow window scrolls sideways instead of reflowing the cards.
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
