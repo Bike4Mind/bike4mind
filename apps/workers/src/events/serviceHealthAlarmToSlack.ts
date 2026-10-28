@@ -77,7 +77,7 @@ function formatMessage(payload: unknown, stage: string, options: FormatOptions):
     return composeAlarmMessage({
       stage,
       level: 'page',
-      title: `A background service failed to start: ${escapeMrkdwn(service)}`,
+      title: `A background service failed to start: ${service}`,
       mention: options.mention,
       sections: [
         `*Reason*\n${escapeMrkdwn(reason)}`,

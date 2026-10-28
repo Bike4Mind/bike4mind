@@ -102,6 +102,13 @@ describe('serviceHealthAlarmToSlack handler', () => {
     expect(text).not.toContain('Task failed to start');
   });
 
+  it('renders the service name literally in the header and escaped in the fallback text', async () => {
+    await handler(makeEvent({ ...taskFailedToStart, detail: { ...taskFailedToStart.detail, group: 'svc<a&b>' } }));
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.blocks[0].text.text).toContain('svc<a&b>');
+    expect(body.text).toContain('svc&lt;a&amp;b&gt;');
+  });
+
   it('falls back to stoppedReason when no container reported one', async () => {
     const noContainerReason = {
       ...taskFailedToStart,

@@ -481,6 +481,7 @@ export function normalizeMentionToken(raw: string | undefined): string | undefin
 export interface ComposeParams {
   stage: string;
   level: AlarmLevel;
+  /** Raw text: it goes into a plain_text header, and is escaped for the mrkdwn fallback. */
   title: string;
   /** Mention token; only honoured on production page-level messages. */
   mention?: string;
@@ -531,7 +532,7 @@ export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
   body.push({ type: 'context', elements: [{ type: 'mrkdwn', text: params.context.join(SEPARATOR) }] });
 
   return {
-    text: `${mention ? `${mention} ` : ''}${headerText}: ${escapeMrkdwn(params.summary)}`,
+    text: `${mention ? `${mention} ` : ''}${escapeMrkdwn(headerText)}: ${escapeMrkdwn(params.summary)}`,
     blocks,
     attachments: [{ color, blocks: body }],
   };
@@ -598,7 +599,7 @@ export function formatAlarmSlackMessage(
   return composeAlarmMessage({
     stage,
     level,
-    title: escapeMrkdwn(title),
+    title,
     mention: options.mention,
     fields: describeFields(alarm, entry?.unit, when),
     sections,

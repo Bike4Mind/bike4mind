@@ -122,6 +122,19 @@ describe('formatAlarmSlackMessage on production', () => {
     expect(attachment(message).color).toBe('#36C5F0');
   });
 
+  it('renders a title with markup characters literally in the header and escaped in the fallback text', () => {
+    const message = composeAlarmMessage({
+      stage: 'production',
+      level: 'info',
+      title: 'Queue <a&b> stuck',
+      sections: [],
+      context: ['production'],
+      summary: 'x',
+    });
+    expect(header(message)).toBe(':information_source: Production notice: Queue <a&b> stuck');
+    expect(message.text).toContain('Queue &lt;a&amp;b&gt; stuck');
+  });
+
   it('prepends the mention to page-level alarms only when a token is configured', () => {
     const off = formatAlarmSlackMessage(burst, 'production');
     expect(topBlocks(off)[0].type).toBe('header');
