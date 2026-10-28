@@ -3,6 +3,7 @@ import { ModelNotFoundError, RuntimeUnsupportedError } from './errors';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   HEALTH_TIMEOUT_MS,
+  chooseRuntimeId,
   describeError,
   runtimeEndpointId,
   isAuthError,
@@ -25,6 +26,8 @@ import type {
 export interface OpenAICompatibleRuntimeOptions {
   /** Server root; a trailing `/v1` is accepted and stripped. */
   baseUrl: string;
+  /** Replaces the address-derived id; see `OllamaRuntimeOptions.id`. */
+  id?: string;
   fetch?: FetchLike;
   /** Enables product-specific endpoints for richer model details. */
   product?: OpenAICompatibleProduct | null;
@@ -102,7 +105,7 @@ export class OpenAICompatibleRuntime implements LocalRuntime {
 
   constructor(options: OpenAICompatibleRuntimeOptions) {
     this.baseUrl = requireBaseUrl(options.baseUrl, 'openai-compatible');
-    this.id = `openai-compatible:${runtimeEndpointId(this.baseUrl)}`;
+    this.id = chooseRuntimeId(options.id, `openai-compatible:${runtimeEndpointId(this.baseUrl)}`, 'openai-compatible');
     this.product = options.product ?? null;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.healthTimeoutMs = options.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;

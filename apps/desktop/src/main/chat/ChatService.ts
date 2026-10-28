@@ -55,6 +55,7 @@ import {
   NO_LOCAL_MODEL,
   parseLocalModelId,
   pickLocalModel,
+  SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
@@ -126,6 +127,8 @@ import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
 import { OllamaLocal } from './OllamaLocal';
+import type { LocalChat } from './localChat';
+import { ServerCredentialsError } from '../modelServers/errors';
 import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
@@ -447,7 +450,8 @@ export interface ChatServiceDeps {
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
   prepareImage?: ImageContext['prepare'];
   history?: LocalHistory;
-  local?: OllamaLocal;
+  /** This computer's Ollama and the saved model servers; see modelServers/LocalModels. */
+  local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -3031,7 +3035,11 @@ export class ChatService {
       const expired = err instanceof SessionRevokedError || err instanceof NotAuthenticatedError;
       const message = expired ? SESSION_PAUSED_MESSAGE : err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(expired ? 'CHAT: reply paused: the session expired' : `CHAT: reply failed: ${message}`);
-      const stop = expired ? { stopReason: SESSION_EXPIRED_STOP } : {};
+      const stop = expired
+        ? { stopReason: SESSION_EXPIRED_STOP }
+        : err instanceof ServerCredentialsError
+          ? { stopReason: SERVER_CREDENTIALS_STOP }
+          : {};
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
@@ -5877,7 +5885,7 @@ async function streamRound(...args: Parameters<typeof streamCompletion>): Promis
 }
 
 async function streamLocalRound(
-  local: OllamaLocal,
+  local: LocalChat,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
   signal?: AbortSignal,
