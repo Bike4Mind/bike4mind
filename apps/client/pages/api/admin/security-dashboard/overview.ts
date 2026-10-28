@@ -1,5 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import {
@@ -41,11 +40,10 @@ export interface SecurityDashboardOverviewResponse {
  * Admin Security Dashboard Overview API.
  * Aggregates the latest scan snapshots (web/code/packages/secrets/cloud/waf) into a single overview.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const now = new Date();
 
   const stage = Resource.App.stage;

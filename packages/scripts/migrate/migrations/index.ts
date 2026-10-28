@@ -247,6 +247,7 @@ import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organ
 import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import RestoreLegacyXlsMimeType from './20260921235946_restore-legacy-xls-mime-type';
+import EnsureUserAdminListIndexes from './20260921236000_ensure-user-admin-list-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -429,6 +430,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureQuestSignupActivityIndex,
   EnsureUserSignupGrantOrgIndex,
   RedropShareTokenScalarIndex,
+  EnsureUserAdminListIndexes,
   EnsureCreditTransactionBalanceEventIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,

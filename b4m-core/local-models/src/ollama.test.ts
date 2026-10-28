@@ -39,6 +39,24 @@ describe('OllamaRuntime identity', () => {
     expect(new OllamaRuntime({ baseUrl: 'http://10.0.0.5:11500/' }).id).toBe('ollama:10.0.0.5:11500');
   });
 
+  it('takes an explicit id over the address, so two servers at one address stay apart', async () => {
+    server = await startFakeServer({ 'GET /api/tags': json({ models: null }) });
+    const saved = new OllamaRuntime({ baseUrl: server.baseUrl, id: 'srv-a1b2c3' });
+    const tunnelled = new OllamaRuntime({ baseUrl: server.baseUrl, id: 'srv-d4e5f6' });
+    expect(saved.id).toBe('srv-a1b2c3');
+    expect(tunnelled.id).toBe('srv-d4e5f6');
+    expect(new OllamaRuntime({ id: 'srv-a1b2c3' }).id).toBe('srv-a1b2c3');
+    const down = new OllamaRuntime({ baseUrl: `http://127.0.0.1:${await closedPort()}`, id: 'srv-a1b2c3' });
+    await expect(down.list()).rejects.toMatchObject({ runtimeId: 'srv-a1b2c3' });
+    expect(await saved.list()).toEqual([]);
+  });
+
+  it('refuses an unusable explicit id', () => {
+    expect(() => new OllamaRuntime({ id: '' })).toThrow('Invalid ollama runtime id');
+    expect(() => new OllamaRuntime({ id: 'srv a' })).toThrow(LocalRuntimeError);
+    expect(() => new OllamaRuntime({ id: 'x'.repeat(129) })).toThrow(LocalRuntimeError);
+  });
+
   it('canonicalizes localhost to 127.0.0.1', () => {
     const runtime = new OllamaRuntime({ baseUrl: 'localhost:11434' });
     expect(runtime.baseUrl).toBe('http://127.0.0.1:11434');
