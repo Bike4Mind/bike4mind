@@ -91,6 +91,16 @@
       "outputs": ["out/**"],
       "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json", "$TURBO_ROOT$/catalog/model-hub/**"]
     },
+    // The main process imports the curated manifest from catalog/, outside the package, and its
+    // tests validate it; without this a manifest-only change replays cached results.
+    "@bike4mind/desktop#typecheck": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/catalog/model-hub/**"]
+    },
+    "@bike4mind/desktop#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/catalog/model-hub/**"]
+    },
     // @bike4mind/workers compiles and tests apps/client/server code through its interim path
     // alias (apps/workers/tsconfig.json), and some of that code imports the premium-generated
     // stubs @bike4mind/client's codegen writes - same cross-package edge as @bike4mind/scripts.
