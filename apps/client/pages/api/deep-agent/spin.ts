@@ -4,8 +4,7 @@ import { randomUUID } from 'crypto';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-// Direct file imports, as in every other deep-agent route. The wake deps are
-// assembled inline from the clean modules because buildDefaultWakeDeps lives in
+// The wake deps are assembled inline because buildDefaultWakeDeps lives in
 // apps/workers/src/deepAgent/wakeHandler.ts, which apps/client cannot import.
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps } from '@bike4mind/agents';
 import '@server/deepAgent/contributedToolbelts';
