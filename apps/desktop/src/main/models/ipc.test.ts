@@ -85,9 +85,39 @@ describe('registerModelsIpc', () => {
     const { invoke, local, remote } = setup('allowed');
     expect(await invoke(IPC_CHANNELS.modelsRemove, 'qwen2.5:0.5b', 'gpu')).toEqual({ ok: true });
     expect(remote.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
-    expect(await invoke(IPC_CHANNELS.modelsRemove, 'llama3', 42)).toEqual({ ok: true });
+    expect(await invoke(IPC_CHANNELS.modelsRemove, 'llama3', undefined)).toEqual({ ok: true });
     expect(local.remove).toHaveBeenCalledWith('llama3');
   });
+
+  it.each([42, null, '', { id: 'gpu' }])('refuses a server id of %j instead of acting on this computer', async id => {
+    const { invoke, local, remote } = setup('allowed');
+    expect(await invoke(IPC_CHANNELS.modelsRemove, 'llama3', id)).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid' },
+    });
+    expect(await invoke(IPC_CHANNELS.modelsPull, { ...pullRequest, serverId: id })).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid' },
+      listed: false,
+    });
+    expect(await invoke(IPC_CHANNELS.modelsListInstalled, id)).toMatchObject({ ok: false, error: { kind: 'invalid' } });
+    expect(await invoke(IPC_CHANNELS.modelsGetStatus, id)).toMatchObject({ reachable: false, serverId: '' });
+    expect(local.remove).not.toHaveBeenCalled();
+    expect(remote.remove).not.toHaveBeenCalled();
+  });
+
+  it.each(['gpu/Qwen/Qwen2.5-0.5B-Instruct-GGUF', 'Qwen', 'Qwen/a#b', '../x/y'])(
+    'refuses a pull of repo %s, so it cannot reuse another pull key',
+    async repo => {
+      const { invoke, getModel } = setup('allowed');
+      expect(await invoke(IPC_CHANNELS.modelsPull, { ...pullRequest, repo, serverId: undefined })).toMatchObject({
+        ok: false,
+        error: { kind: 'invalid' },
+      });
+      expect(getModel).not.toHaveBeenCalled();
+      expect(await invoke(IPC_CHANNELS.modelsListPulls)).toEqual([]);
+    }
+  );
 
   it('reports a server that is no longer saved', async () => {
     const { invoke } = setup('allowed');

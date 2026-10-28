@@ -1,4 +1,5 @@
 import type { IpcMain } from 'electron';
+import { isHubRepoId } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { ModelHubService } from './ModelHubService';
 
@@ -8,12 +9,24 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_TEXT ? value : null;
 }
 
-/** A server id from the renderer; anything else means this computer. */
-function serverId(value: unknown): string | undefined {
-  return text(value) ?? undefined;
+/** A server id from the renderer: omitted means this computer; null when it is present but not an id. */
+function server(value: unknown): { id: string | undefined } | null {
+  if (value === undefined) return { id: undefined };
+  const id = text(value);
+  return id ? { id } : null;
 }
 
 const invalid = { ok: false, error: { kind: 'invalid', message: 'Invalid request.' } } as const;
+
+const invalidStatus = {
+  reachable: false,
+  version: null,
+  url: '',
+  error: 'Invalid request.',
+  serverId: '',
+  serverName: 'Model server',
+  management: 'unsupported',
+} as const;
 
 /** The Models screen's handlers. Which servers allow pulls and removals is decided in the service, not here. */
 export function registerModelsIpc(
@@ -23,8 +36,14 @@ export function registerModelsIpc(
     'status' | 'installed' | 'pulls' | 'search' | 'detail' | 'pull' | 'cancel' | 'resume' | 'dismiss' | 'remove'
   >
 ): void {
-  ipc.handle(IPC_CHANNELS.modelsGetStatus, (_event, server: unknown) => service.status(serverId(server)));
-  ipc.handle(IPC_CHANNELS.modelsListInstalled, (_event, server: unknown) => service.installed(serverId(server)));
+  ipc.handle(IPC_CHANNELS.modelsGetStatus, (_event, value: unknown) => {
+    const target = server(value);
+    return target ? service.status(target.id) : invalidStatus;
+  });
+  ipc.handle(IPC_CHANNELS.modelsListInstalled, (_event, value: unknown) => {
+    const target = server(value);
+    return target ? service.installed(target.id) : invalid;
+  });
   ipc.handle(IPC_CHANNELS.modelsListPulls, () => service.pulls());
   ipc.handle(IPC_CHANNELS.modelsSearch, (_event, request: unknown) => {
     const body = request && typeof request === 'object' ? (request as Record<string, unknown>) : null;
@@ -42,7 +61,16 @@ export function registerModelsIpc(
     const buildId = text(body?.buildId);
     const revision = text(body?.revision);
     const sizeBytes = body?.sizeBytes;
-    if (!repo || !buildId || !revision || typeof sizeBytes !== 'number' || !Number.isSafeInteger(sizeBytes))
+    const target = server(body?.serverId);
+    if (
+      !repo ||
+      !isHubRepoId(repo) ||
+      !buildId ||
+      !revision ||
+      typeof sizeBytes !== 'number' ||
+      !Number.isSafeInteger(sizeBytes) ||
+      !target
+    )
       return { ...invalid, listed: false };
     return service.pull({
       repo,
@@ -51,7 +79,7 @@ export function registerModelsIpc(
       sizeBytes,
       acceptLicense: body?.acceptLicense === true,
       confirmAccess: body?.confirmAccess === true,
-      serverId: serverId(body?.serverId),
+      serverId: target.id,
     });
   });
   ipc.handle(IPC_CHANNELS.modelsCancelPull, (_event, key: unknown) => {
@@ -66,8 +94,9 @@ export function registerModelsIpc(
     const id = text(key);
     if (id) service.dismiss(id);
   });
-  ipc.handle(IPC_CHANNELS.modelsRemove, (_event, name: unknown, server: unknown) => {
+  ipc.handle(IPC_CHANNELS.modelsRemove, (_event, name: unknown, value: unknown) => {
     const id = text(name);
-    return id ? service.remove(id, serverId(server)) : invalid;
+    const target = server(value);
+    return id && target ? service.remove(id, target.id) : invalid;
   });
 }

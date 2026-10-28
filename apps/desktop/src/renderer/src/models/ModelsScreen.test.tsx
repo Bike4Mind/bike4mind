@@ -137,6 +137,7 @@ interface Bridge {
 
 let bridge: Bridge;
 let pushPulls: (pulls: ModelPull[]) => void = () => {};
+let pushServers: (servers: ModelServerView[]) => void = () => {};
 const calls = {
   pull: vi.fn(),
   cancelPull: vi.fn(),
@@ -166,7 +167,10 @@ beforeEach(() => {
     shell: { openExternal: vi.fn() },
     modelServers: {
       list: async () => bridge.servers,
-      onChanged: () => () => {},
+      onChanged: (listener: (servers: ModelServerView[]) => void) => {
+        pushServers = listener;
+        return () => {};
+      },
     },
     models: {
       getStatus: async (serverId?: string) => {
@@ -748,6 +752,58 @@ describe('ModelsScreen servers', () => {
     expect(q('models-pull-keep-open')).toBeNull();
     await click(q('models-pull-resume-btn'));
     expect(calls.resumePull).toHaveBeenCalledWith(`gpu/${REPO}#q`);
+  });
+
+  const changeServers = async (servers: ModelServerView[]) => {
+    bridge.servers = servers;
+    act(() => pushServers(servers));
+    await flush();
+    await flush();
+  };
+
+  it('falls back to this computer when the selected server is removed, closing its Remove confirmation', async () => {
+    await mount();
+    await pickServer('gpu');
+    await click(q('models-installed-remove-btn'));
+    expect(q('models-remove-dialog')?.textContent).toContain('on gpu box');
+
+    await changeServers([THIS_COMPUTER, SHARED_BOX]);
+
+    expect(q('models-remove-dialog')).toBeNull();
+    expect(calls.getStatus).toHaveBeenLastCalledWith('local');
+    expect(q('models-server-select')?.textContent).toContain('This computer');
+    expect(q('models-runtime-status')?.textContent).toContain('running at');
+    expect(q('models-installed-empty')?.textContent).toContain('No local models yet');
+    expect(calls.remove).not.toHaveBeenCalled();
+  });
+
+  it('closes an open download dialog when its server is removed, and sends nothing', async () => {
+    await mount();
+    await pickServer('gpu');
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-server')?.textContent).toContain('gpu box');
+
+    await changeServers([THIS_COMPUTER, SHARED_BOX]);
+
+    expect(q('models-pull-dialog-confirm-btn')).toBeNull();
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it('hides the controls and re-checks the server when Settings sets it to Chat only', async () => {
+    await mount();
+    await pickServer('gpu');
+    expect(q('models-installed-remove-btn')).not.toBeNull();
+    const checks = calls.getStatus.mock.calls.length;
+
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management: 'chat-only' });
+    await changeServers([THIS_COMPUTER, { ...GPU_BOX, access: 'chat' }, SHARED_BOX]);
+
+    expect(q('models-installed-remove-btn')).toBeNull();
+    expect(q('models-manage-note')?.textContent).toContain('gpu box is set to Chat only');
+    expect(calls.getStatus.mock.calls.length).toBeGreaterThan(checks);
+    expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
   });
 
   it("names the server's own Ollama key in the access steps", async () => {

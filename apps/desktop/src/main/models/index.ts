@@ -15,7 +15,9 @@ const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
  * The Models screen's backend. Hugging Face is only reached from here, never the renderer. The app keeps no
  * Hugging Face token, so gated and private repos cannot be verified or pulled yet.
  */
-export function registerModels(servers: Pick<ModelServerRegistry, 'hubServer' | 'check'>): ModelHubService {
+export function registerModels(
+  servers: Pick<ModelServerRegistry, 'hubServer' | 'check' | 'onServerSaved'>
+): ModelHubService {
   const send = (channel: string, payload?: ModelPull[] | string) => {
     for (const window of appWindows()) window.webContents.send(channel, payload);
   };
@@ -27,9 +29,13 @@ export function registerModels(servers: Pick<ModelServerRegistry, 'hubServer' | 
     hub: new HuggingFaceHub(),
     onPullsChanged: pulls => send(IPC_CHANNELS.modelsPullsChanged, pulls),
     onInstalledChanged: serverId => {
-      // Announced after the recheck, so the picker's reload finds the server online and its saved list current.
-      const checked = serverId === LOCAL_SERVER_ID ? Promise.resolve() : servers.check(serverId).catch(() => undefined);
-      void checked.then(() => send(IPC_CHANNELS.modelsInstalledChanged, serverId));
+      send(IPC_CHANNELS.modelsInstalledChanged, serverId);
+      if (serverId === LOCAL_SERVER_ID) return;
+      // Again after the recheck, so the picker's reload finds the server online and its saved list current.
+      void servers
+        .check(serverId)
+        .catch(() => undefined)
+        .then(() => send(IPC_CHANNELS.modelsInstalledChanged, serverId));
     },
     keepAwake: on => {
       if (on && blocker === null) blocker = powerSaveBlocker.start('prevent-app-suspension');
@@ -39,6 +45,7 @@ export function registerModels(servers: Pick<ModelServerRegistry, 'hubServer' | 
       }
     },
   });
+  servers.onServerSaved(id => service.serverChanged(id));
   registerModelsIpc(ipcMain, service);
   return service;
 }

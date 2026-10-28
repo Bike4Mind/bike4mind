@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import {
   OllamaRuntime,
   OpenAICompatibleRuntime,
+  PullIdleTimeoutError,
   RuntimeConnectionError,
   RuntimeHttpError,
   type FetchLike,
@@ -112,8 +113,15 @@ export class ModelServerRegistry {
   private localHealth: ModelServerHealth = { ...UNKNOWN_HEALTH };
   private timer: ReturnType<typeof setInterval> | undefined;
   private loaded: Promise<void> | null = null;
+  private readonly savedListeners = new Set<(id: string) => void>();
 
   constructor(private readonly deps: ModelServerRegistryDeps) {}
+
+  /** Calls `listener` with a server's id after its saved settings change or it is removed. */
+  onServerSaved(listener: (id: string) => void): () => void {
+    this.savedListeners.add(listener);
+    return () => this.savedListeners.delete(listener);
+  }
 
   /** Loads the saved servers and starts the background recheck. */
   start(): Promise<void> {
@@ -248,6 +256,7 @@ export class ModelServerRegistry {
     }
     const record = await this.deps.store.update(id, input);
     this.entries.set(id, this.build(record, entry));
+    this.saved(id);
     if (input.credential || input.kind) await this.check(id);
     else this.emit();
     return this.views();
@@ -257,6 +266,7 @@ export class ModelServerRegistry {
     await this.load();
     await this.deps.store.remove(id);
     this.entries.delete(id);
+    this.saved(id);
     this.emit();
     return this.views();
   }
@@ -574,6 +584,10 @@ export class ModelServerRegistry {
     return this.loaded;
   }
 
+  private saved(id: string): void {
+    for (const listener of this.savedListeners) listener(id);
+  }
+
   private emit(): void {
     if (!this.deps.changed) return;
     void this.views().then(servers => this.deps.changed?.(servers));
@@ -626,6 +640,7 @@ export function describeFailure(err: unknown): string {
   if (err instanceof ServerTransportError || err instanceof ServerRedirectError) return err.message;
   if (err instanceof DOMException && err.name === 'TimeoutError') return 'it did not answer in time';
   if (err instanceof Error && err.name === 'TimeoutError') return 'it did not answer in time';
+  if (err instanceof PullIdleTimeoutError) return 'it stopped sending data';
   const code = errorCode(err);
   if (code === 'ECONNREFUSED') return 'connection refused';
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'host not found';
@@ -649,6 +664,7 @@ function failureHealth(err: unknown, label: string): ModelServerHealth | null {
   const connection =
     err instanceof TypeError ||
     (err instanceof Error && err.name === 'TimeoutError') ||
+    err instanceof PullIdleTimeoutError ||
     (err instanceof Error && err.cause instanceof TypeError) ||
     DROP_CODES.has(errorCode(err) ?? '') ||
     (err instanceof Error && /ended (the reply )?before|stream ended/i.test(err.message));

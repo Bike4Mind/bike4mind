@@ -132,14 +132,16 @@ export function InstalledTab({
   onRetry: () => void;
   onExplore: () => void;
 }) {
-  const [confirming, setConfirming] = useState<LocalModelEntry | null>(null);
+  // The server is kept with the model, so a confirmation never acts on a server other than the one it named.
+  const [confirmingOn, setConfirming] = useState<{ model: LocalModelEntry; serverId: string | undefined } | null>(null);
+  const confirming = confirmingOn?.model ?? null;
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const canManage = target.management === 'allowed';
 
-  const remove = async (model: LocalModelEntry) => {
+  const remove = async (model: LocalModelEntry, serverId: string | undefined) => {
     setRemoving(true);
-    const result = await window.b4m.models.remove(model.name, target.local ? undefined : target.id);
+    const result = await window.b4m.models.remove(model.name, serverId);
     setRemoving(false);
     setConfirming(null);
     setRemoveError(result.ok ? null : result.error.message);
@@ -227,7 +229,13 @@ export function InstalledTab({
             {target.local ? '' : ` on ${target.name}`}
           </Typography>
           {installed.models.map(model => (
-            <InstalledRow key={model.name} model={model} onRemove={canManage ? () => setConfirming(model) : null} />
+            <InstalledRow
+              key={model.name}
+              model={model}
+              onRemove={
+                canManage ? () => setConfirming({ model, serverId: target.local ? undefined : target.id }) : null
+              }
+            />
           ))}
         </>
       )}
@@ -249,7 +257,7 @@ export function InstalledTab({
             <Button
               color="danger"
               loading={removing}
-              onClick={() => confirming && void remove(confirming)}
+              onClick={() => confirmingOn && void remove(confirmingOn.model, confirmingOn.serverId)}
               data-testid="models-remove-dialog-confirm-btn"
             >
               Remove

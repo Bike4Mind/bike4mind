@@ -3,9 +3,11 @@ import {
   HubRateLimitError,
   LocalRuntimeError,
   ModelNotFoundError,
+  PullIdleTimeoutError,
   RuntimeConnectionError,
   RuntimeHttpError,
   isAbliteratedModel,
+  isHubRepoId,
   type HubGgufBuild,
   type HubModelDetail,
   type HubModelSummary,
@@ -111,6 +113,11 @@ export function toModelHubError(error: unknown): ModelHubError {
   if (error instanceof ServerUnreachableError) return hubError('runtime-unavailable', error.message);
   if (error instanceof ServerTransportError || error instanceof ServerRedirectError)
     return hubError('failed', error.message);
+  if (error instanceof PullIdleTimeoutError)
+    return hubError(
+      'runtime-unavailable',
+      'Ollama stopped sending download progress, so the download was stopped. Download again to continue it.'
+    );
   const fromHub = error instanceof LocalRuntimeError && error.runtimeId.startsWith('huggingface');
   if (error instanceof HubRateLimitError)
     return hubError('rate-limited', 'Hugging Face is rate limiting this computer.', error.retryAfterMs);
@@ -353,6 +360,7 @@ export class ModelHubService {
    * Refused for a server the user did not set to "Chat and manage".
    */
   async pull(request: ModelPullRequest): Promise<ModelPullResult> {
+    if (!isHubRepoId(request.repo)) return { ok: false, error: hubError('invalid', 'Invalid request.'), listed: false };
     const target = this.#target(request.serverId);
     if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE), listed: false };
     const refusal = manageRefusal(target);
@@ -497,6 +505,17 @@ export class ModelHubService {
   dismiss(key: string): void {
     const entry = this.#pulls.get(key);
     if (entry?.view.phase === 'failed' || entry?.view.phase === 'paused') this.#drop(key, entry);
+  }
+
+  /** Called when a saved server changes or is removed: stops and clears its pulls once it no longer allows them. */
+  serverChanged(serverId: string): void {
+    const target = this.#target(serverId);
+    if (target && !manageRefusal(target)) return;
+    for (const [key, entry] of this.#pulls) {
+      if (entry.view.serverId !== serverId) continue;
+      entry.controller.abort();
+      this.#drop(key, entry);
+    }
   }
 
   /** Refused for a server the user did not set to "Chat and manage". */

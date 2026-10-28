@@ -198,7 +198,7 @@ function ModelDetail({
   onRecheck: () => void;
 }) {
   const [detail, setDetail] = useState<DetailState>({ state: 'loading' });
-  const [confirming, setConfirming] = useState<HubBuildView | null>(null);
+  const [confirmingOn, setConfirming] = useState<{ build: HubBuildView; serverId: string | undefined } | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -237,7 +237,7 @@ function ModelDetail({
   const model = detail.model;
   const runtimeReady = status?.reachable === true;
   const canPull = target.management === 'allowed';
-  const start = async (build: HubBuildView, consent: PullConsent) => {
+  const start = async (build: HubBuildView, serverId: string | undefined, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
     const result = await window.b4m.models.pull({
@@ -246,7 +246,7 @@ function ModelDetail({
       revision: model.revision,
       sizeBytes: build.sizeBytes,
       ...consent,
-      ...(target.local ? {} : { serverId: target.id }),
+      ...(serverId === undefined ? {} : { serverId }),
     });
     if (result.ok) return;
     if (result.error.kind === 'runtime-unavailable') onRecheck();
@@ -351,7 +351,7 @@ function ModelDetail({
               installed={!!build.ollamaRef && installedNames.has(build.ollamaRef.toLowerCase())}
               runtimeReady={runtimeReady}
               canPull={canPull}
-              onPull={() => setConfirming(build)}
+              onPull={() => setConfirming({ build, serverId: target.local ? undefined : target.id })}
             />
           ))
         )}
@@ -362,13 +362,13 @@ function ModelDetail({
         )}
       </Box>
 
-      {confirming && (
+      {confirmingOn && (
         <PullDialog
           model={model}
-          build={confirming}
+          build={confirmingOn.build}
           target={target}
           onClose={() => setConfirming(null)}
-          onConfirm={consent => void start(confirming, consent)}
+          onConfirm={consent => void start(confirmingOn.build, confirmingOn.serverId, consent)}
         />
       )}
     </Stack>
@@ -540,7 +540,7 @@ export function ExploreTab({
       <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2, position: { md: 'sticky' }, top: { md: 8 } }}>
         {selected ? (
           <ModelDetail
-            key={selected}
+            key={`${target.id}:${selected}`}
             repo={selected}
             status={status}
             target={target}

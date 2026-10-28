@@ -44,10 +44,16 @@ afterEach(async () => {
 });
 
 /**
- * An Ollama behind a bearer token. Its first pull streams part of the blob and then drops the connection;
+ * How the first pull ends: `drop` closes the connection, `quiet` stops writing and leaves it open (a network
+ * drop no packet reports), `stall` stays open and is never resumed, `error` sends Ollama's error frame.
+ */
+type FirstPull = 'drop' | 'quiet' | 'stall' | 'error';
+
+/**
+ * An Ollama behind a bearer token. Its first pull streams part of the blob and then ends as `first` says;
  * the next pull of the same name starts from the partial file, as Ollama's does.
  */
-async function fakeOllama() {
+async function fakeOllama(first: FirstPull = 'drop') {
   const state = { stored: 0, installed: [] as string[], pulls: [] as string[], authorized: [] as boolean[] };
   const server = http.createServer((req, res) => {
     let body = '';
@@ -74,10 +80,14 @@ async function fakeOllama() {
       const frame = (value: unknown) => res.write(`${JSON.stringify(value)}\n`);
       frame({ status: 'pulling manifest' });
       frame({ status: 'pulling sha256:aa', digest: 'sha256:aa', total: TOTAL, completed: state.stored });
-      if (state.pulls.length === 1) {
+      if (state.pulls.length === 1 || first === 'stall') {
         state.stored = 400;
         frame({ status: 'pulling sha256:aa', digest: 'sha256:aa', total: TOTAL, completed: state.stored });
-        setTimeout(() => res.socket?.destroy(), 20);
+        if (first === 'drop') setTimeout(() => res.socket?.destroy(), 20);
+        if (first === 'error') {
+          frame({ error: 'max retries exceeded: unexpected EOF' });
+          res.end();
+        }
         return;
       }
       state.stored = TOTAL;
@@ -144,8 +154,11 @@ const unusedLocal: ModelRuntimePort = {
   remove: () => Promise.reject(new Error('this computer must not be asked')),
 };
 
-async function setup(access: 'chat' | 'manage') {
-  const fake = await fakeOllama();
+async function setup(
+  access: 'chat' | 'manage',
+  options: { first?: FirstPull; idleTimeoutMs?: number; followSettings?: boolean } = {}
+) {
+  const fake = await fakeOllama(options.first);
   const registry = new ModelServerRegistry({
     store: new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined }),
     logger: { debug: () => undefined, warn: () => undefined },
@@ -170,14 +183,15 @@ async function setup(access: 'chat' | 'manage') {
         ...server,
         runtime: {
           ...server.runtime,
-          pull: (ref, options) => {
+          pull: (ref, pullOptions) => {
             const mine: PullProgress[] = [];
             frames.push(mine);
             return server.runtime.pull(ref, {
-              ...options,
+              ...pullOptions,
+              ...(options.idleTimeoutMs ? { idleTimeoutMs: options.idleTimeoutMs } : {}),
               onProgress: progress => {
                 mine.push(progress);
-                options?.onProgress?.(progress);
+                pullOptions?.onProgress?.(progress);
               },
             });
           },
@@ -190,6 +204,7 @@ async function setup(access: 'chat' | 'manage') {
     keepAwake,
     progressIntervalMs: 0,
   });
+  if (options.followSettings) registry.onServerSaved(id => service.serverChanged(id));
   return { fake, registry, service, serverId: saved.id, frames, keepAwake, installedChanged };
 }
 
@@ -232,6 +247,107 @@ describe('ModelHubService on a saved model server', () => {
       expect.arrayContaining([expect.objectContaining({ name: REF, server: { id: serverId, name: 'gpu box' } })])
     );
     expect(picker.find(model => model.name === REF)?.unavailable).toBeUndefined();
+  });
+
+  it('pauses a pull when the server goes quiet without closing, and resume finishes it', async () => {
+    const { fake, registry, service, serverId, keepAwake } = await setup('manage', {
+      first: 'quiet',
+      idleTimeoutMs: 50,
+    });
+
+    const first = await service.pull(request(serverId));
+    expect(first).toMatchObject({ ok: false, error: { kind: 'connection-lost' }, listed: true });
+    const [paused] = service.pulls();
+    expect(paused).toMatchObject({ phase: 'paused', completedBytes: 400 });
+    expect(paused.error?.message).toContain('lost the connection to gpu box');
+    expect(paused.error?.message).not.toContain('srv-');
+    const health = (await registry.views()).find(view => view.id === serverId)?.health;
+    expect(health).toMatchObject({ state: 'unreachable', error: 'gpu box: it stopped sending data' });
+    expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+
+    expect(await service.resume(paused.key)).toEqual({ ok: true, ref: REF });
+    expect(fake.state.pulls).toEqual([REF, REF]);
+    expect(service.pulls()).toEqual([]);
+  });
+
+  it.each([
+    [
+      'set to Chat only',
+      'not-allowed',
+      (registry: ModelServerRegistry, id: string) => registry.update(id, { access: 'chat' }),
+    ],
+    ['removed', 'not-found', (registry: ModelServerRegistry, id: string) => registry.remove(id)],
+  ] as const)('resume refuses a server %s while paused, and sends it nothing', async (_label, kind, change) => {
+    const { fake, registry, service, serverId, keepAwake } = await setup('manage');
+    await service.pull(request(serverId));
+    const [paused] = service.pulls();
+    await change(registry, serverId);
+
+    expect(await service.resume(paused.key)).toMatchObject({ ok: false, error: { kind }, listed: true });
+    expect(service.pulls()).toMatchObject([{ key: paused.key, phase: 'failed' }]);
+    expect(fake.state.pulls).toEqual([REF]);
+    expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it.each([
+    ['set to Chat only', (registry: ModelServerRegistry, id: string) => registry.update(id, { access: 'chat' })],
+    ['removed', (registry: ModelServerRegistry, id: string) => registry.remove(id)],
+  ] as const)('stops a running pull once its server is %s, and lets the computer sleep', async (_label, change) => {
+    const { service, registry, serverId, keepAwake } = await setup('manage', { first: 'stall', followSettings: true });
+    const running = service.pull(request(serverId));
+    await vi.waitFor(() => expect(service.pulls()).toMatchObject([{ phase: 'downloading', completedBytes: 400 }]));
+
+    await change(registry, serverId);
+
+    await expect(running).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+    expect(service.pulls()).toEqual([]);
+    expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('clears a paused pull once its server is set to Chat only, and keeps pulls to other changes', async () => {
+    const { service, registry, serverId } = await setup('manage', { followSettings: true });
+    await service.pull(request(serverId));
+    await registry.update(serverId, { name: 'big gpu box' });
+    expect(service.pulls()).toMatchObject([{ phase: 'paused' }]);
+
+    await registry.update(serverId, { access: 'chat' });
+    expect(service.pulls()).toEqual([]);
+  });
+
+  it('refuses a local pull whose repo spells out a server pull key, leaving that pull running', async () => {
+    const { service, serverId } = await setup('manage', { first: 'stall' });
+    void service.pull(request(serverId));
+    await vi.waitFor(() => expect(service.pulls()).toMatchObject([{ phase: 'downloading' }]));
+    const [running] = service.pulls();
+
+    expect(
+      await service.pull({ ...request(serverId), repo: `${serverId}/${REPO}`, serverId: undefined })
+    ).toMatchObject({ ok: false, error: { kind: 'invalid' }, listed: false });
+    expect(service.pulls()).toEqual([running]);
+    service.dispose();
+  });
+
+  it('lets the computer sleep again after a cancel, a failure and a dispose', async () => {
+    const stalled = await setup('manage', { first: 'stall' });
+    const cancelled = stalled.service.pull(request(stalled.serverId));
+    await vi.waitFor(() => expect(stalled.service.pulls()).toMatchObject([{ phase: 'downloading' }]));
+    stalled.service.cancel(stalled.service.pulls()[0].key);
+    await expect(cancelled).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+    expect(stalled.keepAwake.mock.calls).toEqual([[true], [false]]);
+
+    const disposed = stalled.service.pull(request(stalled.serverId));
+    await vi.waitFor(() => expect(stalled.service.pulls()).toMatchObject([{ phase: 'downloading' }]));
+    stalled.service.dispose();
+    await expect(disposed).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+    expect(stalled.keepAwake.mock.calls).toEqual([[true], [false], [true], [false]]);
+
+    const failing = await setup('manage', { first: 'error' });
+    expect(await failing.service.pull(request(failing.serverId))).toMatchObject({
+      ok: false,
+      error: { kind: 'failed' },
+      listed: true,
+    });
+    expect(failing.keepAwake.mock.calls).toEqual([[true], [false]]);
   });
 
   it('refuses to pull to or remove from a Chat only server, and sends it nothing', async () => {

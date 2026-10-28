@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
@@ -186,15 +186,14 @@ function targetOf(serverId: string, servers: ModelServerView[] | null, status: M
     id: serverId,
     name: local ? LOCAL_SERVER_NAME : (server?.name ?? status?.serverName ?? 'Model server'),
     local,
-    // Main's answer wins: it is what a pull or removal is checked against.
-    management:
-      status?.serverId === serverId
+    // The live list follows Settings at once; main checks every pull and removal against the same settings.
+    management: server
+      ? serverManagement(server)
+      : status?.serverId === serverId
         ? status.management
-        : server
-          ? serverManagement(server)
-          : local
-            ? 'allowed'
-            : 'chat-only',
+        : local
+          ? 'allowed'
+          : 'chat-only',
   };
 }
 
@@ -216,6 +215,12 @@ export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: 
   };
   const target = targetOf(serverId, servers, hub.status);
   const status = hub.status?.serverId === serverId ? hub.status : null;
+  const { refresh } = hub;
+  const statusManagement = status?.management;
+  useEffect(() => {
+    // Settings changed the server's access or kind: what main reports about it changes too.
+    if (statusManagement && statusManagement !== target.management) void refresh();
+  }, [statusManagement, target.management, refresh]);
   const installedCount = status && hub.installed?.ok ? hub.installed.models.length : null;
   const note = manageNote(target);
 
@@ -291,6 +296,7 @@ export function ModelsScreen({ onClose, inUse }: { onClose: () => void; inUse?: 
         <TabPanel value="installed" sx={{ p: 0, flex: 1, ...scrollingColumnHostSx }}>
           <Box sx={{ ...screenColumnSx, py: 1 }}>
             <InstalledTab
+              key={serverId}
               status={status}
               target={target}
               installed={status ? hub.installed : null}
