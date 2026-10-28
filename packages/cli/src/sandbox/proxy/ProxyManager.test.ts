@@ -1,4 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { existsSync } from 'fs';
+import net from 'net';
+import os from 'os';
+import path from 'path';
 import { ProxyManager } from './ProxyManager.js';
 import { HttpConnectProxy } from './HttpConnectProxy.js';
 import type { NetworkConfig } from '../types.js';
@@ -18,6 +22,59 @@ describe('ProxyManager', () => {
     if (manager?.isRunning()) {
       await manager.stop();
     }
+  });
+
+  describe('unix socket bridge', () => {
+    it('is off by default', async () => {
+      manager = new ProxyManager(enabledConfig());
+      await manager.start();
+      expect(manager.getUnixSocketPath()).toBeNull();
+    });
+
+    it('forwards the socket to the filtering proxy and removes it on stop', async () => {
+      manager = new ProxyManager(enabledConfig(), { unixSocketBridge: true });
+      await manager.start();
+      const socketPath = manager.getUnixSocketPath();
+      expect(socketPath).not.toBeNull();
+
+      const reply = await new Promise<string>((resolve, reject) => {
+        const socket = net.connect(socketPath!, () => socket.write('CONNECT blocked.invalid:443 HTTP/1.1\r\n\r\n'));
+        let data = '';
+        socket.on('data', chunk => (data += chunk));
+        socket.on('end', () => resolve(data));
+        socket.on('error', reject);
+      });
+      expect(reply).toContain('403');
+
+      await manager.stop();
+      expect(manager.getUnixSocketPath()).toBeNull();
+      expect(existsSync(path.dirname(socketPath!))).toBe(false);
+    });
+
+    it('stops and drops open connections instead of waiting for them', async () => {
+      manager = new ProxyManager(enabledConfig(), { unixSocketBridge: true });
+      await manager.start();
+      const socket = net.connect(manager.getUnixSocketPath()!);
+      const closed = new Promise(resolve => socket.on('close', resolve));
+      socket.on('error', () => {});
+      await new Promise(resolve => socket.on('connect', resolve));
+
+      await manager.stop();
+      await closed;
+      expect(manager.isRunning()).toBe(false);
+    });
+
+    it('fails the start and stops the proxy when the socket cannot be created', async () => {
+      const tmpdirSpy = vi.spyOn(os, 'tmpdir').mockReturnValue('/nonexistent-b4m-test-dir');
+      try {
+        manager = new ProxyManager(enabledConfig(), { unixSocketBridge: true });
+        await expect(manager.start()).rejects.toThrow();
+        expect(manager.isRunning()).toBe(false);
+        expect(manager.getUnixSocketPath()).toBeNull();
+      } finally {
+        tmpdirSpy.mockRestore();
+      }
+    });
   });
 
   describe('start/stop', () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BubblewrapRuntime } from './BubblewrapRuntime.js';
+import { PROXY_RELAY_SOURCE } from './proxyRelay.js';
 import os from 'os';
 import path from 'path';
 import { mkdirSync, statSync } from 'fs';
@@ -372,27 +373,65 @@ describe('BubblewrapRuntime', () => {
       expect(result.args).toContain('--unshare-net');
       expect(result.args).not.toContain('--share-net');
       expect(result.args).toContain('--die-with-parent');
-      // Order matters: the net flag must follow --unshare-all, else --unshare-all
-      // would re-isolate the net namespace a later --share-net meant to keep.
       expect(result.args.indexOf('--unshare-net')).toBeGreaterThan(result.args.indexOf('--unshare-all'));
+      expect(result.args.slice(-3)).toEqual(['bash', '-c', 'echo test']);
     });
 
-    it('shares the net namespace when network is enabled', () => {
-      const result = runtime.wrapCommand({
-        command: 'curl https://example.com',
-        cwd: '/home/test/project',
-        filesystemConfig: {
-          writeOnlyToWorkingDir: true,
-          allowedReadPaths: [],
-          deniedPaths: [],
-        },
-        networkEnabled: true,
+    describe('network enabled', () => {
+      const wrapWithNetwork = (extra: { proxyPort?: number; proxySocketPath?: string }) =>
+        runtime.wrapCommand({
+          command: 'curl https://example.com',
+          cwd: '/home/test/project',
+          filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+          networkEnabled: true,
+          ...extra,
+        });
+
+      it('isolates the net namespace and runs the command behind the proxy relay', () => {
+        const { args } = wrapWithNetwork({ proxyPort: 8888, proxySocketPath: '/tmp/b4m-proxy-x/proxy.sock' });
+
+        expect(args).toContain('--unshare-net');
+        expect(args).not.toContain('--share-net');
+        expect(args.indexOf('--unshare-net')).toBeGreaterThan(args.indexOf('--unshare-all'));
+        const socketBind = args.indexOf('/tmp/b4m-proxy-x/proxy.sock');
+        expect(args.slice(socketBind - 1, socketBind + 2)).toEqual([
+          '--ro-bind',
+          '/tmp/b4m-proxy-x/proxy.sock',
+          '/run/b4m-sandbox/proxy.sock',
+        ]);
+        const nodeBind = args.indexOf('/run/b4m-sandbox/node');
+        expect(args.slice(nodeBind - 2, nodeBind + 1)).toEqual([
+          '--ro-bind',
+          process.execPath,
+          '/run/b4m-sandbox/node',
+        ]);
+        expect(args.slice(-6)).toEqual([
+          '/run/b4m-sandbox/node',
+          '-e',
+          PROXY_RELAY_SOURCE,
+          '8888',
+          '/run/b4m-sandbox/proxy.sock',
+          'curl https://example.com',
+        ]);
       });
 
-      expect(result.args).toContain('--share-net');
-      expect(result.args).not.toContain('--unshare-net');
-      // --share-net must follow --unshare-all to re-grant the net namespace.
-      expect(result.args.indexOf('--share-net')).toBeGreaterThan(result.args.indexOf('--unshare-all'));
+      it.each([
+        ['no proxy socket', { proxyPort: 8888 }],
+        ['no proxy port', { proxySocketPath: '/tmp/b4m-proxy-x/proxy.sock' }],
+      ])('runs the command offline when there is %s', (_label, extra) => {
+        const { args } = wrapWithNetwork(extra);
+
+        expect(args).toContain('--unshare-net');
+        expect(args).not.toContain('--share-net');
+        expect(args).not.toContain('/run/b4m-sandbox/proxy.sock');
+        expect(args.slice(-3)).toEqual(['bash', '-c', 'curl https://example.com']);
+      });
+
+      it('rejects an invalid proxy port', () => {
+        expect(() => wrapWithNetwork({ proxyPort: 0, proxySocketPath: '/tmp/b4m-proxy-x/proxy.sock' })).toThrow(
+          'Invalid proxy port'
+        );
+      });
     });
 
     it('sets the working directory', () => {

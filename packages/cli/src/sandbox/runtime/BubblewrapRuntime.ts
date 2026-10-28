@@ -9,7 +9,7 @@
  */
 import os from 'os';
 import path from 'path';
-import { lstatSync, mkdirSync, statSync } from 'fs';
+import { lstatSync, mkdirSync, realpathSync, statSync } from 'fs';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import { logger } from '../../utils/Logger.js';
 import {
@@ -20,9 +20,15 @@ import {
   type SandboxRuntime,
   type WrapCommandOptions,
 } from './SandboxRuntimeAdapter.js';
+import { PROXY_RELAY_SOURCE } from './proxyRelay.js';
 
 /** System paths to bind read-only into the sandbox */
 const SYSTEM_RO_BINDS = ['/usr', '/bin', '/lib', '/lib64', '/sbin', '/etc'];
+
+/** In-sandbox mount points for the proxy relay; the root is a fresh tmpfs, so nothing else lives here. */
+const RELAY_DIR = '/run/b4m-sandbox';
+const RELAY_NODE = `${RELAY_DIR}/node`;
+const RELAY_SOCKET = `${RELAY_DIR}/proxy.sock`;
 
 /** Paths that need special handling (dev, proc, tmp) */
 const SPECIAL_MOUNTS = {
@@ -131,16 +137,25 @@ export class BubblewrapRuntime implements SandboxRuntime {
       }
     }
 
-    // Write restrictions: if writeOnlyToWorkingDir, make home read-only
-    // (already done above with --ro-bind for home)
-
-    // Namespace isolation. Egress is fail-closed: share the net namespace only
-    // when network is explicitly enabled (proxy handles filtering). --unshare-all
-    // already unshares net, so in the disabled case --unshare-net changes nothing
-    // and is emitted purely as an explicit, greppable marker of intent; --share-net
-    // is what actually re-grants the namespace when enabled.
+    // The sandbox always gets its own network namespace, which has only loopback. With network on,
+    // the relay inside it forwards the proxy port to the host proxy's Unix socket, so the proxy is
+    // the only way out. Without a socket the command runs offline rather than on the host network.
+    const relay =
+      options.networkEnabled && options.proxyPort !== undefined && options.proxySocketPath
+        ? { port: options.proxyPort, socketPath: options.proxySocketPath }
+        : null;
+    if (options.networkEnabled && !relay) {
+      logger.debug('Sandbox: no proxy socket available, running without network');
+    }
+    if (relay) {
+      if (!Number.isInteger(relay.port) || relay.port < 1 || relay.port > 65535) {
+        throw new Error(`Invalid proxy port: ${relay.port}`);
+      }
+      args.push('--ro-bind', realpathSync(process.execPath), RELAY_NODE);
+      args.push('--ro-bind', relay.socketPath, RELAY_SOCKET);
+    }
     args.push('--unshare-all');
-    args.push(options.networkEnabled ? '--share-net' : '--unshare-net');
+    args.push('--unshare-net');
     args.push('--die-with-parent');
 
     // Seccomp profile (optional)
@@ -156,8 +171,11 @@ export class BubblewrapRuntime implements SandboxRuntime {
     // Set working directory
     args.push('--chdir', cwd);
 
-    // The command to execute inside the sandbox
-    args.push('bash', '-c', command);
+    if (relay) {
+      args.push(RELAY_NODE, '-e', PROXY_RELAY_SOURCE, String(relay.port), RELAY_SOCKET, command);
+    } else {
+      args.push('bash', '-c', command);
+    }
 
     // Build the full command string for CLI-level wrapping
     const commandString = ['bwrap', ...args.map(shellEscape)].join(' ');

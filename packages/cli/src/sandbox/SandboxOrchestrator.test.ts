@@ -45,6 +45,7 @@ function createMockProxyManager(running: boolean, port: number | null): ProxyMan
     getAllowedDomains: () => [],
     isRunning: () => running,
     getPort: () => port,
+    getUnixSocketPath: () => (running ? '/tmp/b4m-proxy-test/proxy.sock' : null),
     onEvent: vi.fn(() => () => {}),
   } as unknown as ProxyManager;
 }
@@ -70,6 +71,7 @@ function createStatefulProxyManager(opts?: { failStart?: boolean }): ProxyManage
     }),
     isRunning: () => running,
     getPort: () => (running ? 8888 : null),
+    getUnixSocketPath: () => null,
     getProxyEnv: () => (running ? { HTTP_PROXY: 'http://127.0.0.1:8888' } : {}),
     addAllowedDomain: vi.fn(),
     getAllowedDomains: () => [],
@@ -384,7 +386,13 @@ describe('SandboxOrchestrator', () => {
 
       orchestrator.shouldSandbox('curl https://example.com', '/tmp');
 
-      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true, proxyPort: 8888 }));
+      expect(wrapSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          networkEnabled: true,
+          proxyPort: 8888,
+          proxySocketPath: '/tmp/b4m-proxy-test/proxy.sock',
+        })
+      );
     });
 
     it('omits the proxy port when network is not granted', () => {
@@ -395,6 +403,7 @@ describe('SandboxOrchestrator', () => {
       orchestrator.shouldSandbox('curl https://example.com', '/tmp');
 
       expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('proxyPort');
+      expect(wrapSpy.mock.calls[0][0]).not.toHaveProperty('proxySocketPath');
       expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
     });
 

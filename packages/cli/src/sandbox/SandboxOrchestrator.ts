@@ -102,14 +102,15 @@ export class SandboxOrchestrator {
     const proxyEnv = this.proxyManager?.getProxyEnv() ?? {};
     const proxyPort =
       this.config.network.enabled && this.proxyManager?.isRunning() ? this.proxyManager.getPort() : null;
+    const proxySocketPath = proxyPort !== null ? this.proxyManager?.getUnixSocketPath() : null;
     const wrappedCommand = this.runtime.wrapCommand({
       command,
       cwd,
       filesystemConfig: this.config.filesystem,
       // Single choke point: a stale network.enabled flag without a running proxy grants nothing.
-      // Only the Seatbelt runtime confines egress to the proxy; Linux still relies on the proxy env vars.
       networkEnabled: proxyPort !== null,
       ...(proxyPort !== null && { proxyPort }),
+      ...(proxySocketPath && { proxySocketPath }),
       allowContainerSockets: this.config.allowContainerSockets === true,
       env: proxyEnv,
       ...(this.runtime.platform === 'linux' &&

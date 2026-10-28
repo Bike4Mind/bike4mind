@@ -18,6 +18,8 @@ export interface WrapCommandOptions {
   networkEnabled: boolean;
   /** Filtering proxy port; Seatbelt grants loopback-only network when set with networkEnabled. */
   proxyPort?: number;
+  /** Host Unix socket forwarding to the proxy; Bubblewrap relays to it from inside an isolated net namespace. */
+  proxySocketPath?: string;
   /** Leave container engine sockets (see getContainerSocketPaths) reachable inside the sandbox. */
   allowContainerSockets?: boolean;
 }

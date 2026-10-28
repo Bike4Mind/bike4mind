@@ -31,6 +31,7 @@ vi.mock('../sandbox/proxy/ProxyManager.js', () => ({
     });
     isRunning = () => this.running;
     getPort = () => (this.running ? 8080 : null);
+    getUnixSocketPath = () => null;
     getProxyEnv = () => ({});
     addAllowedDomain = vi.fn();
     getAllowedDomains = () => [];

@@ -71,7 +71,9 @@ export async function buildSandbox(input: BuildSandboxInput): Promise<BuildSandb
   // Sandbox runtime creation and checkpoint initialization are independent
   const [sandboxRuntime] = await Promise.all([createSandboxRuntime(), checkpointStore.init(sessionId).catch(() => {})]);
 
-  const proxyManager = new ProxyManager(sandboxConfig.network);
+  const proxyManager = new ProxyManager(sandboxConfig.network, {
+    unixSocketBridge: sandboxRuntime?.platform === 'linux',
+  });
   const sandboxOrchestrator = new SandboxOrchestrator(sandboxConfig, sandboxRuntime, proxyManager);
 
   // Register proxy event handler after sandboxOrchestrator is defined

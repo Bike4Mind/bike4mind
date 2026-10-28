@@ -3,7 +3,8 @@
  * These tests run actual sandboxed commands; skipped on non-Linux platforms.
  */
 import { describe, it, expect, afterAll } from 'vitest';
-import { execSync } from 'child_process';
+import { execFile, execSync } from 'child_process';
+import net from 'net';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -125,6 +126,33 @@ describe.skipIf(skipReason)('BubblewrapRuntime integration', () => {
       // bwrap mounts tmpfs over denied paths; cat should fail or return empty
     } catch {
       // Expected: denied path is hidden by tmpfs overlay
+    }
+  });
+
+  it('with network on, reaches only the proxy socket through the relay', async () => {
+    const socketDir = path.join(TEST_DIR, 'relay');
+    mkdirSync(socketDir, { recursive: true });
+    const socketPath = path.join(socketDir, 'proxy.sock');
+    const proxy = net.createServer(socket => socket.end('via-proxy'));
+    await new Promise<void>(resolve => proxy.listen(socketPath, resolve));
+    try {
+      const wrapped = runtime.wrapCommand({
+        command:
+          'exec 3<>/dev/tcp/127.0.0.1/18888 && cat <&3; (exec 4<>/dev/tcp/1.1.1.1/80) 2>/dev/null || echo :blocked',
+        cwd: TEST_DIR,
+        filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+        networkEnabled: true,
+        proxyPort: 18888,
+        proxySocketPath: socketPath,
+      });
+      const output = await new Promise<string>((resolve, reject) =>
+        execFile(wrapped.executable, wrapped.args, { encoding: 'utf-8', timeout: 10000 }, (error, stdout) =>
+          error ? reject(error) : resolve(stdout)
+        )
+      );
+      expect(output.trim()).toBe('via-proxy:blocked');
+    } finally {
+      await new Promise(resolve => proxy.close(resolve));
     }
   });
 });
