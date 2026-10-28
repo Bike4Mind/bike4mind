@@ -80,7 +80,7 @@ export const usersBulkResolveDeps: ResolveDeps = {
     ).map(toBulkUser),
   openFilterPages: async (filter, now) => {
     // adminUsersPipeline leads with the filter's $match; the cursor and the sort go right there, ahead
-    // of the hasApiKey $lookup stages, so each page is an indexed range scan on _id.
+    // of any later stages, so each page is an indexed range scan on _id.
     const [leading, ...rest] = await adminUsersPipeline(filter, now);
     if (!leading || !('$match' in leading)) throw new Error('adminUsersPipeline must start with a $match stage');
     return async (afterId, limit) =>
