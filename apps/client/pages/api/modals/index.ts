@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { FilterQuery } from 'mongoose';
-import { IModalDocument, hasAdminPermission } from '@bike4mind/common';
+import { IModalDocument } from '@bike4mind/common';
 import { extractVariantForViewer, viewerClassifier } from '@bike4mind/services';
 
 const WHATS_NEW_TAG = 'whats-new';
@@ -16,8 +16,6 @@ const handler = baseApi().get(
     const query = req.query as { tags?: string; excludeWhatsNew?: string };
     const { tags, excludeWhatsNew } = query;
 
-    const canManageModals = hasAdminPermission(req.user, 'settings:manage');
-
     const filter: FilterQuery<IModalDocument> = {};
 
     // Filter by tags if provided (for What's New modals tab)
@@ -27,7 +25,7 @@ const handler = baseApi().get(
 
     // Exclude What's New modals from general modals list (default behavior for admin)
     // Unless specifically requesting What's New modals via tags query or excludeWhatsNew=false
-    if (excludeWhatsNew === 'true' || (!tags && canManageModals && excludeWhatsNew !== 'false')) {
+    if (excludeWhatsNew === 'true' || (!tags && req.user?.isAdmin && excludeWhatsNew !== 'false')) {
       filter.tags = { $ne: WHATS_NEW_TAG };
     }
 
@@ -40,7 +38,7 @@ const handler = baseApi().get(
     // hides the modal on its own start day, so the upper bound is padded with the
     // highest-sorting UTF-8 char to stay tolerant of any same-day suffix. endDate's `$gte`
     // side needs no padding: a same-day timestamp already sorts above the bare date.
-    if (!canManageModals) {
+    if (!req.user?.isAdmin) {
       const today = new Date().toISOString().slice(0, 10);
       filter.enabled = true;
       filter.$and = [
@@ -51,7 +49,6 @@ const handler = baseApi().get(
 
     const modals = await ModalModel.find(filter);
 
-    // Audience stays on raw isAdmin: internal-only variant content must never reach a delegate.
     // Resolve the viewer's audience key server-side from their stored tags.
     // Fail-open to the safe default (customer) on any error - a database blip
     // or malformed context degrades to customer content, never a 500.

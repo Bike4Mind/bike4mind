@@ -38,12 +38,10 @@ vi.mock('@bike4mind/database/social', () => ({
   },
 }));
 
-const classify = vi.hoisted(() => vi.fn(async (_viewer: unknown) => 'customer'));
-
 vi.mock('@bike4mind/services', () => ({
   extractVariantForViewer: (doc: any) => doc,
   viewerClassifier: {
-    classify,
+    classify: vi.fn(async () => 'customer'),
     safeDefaultKey: 'customer',
   },
 }));
@@ -96,18 +94,10 @@ describe('GET /api/modals - delegated settings:manage', () => {
   beforeEach(() => {
     mockRefs.findFilter = undefined;
     mockRefs.modals = [];
-    classify.mockClear();
   });
 
-  it('gives a settings:manage delegate the unfiltered list but classifies them as a non-admin', async () => {
-    const { req, res } = mocks(false, { excludeWhatsNew: 'false' }, ['settings:manage']);
-    await mockRefs.getHandler!(req, res);
-    expect(mockRefs.findFilter).toEqual({});
-    expect(classify).toHaveBeenCalledWith({ isAdmin: false });
-  });
-
-  it('keeps the publication filter for a delegate holding a different permission', async () => {
-    const { req, res } = mocks(false, {}, ['support:read']);
+  it('keeps the publication filter for a settings:manage delegate (drafts stay admin-only)', async () => {
+    const { req, res } = mocks(false, {}, ['settings:manage']);
     await mockRefs.getHandler!(req, res);
     expect(mockRefs.findFilter.enabled).toBe(true);
   });

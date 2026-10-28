@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, creditTransactionRepository, userApiKeyRepository } from '@bike4mind/database';
 import {
+  ApiKeyScope,
   CreditHolderType,
   hasAdminPermission,
   type IUsageDashboardResponse,
@@ -37,8 +38,10 @@ const QuerySchema = z.object({
  * member/model/feature cuts because it is the only source carrying frozen COGS +
  * per-member attribution.
  *
- * Access: platform admins see any owner. Otherwise an Organization owner is gated
- * by verifyOrgOwner (owner or platform admin; org managers are refused); a User owner may read only their own id.
+ * Access: platform admins see any owner. A delegate holding support:read (API keys
+ * need ApiKeyScope.ADMIN) gets the same read-only view minus key names/prefixes.
+ * Otherwise an Organization owner is gated by verifyOrgOwner (org managers are
+ * refused); a User owner may read only their own id.
  */
 const handler = baseApi().get(async (req, res) => {
   if (!req.user) {
@@ -47,14 +50,25 @@ const handler = baseApi().get(async (req, res) => {
 
   const { ownerType, ownerId, days = 30 } = QuerySchema.parse(req.query);
 
-  const canReadSupport = hasAdminPermission(req.user, 'support:read');
+  const canReadSupport =
+    hasAdminPermission(req.user, 'support:read') &&
+    (!req.apiKeyInfo || req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN));
 
+  let viaDelegate = false;
   if (ownerType === CreditHolderType.Organization) {
-    // Read-only allowance scoped to this route: the shared owner check is left untouched.
-    await verifyOrgOwner({ id: req.user.id, isAdmin: req.user.isAdmin || canReadSupport }, ownerId);
-  } else if (!canReadSupport && req.user.id !== ownerId) {
-    throw new ForbiddenError('You can only view your own usage');
+    try {
+      await verifyOrgOwner({ id: req.user.id, isAdmin: req.user.isAdmin }, ownerId);
+    } catch (error) {
+      if (!canReadSupport) throw error;
+      // Re-run as platform admin only to load the org / reject a bad id; this route's read-only allowance.
+      await verifyOrgOwner({ id: req.user.id, isAdmin: true }, ownerId);
+      viaDelegate = true;
+    }
+  } else if (req.user.id !== ownerId) {
+    if (!canReadSupport) throw new ForbiddenError('You can only view your own usage');
+    viaDelegate = true;
   }
+  const showKeyIdentifiers = !viaDelegate || req.user.isAdmin;
 
   // Usage cuts come from UsageEventModel (frozen COGS + per-member attribution);
   // by-API-key and by-source come from the ledger, the only source carrying
@@ -83,7 +97,9 @@ const handler = baseApi().get(async (req, res) => {
       ? await resolveUserNames(summary.byMember.map(m => m.userId))
       : new Map<string, string>();
 
-  const keyById = new Map(ownerKeys.map(k => [String(k.id), { keyName: k.name, keyPrefix: k.keyPrefix }]));
+  const keyById = new Map(
+    (showKeyIdentifiers ? ownerKeys : []).map(k => [String(k.id), { keyName: k.name, keyPrefix: k.keyPrefix }])
+  );
   const byApiKey: NamedApiKeyUsage[] = apiKeyUsage.map(u => ({ ...u, ...keyById.get(u.apiKeyId) }));
 
   const response: IUsageDashboardResponse = {

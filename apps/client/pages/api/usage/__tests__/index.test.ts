@@ -49,7 +49,13 @@ const ORG = '6650000000000000000000aa';
 const SELF = 'user-1';
 const OTHER_USER = 'user-2';
 
-function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object; adminPermissions?: string[] }) {
+function call(options: {
+  isAdmin?: boolean;
+  hasUser?: boolean;
+  query?: object;
+  adminPermissions?: string[];
+  scopes?: string[];
+}) {
   const { req, res } = createMocks({
     method: 'GET',
     query: options.query ?? { ownerType: 'Organization', ownerId: ORG },
@@ -61,6 +67,7 @@ function call(options: { isAdmin?: boolean; hasUser?: boolean; query?: object; a
       id: SELF,
     };
   }
+  if (options.scopes) (req as unknown as { apiKeyInfo: { scopes: string[] } }).apiKeyInfo = { scopes: options.scopes };
   return { req, res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
 
@@ -171,9 +178,54 @@ describe('GET /api/usage - access', () => {
     });
 
     it('passes the org check as read-only platform access for a support:read delegate', async () => {
+      mockVerifyOrgOwner.mockRejectedValueOnce(new NotFoundError('Organization not found'));
       const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
       await run();
-      expect(mockVerifyOrgOwner).toHaveBeenCalledWith({ id: SELF, isAdmin: true }, ORG);
+      expect(mockVerifyOrgOwner).toHaveBeenLastCalledWith({ id: SELF, isAdmin: true }, ORG);
+    });
+
+    it('omits key names and prefixes from a delegate org view', async () => {
+      mockVerifyOrgOwner.mockRejectedValueOnce(new NotFoundError('Organization not found'));
+      mockApiKeyUsageForOwner.mockResolvedValue([
+        { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
+      ]);
+      mockFindByOrganizationId.mockResolvedValue([{ id: 'key-1', name: 'Org Key', keyPrefix: 'b4m_live_abcd' }]);
+      const { res, run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
+      await run();
+      expect(res._getJSONData().byApiKey[0].keyName).toBeUndefined();
+      expect(res._getJSONData().byApiKey[0].keyPrefix).toBeUndefined();
+    });
+
+    it('still denies a delegate with a bad org id', async () => {
+      mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+      const { run } = call({ isAdmin: false, adminPermissions: ['support:read'] });
+      await expect(run()).rejects.toThrow(/not found/i);
+      expect(mockOwnerUsageSummary).not.toHaveBeenCalled();
+    });
+
+    it('denies a delegate API key without the ADMIN scope on both owner types', async () => {
+      mockVerifyOrgOwner.mockRejectedValue(new NotFoundError('Organization not found'));
+      const org = call({ isAdmin: false, adminPermissions: ['support:read'], scopes: ['chat:read'] });
+      await expect(org.run()).rejects.toThrow(/not found/i);
+      const user = call({
+        isAdmin: false,
+        adminPermissions: ['support:read'],
+        scopes: ['chat:read'],
+        query: { ownerType: 'User', ownerId: OTHER_USER },
+      });
+      await expect(user.run()).rejects.toThrow(/your own usage/i);
+      expect(mockOwnerUsageSummary).not.toHaveBeenCalled();
+    });
+
+    it('allows a delegate API key that carries the ADMIN scope', async () => {
+      const { run } = call({
+        isAdmin: false,
+        adminPermissions: ['support:read'],
+        scopes: ['admin:*'],
+        query: { ownerType: 'User', ownerId: OTHER_USER },
+      });
+      await run();
+      expect(mockOwnerUsageSummary).toHaveBeenCalledWith(OTHER_USER, 'User', 30);
     });
   });
 });
