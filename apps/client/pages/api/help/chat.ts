@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -109,7 +110,7 @@ ${HELP_SYSTEM_PROMPT_SUFFIX}`;
 const handler = baseApi()
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 100 : 20,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 100 : 20),
       windowMs: 60 * 1000,
     })
   )

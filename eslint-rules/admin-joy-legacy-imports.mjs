@@ -21,7 +21,7 @@ export default {
   'Analytics/tabs/WeeklyReportTab.tsx': [[2, 'd1741853204fdc13']],
   'ContextInspectorTab.tsx': [[3, '4efdcaa4a7756dc6']],
   'CreateSlackAppModal.tsx': [[2, '77f0833039f8ec69']],
-  'CreditAnalysis/components/CreditAdjustmentModal.tsx': [[2, '598b2ccd03b60392']],
+  'CreditAnalysis/components/CreditAdjustmentModal.tsx': [[2, '203e42cbb719af8a']],
   'CreditAnalysis/components/MarginDashboard.tsx': [[2, '053e20b6358dd15b']],
   'CreditAnalysis/components/ModelPricingCatalog.tsx': [[2, 'c7210fa0dd800769']],
   'CreditAnalysis/components/PlatformUsageDashboard.tsx': [[2, 'fd9099ffaa68617d']],

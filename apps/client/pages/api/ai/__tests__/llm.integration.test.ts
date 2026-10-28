@@ -29,6 +29,7 @@ const {
   mockLoadIdentityPrompts,
   mockOrgFindAccessibleById,
   mockOrgFindById,
+  mockResolveUserRateLimitPerMin,
 } = vi.hoisted(() => ({
   mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
   mockValidate: vi.fn(),
@@ -42,6 +43,7 @@ const {
   mockLoadIdentityPrompts: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
   mockOrgFindById: vi.fn(),
+  mockResolveUserRateLimitPerMin: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -65,6 +67,9 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockApiKeyRateLimit(...a),
+}));
+vi.mock('@server/utils/userRateTier', () => ({
+  resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
@@ -210,6 +215,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockResolveUserRateLimitPerMin.mockResolvedValue(10);
     mockUserUpdate.mockResolvedValue(undefined);
     mockWillInjectAuthoredPrompt.mockResolvedValue(false);
     mockLoadIdentityPrompts.mockResolvedValue([]);
@@ -462,6 +468,43 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       const { req, res } = fire();
       await handler(req, res);
       expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
+    });
+  });
+
+  describe('per-user tier rate limit', () => {
+    it('blocks a caller whose tier limit is 0 (429) with no bucket write, session, or completion', async () => {
+      mockResolveUserRateLimitPerMin.mockResolvedValue(0);
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('still serves a caller at the Free default of 10 and counts against that limit', async () => {
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).toHaveBeenCalledWith(expect.any(String), 10, 60_000);
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    it('429s an over-limit caller once the bucket is full', async () => {
+      mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('skips enforcement for an unlimited (admin/developer) caller', async () => {
+      mockResolveUserRateLimitPerMin.mockResolvedValue(Infinity);
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
     });
   });
 
