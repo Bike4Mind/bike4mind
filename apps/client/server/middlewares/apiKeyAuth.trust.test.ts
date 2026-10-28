@@ -80,8 +80,32 @@ describe('apiKeyAuth subscription trust', () => {
 
     expect(next).toHaveBeenCalledOnce();
     expect(request.apiKeyInfo?.rateLimit.requestsPerMinute).toBe(expectedLimit);
+    expect(request.apiKeyInfo?.ownerUntrusted).toBe(expectedLimit === 20);
     expect(findSubscriptions).toHaveBeenCalledWith('user-1');
     expect(await getRequestActiveSubscriptions(request)).toEqual(subscriptions);
     expect(findSubscriptions).toHaveBeenCalledOnce();
+  });
+
+  it('retains admin owner trust when the key cannot exercise the admin role', async () => {
+    findUser.mockResolvedValue({
+      id: 'user-1',
+      emailVerified: true,
+      createdAt: new Date(),
+      isAdmin: true,
+    });
+    const request = {
+      headers: { 'x-api-key': 'b4m_live_0123456789abcdef0123456789abcdef' },
+      method: 'GET',
+      originalUrl: '/api/v1/sessions',
+    } as unknown as Request;
+    const response = { once: vi.fn(), statusCode: 200 } as unknown as Response;
+    const next = vi.fn();
+
+    await apiKeyAuth()(request, response, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(request.user?.isAdmin).toBe(false);
+    expect(request.apiKeyInfo?.ownerUntrusted).toBe(false);
+    expect(request.apiKeyInfo?.rateLimit.requestsPerMinute).toBe(60);
   });
 });

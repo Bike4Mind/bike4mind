@@ -6,8 +6,25 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatModels } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { AnthropicBackend } from './anthropicBackend';
 import { LlmTimeoutError } from './llmTimeoutErrors';
+
+const { sendMetric } = vi.hoisted(() => ({ sendMetric: vi.fn(async () => ({})) }));
+vi.mock('@aws-sdk/client-cloudwatch', () => ({
+  CloudWatchClient: class {
+    send = sendMetric;
+  },
+  PutMetricDataCommand: class {},
+  StandardUnit: { Count: 'Count' },
+}));
+
+// Idle timeouts emit detached metrics; keep their network and logging inside this fixture.
+const makeLogger = () => Object.assign(new Logger(), { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 const messageStart = { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 0 } } };
 
@@ -38,7 +55,7 @@ function stalledStream() {
 }
 
 function buildBackend(stream: unknown) {
-  const backend = new AnthropicBackend('test-key');
+  const backend = new AnthropicBackend('test-key', makeLogger());
   type AnthropicApiMock = { messages: { create: (...args: unknown[]) => unknown } };
   (backend as unknown as { _api: AnthropicApiMock })._api = {
     messages: { create: async () => stream },
@@ -72,7 +89,8 @@ describe('AnthropicBackend - stream idle timeout selection', () => {
     vi.useFakeTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
   });
 
@@ -113,6 +131,7 @@ describe('AnthropicBackend - stream idle timeout selection', () => {
     expect(outcome.error).toMatchObject({ kind: 'stream_idle', timeoutMs: 90_000 });
     expect(outcome.error?.message).toContain('stream timeout');
     expect(outcome.error?.message.toLowerCase()).not.toContain('overloaded');
+    expect(sendMetric).toHaveBeenCalledOnce();
   });
 });
 
@@ -128,7 +147,7 @@ const PING = sse('ping', { type: 'ping' });
 function rawSseTurn(model: string, abortSignal?: AbortSignal) {
   let body: ReadableStreamDefaultController<Uint8Array> | undefined;
   const signalState: { signal?: AbortSignal } = {};
-  const backend = new AnthropicBackend('test-key');
+  const backend = new AnthropicBackend('test-key', makeLogger());
   type RawApiMock = { messages: { create: (params: unknown, options: { signal?: AbortSignal }) => unknown } };
   (backend as unknown as { _api: RawApiMock })._api = {
     messages: {
@@ -182,7 +201,8 @@ describe('AnthropicBackend - keepalive pings and the idle timer', () => {
     vi.useFakeTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
   });
 

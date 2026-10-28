@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
@@ -102,245 +103,252 @@ function buildPrompt(html: string, annotations: OpenAnnotationLean[]): IMessage[
   ];
 }
 
-const handler = baseApi().post(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  if (!req.user?.id) return res.status(401).json({ error: 'Authentication required' });
+const handler = baseApi().post(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    if (!req.user?.id) return res.status(401).json({ error: 'Authentication required' });
 
-  const publicId = String((req.query as { publicId?: string }).publicId ?? '');
-  if (!publicId) return res.status(400).json({ error: 'Missing publicId' });
+    const publicId = String((req.query as { publicId?: string }).publicId ?? '');
+    if (!publicId) return res.status(400).json({ error: 'Missing publicId' });
 
-  const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null }).lean<ReviseArtifactLean>();
-  if (!artifact) return res.status(404).json({ error: 'Not found' });
+    const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null }).lean<ReviseArtifactLean>();
+    if (!artifact) return res.status(404).json({ error: 'Not found' });
 
-  // Owner/admin only.
-  if (artifact.ownerId !== String(req.user.id) && !req.user.isAdmin) {
-    return res.status(403).json({ error: 'Only the owner may revise this artifact' });
-  }
-  // v1 revises hosted bundles only (reply/fabfile snapshots have no index.html).
-  if (artifact.source.kind !== 'bundle') {
-    return res.status(400).json({ error: 'Only bundle artifacts can be AI-revised' });
-  }
-  // A bundle must carry the version anchor - without it we cannot scope feedback
-  // (or the resolve) to the current version, and would risk applying/resolving
-  // comments across all versions. Bundles always have it post-finalize.
-  const currentSha = artifact.sha256Index;
-  if (!currentSha) {
-    return res.status(409).json({ error: 'Artifact has no version anchor yet; cannot revise' });
-  }
-
-  // ── Acquire a per-artifact revise lock atomically (steal if stale). ──
-  const lockNow = new Date();
-  const lockAcquired = await PublishedArtifact.findOneAndUpdate(
-    {
-      publicId,
-      deletedAt: null,
-      $or: [{ revisingAt: null }, { revisingAt: { $lt: new Date(lockNow.getTime() - REVISE_LOCK_TTL_MS) } }],
-    },
-    { $set: { revisingAt: lockNow } }
-  );
-  if (!lockAcquired) {
-    return res.status(409).json({ error: 'A revision is already in progress for this artifact' });
-  }
-
-  // The counted publish action, handed back in `finally` only if the revise ends before the model runs.
-  let action: PublishActionReceipt | undefined;
-  let modelCalled = false;
-  try {
-    // Gather the open feedback pinned to the CURRENT version.
-    const open = await Annotation.find({ publicId, deletedAt: null, resolvedAt: null, artifactVersionSha: currentSha })
-      .sort({ createdAt: 1 })
-      .select('body authorDisplayName anchor')
-      .lean<OpenAnnotationLean[]>();
-
-    if (!open.length) {
-      return res.status(400).json({ error: 'No open feedback to apply on the current version' });
+    // Owner/admin only.
+    if (artifact.ownerId !== String(req.user.id) && !req.user.isAdmin) {
+      return res.status(403).json({ error: 'Only the owner may revise this artifact' });
+    }
+    // v1 revises hosted bundles only (reply/fabfile snapshots have no index.html).
+    if (artifact.source.kind !== 'bundle') {
+      return res.status(400).json({ error: 'Only bundle artifacts can be AI-revised' });
+    }
+    // A bundle must carry the version anchor - without it we cannot scope feedback
+    // (or the resolve) to the current version, and would risk applying/resolving
+    // comments across all versions. Bundles always have it post-finalize.
+    const currentSha = artifact.sha256Index;
+    if (!currentSha) {
+      return res.status(409).json({ error: 'Artifact has no version anchor yet; cannot revise' });
     }
 
-    const storage = getPublishedArtifactsStorage();
-    // The stored bytes are what gets archived (and counted), not a re-encoding of the decoded text.
-    let currentBuf: Buffer;
+    // ── Acquire a per-artifact revise lock atomically (steal if stale). ──
+    const lockNow = new Date();
+    const lockAcquired = await PublishedArtifact.findOneAndUpdate(
+      {
+        publicId,
+        deletedAt: null,
+        $or: [{ revisingAt: null }, { revisingAt: { $lt: new Date(lockNow.getTime() - REVISE_LOCK_TTL_MS) } }],
+      },
+      { $set: { revisingAt: lockNow } }
+    );
+    if (!lockAcquired) {
+      return res.status(409).json({ error: 'A revision is already in progress for this artifact' });
+    }
+
+    // The counted publish action, handed back in `finally` only if the revise ends before the model runs.
+    let action: PublishActionReceipt | undefined;
+    let modelCalled = false;
     try {
-      currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
-    } catch {
-      return res.status(500).json({ error: 'Artifact index.html missing from storage' });
-    }
-    if (currentBuf.length > MAX_REVISE_INDEX_BYTES) {
-      return res.status(422).json({
-        error: `index.html (${currentBuf.length}B) is too large to AI-revise in this version (max ${MAX_REVISE_INDEX_BYTES}B)`,
-      });
-    }
-    const currentHtml = currentBuf.toString('utf-8');
+      // Gather the open feedback pinned to the CURRENT version.
+      const open = await Annotation.find({
+        publicId,
+        deletedAt: null,
+        resolvedAt: null,
+        artifactVersionSha: currentSha,
+      })
+        .sort({ createdAt: 1 })
+        .select('body authorDisplayName anchor')
+        .lean<OpenAnnotationLean[]>();
 
-    // Counted before the model call rather than after the storage-quota check below, because the
-    // model call is the costly part and the quota can only be checked once its output is known.
-    // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
-    // An attempt that reaches the model keeps its count whatever the outcome; one that ends
-    // before the model is called is refunded in `finally`.
-    action = await consumePublishAction(req.user);
+      if (!open.length) {
+        return res.status(400).json({ error: 'No open feedback to apply on the current version' });
+      }
 
-    // ── Run the LLM (in-monorepo path; accumulate the non-streamed completion). ──
-    const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
-    req.logger.info(`[REVISE] ${publicId} using ${modelInfo.name} (${modelInfo.backend}) on ${open.length} comments`);
-
-    const messages = buildPrompt(currentHtml, open);
-    const buffers: string[] = [];
-    modelCalled = true;
-    await llm.complete(
-      modelId,
-      messages,
-      { stream: false, maxTokens: REVISE_MAX_OUTPUT_TOKENS, temperature: 0.4 },
-      async (chunk: (string | null | undefined)[]) => {
-        chunk.forEach((part, i) => {
-          if (part == null) return;
-          buffers[i] = (buffers[i] ?? '') + part;
+      const storage = getPublishedArtifactsStorage();
+      // The stored bytes are what gets archived (and counted), not a re-encoding of the decoded text.
+      let currentBuf: Buffer;
+      try {
+        currentBuf = await storage.download(`${artifact.storageKeyPrefix}index.html`);
+      } catch {
+        return res.status(500).json({ error: 'Artifact index.html missing from storage' });
+      }
+      if (currentBuf.length > MAX_REVISE_INDEX_BYTES) {
+        return res.status(422).json({
+          error: `index.html (${currentBuf.length}B) is too large to AI-revise in this version (max ${MAX_REVISE_INDEX_BYTES}B)`,
         });
       }
-    );
-    let revisedHtml = stripFences(buffers.filter(Boolean).join(''));
+      const currentHtml = currentBuf.toString('utf-8');
 
-    // Defense-in-depth: strip any author/LLM inline <script> at WRITE time (not
-    // just serve time) so a stored bundle never carries executable inline JS,
-    // even though validateBundle would pass benign inline scripts.
-    if (/<script/i.test(revisedHtml)) {
-      const $ = cheerio.load(revisedHtml);
-      $('script:not([src])').remove();
-      revisedHtml = $.html();
-    }
+      // Counted before the model call rather than after the storage-quota check below, because the
+      // model call is the costly part and the quota can only be checked once its output is known.
+      // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
+      // An attempt that reaches the model keeps its count whatever the outcome; one that ends
+      // before the model is called is refunded in `finally`.
+      action = await consumePublishAction(req.user);
 
-    // Reject truncated / gutted output rather than clobber a good version.
-    if (!revisedHtml || !/<html[\s>]/i.test(revisedHtml) || !/<\/html\s*>/i.test(revisedHtml)) {
-      return res.status(502).json({ error: 'The model did not return a complete HTML document' });
-    }
-    if (revisedHtml.length < currentHtml.length * REVISE_MIN_OUTPUT_RATIO) {
-      return res.status(502).json({ error: 'The revised document looks truncated; not applied' });
-    }
+      // ── Run the LLM (in-monorepo path; accumulate the non-streamed completion). ──
+      const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+      req.logger.info(`[REVISE] ${publicId} using ${modelInfo.name} (${modelInfo.backend}) on ${open.length} comments`);
 
-    // ── Re-validate against the publish security contract (untrusted output). ──
-    const validation = validateBundle({
-      indexHtml: revisedHtml,
-      manifest: artifact.manifest.map(f => ({ path: f.path, mimeType: f.mimeType })),
-    });
-    if (!validation.valid) {
-      return res.status(422).json({ error: 'Revised HTML failed validation', violations: validation.violations });
-    }
+      const messages = buildPrompt(currentHtml, open);
+      const buffers: string[] = [];
+      modelCalled = true;
+      await llm.complete(
+        modelId,
+        messages,
+        { stream: false, maxTokens: REVISE_MAX_OUTPUT_TOKENS, temperature: 0.4 },
+        async (chunk: (string | null | undefined)[]) => {
+          chunk.forEach((part, i) => {
+            if (part == null) return;
+            buffers[i] = (buffers[i] ?? '') + part;
+          });
+        }
+      );
+      let revisedHtml = stripFences(buffers.filter(Boolean).join(''));
 
-    const revisedBuf = Buffer.from(revisedHtml, 'utf-8');
-    const newIndexSha = createHash('sha256').update(revisedBuf).digest('hex');
-    const newManifest = artifact.manifest.map(f =>
-      f.path === 'index.html' ? { ...f, size: revisedBuf.length, sha256: newIndexSha } : f
-    );
-    const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
-    const now = new Date();
+      // Defense-in-depth: strip any author/LLM inline <script> at WRITE time (not
+      // just serve time) so a stored bundle never carries executable inline JS,
+      // even though validateBundle would pass benign inline scripts.
+      if (/<script/i.test(revisedHtml)) {
+        const $ = cheerio.load(revisedHtml);
+        $('script:not([src])').remove();
+        revisedHtml = $.html();
+      }
 
-    // Record the version, deduped by content sha and backfilling the version being
-    // replaced if history doesn't yet contain it (see restore.ts for rationale).
-    // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
-    const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
-    const versionsToPush: ArtifactVersionMeta[] = [];
-    if (!haveShas.has(currentSha)) {
-      versionsToPush.push({
-        publishedAt: artifact.publishedAt,
-        publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
-        size: artifact.size,
-        sha256Index: currentSha,
-        indexBytes: currentBuf.length,
+      // Reject truncated / gutted output rather than clobber a good version.
+      if (!revisedHtml || !/<html[\s>]/i.test(revisedHtml) || !/<\/html\s*>/i.test(revisedHtml)) {
+        return res.status(502).json({ error: 'The model did not return a complete HTML document' });
+      }
+      if (revisedHtml.length < currentHtml.length * REVISE_MIN_OUTPUT_RATIO) {
+        return res.status(502).json({ error: 'The revised document looks truncated; not applied' });
+      }
+
+      // ── Re-validate against the publish security contract (untrusted output). ──
+      const validation = validateBundle({
+        indexHtml: revisedHtml,
+        manifest: artifact.manifest.map(f => ({ path: f.path, mimeType: f.mimeType })),
       });
-      haveShas.add(currentSha);
-    }
-    if (!haveShas.has(newIndexSha)) {
-      versionsToPush.push({
-        publishedAt: now,
-        publishedBy: String(req.user.id),
-        size: { totalBytes, fileCount: newManifest.length },
-        sha256Index: newIndexSha,
-        indexBytes: revisedBuf.length,
+      if (!validation.valid) {
+        return res.status(422).json({ error: 'Revised HTML failed validation', violations: validation.violations });
+      }
+
+      const revisedBuf = Buffer.from(revisedHtml, 'utf-8');
+      const newIndexSha = createHash('sha256').update(revisedBuf).digest('hex');
+      const newManifest = artifact.manifest.map(f =>
+        f.path === 'index.html' ? { ...f, size: revisedBuf.length, sha256: newIndexSha } : f
+      );
+      const totalBytes = newManifest.reduce((sum, f) => sum + f.size, 0);
+      const now = new Date();
+
+      // Record the version, deduped by content sha and backfilling the version being
+      // replaced if history doesn't yet contain it (see restore.ts for rationale).
+      // `indexBytes` is the index.html an entry has archived, or will archive once replaced.
+      const haveShas = new Set((artifact.versions ?? []).map(v => v.sha256Index));
+      const versionsToPush: ArtifactVersionMeta[] = [];
+      if (!haveShas.has(currentSha)) {
+        versionsToPush.push({
+          publishedAt: artifact.publishedAt,
+          publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
+          size: artifact.size,
+          sha256Index: currentSha,
+          indexBytes: currentBuf.length,
+        });
+        haveShas.add(currentSha);
+      }
+      if (!haveShas.has(newIndexSha)) {
+        versionsToPush.push({
+          publishedAt: now,
+          publishedBy: String(req.user.id),
+          size: { totalBytes, fileCount: newManifest.length },
+          sha256Index: newIndexSha,
+          indexBytes: revisedBuf.length,
+        });
+      }
+
+      // Storage quota on the net change (see checkInPlaceRewriteQuota): index.html is rewritten and
+      // the current one is archived, so a revision that changes the page grows it even if no larger.
+      const quota = await checkInPlaceRewriteQuota({
+        isAdmin: req.user.isAdmin,
+        artifact,
+        next: {
+          bytes: totalBytes,
+          fileCount: newManifest.length,
+          sha256Index: newIndexSha,
+          versions: [...(artifact.versions ?? []), ...versionsToPush],
+        },
       });
-    }
+      if (!quota.ok) {
+        return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
+      }
 
-    // Storage quota on the net change (see checkInPlaceRewriteQuota): index.html is rewritten and
-    // the current one is archived, so a revision that changes the page grows it even if no larger.
-    const quota = await checkInPlaceRewriteQuota({
-      isAdmin: req.user.isAdmin,
-      artifact,
-      next: {
-        bytes: totalBytes,
-        fileCount: newManifest.length,
-        sha256Index: newIndexSha,
-        versions: [...(artifact.versions ?? []), ...versionsToPush],
-      },
-    });
-    if (!quota.ok) {
-      return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
-    }
+      // Archive the current version's stored bytes before overwriting, so a bad revision can be
+      // rolled back (previousVersionMeta only stores metadata).
+      await storage
+        .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
+          ContentType: 'text/html',
+        })
+        .catch(() =>
+          req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`)
+        );
 
-    // Archive the current version's stored bytes before overwriting, so a bad revision can be
-    // rolled back (previousVersionMeta only stores metadata).
-    await storage
-      .upload(currentBuf, `${artifact.storageKeyPrefix}versions/${currentSha}.html`, {
-        ContentType: 'text/html',
-      })
-      .catch(() =>
-        req.logger.warn(`[REVISE] ${publicId} failed to archive previous version ${currentSha.slice(0, 12)}`)
+      // Write the new index.html in place, then the version metadata.
+      await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
+
+      await PublishedArtifact.updateOne(
+        { publicId, deletedAt: null },
+        {
+          $set: {
+            manifest: newManifest,
+            sha256Index: newIndexSha,
+            size: { totalBytes, fileCount: newManifest.length },
+            lastPublishedBy: String(req.user.id),
+            publishedAt: now,
+            previousVersionMeta: {
+              publishedAt: artifact.publishedAt,
+              publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
+              size: artifact.size,
+              sha256Index: currentSha,
+            },
+          },
+          $push: { versions: { $each: versionsToPush } },
+        }
       );
 
-    // Write the new index.html in place, then the version metadata.
-    await storage.upload(revisedBuf, `${artifact.storageKeyPrefix}index.html`, { ContentType: 'text/html' });
+      // Mark the consumed feedback resolved by the AI revision (current version only).
+      await Annotation.updateMany(
+        { publicId, deletedAt: null, resolvedAt: null, artifactVersionSha: currentSha },
+        { $set: { resolvedAt: now, resolvedBy: 'ai-revise' } }
+      );
 
-    await PublishedArtifact.updateOne(
-      { publicId, deletedAt: null },
-      {
-        $set: {
-          manifest: newManifest,
-          sha256Index: newIndexSha,
-          size: { totalBytes, fileCount: newManifest.length },
-          lastPublishedBy: String(req.user.id),
-          publishedAt: now,
-          previousVersionMeta: {
-            publishedAt: artifact.publishedAt,
-            publishedBy: artifact.lastPublishedBy ?? artifact.ownerId,
-            size: artifact.size,
-            sha256Index: currentSha,
-          },
-        },
-        $push: { versions: { $each: versionsToPush } },
-      }
-    );
+      // The new version overwrote index.html in place - bust the CDN cache so the
+      // revision is visible immediately, not after the TTL. Only public pages are
+      // CDN-cached (gated are no-store). Best-effort, never throws.
+      if (artifact.visibility === 'public') void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
 
-    // Mark the consumed feedback resolved by the AI revision (current version only).
-    await Annotation.updateMany(
-      { publicId, deletedAt: null, resolvedAt: null, artifactVersionSha: currentSha },
-      { $set: { resolvedAt: now, resolvedBy: 'ai-revise' } }
-    );
+      // Best-effort, never throws: the revised version gets its own owner-only thumbnail.
+      await enqueuePublishThumbnail({ publicId, versionId: newIndexSha }, req.logger);
 
-    // The new version overwrote index.html in place - bust the CDN cache so the
-    // revision is visible immediately, not after the TTL. Only public pages are
-    // CDN-cached (gated are no-store). Best-effort, never throws.
-    if (artifact.visibility === 'public') void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+      const url = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug);
+      req.logger.info(`[REVISE] ${publicId} → new version sha=${newIndexSha.slice(0, 12)} applied=${open.length}`);
 
-    // Best-effort, never throws: the revised version gets its own owner-only thumbnail.
-    await enqueuePublishThumbnail({ publicId, versionId: newIndexSha }, req.logger);
-
-    const url = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug);
-    req.logger.info(`[REVISE] ${publicId} → new version sha=${newIndexSha.slice(0, 12)} applied=${open.length}`);
-
-    return res.status(200).json({
-      publicId,
-      url,
-      sha256Index: newIndexSha,
-      previousSha256Index: currentSha,
-      commentsApplied: open.length,
-      publishedAt: now.toISOString(),
-      model: modelInfo.name,
-    });
-  } finally {
-    if (action && !modelCalled) await action.refund();
-    // Compare-and-set release: only clear the lock if we still hold it. A request
-    // whose lock was stolen after the TTL must NOT clear the newer holder's lock.
-    await PublishedArtifact.updateOne({ publicId, revisingAt: lockNow }, { $set: { revisingAt: null } }).catch(
-      () => undefined
-    );
-  }
-});
+      return res.status(200).json({
+        publicId,
+        url,
+        sha256Index: newIndexSha,
+        previousSha256Index: currentSha,
+        commentsApplied: open.length,
+        publishedAt: now.toISOString(),
+        model: modelInfo.name,
+      });
+    } finally {
+      if (action && !modelCalled) await action.refund();
+      // Compare-and-set release: only clear the lock if we still hold it. A request
+      // whose lock was stolen after the TTL must NOT clear the newer holder's lock.
+      await PublishedArtifact.updateOne({ publicId, revisingAt: lockNow }, { $set: { revisingAt: null } }).catch(
+        () => undefined
+      );
+    }
+  })
+);
 
 export const config = {
   api: { externalResolver: true, bodyParser: { sizeLimit: '64kb' } },

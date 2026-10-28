@@ -60,7 +60,10 @@ vi.mock('@server/billing/freeTierDailyCapGate', () => ({
 }));
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
@@ -166,6 +169,17 @@ vi.mock('@server/auth/auth', async orig => {
     },
   };
 });
+
+const { mockAdmitRequestCompletion, mockQuotaRelease } = vi.hoisted(() => {
+  const mockQuotaRelease = vi.fn(async () => {});
+  return {
+    mockQuotaRelease,
+    mockAdmitRequestCompletion: vi.fn(async (..._a: unknown[]) => ({ release: mockQuotaRelease })),
+  };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
+}));
 
 import handler from '../llm';
 import { ApiKeyScope, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
@@ -688,5 +702,39 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke.mock.calls[0][0].body.systemPrompt).toBe(atCap);
+  });
+});
+
+describe('POST /api/ai/llm (integration - untrusted owner quotas)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
+    mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockWillInjectAuthoredPrompt.mockResolvedValue(false);
+    mockLoadIdentityPrompts.mockResolvedValue([]);
+    mockGetOrCreateSession.mockResolvedValue({ sessionId: 'sess-1', asyncPromises: [], session: { id: 'sess-1' } });
+    mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+    mockAdmitRequestCompletion.mockResolvedValue({ release: mockQuotaRelease });
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+  });
+
+  it('checks the token quota for the queued turn without holding a concurrency slot', async () => {
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(req, { holdSlot: false });
+  });
+
+  it('refuses an over-quota turn with a 429 and its errorCode before creating a session', async () => {
+    mockAdmitRequestCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 5 })
+    );
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'token_rate_limit_exceeded' });
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 });

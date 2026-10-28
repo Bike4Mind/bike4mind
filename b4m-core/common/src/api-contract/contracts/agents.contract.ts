@@ -187,6 +187,12 @@ const AUTHORING_FORBIDDEN =
 const AUTHORING_400 =
   'The assistant cannot run: the feature is disabled or not configured on this deployment. Nothing is written.';
 
+const AUTHORING_QUOTA_429 =
+  'the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: ' +
+  '"token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`).';
+
+const AUTHORING_429 = `Per-user rate limit exceeded, or ${AUTHORING_QUOTA_429}`;
+
 const AUTHORING_502 = 'The model or image provider failed to produce a result. Nothing is written; retry later.';
 
 export const generateAgentAvatarContract = defineEndpoint({
@@ -217,7 +223,11 @@ export const generateAgentAvatarContract = defineEndpoint({
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: BODY_422, schema: ApiErrorSchema },
-    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+    429: {
+      description: AUTHORING_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
     502: {
       description:
         'The image provider failed, refused the prompt, or the generated image was flagged by content ' +
@@ -246,7 +256,11 @@ export const generateAgentDescriptionContract = defineEndpoint({
     200: { description: 'The generated description.', schema: GenerateAgentDescriptionResponseSchema },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
-    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+    429: {
+      description: AUTHORING_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
     502: { description: AUTHORING_502, schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false },
@@ -273,9 +287,11 @@ export const generateAgentSystemPromptContract = defineEndpoint({
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     429: {
       description:
-        'Per-user rate limit exceeded, or this agent system prompt was generated more recently than the ' +
-        'admin-set interval allows.',
+        'Per-user rate limit exceeded, this agent system prompt was generated more recently than the ' +
+        'admin-set interval allows, or ' +
+        AUTHORING_QUOTA_429,
       schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
     },
     502: { description: AUTHORING_502, schema: ApiErrorSchema },
   },
@@ -310,7 +326,11 @@ export const enhanceAgentFieldContract = defineEndpoint({
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: BODY_422, schema: ApiErrorSchema },
-    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+    429: {
+      description: AUTHORING_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
     502: { description: AUTHORING_502, schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: ENHANCE_FIELD_EXAMPLE },

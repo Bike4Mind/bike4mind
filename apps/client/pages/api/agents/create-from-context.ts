@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
@@ -386,161 +387,163 @@ IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formattin
 
 const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{}, CreateFromContextResponse, CreateFromContextRequest>
->(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  const { agentName, sessionId } = req.body;
-  const authenticatedUserId = req.user!.id;
+>(
+  withRequestCompletionQuota(async (req, res) => {
+    assertAiAccessAllowed(req.user);
+    const { agentName, sessionId } = req.body;
+    const authenticatedUserId = req.user!.id;
 
-  // Validate request
-  if (!agentName || !sessionId) {
-    throw new BadRequestError('Agent name and session ID are required');
-  }
-
-  // A malformed id has always answered 404 here (the error handler remapped the cast); the
-  // 400 below is this route's answer for a well-formed id that matches nothing.
-  if (!isValidObjectId(sessionId)) throw new NotFoundError('Session not found');
-
-  // Verify user owns the session OR has shared access
-  const session = await sessionRepository.findById(sessionId);
-  if (!session) {
-    throw new BadRequestError('Session not found');
-  }
-
-  // Check owner, global write permission, or shared create permission
-  const isOwner = session.userId === authenticatedUserId;
-  const hasGlobalWrite = session.isGlobalWrite === true;
-  const hasSharedCreateAccess =
-    session.users?.some(
-      userShare => userShare.userId === authenticatedUserId && userShare.permissions.includes(Permission.create)
-    ) ?? false;
-
-  if (!isOwner && !hasGlobalWrite && !hasSharedCreateAccess) {
-    req.logger.warn(
-      `User ${authenticatedUserId} denied creating agent in session ${sessionId} - insufficient permissions`
-    );
-    throw new ForbiddenError('You do not have permission to create agents in this session');
-  }
-
-  // Outside the try below, which turns every error into a 500; also ahead of the LLM generation.
-  await assertAgentLimit(req.user!);
-
-  try {
-    req.logger.info(`Creating agent "${agentName}" from context for user ${authenticatedUserId}`);
-
-    // Check if system prompt generation is enabled
-    const settings = await agentOpsSettingsRepository.getSettings();
-    if (settings && !settings.isEnabled) {
-      throw new BadRequestError('Agent generation is currently disabled');
+    // Validate request
+    if (!agentName || !sessionId) {
+      throw new BadRequestError('Agent name and session ID are required');
     }
 
-    // Get messages from the session
-    const messages = await questRepository.findAllBySessionId(sessionId);
+    // A malformed id has always answered 404 here (the error handler remapped the cast); the
+    // 400 below is this route's answer for a well-formed id that matches nothing.
+    if (!isValidObjectId(sessionId)) throw new NotFoundError('Session not found');
 
-    // Derive file IDs from session data (knowledgeIds + message fabFileIds)
-    // instead of trusting client-provided file IDs
-    const fileIds = await collectSessionFileIds(sessionId, messages);
-    // Access-scoped: both id lists are client-written, and file contents go into the generated
-    // agent's prompt. Same arms as the attachment door; a lake resolution failure leaves
-    // ownership-only arms, so a lake file drops out of the context rather than widening it.
-    const fabFiles =
-      fileIds.length > 0
-        ? await fabFileRepository.findAccessibleInIds(
-            fileIds,
-            { userId: authenticatedUserId, userGroups: req.user!.groups ?? undefined },
-            await createAttachmentLakeAccess(req.user!, req.logger)()
-          )
-        : [];
+    // Verify user owns the session OR has shared access
+    const session = await sessionRepository.findById(sessionId);
+    if (!session) {
+      throw new BadRequestError('Session not found');
+    }
 
-    // Generate the agent from context
-    const agentData = await generateAgentFromContext(
-      req,
-      agentName,
-      messages,
-      fabFiles,
-      authenticatedUserId,
-      req.logger
-    );
+    // Check owner, global write permission, or shared create permission
+    const isOwner = session.userId === authenticatedUserId;
+    const hasGlobalWrite = session.isGlobalWrite === true;
+    const hasSharedCreateAccess =
+      session.users?.some(
+        userShare => userShare.userId === authenticatedUserId && userShare.permissions.includes(Permission.create)
+      ) ?? false;
 
-    // Always create a dedicated project for this agent. Per-user project names are
-    // unique (userId_1_name_1), so generating a second agent with the same name would
-    // trip code 11000; disambiguate with a short suffix rather than 500 the whole
-    // agent creation.
-    const makeAgentProjectDoc = (name: string) =>
-      ({
-        name,
-        description: `Project automatically created for the ${agentName} agent`,
-        userId: authenticatedUserId,
-        users: [
-          {
-            userId: authenticatedUserId,
-            permissions: ['read', 'create', 'update', 'delete', 'share'], // All permissions for owner
-          },
-        ],
+    if (!isOwner && !hasGlobalWrite && !hasSharedCreateAccess) {
+      req.logger.warn(
+        `User ${authenticatedUserId} denied creating agent in session ${sessionId} - insufficient permissions`
+      );
+      throw new ForbiddenError('You do not have permission to create agents in this session');
+    }
+
+    // Outside the try below, which turns every error into a 500; also ahead of the LLM generation.
+    await assertAgentLimit(req.user!);
+
+    try {
+      req.logger.info(`Creating agent "${agentName}" from context for user ${authenticatedUserId}`);
+
+      // Check if system prompt generation is enabled
+      const settings = await agentOpsSettingsRepository.getSettings();
+      if (settings && !settings.isEnabled) {
+        throw new BadRequestError('Agent generation is currently disabled');
+      }
+
+      // Get messages from the session
+      const messages = await questRepository.findAllBySessionId(sessionId);
+
+      // Derive file IDs from session data (knowledgeIds + message fabFileIds)
+      // instead of trusting client-provided file IDs
+      const fileIds = await collectSessionFileIds(sessionId, messages);
+      // Access-scoped: both id lists are client-written, and file contents go into the generated
+      // agent's prompt. Same arms as the attachment door; a lake resolution failure leaves
+      // ownership-only arms, so a lake file drops out of the context rather than widening it.
+      const fabFiles =
+        fileIds.length > 0
+          ? await fabFileRepository.findAccessibleInIds(
+              fileIds,
+              { userId: authenticatedUserId, userGroups: req.user!.groups ?? undefined },
+              await createAttachmentLakeAccess(req.user!, req.logger)()
+            )
+          : [];
+
+      // Generate the agent from context
+      const agentData = await generateAgentFromContext(
+        req,
+        agentName,
+        messages,
+        fabFiles,
+        authenticatedUserId,
+        req.logger
+      );
+
+      // Always create a dedicated project for this agent. Per-user project names are
+      // unique (userId_1_name_1), so generating a second agent with the same name would
+      // trip code 11000; disambiguate with a short suffix rather than 500 the whole
+      // agent creation.
+      const makeAgentProjectDoc = (name: string) =>
+        ({
+          name,
+          description: `Project automatically created for the ${agentName} agent`,
+          userId: authenticatedUserId,
+          users: [
+            {
+              userId: authenticatedUserId,
+              permissions: ['read', 'create', 'update', 'delete', 'share'], // All permissions for owner
+            },
+          ],
+          groups: [],
+          isGlobalRead: false,
+          isGlobalWrite: false,
+        }) as never; // projectRepository.create() expects full document type but we provide a partial
+
+      let agentProject;
+      try {
+        agentProject = await projectRepository.create(makeAgentProjectDoc(`${agentName} Agent Project`));
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+        agentProject = await projectRepository.create(
+          makeAgentProjectDoc(`${agentName} Agent Project (${uuidv4().slice(0, 8)})`)
+        );
+      }
+
+      if (!agentProject) {
+        throw new Error('Failed to create project for agent');
+      }
+
+      const projectId = agentProject.id;
+      req.logger.info(`Created dedicated project ${projectId} for agent "${agentName}"`);
+
+      // Save the agent to the database with additional required fields
+      const agentToSave = {
+        ...agentData,
+        projectId,
         groups: [],
         isGlobalRead: false,
         isGlobalWrite: false,
-      }) as never; // projectRepository.create() expects full document type but we provide a partial
+        users: [
+          {
+            userId: authenticatedUserId,
+            permissions: ['read', 'create', 'update', 'delete', 'share'], // All permissions for the creator
+          },
+        ],
+      };
+      const savedAgent = await agentRepository.create(agentToSave as never); // any: agentRepository.create() expects full document type but we provide a partial
 
-    let agentProject;
-    try {
-      agentProject = await projectRepository.create(makeAgentProjectDoc(`${agentName} Agent Project`));
-    } catch (error) {
-      if (!isDuplicateKeyError(error)) throw error;
-      agentProject = await projectRepository.create(
-        makeAgentProjectDoc(`${agentName} Agent Project (${uuidv4().slice(0, 8)})`)
-      );
+      if (!savedAgent) {
+        throw new Error('Failed to save agent to database');
+      }
+
+      req.logger.info(`Successfully created agent "${agentName}" with ID ${savedAgent.id}`);
+
+      return res.status(200).json({
+        success: true,
+        agent: savedAgent,
+        message: `Agent "${agentName}" created successfully!`,
+      });
+    } catch (error: any) {
+      // The credit reservation and model admission keep their own statuses rather than collapsing into the generic 500.
+      if (
+        error instanceof UnprocessableEntityError ||
+        error instanceof ForbiddenError ||
+        error instanceof BadRequestError
+      ) {
+        throw error;
+      }
+      req.logger.error(`Error creating agent from context:`, error);
+
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to create agent from context',
+      });
     }
-
-    if (!agentProject) {
-      throw new Error('Failed to create project for agent');
-    }
-
-    const projectId = agentProject.id;
-    req.logger.info(`Created dedicated project ${projectId} for agent "${agentName}"`);
-
-    // Save the agent to the database with additional required fields
-    const agentToSave = {
-      ...agentData,
-      projectId,
-      groups: [],
-      isGlobalRead: false,
-      isGlobalWrite: false,
-      users: [
-        {
-          userId: authenticatedUserId,
-          permissions: ['read', 'create', 'update', 'delete', 'share'], // All permissions for the creator
-        },
-      ],
-    };
-    const savedAgent = await agentRepository.create(agentToSave as never); // any: agentRepository.create() expects full document type but we provide a partial
-
-    if (!savedAgent) {
-      throw new Error('Failed to save agent to database');
-    }
-
-    req.logger.info(`Successfully created agent "${agentName}" with ID ${savedAgent.id}`);
-
-    return res.status(200).json({
-      success: true,
-      agent: savedAgent,
-      message: `Agent "${agentName}" created successfully!`,
-    });
-  } catch (error: any) {
-    // The credit reservation and model admission keep their own statuses rather than collapsing into the generic 500.
-    if (
-      error instanceof UnprocessableEntityError ||
-      error instanceof ForbiddenError ||
-      error instanceof BadRequestError
-    ) {
-      throw error;
-    }
-    req.logger.error(`Error creating agent from context:`, error);
-
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to create agent from context',
-    });
-  }
-});
+  })
+);
 
 export default handler;

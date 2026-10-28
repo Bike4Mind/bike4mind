@@ -59,12 +59,19 @@ deployment settings, so contact your deployment administrator if the allowance d
 | `provider_rejected` | The provider refused B4M's credentials. Your key is fine. | Later, or another model |
 | `provider_error` | Any other provider failure. | Yes, with backoff |
 
+## Account-level limits
+
+Some accounts also have a tokens-per-minute limit and a limit on completions in flight at once. A 429 for one of these names it in `errorCode`:
+
+- `token_rate_limit_exceeded`: wait for `Retry-After` seconds. A retry can be refused again while your usage in the last minute is still over the limit.
+- `concurrency_limit_exceeded`: retry when one of your running completions finishes.
+
 ## Retry guidance
 
 | Status | Retry? |
 |--------|--------|
 | 400, 401, 403, 413, 422 | No. Fix the request, key, scopes or balance first. |
-| 429 | Yes. Wait `Retry-After` seconds. |
+| 429 | Yes. Wait `Retry-After` seconds. See [Account-level limits](#account-level-limits) for the `errorCode` values. |
 | 500, 503 | Yes, with exponential backoff. A 503 with `errorCode: "provider_not_configured"` means the model's provider is unavailable here; try later or another model. |
 
 Log the `request_id` from the error body (also sent as the `X-Request-ID` header) and include it when you contact support.

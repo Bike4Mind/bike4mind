@@ -24,6 +24,7 @@ import { sessionWillInjectAuthoredPrompt } from '@server/utils/sessionSystemProm
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@server/utils/systemPrompts/loader';
 import { requestTurnAuth } from '@server/auth/turnAuth';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 import { Request } from 'express';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
@@ -98,6 +99,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       usageEventRepository,
       logger: req.logger,
     });
+    // The turn is queued and finishes elsewhere, so only the token quota applies here.
+    await admitRequestCompletion(req, { holdSlot: false });
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: reqSessionId,
