@@ -627,10 +627,8 @@ export function contextOptions(input: Omit<FitInput, 'context'>): Array<FitPlan 
     });
 }
 
-/**
- * Ceiling on the num_ctx the Ollama backend (llm-adapters ollamaBackend.ts) asks Ollama to allocate. Models
- * advertise windows far larger than a dev box can hold in KV cache (262K on qwen3.5). Override with OLLAMA_MAX_NUM_CTX.
- */
+// Ceiling on the num_ctx llm-adapters ollamaBackend.ts requests: advertised windows (262K on qwen3.5) outgrow a
+// dev box's KV cache. Override with OLLAMA_MAX_NUM_CTX.
 export const DEFAULT_MAX_NUM_CTX = 32768;
 
 /** The num_ctx the Ollama backend requests for a model reporting a `reported`-token window. */
