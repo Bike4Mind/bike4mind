@@ -301,7 +301,7 @@ async function pullWithProgress(target: RuntimeTarget, ref: string, deps: Models
         // Bytes in the first counted frame were already on the runtime: a resumed partial or a shared layer.
         if (!sawBytes && totalBytes) {
           sawBytes = true;
-          if (completedBytes > 0) {
+          if (completedBytes > 0 && completedBytes < totalBytes) {
             if (deps.isTTY) deps.progress.end();
             deps.log(`Already downloaded: ${formatBytes(completedBytes)}; pulling the rest.`);
           }

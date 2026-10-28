@@ -117,4 +117,37 @@ describe('b4m models pull after an interrupted pull', () => {
     expect(second.lines).toContain(`Already downloaded: ${resumedFrom} B; pulling the rest.`);
     expect(first.lines.some(line => line.startsWith('Already downloaded'))).toBe(false);
   });
+
+  it('says nothing about resuming when the model is already fully downloaded', async () => {
+    server = await startFakeServer({
+      'POST /api/pull': async (_request, response) => {
+        response.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        response.end(ndjson([{ status: 'pulling manifest' }, layerFrame(TOTAL), { status: 'success' }]));
+      },
+    });
+    const runtime = new OllamaRuntime({ baseUrl: server.baseUrl });
+    const lines: string[] = [];
+    const code = await runModelsCommand(
+      'pull',
+      { _: [], ref: 'tiny:latest', yes: true, 'accept-license': true },
+      {
+        hub: () => {
+          throw new Error('an Ollama name needs no Hugging Face lookup');
+        },
+        ollamaRegistry: async () => ({ digest: LAYER, layers: [LAYER], sizeBytes: TOTAL, licenses: [] }),
+        resolveRuntime: async () => ({ runtime, source: 'config' }),
+        config: { defaultModel: undefined, ollamaHost: server.baseUrl, save: async () => {} },
+        confirm: async () => false,
+        isTTY: false,
+        log: line => lines.push(line),
+        progress: { update: () => {}, end: () => {} },
+        machine: async () => ({ hardware: CPU_64 }),
+        runtimeHost: () => server?.baseUrl ?? null,
+        signal: new AbortController().signal,
+      }
+    );
+    expect(code).toBe(0);
+    expect(lines.some(line => line.startsWith('Pulled tiny:latest.'))).toBe(true);
+    expect(lines.some(line => line.startsWith('Already downloaded'))).toBe(false);
+  });
 });
