@@ -21,7 +21,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async 
   const projectId = req.query.id as string;
 
   // Read before the leave: its cascade prunes the project's file list.
-  const cleanUpTargets = await projectRevokeCleanupTargets(projectId, memberIdToRemove ?? req.user.id, req.logger);
+  const cleanUpTargets = await projectRevokeCleanupTargets(projectId, memberIdToRemove || req.user.id, req.logger);
 
   const result = await withTransaction(async () => {
     const project = await projectService.leaveProject(

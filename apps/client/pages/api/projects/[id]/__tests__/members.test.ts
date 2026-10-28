@@ -91,6 +91,8 @@ describe('DELETE /api/projects/[id]/members', () => {
   it.each([
     ['a member leaving', {}, 'u1'],
     ['an owner removing a member', { userId: 'member-1' }, 'member-1'],
+    // leaveProject treats an empty userId as a self-leave; planning must too, not as a project delete.
+    ['a member leaving with an empty userId', { userId: '' }, 'u1'],
   ])('plans the reference cleanup before %s and runs it after the commit', async (_label, body, revoked) => {
     leaveProject.mockResolvedValue({ id: 'p1', name: 'Project' });
     const { req, res } = request(body);
