@@ -72,7 +72,7 @@ apps/client/server/middlewares/apiKeyScopeGate.ts
 apps/client/server/rapidReply/resolveRapidModel.ts
 apps/client/server/skillMarket/scanRules.ts
 apps/client/server/utils/auth/verifyCallback.test.ts
-apps/client/server/utils/invokeMcpHandler.test.ts
+packages/server-utils/src/utils/invokeMcpHandler.test.ts
 apps/client/server/utils/systemPrompts/defaults.ts
 apps/client/types/react-syntax-highlighter.d.ts
 apps/desktop/src/main/chat/approvalScope.test.ts
