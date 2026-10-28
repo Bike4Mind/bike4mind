@@ -412,7 +412,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   );
   // A dismissed bar reports no binding, but the PR is still this session's, and offering to open
   // a second one for the same branch would be wrong. The sidebar summary covers the moment before
-  // the bar's state arrives on a switch.
+  // the bar's state arrives on a switch, except for a dismissed bar, which has no summary.
   const hasPullRequest =
     !!pullRequest?.binding || !!pullRequest?.dismissed || (!!activeId && prSummaries.has(activeId));
   const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
