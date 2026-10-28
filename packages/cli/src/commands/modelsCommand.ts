@@ -234,7 +234,7 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   }
   deps.log('Builds (smallest first):');
   const lines = table([
-    ['QUANT', 'SIZE', 'OLLAMA REF'],
+    ['BUILD', 'SIZE', 'OLLAMA REF'],
     ...detail.builds.map(build => [
       clean(build.label),
       formatBytes(build.sizeBytes),

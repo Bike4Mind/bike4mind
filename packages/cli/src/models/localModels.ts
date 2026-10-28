@@ -447,11 +447,11 @@ export async function planPull(
 
   const build = pickBuild(detail.builds, parsed.tag);
   if (!build) {
-    const quants = detail.builds.flatMap(entry => (entry.quant ? [clean(entry.label)] : []));
+    const tags = detail.builds.map(entry => clean(buildTag(entry)));
     throw new Error(
-      quants.length === 0
+      tags.length === 0
         ? `${id} has no GGUF builds.`
-        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${quants.join(', ')} (${pullCommand} ${id}:<QUANT>)`
+        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${tags.join(', ')} (${pullCommand} ${id}:<BUILD>)`
     );
   }
   if (build.ollamaRefIssue && UNPULLABLE.has(build.ollamaRefIssue)) {

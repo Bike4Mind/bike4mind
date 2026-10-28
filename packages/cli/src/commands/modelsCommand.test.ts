@@ -551,6 +551,7 @@ describe('models show', () => {
     await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
     const text = h.lines.join('\n');
     expect(text).toMatch(/\n {2}Q4_0 {6}219 MB\s+hf\.co\/\S+:Q4_0\n/);
+    expect(text).toMatch(/\n {2}BUILD\s+SIZE\s+OLLAMA REF\n/);
     expect(text).toMatch(/\n {2}QAD-Q4_0 {2}219 MB\s+hf\.co\/\S+:QAD-Q4_0\n/);
     expect(pickBuild(builds, 'qad-q4_0')).toBe(qad);
     expect(pickBuild(builds, 'Q4_0')).toBe(builds[0]);

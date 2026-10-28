@@ -222,14 +222,16 @@ const QUANT_RE = new RegExp(
 
 // Ollama's tag rule (name.go): alphanumeric or `_` first, then `_ . -`, at most 80 characters.
 const OLLAMA_TAG_RE = /^[A-Za-z0-9_][\w.-]{0,79}$/;
+const OLLAMA_TAG_MAX = 80;
 const OLLAMA_NAME_PART_MAX = 80;
 const OLLAMA_MODEL_LAYER = 'application/vnd.ollama.image.model';
 const REGISTRY_MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json';
 
 const SHARD_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
-// Draft heads named so at either end of the stem. The registry skips drafts by GGUF metadata, so a mid-name `-MTP-`
-// build stays listed (GLM-4.5-Air-MTP is a full model) and verifyOllamaRef catches the sidecars among them.
-const DRAFT_GGUF_RE = /^(?:mtp|dflash|dspark|eagle3)[-_.]|[-_.](?:mtp|dflash|dspark|eagle3)$/i;
+// Draft heads named so at the start of a folder or the stem, or the end of the stem. The registry skips drafts by GGUF
+// metadata, so a mid-name `-MTP-` build stays listed (GLM-4.5-Air-MTP is a full model); verifyOllamaRef catches sidecars.
+const DRAFT_PREFIX_RE = /^(?:mtp|dflash|dspark|eagle3)(?:[-_.]|$)/i;
+const DRAFT_SUFFIX_RE = /[-_.](?:mtp|dflash|dspark|eagle3)$/i;
 const IMATRIX_GGUF_RE = /(?:^|[-_.])imatrix(?:[-_.]|$)/i;
 const LABEL_TOKEN_RE = /[-_. ]+|[^-_. ]+/g;
 const REPO_ID_RE = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,95}$/;
@@ -525,8 +527,13 @@ function distinctMiddles(lists: string[][]): string[] {
   );
 }
 
-/** The text as a tag `hf.co/<repo>:<tag>` parsers accept. */
-const tagSafe = (text: string) => text.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+/** The text as a tag Ollama and `hf.co/<repo>:<tag>` parsers accept (OLLAMA_TAG_RE), `build` when nothing is left. */
+const tagSafe = (text: string, max = OLLAMA_TAG_MAX) =>
+  text
+    .replace(/[^A-Za-z0-9_.-]+/g, '-')
+    .replace(/^[-.]+/, '')
+    .slice(0, max)
+    .replace(/[-.]+$/, '') || 'build';
 
 /** The tag a build answers to: its planned ref's, else its label. `findHubBuild` resolves it back to the build. */
 export function hubBuildTag(build: Pick<HubGgufBuild, 'ollamaRef' | 'label'>): string {
@@ -544,10 +551,11 @@ export function findHubBuild<T extends Pick<HubGgufBuild, 'ollamaRef' | 'label' 
   tag: string
 ): T | undefined {
   const wanted = tag.toUpperCase();
+  const byQuant = builds.filter(build => build.quant?.toUpperCase() === wanted);
   return (
     builds.find(build => build.ollamaRef && hubBuildTag(build).toUpperCase() === wanted) ??
     builds.find(build => build.label.toUpperCase() === wanted) ??
-    builds.find(build => build.quant?.toUpperCase() === wanted)
+    (byQuant.length === 1 ? byQuant[0] : undefined)
   );
 }
 
@@ -578,16 +586,22 @@ function buildLabels(
   for (const build of builds) if (build.ollamaRef) owners.set(refTag(build.ollamaRef).toUpperCase(), build.id);
   const counts = new Map<string, number>();
   for (const label of labels.values()) counts.set(label.toUpperCase(), (counts.get(label.toUpperCase()) ?? 0) + 1);
-  const clashes = (id: string, label: string) =>
-    (counts.get(label.toUpperCase()) ?? 0) > 1 || (owners.get(label.toUpperCase()) ?? id) !== id;
+  const clashes = (id: string, label: string) => {
+    const owner = owners.get(label.toUpperCase());
+    return owner ? owner !== id : (counts.get(label.toUpperCase()) ?? 0) > 1;
+  };
   const clashing = [...labels].filter(([id, label]) => clashes(id, label));
   for (const [id, label] of labels) if (!clashes(id, label)) owners.set(label.toUpperCase(), id);
+  // Each file's own name stays free for it, so no suffixed label lands on a tag that names another file.
+  for (const build of builds)
+    for (const own of [tagSafe(build.id), tagSafe(ggufStem(build.files[0]?.path ?? build.id))])
+      if (!owners.has(own.toUpperCase())) owners.set(own.toUpperCase(), build.id);
   // The same file name in two folders, a merged file beside its own shards, or a label another build's ref claims:
   // the path tells them apart.
+  const free = (id: string, label: string) => (owners.get(label.toUpperCase()) ?? id) === id;
   for (const [id] of clashing) {
-    const base = tagSafe(id);
-    let label = base;
-    for (let n = 2; (owners.get(label.toUpperCase()) ?? id) !== id; n++) label = `${base}-${n}`;
+    let label = tagSafe(id);
+    for (let n = 2; !free(id, label); n++) label = `${tagSafe(id, OLLAMA_TAG_MAX - String(n).length - 1)}-${n}`;
     owners.set(label.toUpperCase(), id);
     labels.set(id, label);
   }
@@ -617,7 +631,9 @@ function groupGgufFiles(
       continue;
     }
     const stem = ggufStem(name);
-    if (DRAFT_GGUF_RE.test(stem) || (IMATRIX_GGUF_RE.test(stem) && !ggufQuantLabel(name))) continue;
+    const folders = entry.path.split('/').slice(0, -1);
+    if ([...folders, stem].some(part => DRAFT_PREFIX_RE.test(part)) || DRAFT_SUFFIX_RE.test(stem)) continue;
+    if (IMATRIX_GGUF_RE.test(stem) && !ggufQuantLabel(name)) continue;
     const shard = SHARD_RE.exec(entry.path);
     const id = shard ? entry.path.slice(0, shard.index) : entry.path.replace(/\.gguf$/i, '');
     const key = `${shard ? 'split' : 'single'}:${id}`;

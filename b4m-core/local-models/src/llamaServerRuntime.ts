@@ -2,7 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { LlamaServerVersionError, LocalRuntimeError, ModelIncompleteError, ModelNotFoundError } from './errors';
 import { GgufModelStore, type StoredGgufModel } from './ggufStore';
-import { HuggingFaceHub, findHubBuild, isHubRepoId } from './huggingface';
+import { HuggingFaceHub, findHubBuild, hubBuildTag, isHubRepoId } from './huggingface';
 import {
   LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD,
   findLlamaServer,
@@ -167,9 +167,9 @@ export class LlamaServerRuntime implements LocalRuntime {
     const detail = await this.#hub.getModel(repo, { signal: opts.signal });
     const build = findHubBuild(detail.builds, quant);
     if (!build) {
-      const quants = detail.builds.flatMap(entry => (entry.quant ? [entry.label] : []));
+      const tags = detail.builds.map(hubBuildTag);
       throw new ModelNotFoundError(this.id, ref, {
-        cause: new Error(`${repo} offers ${quants.length > 0 ? quants.join(', ') : 'no labelled quants'}`),
+        cause: new Error(`${repo} offers ${tags.length > 0 ? tags.join(', ') : 'no GGUF builds'}`),
       });
     }
     if (!build.complete) throw new ModelIncompleteError(this.id, ref, []);
