@@ -77,7 +77,7 @@ async function completeValidated<T>(
     } catch (error) {
       if (fallback === undefined) throw error;
       const reason = error instanceof Error ? error.message : String(error);
-      logger?.warn(`[releaseNotes] ${label} repair call failed (${reason}); keeping the first draft`);
+      logger?.warn(`[releaseNotes] ${label} repair call failed (${reason}); keeping the best draft so far`);
       return fallback;
     }
     // Only completed calls are counted; one that throws may have reached the provider uncounted.
@@ -107,7 +107,7 @@ async function completeValidated<T>(
     ].join('\n');
   }
   if (fallback !== undefined) {
-    logger?.warn(`[releaseNotes] ${label} repair invalid (${lastErrors.join('; ')}); keeping the first draft`);
+    logger?.warn(`[releaseNotes] ${label} repair invalid (${lastErrors.join('; ')}); keeping the best draft so far`);
     return fallback;
   }
   throw new Error(`[releaseNotes] ${label} output invalid after one repair: ${lastErrors.join('; ')}`);
