@@ -41490,17 +41490,16 @@
             }
           },
           "429": {
-            "description": "Per-user rate limit exceeded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
+            "description": "Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: \"token_rate_limit_exceeded\"`, with a `Retry-After` for when the window drains, or `\"concurrency_limit_exceeded\"`).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
                 "schema": {
                   "type": "string"
                 }
@@ -41539,6 +41538,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -41907,17 +41913,16 @@
             }
           },
           "429": {
-            "description": "Per-user rate limit exceeded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
+            "description": "Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: \"token_rate_limit_exceeded\"`, with a `Retry-After` for when the window drains, or `\"concurrency_limit_exceeded\"`).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
                 "schema": {
                   "type": "string"
                 }
@@ -41956,6 +41961,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -42378,17 +42390,16 @@
             }
           },
           "429": {
-            "description": "Per-user rate limit exceeded, or this agent system prompt was generated more recently than the admin-set interval allows.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
+            "description": "Per-user rate limit exceeded, this agent system prompt was generated more recently than the admin-set interval allows, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: \"token_rate_limit_exceeded\"`, with a `Retry-After` for when the window drains, or `\"concurrency_limit_exceeded\"`).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
                 "schema": {
                   "type": "string"
                 }
@@ -42427,6 +42438,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -42859,17 +42877,16 @@
             }
           },
           "429": {
-            "description": "Per-user rate limit exceeded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
+            "description": "Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: \"token_rate_limit_exceeded\"`, with a `Retry-After` for when the window drains, or `\"concurrency_limit_exceeded\"`).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
                 "schema": {
                   "type": "string"
                 }
@@ -42908,6 +42925,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

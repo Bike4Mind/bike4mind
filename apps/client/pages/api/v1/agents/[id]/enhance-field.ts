@@ -9,27 +9,30 @@ import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1Ag
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
-import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 
 const handler = nextRouteForContract(enhanceAgentFieldContract, {
   rateLimit: perUserRateLimit(AUTHORING_RATE_LIMIT_BUCKET),
-}).post(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
-  const { field_name, current_value, agent_name } = req.validated;
+}).post(
+  withRequestCompletionQuota(async (req: ContractRequest<typeof enhanceAgentFieldContract>, res) => {
+    assertAiAccessAllowed(req.user);
+    const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
+    const { field_name, current_value, agent_name } = req.validated;
 
-  try {
-    const enhanced = await enhanceAgentField(
-      agent,
-      req.user.id,
-      { fieldName: field_name, currentValue: current_value, agentName: agent_name },
-      req.logger
-    );
-    return res.json({ enhanced_value: enhanced });
-  } catch (error) {
-    req.logger.error('Error enhancing agent field:', error);
-    throw toV1AuthoringError(error);
-  }
-});
+    try {
+      const enhanced = await enhanceAgentField(
+        agent,
+        req.user.id,
+        { fieldName: field_name, currentValue: current_value, agentName: agent_name },
+        req.logger
+      );
+      return res.json({ enhanced_value: enhanced });
+    } catch (error) {
+      req.logger.error('Error enhancing agent field:', error);
+      throw toV1AuthoringError(error);
+    }
+  })
+);
 
 export default handler;

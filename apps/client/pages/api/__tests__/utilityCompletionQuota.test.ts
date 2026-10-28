@@ -13,6 +13,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return router;
   },
 }));
+vi.mock('@server/middlewares/defineNextRoute', () => ({
+  nextRouteForContract: () => ({ post: (handler: Handler) => handler }),
+}));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
@@ -34,7 +37,10 @@ vi.mock('@client/server/agents/systemPromptRateLimit', () => ({ assertSystemProm
 vi.mock('@server/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
 vi.mock('@server/help/retrieval', () => ({ searchHelpContext: vi.fn() }));
-vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit: () => async () => 20 }));
+vi.mock('@server/middlewares/perUserRateLimit', () => ({
+  blockedAtZeroTierLimit: () => async () => 20,
+  perUserRateLimit: vi.fn(),
+}));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   completionRequestCeilingUsd: vi.fn(),
   completionUsd: vi.fn(),
@@ -50,6 +56,10 @@ const routes = [
   ['agent avatar generation', () => import('../agents/[id]/generate-avatar')],
   ['agent description generation', () => import('../agents/[id]/generate-description')],
   ['agent system prompt generation', () => import('../agents/[id]/generate-system-prompt')],
+  ['v1 agent field enhancement', () => import('../v1/agents/[id]/enhance-field')],
+  ['v1 agent avatar generation', () => import('../v1/agents/[id]/generate-avatar')],
+  ['v1 agent description generation', () => import('../v1/agents/[id]/generate-description')],
+  ['v1 agent system prompt generation', () => import('../v1/agents/[id]/generate-system-prompt')],
   ['fabfile editing', () => import('../fabfiles/[id]/edit')],
   ['help chat', () => import('../help/chat')],
   ['lattice chat', () => import('../lattice/chat')],
