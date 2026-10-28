@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   sumNewer: vi.fn(),
   findUser: vi.fn(),
   findKey: vi.fn(),
+  withTransaction: vi.fn(),
+  inSnapshot: false,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,6 +31,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { findLedgerPage: h.findLedgerPage, sumSignedCreditsNewerThan: h.sumNewer },
   userRepository: { findById: h.findUser },
+  withTransaction: h.withTransaction,
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById: h.findKey } }));
 
@@ -54,6 +57,14 @@ const lines = (res: { _getData: () => string }) => res._getData().split('\n').fi
 
 beforeEach(() => {
   vi.resetAllMocks();
+  h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => {
+    h.inSnapshot = true;
+    try {
+      return await fn();
+    } finally {
+      h.inSnapshot = false;
+    }
+  });
   h.findUser.mockImplementation(async (id: string) => (id === 'u1' ? { id: 'u1', currentCredits: 100 } : null));
   h.findLedgerPage.mockResolvedValue([]);
 });
@@ -96,6 +107,27 @@ describe('GET /api/admin/users/[userId]/credit-ledger-export', () => {
     expect(second).toContain(`"'+cmd|calc"`);
     expect(second).toContain(`"'-x"`);
     expect(first).not.toContain(`'-412`);
+  });
+
+  it('reads the balance and the first page from one snapshot and later pages outside it', async () => {
+    const seen: boolean[] = [];
+    h.findUser.mockImplementation(async () => (seen.push(h.inSnapshot), { id: 'u1', currentCredits: 100 }));
+    h.findLedgerPage
+      .mockImplementationOnce(
+        async () => (seen.push(h.inSnapshot), Array.from({ length: 501 }, (_, i) => usageDoc(600 - i)))
+      )
+      .mockImplementationOnce(async () => (seen.push(h.inSnapshot), [usageDoc(1)]));
+
+    const { res, promise } = run();
+    await promise;
+
+    expect(seen).toEqual([true, true, false]);
+    expect(h.withTransaction).toHaveBeenCalledExactlyOnceWith(expect.any(Function), {
+      readConcern: { level: 'snapshot' },
+    });
+    const all = lines(res);
+    expect(all).toHaveLength(502);
+    expect(all[501]).toContain(',-1,600,');
   });
 
   it('passes the kind through to the repository and writes no balance for non-adjustments', async () => {

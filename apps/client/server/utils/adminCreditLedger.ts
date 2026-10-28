@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import { creditTransactionRepository, userRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import type { Logger } from '@bike4mind/observability';
 
 /** Where a page continues from: the last row of the previous page in {createdAt, _id} order. */
 export type LedgerCursor = { createdAt: Date; id: string };
@@ -77,12 +78,15 @@ type BuildRowsOptions = {
   kind: AdminLedgerKind | undefined;
   /** Balance right after the first document; required when `kind` is undefined. */
   balanceAfterFirst?: number;
+  /** Where a derived balance that disagrees with an adjustment's recorded one is reported. */
+  userId?: string;
+  logger?: Logger;
 };
 
 /** Maps ledger documents to the wire rows (see adminLedgerRowSchema). */
 export async function buildLedgerRows(
   documents: LedgerDocument[],
-  { kind: filterKind, balanceAfterFirst }: BuildRowsOptions
+  { kind: filterKind, balanceAfterFirst, userId, logger }: BuildRowsOptions
 ): Promise<AdminLedgerRow[]> {
   const lookups = await loadLookups(documents);
   let runningBalance = filterKind === undefined ? balanceAfterFirst : undefined;
@@ -100,6 +104,17 @@ export async function buildLedgerRows(
     if (runningBalance !== undefined) {
       balanceAfter = runningBalance;
       runningBalance -= credits;
+      // The derivation assumes currentCredits equals the sum of this owner's ledger rows. The recorded
+      // balance is itself best-effort (see adminUpdate.ts), so a mismatch is reported, not corrected.
+      const recorded = kind === 'adjustment' ? asNumber(metadata.resultingBalance) : undefined;
+      if (recorded !== undefined && recorded !== balanceAfter) {
+        logger?.warn('[ADMIN_LEDGER_BALANCE_DRIFT]', {
+          userId,
+          transactionId: doc.id,
+          derived: balanceAfter,
+          recorded,
+        });
+      }
     } else if (kind === 'adjustment') {
       balanceAfter = asNumber(metadata.resultingBalance);
     }

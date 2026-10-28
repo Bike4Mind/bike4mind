@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   sumNewer: vi.fn(),
   findUser: vi.fn(),
   findKey: vi.fn(),
+  withTransaction: vi.fn(),
+  inSnapshot: false,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,6 +31,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { findLedgerPage: h.findLedgerPage, sumSignedCreditsNewerThan: h.sumNewer },
   userRepository: { findById: h.findUser },
+  withTransaction: h.withTransaction,
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById: h.findKey } }));
 
@@ -55,6 +58,14 @@ const run = (query: Record<string, string> = {}, user: unknown = ADMIN) => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  h.withTransaction.mockImplementation(async (fn: () => Promise<unknown>) => {
+    h.inSnapshot = true;
+    try {
+      return await fn();
+    } finally {
+      h.inSnapshot = false;
+    }
+  });
   h.findUser.mockImplementation(async (id: string) =>
     id === 'u1' ? { id: 'u1', currentCredits: 1000 } : id === OID(900) ? { id, name: 'Ada Admin' } : null
   );
@@ -119,6 +130,41 @@ describe('GET /api/admin/users/[userId]/credit-ledger', () => {
     );
     expect(h.sumNewer).toHaveBeenCalledExactlyOnceWith('u1', 'User', { createdAt: at(4), id: OID(4) });
     expect(res._getJSONData().rows[0].balanceAfter).toBe(1040);
+  });
+
+  it('reads the balance, the page and the newer-rows sum from one snapshot', async () => {
+    const seen: boolean[] = [];
+    h.findUser.mockImplementation(async () => (seen.push(h.inSnapshot), { id: 'u1', currentCredits: 1000 }));
+    h.findLedgerPage.mockImplementation(
+      async () => (seen.push(h.inSnapshot), [doc(4, { type: 'purchase', credits: 1 })])
+    );
+    h.sumNewer.mockImplementation(async () => (seen.push(h.inSnapshot), 0));
+
+    await run({ cursor: encodeLedgerCursor({ createdAt: at(5), id: OID(5) }) }).promise;
+
+    expect(seen).toEqual([true, true, true]);
+    expect(h.withTransaction).toHaveBeenCalledExactlyOnceWith(expect.any(Function), {
+      readConcern: { level: 'snapshot' },
+    });
+  });
+
+  it('warns when the derived balance disagrees with an adjustment recorded balance', async () => {
+    h.findLedgerPage.mockResolvedValue([
+      doc(2, { type: 'text_generation_usage', credits: -5 }),
+      doc(1, { type: 'generic_add', credits: 50, metadata: { resultingBalance: 990 } }),
+    ]);
+    const { req, res } = createMocks({ method: 'GET', query: { userId: 'u1' } });
+    const warn = vi.fn();
+    Object.assign(req, { user: ADMIN, logger: { warn } });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getJSONData().rows[1].balanceAfter).toBe(1005);
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[ADMIN_LEDGER_BALANCE_DRIFT]', {
+      userId: 'u1',
+      transactionId: OID(1),
+      derived: 1005,
+      recorded: 990,
+    });
   });
 
   it('returns a nextCursor from the last visible row when the probe row exists', async () => {

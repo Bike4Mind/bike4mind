@@ -8,7 +8,7 @@ import {
   NotFoundError,
   transactionTypesForKind,
 } from '@bike4mind/common';
-import { creditTransactionRepository, userRepository } from '@bike4mind/database';
+import { creditTransactionRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -46,23 +46,31 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
 
     const after = cursor ? decodeLedgerCursor(cursor) : undefined;
 
-    const user = await userRepository.findById(userId);
-    if (!user) throw new NotFoundError('User not found');
+    // One snapshot for the balance and the page: a row landing between separate reads would shift
+    // every balanceAfter on the page by its amount.
+    const { user, documents, hasMore, balanceAfterFirst } = await withTransaction(
+      async () => {
+        const user = await userRepository.findById(userId);
+        if (!user) throw new NotFoundError('User not found');
 
-    // One extra row tells us whether a next page exists without a count query.
-    const fetched = await creditTransactionRepository.findLedgerPage(user.id, CreditHolderType.User, {
-      types: kind ? transactionTypesForKind(kind) : undefined,
-      after,
-      limit: limit + 1,
-    });
-    const hasMore = fetched.length > limit;
-    const documents = hasMore ? fetched.slice(0, limit) : fetched;
+        // One extra row tells us whether a next page exists without a count query.
+        const fetched = await creditTransactionRepository.findLedgerPage(user.id, CreditHolderType.User, {
+          types: kind ? transactionTypesForKind(kind) : undefined,
+          after,
+          limit: limit + 1,
+        });
+        const hasMore = fetched.length > limit;
+        const documents = hasMore ? fetched.slice(0, limit) : fetched;
 
-    const balanceAfterFirst =
-      !kind && documents.length > 0
-        ? await balanceAfterFirstRow(user.id, user.currentCredits, documents[0], !after)
-        : undefined;
-    const rows = await buildLedgerRows(documents, { kind, balanceAfterFirst });
+        const balanceAfterFirst =
+          !kind && documents.length > 0
+            ? await balanceAfterFirstRow(user.id, user.currentCredits, documents[0], !after)
+            : undefined;
+        return { user, documents, hasMore, balanceAfterFirst };
+      },
+      { readConcern: { level: 'snapshot' } }
+    );
+    const rows = await buildLedgerRows(documents, { kind, balanceAfterFirst, userId: user.id, logger: req.logger });
 
     const last = documents[documents.length - 1];
     const nextCursor = hasMore && last ? encodeLedgerCursor({ createdAt: last.createdAt, id: last.id }) : null;
