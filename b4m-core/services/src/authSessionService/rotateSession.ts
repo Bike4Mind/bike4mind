@@ -243,6 +243,7 @@ export const rotateSession = async (
   const finish = async (rotatedSecret: string | null): Promise<RotateSessionResult> => {
     const user = await db.users.findById(session.userId);
     if (!user) throw invalid();
+    if (session.impersonatedBy && !isLive(session, new Date())) throw invalid();
 
     const accessToken = signAccessToken(user.id, user.tokenVersion ?? 0, {
       sid,

@@ -127,6 +127,32 @@ const setupStateful = (initialSecret: string) => {
 };
 
 describe('rotateSession', () => {
+  it('rejects a refresh that crosses the hard deadline during user lookup', async () => {
+    const { authSessions, users, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    const now = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(secret),
+        impersonatedBy: 'admin',
+        impersonationExpiresAt: new Date(now + 1000),
+      })
+    );
+    users.findById.mockImplementation(async () => {
+      vi.setSystemTime(now + 1001);
+      return { id: 'user-1' } as never;
+    });
+    try {
+      await expect(rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken })).rejects.toThrow(
+        UnauthorizedError
+      );
+      expect(signAccessToken).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('rejects impersonation after its fixed deadline even when refresh expiry is still live', async () => {
     const { authSessions, db, signAccessToken } = setup();
     authSessions.findBySid.mockResolvedValue(makeSession({ impersonatedBy: 'admin', impersonationExpiresAt: past() }));

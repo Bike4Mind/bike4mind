@@ -8,6 +8,19 @@ import { api } from '@client/app/contexts/apiClient';
 import { ActionDialog } from './admin/shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from './admin/shared/adminReason';
 
+function tokenDeadline(token: string | null): number | null {
+  try {
+    const payload = JSON.parse(atob((token ?? '').split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as {
+      impersonationExpiresAt?: unknown;
+    };
+    return typeof payload.impersonationExpiresAt === 'number' && Number.isFinite(payload.impersonationExpiresAt)
+      ? payload.impersonationExpiresAt
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function ImpersonationBanner() {
   const impersonating = useAccessToken(s => s.impersonating);
   const token = useAccessToken(s => s.accessToken);
@@ -23,7 +36,8 @@ export function ImpersonationBanner() {
     queryFn: async () => (await api.get<{ expiresAt: string; writeEnabled: boolean }>('/api/auth/impersonation')).data,
     staleTime: 15_000,
   });
-  const remaining = state.data ? Math.max(0, new Date(state.data.expiresAt).getTime() - now) : null;
+  const deadline = state.data ? new Date(state.data.expiresAt).getTime() : tokenDeadline(token);
+  const remaining = deadline === null ? null : Math.max(0, deadline - now);
   useEffect(() => {
     if (!impersonating) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);

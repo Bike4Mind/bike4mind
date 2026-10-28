@@ -6,18 +6,22 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
   active: true,
+  token: 'token',
+  missingState: false,
   mutate: vi.fn(),
   post: vi.fn(),
   refetch: vi.fn(),
   state: { expiresAt: new Date(Date.now() + 60_000).toISOString(), writeEnabled: false },
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: (select: (state: unknown) => unknown) => select({ impersonating: h.active, accessToken: 'token' }),
+  useAccessToken: (select: (state: unknown) => unknown) => select({ impersonating: h.active, accessToken: h.token }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { name: 'Customer' } }) }));
 vi.mock('@client/app/hooks/data/user', () => ({ useReturnToAdmin: () => ({ mutate: h.mutate }) }));
 vi.mock('@client/app/contexts/apiClient', () => ({ api: { post: h.post } }));
-vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: h.state, refetch: h.refetch }) }));
+vi.mock('@tanstack/react-query', () => ({
+  useQuery: () => ({ data: h.missingState ? undefined : h.state, refetch: h.refetch }),
+}));
 import { ImpersonationBanner } from './ImpersonationBanner';
 const theme = extendTheme({ ...getThemeConfig() });
 const mount = () =>
@@ -31,6 +35,8 @@ describe('global impersonation banner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.active = true;
+    h.missingState = false;
+    h.token = 'token';
     h.state = { expiresAt: new Date(Date.now() + 60_000).toISOString(), writeEnabled: false };
   });
   it('shows identity, readonly mode, time and an accessible End on any route', () => {
@@ -62,5 +68,11 @@ describe('global impersonation banner', () => {
     h.active = false;
     mount();
     expect(screen.queryByTestId('impersonation-banner')).toBeNull();
+  });
+  it('returns at the signed deadline even when the state request failed', () => {
+    h.missingState = true;
+    h.token = `header.${btoa(JSON.stringify({ impersonationExpiresAt: 1 }))}.signature`;
+    mount();
+    expect(h.mutate).toHaveBeenCalledTimes(1);
   });
 });
