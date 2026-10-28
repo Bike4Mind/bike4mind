@@ -346,6 +346,30 @@ describe('ModelServerRegistry', () => {
     expect(model.unavailable).toMatch(/needs new credentials/);
   });
 
+  describe('credentials on a saved http host name that has not been checked yet', () => {
+    const saved = {
+      name: 'gpu box',
+      kind: 'ollama' as const,
+      transport: { type: 'http' as const, baseUrl: 'http://box.example.test:11434' },
+      access: 'chat' as const,
+    };
+
+    it('accepts them when the name resolves to this computer', async () => {
+      const { registry: servers, store } = registry(fakeOllama(), { 'box.example.test': ['127.0.0.1'] });
+      const record = await store.add(saved, none);
+      await servers.update(record.id, { credential: { type: 'bearer', token: TOKEN } });
+      expect(store.headers((await store.get(record.id))!)).toEqual({ authorization: `Bearer ${TOKEN}` });
+    });
+
+    it('refuses them when the name resolves to a private address', async () => {
+      const { registry: servers, store } = registry(fakeOllama(), { 'box.example.test': ['192.168.1.5'] });
+      const record = await store.add(saved, none);
+      await expect(servers.update(record.id, { credential: { type: 'bearer', token: TOKEN } })).rejects.toThrow(
+        /only sent over https/
+      );
+    });
+  });
+
   it('returns no chat client for this computer or a hosted model', () => {
     const { registry: servers } = registry(fakeOllama());
     expect(servers.chatFor('ollama')).toBeNull();

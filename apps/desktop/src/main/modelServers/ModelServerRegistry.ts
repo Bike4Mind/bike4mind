@@ -225,12 +225,13 @@ export class ModelServerRegistry {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('That model server is no longer saved.');
     if (input.credential) {
-      const verdict = transportVerdict(
-        entry.parsed.protocol,
-        entry.scope ?? 'public',
-        !!credentialHeaders(input.credential)
-      );
-      if (!verdict.ok) throw new Error(verdict.reason);
+      const hasCredentials = !!credentialHeaders(input.credential);
+      entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
+      // With no scope (DNS failed), the lookup check at connect time decides.
+      if (entry.scope) {
+        const verdict = transportVerdict(entry.parsed.protocol, entry.scope, hasCredentials);
+        if (!verdict.ok) throw new Error(verdict.reason);
+      }
     }
     const record = await this.deps.store.update(id, input);
     this.entries.set(id, this.build(record, entry));
