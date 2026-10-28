@@ -241,6 +241,8 @@ export const web = new sst.aws.Nextjs(
 
     vpc: lambdaVpc,
     router: router ? { instance: router } : undefined,
+    // The function URL keeps SST's default CORS, so it adds `Access-Control-Allow-Origin: *` to any
+    // request with an Origin; handlers must not add a second (apps/client/server/utils/allowOrigin.ts).
     server: {
       timeout: '60 seconds',
       runtime: 'nodejs24.x',

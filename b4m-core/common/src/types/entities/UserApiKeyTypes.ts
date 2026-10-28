@@ -132,11 +132,32 @@ export enum ApiKeyScope {
    */
   QA_INGEST = 'qa:ingest',
   /**
-   * List and download the Claude Code plugin feed of an org's approved Skill Market listings
-   * (`/api/v1/skills/market/*`). Confined: the key ends up in plaintext in `~/.claude/settings.json`,
-   * so it must reach nothing else. Minted from the Skill Market's "Use in Claude Code" dialog.
+   * List and download the Claude Code plugin feed of an org's approved Skill Market listings, and
+   * browse listings and read one listing's detail (`/api/v1/skills/market/*`). Confined: the key ends
+   * up in plaintext in `~/.claude/settings.json`, so it reaches only those read-only routes, each of
+   * which serves just what the key's owner can already see. Minted from the Skill Market's "Use in
+   * Claude Code" dialog.
+   * Not bound to an org: membership is re-checked on every request (`memberOrgIdsFor` in
+   * apps/client/server/skillMarket/market.ts), so a member who leaves or is removed loses that org's
+   * feed and zips while the key stays valid for their other orgs.
    */
   SKILLS_READ = 'skills:read',
+  /**
+   * Author on the Skill Market from a script or the CLI (`/api/v1/skills/market/listings*`):
+   * publish a listing, submit a new version, list your own listings, rescan, withdraw, browse, read
+   * a listing, and import one into your library. Not confined, because `b4m skills push --publish`
+   * upserts the skill through the scope-less `/api/skills` with the same key, which a confined key is
+   * denied. Kept out of the New-Key modal's Read & write preset despite its suffix, since publishing
+   * is outward-facing (UserApiKeysTab.tsx).
+   */
+  SKILLS_WRITE = 'skills:write',
+  /**
+   * Review held Skill Market versions (`/api/v1/skills/market/review-queue`,
+   * `/api/v1/skills/market/versions/{vid}/review`): list the pending queue, approve or reject. Org
+   * admins only, since isAdmin is withheld under a key without `admin:*`: it reaches the Organization
+   * listings of the orgs the key's owner administers, never Public or unlisted ones. Not confined.
+   */
+  SKILLS_REVIEW = 'skills:review',
   /**
    * Release-note automation: find a release note and set its video, and upload the What's New
    * media for it. Admin-provisioned and confined so the job needs no `admin:*`

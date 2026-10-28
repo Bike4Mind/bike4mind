@@ -23,6 +23,7 @@ import { appUrlForLambdaEnv } from './router';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import './businessMetricAlerts';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -105,6 +106,33 @@ const signupBaselineReport = runsScheduledJobs
         logging: {
           retention: '1 week',
         },
+      },
+    })
+  : undefined;
+
+// Refreshes the disposable email domain lists the signup gate reads. Its SourceFailures metric feeds
+// disposableDomainRefreshFailures in alarms.ts.
+const disposableDomainRefreshCron = runsScheduledJobs
+  ? new sst.aws.Cron('disposableDomainRefresh', {
+      schedule: 'cron(30 4 * * ? *)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/disposableDomainRefresh.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        memory: '1024 MB',
+        // The next daily run is the retry; a failing source keeps its previous entries meanwhile.
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        permissions: [
+          {
+            actions: ['cloudwatch:PutMetricData'],
+            resources: ['*'],
+          },
+        ],
       },
     })
   : undefined;
@@ -1180,6 +1208,7 @@ const lakeInconsistencySweepCron = runsScheduledJobs
 
 export {
   adminAuditAlertsCron,
+  disposableDomainRefreshCron,
   dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,

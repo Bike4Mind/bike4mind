@@ -6,7 +6,10 @@ Use these internal Joy components for admin screens. Colors come from
 `DataTable` receives the **complete filtered result**, then sorts and paginates it
 locally. It preserves server ordering until the first sort. Do not pass a single
 server page as though it were the complete result. Infinite requester lists can
-keep their existing server pagination until they have a compatible adapter. Pass
+use `serverPagination` with a one-based page, page size, total and controlled
+callbacks. In that mode pass only the fetched page; local sorting and selection
+are disabled because they cannot safely operate on an incomplete result. The
+caller owns server ordering, filter resets and out-of-range page recovery. Pass
 `pageResetKey` (e.g. the serialized filter state) so a changed filter opens on the
 first page.
 
@@ -50,6 +53,19 @@ See `IntegrationDemandTab.tsx` for a complete query-backed example.
 `EntityHeader` supplies copy controls with visible failure feedback and relative
 timestamps with exact UTC tooltips. `SectionCard` groups read-only definition-list
 facts; use separate settings components for forms.
+
+## Settings forms
+
+`SettingsSection` supplies a form surface without the definition-list semantics of
+`SectionCard`. `SaveBar` is sticky and accepts a dirty count, save/discard callbacks,
+pending state and validation/error text. It owns Cmd+S and Ctrl+S and removes its
+listener when unmounted. `UnsavedChangesGuard` protects router navigation and page
+unload; its caller defines which route changes leave the form.
+
+Admin Settings uses `SettingsDraftProvider` to retain drafts while filtering or
+switching sections. It saves through each editor's existing mutation, removes only
+successful changes and retains failed/unattempted changes for retry. File uploads
+and scoped override commands keep their existing explicit command flows.
 
 ## Audited writes
 

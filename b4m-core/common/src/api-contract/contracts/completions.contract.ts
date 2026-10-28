@@ -64,7 +64,8 @@ export const createCompletionContract = defineEndpoint({
     'Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band ' +
     "`error` event. Branch on that event's `code`, never on `message`, which is prose and may change: " +
     '`insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider ' +
-    'refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and ' +
+    'refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), ' +
+    '`output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and ' +
     '`provider_error` for any other provider failure. Treat `code` as optional.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',

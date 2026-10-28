@@ -153,6 +153,7 @@ type PersistedUserFields = Pick<
   | 'username'
   | 'photoUrl'
   | 'isAdmin'
+  | 'adminPermissions'
   | 'level'
   | 'organizationId'
   | 'emailVerified'
@@ -181,6 +182,7 @@ const pickPersistedFields = (user: IUserDocument | null): PersistedUserFields | 
     username: user.username,
     photoUrl: user.photoUrl,
     isAdmin: user.isAdmin,
+    adminPermissions: user.adminPermissions,
     level: user.level,
     organizationId: user.organizationId,
     emailVerified: user.emailVerified,

@@ -25,7 +25,7 @@ import {
   type SkillMdSkill,
 } from '@bike4mind/common/utils/skillMd';
 import { downloadData } from '@client/app/utils/download';
-import ClaudeCodeMarketplaceTab from './ClaudeCodeMarketplaceTab';
+import ClaudeCodeMarketplaceTab, { type ClaudeCodeMarketplaceTabProps } from './ClaudeCodeMarketplaceTab';
 
 export interface ClaudeCodeExportDialogProps {
   onClose: () => void;
@@ -38,7 +38,7 @@ export interface ClaudeCodeExportDialogProps {
   /** A market listing the viewer hasn't imported: the export won't exist in Bike4Mind. */
   showImportHint?: boolean;
   /** An Organization listing: adds a "Team marketplace" tab for the org's Claude Code plugin feed. */
-  marketplace?: { org: { id: string; name: string }; pluginName?: string };
+  marketplace?: ClaudeCodeMarketplaceTabProps;
 }
 
 /** "Use in Claude Code": copy a one-line installer or download the skill as SKILL.md. */
@@ -152,7 +152,9 @@ const ClaudeCodeExportDialog: FC<ClaudeCodeExportDialogProps> = ({
     <Modal open onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 560 }} data-testid="skill-claude-code-dialog">
         <ModalClose />
-        <DialogTitle>Use /{skill.name} in Claude Code</DialogTitle>
+        <DialogTitle data-testid="skill-claude-code-title">
+          {marketplace ? 'Use in Claude Code' : `Use /${skill.name} in Claude Code`}
+        </DialogTitle>
         <DialogContent>
           {marketplace ? (
             <Tabs defaultValue={0} sx={{ bgcolor: 'transparent' }}>
@@ -168,7 +170,7 @@ const ClaudeCodeExportDialog: FC<ClaudeCodeExportDialogProps> = ({
                 {singleSkill}
               </TabPanel>
               <TabPanel value={1} sx={{ px: 0 }}>
-                <ClaudeCodeMarketplaceTab org={marketplace.org} pluginName={marketplace.pluginName} />
+                <ClaudeCodeMarketplaceTab {...marketplace} />
               </TabPanel>
             </Tabs>
           ) : (
