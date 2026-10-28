@@ -126,9 +126,17 @@ export interface GgufTensorInfo {
   offset: number;
 }
 
+/** A metadata value's GGUF type as written; `itemType` is set for an array, even an empty one. */
+export interface GgufKeyType {
+  type: GgufValueType;
+  itemType?: GgufValueType;
+}
+
 export interface GgufHeader {
   version: 2 | 3;
   metadata: GgufMetadata;
+  /** Keyed as `metadata`, which loses the integer width and an empty array's item type; has no prototype. */
+  types: Record<string, GgufKeyType>;
   tensors: GgufTensorInfo[];
   /** Bytes from the start of the file to the end of the tensor infos. */
   headerBytes: number;
@@ -236,6 +244,7 @@ class ByteCursor {
     return at;
   }
 
+  peekU32 = () => this.view.getUint32(this.position - this.bufferStart, true);
   u8 = () => this.view.getUint8(this.take(1));
   i8 = () => this.view.getInt8(this.take(1));
   u16 = () => this.view.getUint16(this.take(2), true);
@@ -293,19 +302,27 @@ class HeaderReader {
     const kvCount = this.count(c.u64(), MAX_KV_COUNT, 'metadata keys');
 
     const metadata: GgufMetadata = Object.create(null) as GgufMetadata;
+    const types = Object.create(null) as Record<string, GgufKeyType>;
     for (let i = 0; i < kvCount; i++) {
       const key = await this.string();
       if (!key) throw c.fail(`metadata key ${i} is empty`, 'invalid');
       if (Object.hasOwn(metadata, key)) throw c.fail(`duplicate metadata key ${quote(key)}`, 'invalid');
       await c.need(4);
-      metadata[key] = await this.value(c.u32(), 0);
+      const type = c.u32();
+      if (type === ARRAY) await c.need(4);
+      const itemType = type === ARRAY ? c.peekU32() : undefined;
+      metadata[key] = await this.value(type, 0);
+      types[key] =
+        itemType === undefined
+          ? { type: VALUE_TYPES[type] as GgufValueType }
+          : { type: 'array', itemType: VALUE_TYPES[itemType] as GgufValueType };
     }
 
     const tensors: GgufTensorInfo[] = [];
     const names = new Set<string>();
     for (let i = 0; i < tensorCount; i++) tensors.push(await this.tensor(names));
     await c.confirmEnd();
-    return { version, metadata, tensors, headerBytes: c.position };
+    return { version, metadata, types, tensors, headerBytes: c.position };
   }
 
   private count(raw: bigint, max: number, what: string): number {

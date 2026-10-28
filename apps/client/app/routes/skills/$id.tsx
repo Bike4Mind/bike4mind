@@ -10,6 +10,7 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { Permission } from '@bike4mind/common';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useDeleteSkill, useGetSkill } from '@client/app/hooks/data/skills';
+import { useMarketMe, useMyListings } from '@client/app/hooks/data/skillMarket';
 import { useUser } from '@client/app/contexts/UserContext';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import SkillShareDialog from '@client/app/components/SkillsManagement/SkillShareDialog';
@@ -17,6 +18,8 @@ import SkillUpdatePanel from '@client/app/components/SkillMarket/SkillUpdatePane
 import PublishDialog from '@client/app/components/SkillMarket/PublishDialog';
 import MarketStatusBadge from '@client/app/components/SkillMarket/MarketStatusBadge';
 import ClaudeCodeExportDialog from '@client/app/components/SkillsManagement/ClaudeCodeExportDialog';
+import { findMarketplaceListing } from '@client/app/components/SkillsManagement/ClaudeCodeMarketplaceTab';
+import { SupportingFiles } from '@client/app/components/SkillMarket/parts';
 
 const SkillDetailPage: FC = () => {
   const { id } = useParams({ strict: false }) as { id: string };
@@ -47,6 +50,13 @@ const SkillDetailPage: FC = () => {
   const canEdit =
     !!skill && !!currentUser && (isOwner || isAdmin || skill.isGlobalWrite === true || hasShare(Permission.update));
   const canDelete = !!skill && !!currentUser && (isOwner || isAdmin || hasShare(Permission.delete));
+
+  // Only the author's own skill can have a listing; fetched on open so the page doesn't hit /mine on every load.
+  const wantsMarketplace = claudeCodeOpen && isOwner && !skill?.importedFrom;
+  const { data: myListings, isPending: myListingsPending } = useMyListings({ enabled: wantsMarketplace });
+  const { data: marketMe, isPending: marketMePending } = useMarketMe({ enabled: wantsMarketplace });
+  // Hold the dialog until both load so it doesn't flash the single-skill view before switching to tabs.
+  const marketplacePending = wantsMarketplace && (myListingsPending || marketMePending);
 
   const handleDelete = async () => {
     if (!skill) return;
@@ -124,6 +134,7 @@ const SkillDetailPage: FC = () => {
               variant="outlined"
               startDecorator={<TerminalIcon />}
               onClick={() => setClaudeCodeOpen(true)}
+              loading={marketplacePending}
               data-testid="skill-claude-code-btn"
             >
               Use in Claude Code
@@ -190,11 +201,13 @@ const SkillDetailPage: FC = () => {
             {skill.body}
           </Box>
         </Card>
+
+        <SupportingFiles files={skill.files} />
       </Stack>
 
       {canManageSharing && shareOpen ? <SkillShareDialog onClose={() => setShareOpen(false)} skill={skill} /> : null}
       {publishOpen ? <PublishDialog onClose={() => setPublishOpen(false)} skill={skill} /> : null}
-      {claudeCodeOpen ? (
+      {claudeCodeOpen && !marketplacePending ? (
         <ClaudeCodeExportDialog
           onClose={() => setClaudeCodeOpen(false)}
           skill={skill}
@@ -205,6 +218,9 @@ const SkillDetailPage: FC = () => {
           }
           version={skill.importedFrom?.version}
           thirdParty={!!skill.importedFrom}
+          marketplace={
+            wantsMarketplace ? findMarketplaceListing(myListings, skill.id, marketMe?.organizations) : undefined
+          }
         />
       ) : null}
     </Box>

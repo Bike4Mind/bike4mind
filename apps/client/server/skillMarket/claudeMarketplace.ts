@@ -7,6 +7,7 @@ import {
   requireEnv,
   toAbsoluteUrl,
   type ClaudeMarketplace,
+  type ISkillFile,
   type ISkillListing,
   type ISkillListingVersion,
 } from '@bike4mind/common';
@@ -42,7 +43,8 @@ function skillMdFor(listing: ISkillListing, version: ISkillListingVersion): stri
   });
 }
 
-function buildPluginZip(skillName: string, skillMd: string): Promise<Buffer> {
+// Files arrive sorted by path (checkSkillFiles / toSnapshot), which keeps the entry order stable.
+function buildPluginZip(skillName: string, skillMd: string, files: ISkillFile[] = []): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const archive = archiver('zip', { store: true });
     const chunks: Buffer[] = [];
@@ -50,6 +52,14 @@ function buildPluginZip(skillName: string, skillMd: string): Promise<Buffer> {
     archive.on('end', () => resolve(Buffer.concat(chunks)));
     archive.on('error', reject);
     archive.append(skillMd, { name: `skills/${skillName}/SKILL.md`, date: ZIP_ENTRY_DATE });
+    for (const file of files) {
+      // Executable in case the extractor keeps unix modes; SKILL.md should still call scripts via an interpreter.
+      archive.append(file.content, {
+        name: `skills/${skillName}/${file.path}`,
+        date: ZIP_ENTRY_DATE,
+        ...(file.path.startsWith('scripts/') ? { mode: 0o755 } : {}),
+      });
+    }
     void archive.finalize();
   });
 }
@@ -64,7 +74,7 @@ export async function pluginZipFor(listing: ISkillListing, versionNumber?: numbe
 
 // The one zip builder for both routes, so the feed's sha256 always matches what the zip route serves.
 const zipOf = (listing: ISkillListing, version: ISkillListingVersion) =>
-  buildPluginZip(skillDirName(version), skillMdFor(listing, version));
+  buildPluginZip(skillDirName(version), skillMdFor(listing, version), version.snapshot.files);
 
 /** A pinned version must belong to this listing and remain approved; unpinned requests use the current version. */
 async function approvedVersionOf(listing: ISkillListing, versionNumber?: number): Promise<ISkillListingVersion | null> {

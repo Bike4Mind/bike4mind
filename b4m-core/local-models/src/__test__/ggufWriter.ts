@@ -114,6 +114,20 @@ export function gguf({
   );
 }
 
+/** A header with tokenizer arrays ahead of `template`, as converted models have; no template key when null. */
+export function ggufWithTemplate(template: string | null, architecture = 'qwen2', pooling?: Field): Uint8Array {
+  return gguf({
+    kv: [
+      ['general.architecture', str(architecture)],
+      ['general.alignment', u32(32)],
+      ...(pooling ? [[`${architecture}.pooling_type`, pooling] as [string, Field]] : []),
+      ['tokenizer.ggml.tokens', arr(T.STRING, [str('<s>'), str('hello'), str('world')])],
+      ['tokenizer.ggml.scores', arr(T.FLOAT32, [f32(0), f32(0), f32(0)])],
+      ...(template === null ? [] : [['tokenizer.chat_template', str(template)] as [string, Field]]),
+    ],
+  });
+}
+
 export interface MemorySource extends GgufByteSource {
   reads: { offset: number; length: number }[];
   closed: boolean;
