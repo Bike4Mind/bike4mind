@@ -8,8 +8,13 @@ import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 
 export const ALARM_SLACK_MENTION_PARAMETER_ENV = 'ALARM_SLACK_MENTION_PARAMETER';
 
-/** Seconds; one Lambda container re-reads the parameter at most this often. */
+/** One Lambda container re-reads the parameter at most this often. */
 const CACHE_TTL_MS = 60_000;
+
+/** The read blocks every alarm post, so keep it short. */
+const SSM_MAX_ATTEMPTS = 2;
+const SSM_REQUEST_TIMEOUT_MS = 2000;
+const SSM_CONNECTION_TIMEOUT_MS = 1000;
 
 let cache: { name: string; value: string | undefined; readAt: number } | undefined;
 let client: SSMClient | undefined;
@@ -20,7 +25,10 @@ export interface MentionReader {
 
 const defaultReader: MentionReader = {
   async getParameter(name) {
-    client ??= new SSMClient({});
+    client ??= new SSMClient({
+      maxAttempts: SSM_MAX_ATTEMPTS,
+      requestHandler: { requestTimeout: SSM_REQUEST_TIMEOUT_MS, connectionTimeout: SSM_CONNECTION_TIMEOUT_MS },
+    });
     const result = await client.send(new GetParameterCommand({ Name: name }));
     return result.Parameter?.Value;
   },
