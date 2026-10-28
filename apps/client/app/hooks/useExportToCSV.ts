@@ -1,11 +1,13 @@
 import { useCallback } from 'react';
 import dayjs from 'dayjs';
 
+type CsvRow = Record<string, unknown>;
+
 interface ExportOptions {
   filename?: string;
   dateFormat?: string;
   customHeaders?: string[];
-  customTransform?: (data: any) => any;
+  customTransform?: (row: CsvRow) => CsvRow;
 }
 
 const FORMULA_PREFIX = /^[=+\-@\t\r]/;
@@ -31,7 +33,7 @@ export const toCsvCell = (value: unknown, dateFormat = 'YYYY-MM-DD'): string => 
   return NEEDS_QUOTING.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
-export const toCsv = (rows: Record<string, unknown>[], columns: string[], dateFormat = 'YYYY-MM-DD'): string =>
+export const toCsv = (rows: CsvRow[], columns: string[], dateFormat = 'YYYY-MM-DD'): string =>
   [
     columns.map(column => toCsvCell(column)),
     ...rows.map(row => columns.map(column => toCsvCell(row[column], dateFormat))),
@@ -40,7 +42,7 @@ export const toCsv = (rows: Record<string, unknown>[], columns: string[], dateFo
     .join('\n');
 
 export const useExportToCSV = () => {
-  const exportToCSV = useCallback((data: any[], options: ExportOptions = {}) => {
+  const exportToCSV = useCallback((data: CsvRow[], options: ExportOptions = {}) => {
     if (!data?.length) return;
 
     const { filename = 'export', dateFormat = 'YYYY-MM-DD', customHeaders, customTransform } = options;
