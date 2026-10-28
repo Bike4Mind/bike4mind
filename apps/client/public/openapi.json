@@ -12111,17 +12111,20 @@
           "field_name": {
             "type": "string",
             "minLength": 1,
-            "description": "The personality field being enhanced, for example `quirk` or `coreValues`."
+            "maxLength": 100,
+            "description": "The personality field being enhanced, for example `quirk` or `coreValues`. At most 100 characters."
           },
           "current_value": {
             "type": "string",
             "minLength": 1,
-            "description": "The text to enhance. It stays the basis of the result."
+            "maxLength": 2000,
+            "description": "The text to enhance. It stays the basis of the result. At most 2000 characters."
           },
           "agent_name": {
             "type": "string",
             "minLength": 1,
-            "description": "Overrides the agent's stored name in the prompt."
+            "maxLength": 200,
+            "description": "Overrides the agent's stored name in the prompt. At most 200 characters."
           }
         },
         "required": [
@@ -41235,7 +41238,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `agents:write`.",
+            "description": "The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -41652,7 +41655,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `agents:write`.",
+            "description": "The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -42123,7 +42126,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `agents:write`.",
+            "description": "The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -42604,7 +42607,7 @@
             }
           },
           "403": {
-            "description": "The API key lacks `agents:write`.",
+            "description": "The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`.",
             "content": {
               "application/json": {
                 "schema": {
