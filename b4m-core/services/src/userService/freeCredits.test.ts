@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import * as creditService from '../creditService';
+import * as stagedSignupGrant from './stagedSignupGrant';
 import { grantFreeCredits, releasePendingFreeCredits, resolveFreeCreditAmount } from './freeCredits';
+import * as signupProtection from './signupProtection';
 
 const buildAdapters = (defaultFreeCredits: string | null = '100') => {
   const logger = { error: vi.fn() };
@@ -70,6 +72,36 @@ describe('free credits service', () => {
       expect(addCreditsSpy).not.toHaveBeenCalled();
     });
 
+    it('withholds a staged signup tranche while the signup domain is held', async () => {
+      const adapters = buildAdapters('100');
+      adapters.db.users.findById.mockResolvedValue({
+        id: 'user-1',
+        emailVerified: true,
+        signupGrant: { stage: 'pending_email' },
+      });
+      adapters.db.signupProtection = {
+        repository: {
+          findReview: async () => null,
+          observe: async () => {},
+          recent: async () => [],
+          createHold: async () => false,
+          isOrganizationDomain: async () => false,
+        },
+      };
+      const addTags = vi.fn();
+      Object.assign(adapters.db.users, { addTagsToUser: addTags });
+      const protect = vi.spyOn(signupProtection, 'protectSignupCredits').mockResolvedValue(true);
+      const tranche = vi.spyOn(stagedSignupGrant, 'releaseSignupTranche');
+
+      const result = await grantFreeCredits({ id: 'user-1' }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null, withheld: true });
+      expect(tranche).toHaveBeenCalledExactlyOnceWith('user-1', expect.objectContaining({ db: adapters.db }));
+      expect(protect).toHaveBeenCalledExactlyOnceWith('user-1', adapters.db);
+      expect(addTags).toHaveBeenCalledExactlyOnceWith('user-1', [PENDING_FREE_CREDITS_TAG]);
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
     it('grants nothing when the resolved amount is 0', async () => {
       const result = await grantFreeCredits({ id: 'user-1' }, buildAdapters('0'));
       expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
@@ -118,6 +150,23 @@ describe('free credits service', () => {
       const adapters = buildAdapters('0');
       await grantFreeCredits({ id: 'user-1' }, adapters);
       expect(adapters.db.users.claimFreeCreditGrant).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('staged grant routing', () => {
+    it("forwards the risk collector to an enrolled account's tranche release", async () => {
+      const release = vi
+        .spyOn(stagedSignupGrant, 'releaseSignupTranche')
+        .mockResolvedValue({ creditsGranted: 40, currentCredits: 40 });
+      const adapters = buildAdapters('100');
+      adapters.db.users.findById.mockResolvedValue({ id: 'user-1', signupGrant: { stage: 'pending_email' } });
+      const collectRiskSignals = vi.fn();
+
+      const result = await grantFreeCredits({ id: 'user-1' }, { ...adapters, collectRiskSignals });
+
+      expect(result).toEqual({ creditsGranted: 40, currentCredits: 40 });
+      expect(release).toHaveBeenCalledWith('user-1', expect.objectContaining({ collectRiskSignals }));
+      expect(addCreditsSpy).not.toHaveBeenCalled();
     });
   });
 

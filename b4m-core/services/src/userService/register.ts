@@ -5,6 +5,7 @@ import {
   newSignupGrant,
   IUserDocument,
   IUserRepository,
+  type SignupProtection,
 } from '@bike4mind/common';
 import { IRegInviteDocument, RegInviteSource, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
@@ -21,7 +22,7 @@ import {
   USERNAME_RULES_MESSAGE,
   usernameSchema,
 } from '@bike4mind/common';
-import { releasePendingFreeCredits } from './freeCredits';
+import { type FreeCreditAdapters, releasePendingFreeCredits } from './freeCredits';
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
 import { assertUsernameNotReserved } from './reservedUsername';
@@ -67,6 +68,7 @@ export type RegisterUserParameters = z.infer<typeof registerUserSchema>;
 interface RegisterUserAdapters {
   db: {
     users: IUserRepository;
+    signupProtection?: SignupProtection;
     adminSettings: IAdminSettingsRepository;
     registrationInvites: {
       findByCode: (code: string) => Promise<IRegInviteDocument | null>;
@@ -91,6 +93,8 @@ interface RegisterUserAdapters {
    * Used by OTC registration where email ownership is already verified.
    */
   skipInviteCheck?: boolean;
+  /** Forwarded to the staged signup grant's first assessment (see FreeCreditAdapters). */
+  collectRiskSignals?: FreeCreditAdapters['collectRiskSignals'];
 }
 
 export const registerUser = async (
@@ -138,7 +142,12 @@ export const registerUser = async (
   // the same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
   // flat credits. Registration-only - OTC sign-in for existing accounts never reaches this
   // function, so grandfathered users on such domains are unaffected.
-  if (await shouldBlockDisposableEmail(normalizedEmail, { adminSettings: db.adminSettings })) {
+  if (
+    await shouldBlockDisposableEmail(normalizedEmail, {
+      adminSettings: db.adminSettings,
+      signupProtection: db.signupProtection,
+    })
+  ) {
     throw new BadRequestError('This email domain is not allowed');
   }
 
@@ -433,21 +442,22 @@ export const registerViaOTC = async (
   }
 
   const taggedUser = { ...newUser, tags: [...new Set([...(newUser.tags ?? []), 'Customer'])] };
-  const hasPendingCredits = taggedUser.tags.includes(PENDING_FREE_CREDITS_TAG);
 
   let finalTags = taggedUser.tags;
   let pendingCreditGrant = newUser.pendingCreditGrant ?? null;
 
-  if (hasPendingCredits && db.creditTransactions) {
+  if (db.creditTransactions) {
     const release = await releasePendingFreeCredits(taggedUser, {
       db: {
         adminSettings: db.adminSettings,
         creditTransactions: db.creditTransactions,
         creditLots: db.creditLots,
         users: db.users,
+        signupProtection: db.signupProtection,
       },
       reason: 'OTC registration (email verified)',
       logger,
+      collectRiskSignals: adapters.collectRiskSignals,
     });
     // On failure the patch is empty, so the pending tag and amount survive as the retry
     // breadcrumb while the user is still verified and let in.

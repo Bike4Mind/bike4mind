@@ -4,7 +4,6 @@ import {
   Box,
   Button,
   Chip,
-  CircularProgress,
   FormControl,
   FormHelperText,
   FormLabel,
@@ -13,7 +12,6 @@ import {
   Select,
   Sheet,
   Stack,
-  Table,
   Typography,
 } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
@@ -24,6 +22,7 @@ import { isAxiosError } from 'axios';
 import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 import type { IApiKeyScopePreflightRow } from '@bike4mind/common';
 import { useApiKeyScopePreflight, type ScopePreflightParams } from '@client/app/hooks/data/apiKeyScopePreflight';
+import { AdminPageHeader, DataTable, EmptyState, ErrorState, FilterBar } from './shared';
 
 const WINDOW_OPTIONS = [7, 30, 90];
 
@@ -76,6 +75,7 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [days, setDays] = useState(90);
   const [submitted, setSubmitted] = useState<ScopePreflightParams | null>(null);
+  const [resultQuery, setResultQuery] = useState('');
 
   const { data, isFetching, error, refetch } = useApiKeyScopePreflight(submitted);
 
@@ -93,14 +93,17 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
 
   return (
     <Stack spacing={2} data-testid="admin-scope-preflight-tab">
-      <Box>
-        <Typography level="h4">API key scope preflight</Typography>
-        <Typography level="body-sm" textColor="text.secondary">
-          Before declaring <code>requiredScopes</code> on routes that currently have none, check which live keys would
-          start getting 403s. A key holds only the scopes it was minted with, so they must be re-minted before the gate
-          enforces. Reads {data?.windowDays ?? 90} days of API-key usage history.
-        </Typography>
-      </Box>
+      <AdminPageHeader
+        title="API key scope preflight"
+        count={data && !isFetching && !error ? data.rows.length : undefined}
+        description={
+          <>
+            Before declaring <code>requiredScopes</code> on routes that currently have none, check which live keys would
+            start getting 403s. A key holds only the scopes it was minted with, so they must be re-minted before the
+            gate enforces. Reads {data?.windowDays ?? 90} days of API-key usage history.
+          </>
+        }
+      />
 
       <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }}>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-end' }}>
@@ -173,19 +176,40 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
       </Sheet>
 
       {error ? (
-        <Alert color="danger" data-testid="scope-preflight-error">
-          {preflightErrorMessage(error)}
-        </Alert>
+        <Box data-testid="scope-preflight-error">
+          <ErrorState message={preflightErrorMessage(error)} onRetry={() => void refetch()} />
+        </Box>
       ) : null}
 
       {isFetching ? (
-        <Stack direction="row" spacing={1} alignItems="center">
-          <CircularProgress size="sm" />
-          <Typography level="body-sm">Scanning usage history...</Typography>
-        </Stack>
+        <DataTable
+          label="Scanning usage history"
+          rows={[]}
+          columns={[{ id: 'key', label: 'Key', render: () => '' }]}
+          getRowId={() => ''}
+          loading
+          onRetry={() => void refetch()}
+        />
+      ) : null}
+      {!data && !isFetching && !error ? (
+        <EmptyState
+          title="Run a scope preflight"
+          description="Choose an endpoint prefix and required scopes, then run the read-only scan."
+          action={
+            <Button
+              variant="plain"
+              onClick={() =>
+                document.querySelector<HTMLInputElement>('[data-testid="scope-preflight-prefix-input"] input')?.focus()
+              }
+              data-testid="scope-preflight-start-btn"
+            >
+              Choose endpoint
+            </Button>
+          }
+        />
       ) : null}
 
-      {data && !isFetching ? (
+      {data && !isFetching && !error ? (
         <Stack spacing={2}>
           {/*
             The form stays editable while these results stay on screen, so without
@@ -263,46 +287,83 @@ export const ApiKeyScopePreflightTab: React.FC = () => {
               </Alert>
             )
           ) : (
-            <Table size="sm" stickyHeader data-testid="scope-preflight-results">
-              <thead>
-                <tr>
-                  <th>Outcome</th>
-                  <th>Key</th>
-                  <th>User</th>
-                  <th>Held scopes</th>
-                  <th>Requests</th>
-                  <th>Last used</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.rows.map(row => (
-                  <tr key={row.keyId}>
-                    <td>
-                      <OutcomeChip outcome={row.outcome} />
-                    </td>
-                    <td>
+            <Stack gap={2}>
+              <FilterBar
+                state={{ query: resultQuery, view: '', filters: {} }}
+                searchLabel="Search returned keys"
+                onChange={patch => {
+                  if (patch.query !== undefined) setResultQuery(patch.query);
+                }}
+              />
+              <DataTable
+                label="Scope preflight results"
+                testId="scope-preflight-results"
+                rows={data.rows.filter(row =>
+                  `${row.keyId} ${row.userId} ${row.heldScopes.join(' ')}`
+                    .toLowerCase()
+                    .includes(resultQuery.toLowerCase())
+                )}
+                getRowId={row => row.keyId}
+                onRetry={() => void refetch()}
+                pageResetKey={resultQuery + JSON.stringify(submitted)}
+                // The default empty action is onRetry, which would re-run the expensive scan.
+                empty={
+                  <EmptyState
+                    title="No returned keys match"
+                    action={
+                      <Button
+                        variant="outlined"
+                        data-testid="scope-preflight-clear-search-btn"
+                        onClick={() => setResultQuery('')}
+                      >
+                        Clear search
+                      </Button>
+                    }
+                  />
+                }
+                columns={[
+                  {
+                    id: 'outcome',
+                    label: 'Outcome',
+                    render: row => <OutcomeChip outcome={row.outcome} />,
+                    sortValue: row => row.outcome,
+                  },
+                  {
+                    id: 'key',
+                    label: 'Key',
+                    render: row => (
                       <Typography level="body-xs" fontFamily="monospace">
                         {row.keyId}
                       </Typography>
-                    </td>
-                    <td>
+                    ),
+                    sortValue: row => row.keyId,
+                  },
+                  {
+                    id: 'user',
+                    label: 'User',
+                    render: row => (
                       <Typography level="body-xs" fontFamily="monospace">
                         {row.userId}
                       </Typography>
-                    </td>
-                    <td>
-                      <Typography level="body-xs">
-                        {row.heldScopes.length > 0 ? row.heldScopes.join(', ') : 'none'}
-                      </Typography>
-                    </td>
-                    <td>{row.requests}</td>
-                    <td>
-                      <Typography level="body-xs">{new Date(row.lastUsed).toLocaleDateString()}</Typography>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
+                    ),
+                  },
+                  { id: 'scopes', label: 'Held scopes', render: row => row.heldScopes.join(', ') || 'none' },
+                  {
+                    id: 'requests',
+                    label: 'Requests',
+                    numeric: true,
+                    render: row => row.requests.toLocaleString(),
+                    sortValue: row => row.requests,
+                  },
+                  {
+                    id: 'lastUsed',
+                    label: 'Last used',
+                    render: row => new Date(row.lastUsed).toLocaleDateString(),
+                    sortValue: row => new Date(row.lastUsed).getTime(),
+                  },
+                ]}
+              />
+            </Stack>
           )}
         </Stack>
       ) : null}

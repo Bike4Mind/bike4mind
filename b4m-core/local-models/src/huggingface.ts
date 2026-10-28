@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { downloadFile, type DownloadOptions, type DownloadResult } from './download';
 import {
   HubAccessError,
   HubRateLimitError,
@@ -716,6 +717,36 @@ export class HuggingFaceHub {
       if (model?.digest === `sha256:${sha256}`) return `${OLLAMA_HUGGING_FACE_HOST}/${detail.id}:${tag}`;
     }
     return null;
+  }
+
+  /**
+   * Downloads one GGUF file, resuming `<destination>.partial` from an earlier attempt, and checks its size and
+   * sha256 (size only when the Hub masks the hash). The token goes to the endpoint only, never to the CDN it
+   * redirects to. An existing `destination` is never overwritten: it is verified, or `ModelFileConflictError`.
+   */
+  async download(file: HubGgufFile, destination: string, options: DownloadOptions = {}): Promise<DownloadResult> {
+    const origin = new URL(this.endpoint).origin;
+    const resolved = file.url.startsWith(`${this.endpoint}/`)
+      ? /^\/([^/]+\/[^/]+)\/resolve\/([^/]+)\//.exec(file.url.slice(this.endpoint.length))
+      : null;
+    const repo = resolved?.[1];
+    const revision = resolved?.[2] && decodeURIComponent(resolved[2]);
+    return downloadFile(
+      {
+        runtimeId: this.id,
+        fetch: this.#client.fetch,
+        headersFor: (url): Record<string, string> =>
+          this.#token && url.origin === origin ? { authorization: `Bearer ${this.#token}` } : {},
+        httpError: (response, url) =>
+          url.origin === origin
+            ? this.#httpError(response, url.pathname, { repo, revision })
+            : this.#httpError(response, `${url.origin} download`, {}),
+        connectionError: error => this.#connectionError(file.path, error, options.signal),
+      },
+      file,
+      destination,
+      options
+    );
   }
 
   async #canDownload(

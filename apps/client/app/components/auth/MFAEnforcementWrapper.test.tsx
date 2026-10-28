@@ -40,6 +40,11 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   }),
 }));
 
+const { logoutMutate } = vi.hoisted(() => ({ logoutMutate: vi.fn() }));
+vi.mock('@client/app/hooks/data/user', () => ({
+  useUserLogout: () => ({ mutate: logoutMutate, isPending: false }),
+}));
+
 // Keep the modal + toasts inert so the test focuses on the effect's call behavior.
 vi.mock('@client/app/components/common/MFAModal', () => ({ default: () => null }));
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
@@ -141,6 +146,41 @@ describe('MFAEnforcementWrapper - dismissed verification prompt', () => {
   });
 });
 
+describe('MFAEnforcementWrapper - a session stuck at the verification prompt', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    get.mockResolvedValue({ data: { enabled: false } });
+    // Setup waits on the "Confirm it's you" prompt the user never completes.
+    post.mockReturnValue(new Promise(() => {}));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('offers a sign-out, so the user can sign in fresh and skip the prompt', async () => {
+    renderWrapper();
+
+    const signOut = await screen.findByTestId('mfa-enforcement-sign-out-btn');
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+
+    fireEvent.click(signOut);
+    expect(logoutMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the user when the sign-out fails, instead of leaving them on the screen silently', async () => {
+    logoutMutate.mockImplementation((_vars: unknown, options?: { onError?: (e: unknown) => void }) =>
+      options?.onError?.(new Error('Network Error'))
+    );
+    renderWrapper();
+
+    fireEvent.click(await screen.findByTestId('mfa-enforcement-sign-out-btn'));
+
+    expect(toastError).toHaveBeenCalledWith("Couldn't sign out. Please try again.");
+  });
+});
+
 // Stand-in for the server's enrollment refusal: axios shapes the error, and the client helper
 // (mfaEnrollmentInterceptor) keys off `isAxiosError` + the 403 body flag.
 const enrollmentRefusal = () => ({
@@ -198,5 +238,37 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     expect(screen.queryByTestId('app-content')).toBeNull();
     // The flow is usable, not just visible: setup is attempted.
     await waitFor(() => expect(mfaSetupCalls()).toBeGreaterThanOrEqual(1));
+  });
+});
+
+describe('MFAEnforcementWrapper - an enrolled user is never sent into setup', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The mocked currentUser has no `mfa`, as after a reload rehydrates the persisted user store.
+  it('trusts the status query over a currentUser that lacks mfa', async () => {
+    get.mockResolvedValue({ data: { enabled: true } });
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mfaSetupCalls()).toBe(0);
+  });
+
+  it('refreshes status instead of toasting when setup answers 409', async () => {
+    get.mockResolvedValueOnce({ data: { enabled: false } }).mockResolvedValue({ data: { enabled: true } });
+    post.mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        response: { status: 409, data: { error: 'MFA is already enabled for this account.' } },
+      })
+    );
+
+    renderWrapper();
+
+    await screen.findByTestId('app-content');
+    expect(mfaSetupCalls()).toBe(1);
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

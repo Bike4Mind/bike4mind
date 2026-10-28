@@ -17,6 +17,7 @@ import {
 } from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import AdminSettingInputField from './AdminSettingInputField';
+import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
 import { AdminTab } from './adminSidebarConfig';
 import {
   ADMIN_SETTINGS_SEARCH_PARAM,
@@ -51,7 +52,7 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
     id: 'referral-rewards',
     title: 'Referral rewards for inviters',
     description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. Only the starting-invite count is active today; the reward, hold and alert settings are saved but not paid out until inviter rewards ship.',
+      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. The starting-invite count, first-answer reward and alert are active today; the payment rewards and hold are saved but not paid out until payment rewards ship.',
     keys: [
       'ReferralFirstAnswerCredits',
       'ReferralFirstPaymentCredits',
@@ -179,6 +180,19 @@ const AdminGrowthPricingTab = () => {
     return map;
   }, [data]);
 
+  // No data after loading means the read failed; the catalog says so rather than showing defaults.
+  const teamPlan = useMemo(
+    () =>
+      data
+        ? resolveTeamPlanSettings({
+            teamPlanMinSeats: storedByKey.get('teamPlanMinSeats'),
+            teamPlanMaxSeats: storedByKey.get('teamPlanMaxSeats'),
+            teamPlanCreditsPerSeat: storedByKey.get('teamPlanCreditsPerSeat'),
+          })
+        : undefined,
+    [data, storedByKey]
+  );
+
   // Cross-field checks the per-setting schemas cannot express on their own.
   const warnings = useMemo(() => {
     const out: string[] = [];
@@ -279,6 +293,8 @@ const AdminGrowthPricingTab = () => {
           </CardContent>
         </Card>
       ))}
+
+      <CheckoutCatalogPanel teamPlan={teamPlan} />
 
       {GROWTH_PRICING_LINKS.map(section => (
         <Card key={section.id} variant="outlined" data-testid={`admin-growth-pricing-section-${section.id}`}>

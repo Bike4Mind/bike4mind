@@ -3,6 +3,9 @@ import { createMocks } from 'node-mocks-http';
 import { CreditHolderType, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { signupCreditsForEmail } from '@client/lib/entitlements/registry';
 
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
+
 // Middleware is stripped so the handler body runs directly (same pattern as
 // pages/api/auth/__tests__/unlink.test.ts). baseApi().use(...).use(...).post(fn)
 // must chain and hand back the raw handler.
@@ -45,6 +48,7 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 
 const mockFindByToken = vi.fn();
 const mockUpdate = vi.fn();
+const mockClearPending = vi.fn();
 const mockFindBySettingName = vi.fn();
 // Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
 vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
@@ -54,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findByEmailVerificationToken: (...a: any[]) => mockFindByToken(...a),
     update: (...a: any[]) => mockUpdate(...a),
+    clearPendingFreeCreditGrant: (...a: any[]) => mockClearPending(...a),
   },
   withTransaction: (fn: any) => fn(),
   adminSettingsRepository: { findBySettingName: (...a: any[]) => mockFindBySettingName(...a) },
@@ -130,6 +135,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     vi.clearAllMocks();
     mockVerifyEmailToken.mockResolvedValue(undefined);
     mockUpdate.mockResolvedValue(undefined);
+    mockClearPending.mockImplementation(async (id: string) => ({ id, tags: [] }));
     mockAddCredits.mockResolvedValue({});
     mockReleasePending.mockImplementation(async user => fakeReleasePending(user));
     mockFindBySettingName.mockResolvedValue({ settingValue: 1000 });
@@ -192,7 +198,8 @@ describe('/api/email/verify — domain-grant signup credits', () => {
       expect.objectContaining({ credits: EXPECTED_DOMAIN_CREDITS, transactionId: 'domain-grant-credits:user-1' })
     );
     // The pending tag is removed exactly once.
-    expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1', tags: [] }));
+    expect(mockClearPending).toHaveBeenCalledOnce();
+    expect(mockClearPending).toHaveBeenCalledWith('user-1');
   });
 
   it('grants the invite-resolved pendingCreditGrant amount instead of the setting', async () => {
@@ -205,9 +212,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     // The pending amount travels on the user doc into the service...
     expect(flatGrantCall()?.[0]).toEqual(expect.objectContaining({ id: 'user-1', pendingCreditGrant: 500 }));
     // ...and the tag and the pending amount are cleared together.
-    expect(mockUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1', tags: [], pendingCreditGrant: null })
-    );
+    expect(mockClearPending).toHaveBeenCalledWith('user-1');
   });
 
   it('uses a stable idempotent transactionId so a re-verify cannot double-grant', async () => {
@@ -280,6 +285,7 @@ describe('/api/email/verify - funnel events', () => {
     vi.clearAllMocks();
     mockVerifyEmailToken.mockResolvedValue(undefined);
     mockUpdate.mockResolvedValue(undefined);
+    mockClearPending.mockImplementation(async (id: string) => ({ id, tags: [] }));
     mockAddCredits.mockResolvedValue({});
     mockReleasePending.mockImplementation(async user => fakeReleasePending(user));
     mockFindBySettingName.mockResolvedValue({ settingValue: 1000 });

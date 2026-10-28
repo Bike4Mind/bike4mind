@@ -15,7 +15,7 @@ import { useShallow } from 'zustand/react/shallow';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
 import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
 import { useGetSession } from '@client/app/hooks/data/sessions';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { useAdminChatLayout } from './useAdminChatLayout';
 import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
@@ -62,6 +62,7 @@ const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false 
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
 const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: false });
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
+const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
 const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
@@ -152,14 +153,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const adminSession = useGetSession(adminSessionId);
 
   // Mount the assistant as the minimized pill so it is on hand without covering the page; restore on unmount
-  useEffect(() => {
-    if (!currentUser?.isAdmin) return;
-    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: true });
-    return () => {
-      // Reset the minimized default too, or the next floating chat opened elsewhere starts as the pill
-      setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
-    };
-  }, [currentUser?.isAdmin]);
+  useAdminChatLayout(!!currentUser?.isAdmin);
 
   return (
     <UndoToastProvider>
@@ -216,6 +210,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.ApiCookbook}>{activeTab === AdminTab.ApiCookbook && <ApiCookbookTab />}</TabPanel>
           <TabPanel value={AdminTab.Subscribers}>{activeTab === AdminTab.Subscribers && <SubscribersTab />}</TabPanel>
+          <TabPanel value={AdminTab.SignupDomainHolds} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.SignupDomainHolds && <SignupDomainHoldsTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
           </TabPanel>
@@ -336,6 +333,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               isLoading={!adminSessionId || adminSession.isPending}
               autoHideOnEmpty={false}
               floatingChatCloseToPill
+              floatingChatDockable={false}
             />
           </Box>
         </NotebookFilepondProvider>

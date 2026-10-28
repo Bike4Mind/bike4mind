@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
+import { useUserLogout } from '@client/app/hooks/data/user';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
@@ -30,9 +31,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // Get MFA enforcement setting from admin settings
   const enforceMFA = adminSettings?.enforceMFA === 'true';
 
-  // Check if user already has MFA configured (from user object)
-  const userHasMFA = !!(currentUser?.mfa && currentUser.mfa.totpEnabled);
-
   // Only call MFA status API if enforcement is enabled
   const shouldCheckMFA = !!enforceMFA;
 
@@ -40,6 +38,10 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const mfaStatusQuery = useMFAStatus(shouldCheckMFA);
   const mfaStatus = mfaStatusQuery.data;
   const mfaQueryFailed = mfaStatusQuery.isError;
+  // The status query is the authority, not currentUser.mfa: the persisted user store drops `mfa`,
+  // so a reload rehydrates without it until /api/identify lands, and reading it here fired a
+  // step-up-gated setup call at an enrolled user, which then 409'd.
+  const needsEnrollment = !mfaStatus?.enabled;
 
   const isImpersonating = useAccessToken(s => s.impersonating);
 
@@ -55,6 +57,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // Dismissing the verification prompt is a choice, not a failure: offer to continue instead.
   const setupVerificationCancelled = setupMFAIsError && isStepUpCancelled(setupMFAError);
   const verifyMFASetup = useVerifyMFASetup();
+  const { mutate: logout, isPending: logoutIsPending } = useUserLogout();
 
   // Shared by the auto-start effect and the manual retry button (see the enforced-block
   // screen). Calling mutate() clears the mutation's error state, so a retry re-opens the path
@@ -67,12 +70,17 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       },
       onError: (error: any) => {
         if (isStepUpCancelled(error)) return;
+        // Already enrolled: this tab's status was stale, so refresh it rather than report an error.
+        if (error.response?.status === 409) {
+          void mfaStatusQuery.refetch();
+          return;
+        }
         // Extract the actual error message from axios response
         const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
         toast.error(errorMessage);
       },
     });
-  }, [setupMFAMutate]);
+  }, [setupMFAMutate, mfaStatusQuery.refetch]);
 
   // The server refuses a session that owes enrollment as soon as its own settings cache sees
   // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on the
@@ -131,7 +139,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
     // If MFA is enforced and user doesn't have it configured, force setup.
     // When enforced it applies to ALL users (no "internal" distinction).
-    if (enforceMFA && (!mfaStatus?.enabled || !currentUser.mfa?.totpEnabled)) {
+    if (enforceMFA && needsEnrollment) {
       // Auto-start MFA setup. The `!setupMFAIsError` guard is load-bearing: on a persistent
       // /api/mfa/setup failure onError only toasts, so setupMFAData stays undefined and
       // setupMFAIsPending cycles true->false - both are effect deps, so without this guard the
@@ -145,7 +153,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     isImpersonating,
     currentUser,
     enforceMFA,
-    userHasMFA,
+    needsEnrollment,
     shouldCheckMFA,
     mfaStatus,
     mfaStatusQuery.isLoading,
@@ -247,7 +255,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   // If MFA is enforced and user hasn't configured it, block access.
   // A failed status query normally leaves the app alone, but an observed enrollment refusal is
   // the server telling us this session owes enrollment, so it blocks regardless.
-  if (enforceMFA && (!mfaQueryFailed || enrollmentRefused) && (!mfaStatus?.enabled || !currentUser?.mfa?.totpEnabled)) {
+  if (enforceMFA && (!mfaQueryFailed || enrollmentRefused) && needsEnrollment) {
     return (
       <Box
         data-testid="mfa-enforcement-required-screen"
@@ -296,6 +304,18 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             We&apos;re setting up MFA for your account. Please wait...
           </Typography>
         )}
+
+        {/* An older session must pass an emailed "Confirm it's you" check before setup; a fresh
+            sign-in skips it (see setup.ts), so this is the way out for a user stuck at that check. */}
+        <Button
+          data-testid="mfa-enforcement-sign-out-btn"
+          variant="plain"
+          color="neutral"
+          onClick={() => logout(undefined, { onError: () => toast.error("Couldn't sign out. Please try again.") })}
+          loading={logoutIsPending}
+        >
+          Sign out and sign in again
+        </Button>
 
         {/* MFA Setup Modal */}
         {showMFASetup && setupMFAData && (

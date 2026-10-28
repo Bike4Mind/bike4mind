@@ -16,7 +16,8 @@ import {
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { ProjectEvents, projectResponseSchema, redactSessionsForClient } from '@bike4mind/common';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { z } from 'zod';
 import { SessionEvents } from '@server/utils/eventBus';
@@ -182,7 +183,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         )
       );
 
-      return res.json(project);
+      return respond(res, projectResponseSchema, project);
     })
   );
 

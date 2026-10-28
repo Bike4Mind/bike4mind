@@ -29,14 +29,14 @@ On the admin page or a user profile, press Cmd/Ctrl+K to open **Admin commands**
 | `x` | Toggle selection of a focused selectable shared-table row or Slim Users row/card |
 | `c` | Open Overview and focus Credit balance on a user profile; use Update with a reason to save |
 | `s` | Open an audited suspension preview for the user whose profile is open |
-| Cmd/Ctrl+S | Save the generic, inline-child or string-list settings editor you are working in, including from its inputs |
+| Cmd/Ctrl+S | On Admin Settings, save all staged changes across sections; in standalone editors, save the current setting |
 | `?` | Open shortcut help |
 
 The profile also offers **Revoke API keys**. Suspension and key revocation require an eligibility preview and a reason before you apply them. These flows exclude paid, admin, system and organization accounts, and do not claw back credits. Suspension also revokes API keys and signs the user out.
 
 ### If a shortcut does nothing
 
-Single-key shortcuts (`/`, `x`, `c`, `s`, `?`) do not run while you type in an input or editable text. No shortcut runs while a menu or dialog is open. Close the popup, or Tab out of the field to the intended row first. Cmd/Ctrl+S does not save scoped overrides or bespoke settings forms; use their own Set or Save controls. A disabled save button still needs a valid change. If `/` does nothing, use the page's search control directly.
+Single-key shortcuts (`/`, `x`, `c`, `s`, `?`) do not run while you type in an input or editable text. No shortcut runs while a menu or dialog is open. Close the popup, or Tab out of the field to the intended row first. On Settings, Cmd/Ctrl+S saves staged edits across sections. Scoped overrides, uploads and command actions use their own controls; standalone bespoke forms keep their own Save controls. A disabled save button still needs a valid change. If `/` does nothing, use the page's search control directly.
 
 ## Environment Banner
 

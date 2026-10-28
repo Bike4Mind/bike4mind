@@ -145,10 +145,85 @@ describe('generateReleaseNotes', () => {
     expect(result.draft.items).toEqual([]);
   });
 
-  it('rejects a triage reply that skips a PR', async () => {
-    const complete = vi.fn().mockResolvedValue(triageReply([{ number: 1, customerFacing: false, note: '' }]));
+  it('re-triages a PR the triage reply skips, on its own', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'One.' }]))
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'One.' }]))
+      .mockResolvedValueOnce(triageReply([{ number: 2, customerFacing: true, note: 'Two.' }]));
+    const logger = { warn: vi.fn() };
 
-    await expect(generateReleaseNotes([pr(1), pr(2)], complete)).rejects.toThrow(/missing entry for pull request 2/);
+    const { notes, usage } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
+
+    expect(complete).toHaveBeenCalledTimes(3);
+    const prompts: string[] = complete.mock.calls.map(call => call[0]);
+    expect(usage.inputTokens).toBe(prompts.reduce((sum, prompt) => sum + Math.ceil(prompt.length / 4), 0));
+    expect(complete.mock.calls[1][0]).toContain('missing entry for pull request 2');
+    const retryPrompt: string = complete.mock.calls[2][0];
+    expect(retryPrompt).toContain('"number":2');
+    expect(retryPrompt).not.toContain('"number":1');
+    expect(notes).toEqual(
+      new Map([
+        [1, 'One.'],
+        [2, 'Two.'],
+      ])
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('treating them as internal'));
+  });
+
+  it('keeps the entries of a partial repair reply that covers more than the first reply', async () => {
+    const entry = (number: number) => ({ number, customerFacing: true, note: `Note ${number}.` });
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([entry(1)]))
+      .mockResolvedValueOnce(triageReply([entry(1), entry(2), entry(3)]))
+      .mockResolvedValueOnce(triageReply([entry(4)]));
+    const logger = { warn: vi.fn() };
+
+    const { notes } = await triageReleaseNotes([pr(1), pr(2), pr(3), pr(4)], complete, { logger });
+
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete.mock.calls[2][0]).not.toContain('"number":3');
+    expect([...notes.keys()]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('drops a PR the model keeps omitting with a warning and ships the rest', async () => {
+    const complete = vi.fn(async (prompt: string) =>
+      prompt.includes('"number":1')
+        ? triageReply([{ number: 1, customerFacing: true, note: 'One.' }])
+        : triageReply([{ number: 99, customerFacing: true, note: 'Invented.' }])
+    );
+    const logger = { warn: vi.fn() };
+
+    const { notes, omitted } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
+
+    expect(complete).toHaveBeenCalledTimes(4);
+    expect(notes).toEqual(new Map([[1, 'One.']]));
+    expect(omitted).toEqual([2]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[releaseNotes] triage omitted pull requests 2; treating them as internal'
+    );
+  });
+
+  it('treats omitted PRs as internal when the retry call itself fails', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'One.' }]))
+      .mockResolvedValueOnce(triageReply([{ number: 1, customerFacing: true, note: 'One.' }]))
+      .mockRejectedValueOnce(new Error('timed out'));
+    const logger = { warn: vi.fn() };
+
+    const { notes } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
+
+    expect(notes).toEqual(new Map([[1, 'One.']]));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('retry for omitted pull requests failed'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('omitted pull requests 2'));
+  });
+
+  it('still fails when no triage reply is usable', async () => {
+    const complete = vi.fn().mockResolvedValue('not json');
+
+    await expect(triageReleaseNotes([pr(1)], complete)).rejects.toThrow(/triage output invalid after one repair/);
   });
 
   it('makes no LLM call for an empty PR list', async () => {
@@ -238,7 +313,9 @@ describe('copy accuracy', () => {
     expect(prompt).toContain('never "You can now ..."');
     expect(prompt).toContain('only when the title states that gain');
     expect(prompt).toContain('Never attach a speed or quality claim to an AI model or provider');
-    expect(prompt).toContain('or a security vulnerability fix');
+    expect(prompt).toContain('is a security vulnerability fix');
+    expect(prompt).toContain('Changes only to the operator admin panel');
+    expect(prompt).toContain('Settings that customers manage for their own organization are customer-facing');
     expect(prompt).not.toContain('who it helps');
   });
 
@@ -250,6 +327,8 @@ describe('copy accuracy', () => {
     const prompt: string = complete.mock.calls[0][0];
     expect(prompt).toContain('Security vulnerability fixes,');
     expect(prompt).toContain('what changes for the customer');
+    expect(prompt).toContain('Changes only to the operator admin panel');
+    expect(prompt).toContain('Settings that customers manage for their own organization are customer-facing');
     expect(prompt).toContain('Never say which roles can see or use something');
     expect(prompt).not.toContain('follow the narrower one');
   });

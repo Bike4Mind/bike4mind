@@ -1,24 +1,52 @@
-import { Request, RequestHandler } from 'express';
+import { Request, RequestHandler, Response } from 'express';
 import { Resource } from 'sst';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { verifyTurnstile } from '@bike4mind/server-utils/utils/turnstile';
 import { getTurnstilePolicy, turnstileAllowedHostnames } from '@server/utils/auth/turnstile';
 
+export type TurnstileFailure = {
+  code: 'challenge_failed' | 'challenge_unavailable';
+  status: 403 | 503;
+  error: string;
+};
+
+export type RequireTurnstileOptions = {
+  /** Where the token travels; defaults to `turnstileToken` in the JSON body. */
+  token?: (req: Request) => unknown;
+  /** Requests the policy does not apply to even while active, decided per request. */
+  exempt?: (req: Request) => boolean;
+  /** Replaces the JSON error answer, for routes a browser navigates to directly. */
+  onFailure?: (req: Request, res: Response, failure: TurnstileFailure) => void;
+};
+
+const UNAVAILABLE: TurnstileFailure = {
+  code: 'challenge_unavailable',
+  status: 503,
+  error: 'Verification is temporarily unavailable. Please try again.',
+};
+const FAILED: TurnstileFailure = {
+  code: 'challenge_failed',
+  status: 403,
+  error: 'Verification failed. Please refresh and try again.',
+};
+
 /**
- * Rejects the request with 403 `challenge_failed` unless the body carries a valid Turnstile token
+ * Rejects the request with 403 `challenge_failed` unless it carries a valid Turnstile token
  * for `action`. A no-op while the feature is off or unprovisioned. Only a verification outage is
  * governed by the fail-closed setting; a missing or invalid token always fails. The token is never logged.
  */
-export const requireTurnstile = (action: string): RequestHandler => {
+export const requireTurnstile = (action: string, options: RequireTurnstileOptions = {}): RequestHandler => {
+  const readToken = options.token ?? (req => req.body?.turnstileToken);
+  const fail = (req: Request, res: Response, failure: TurnstileFailure) => {
+    if (options.onFailure) return options.onFailure(req, res, failure);
+    res.status(failure.status).json({ error: failure.error, code: failure.code, request_id: req.requestId });
+  };
   return async (req, res, next) => {
+    if (options.exempt?.(req)) return next();
     const policy = await getTurnstilePolicy().catch(error => {
       req.logger?.warn('turnstile-policy-unreadable', error);
-      res.status(503).json({
-        error: 'Verification is temporarily unavailable. Please try again.',
-        code: 'challenge_unavailable',
-        request_id: req.requestId,
-      });
+      fail(req, res, UNAVAILABLE);
       return null;
     });
     if (!policy) return;
@@ -27,7 +55,7 @@ export const requireTurnstile = (action: string): RequestHandler => {
 
     const ip = getClientIp(req);
     const result = await verifyTurnstile({
-      token: req.body?.turnstileToken,
+      token: readToken(req),
       secret: policy.secret,
       ip,
       expectedAction: action,
@@ -46,11 +74,7 @@ export const requireTurnstile = (action: string): RequestHandler => {
       reason: result.reason,
       errorCodes: result.errorCodes,
     });
-    return res.status(403).json({
-      error: 'Verification failed. Please refresh and try again.',
-      code: 'challenge_failed',
-      request_id: req.requestId,
-    });
+    return fail(req, res, FAILED);
   };
 };
 

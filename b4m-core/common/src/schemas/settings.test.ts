@@ -230,6 +230,12 @@ describe('first-session feature defaults', () => {
 
 describe('public settings projection (M2.5 security boundary)', () => {
   describe('userReadableSettingKeys', () => {
+    it('includes the no-card unlock flags the billing card reads', () => {
+      const keys = new Set(userReadableSettingKeys());
+      expect(keys.has('noCardUnlockEnabled')).toBe(true);
+      expect(keys.has('noCardUnlockProbeInconclusiveAllows')).toBe(true);
+    });
+
     it('excludes admin-only operational config a non-admin has no claim to', () => {
       // These carry no `isSensitive` flag, which is exactly why the previous opt-OUT
       // filter served them to every authenticated caller.
@@ -908,6 +914,16 @@ describe('Credits System group', () => {
     expect(indexed).toEqual(carried);
   });
 
+  // AdminSettingsTab sorts by each definition's own `order`, which these leave unset, so the
+  // admin Settings page renders them in settingsMap definition order, not the index order.
+  it('defines its settings in index order', () => {
+    const indexed = [...API_SERVICE_GROUPS.CREDITS.settings].sort((a, b) => a.order - b.order).map(entry => entry.key);
+    const defined = Object.values(settingsMap)
+      .filter(setting => setting.group === API_SERVICE_GROUPS.CREDITS.id)
+      .map(setting => setting.key);
+    expect(defined).toEqual(indexed);
+  });
+
   it('is not repeated in the User Management index', () => {
     expect(API_SERVICE_GROUPS.USER_MANAGEMENT.settings.map(entry => entry.key)).not.toContain('enforceCredits');
   });
@@ -1440,4 +1456,22 @@ describe('apiKeyAccess default', () => {
     expect(['all', 'paid', 'disabled'].every(v => schema.safeParse(v).success)).toBe(true);
     expect(schema.safeParse('anyone').success).toBe(false);
   });
+});
+
+describe('API rate limit settings floor', () => {
+  it('lets the Free tier be set to 0 but rejects negatives and fractions', () => {
+    const { schema } = settingsMap.apiRateLimitFreePerMin;
+    expect(schema.safeParse(0).success).toBe(true);
+    expect(schema.safeParse(-1).success).toBe(false);
+    expect(schema.safeParse(0.5).success).toBe(false);
+    expect(schema.safeParse(1.5).success).toBe(false);
+  });
+
+  it.each(['apiRateLimitBasicPerMin', 'apiRateLimitProPerMin'] as const)(
+    'keeps a floor of 1 and requires an integer for %s',
+    key => {
+      expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
+      expect(settingsMap[key].schema.safeParse(1.5).success).toBe(false);
+    }
+  );
 });

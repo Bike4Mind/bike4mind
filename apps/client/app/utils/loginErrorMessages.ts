@@ -43,7 +43,13 @@ const LOGIN_ERROR_MESSAGES = {
   // Google/GitHub first sign-in while open registration is off; the login page also offers
   // the waitlist for this code (MultiStepLogin).
   registration_closed: 'Sign-ups are invite-only right now. Join the waitlist to request an invite.',
+  // Google/GitHub first sign-in over the per-network signup cap; must equal the server's
+  // SIGNUP_LIMITED_MESSAGE (server/utils/auth/oauthFailureReason.ts) so OTC and OAuth read the same.
+  signup_limited: 'Too many new accounts from your network. Please try again later.',
   server_configuration_error: 'A server configuration issue is preventing sign-in. Please contact your administrator.',
+  // Turnstile challenge on the OAuth start route (apps/client/server/utils/auth/oauthStartTurnstile.ts)
+  challenge_failed: 'Verification failed. Please try again.',
+  challenge_unavailable: 'Verification is temporarily unavailable. Please try again.',
   // Second factor abandoned after an SSO sign-in (auth/success.tsx)
   mfa_required: 'Multi-factor authentication is required to sign in. Please sign in again and enter your code.',
   mfa_setup_required:

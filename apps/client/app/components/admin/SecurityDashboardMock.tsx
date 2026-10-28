@@ -29,7 +29,7 @@ const SecurityDashboardMock: React.FC = () => {
               data-testid="security-dashboard-react-inner-tab-btn"
               sx={{ fontWeight: 'md', textTransform: 'none' }}
             >
-              Security Dashboard (Mock)
+              Security
             </Tab>
           </TabList>
           <ContextHelpButton helpId="admin/security-dashboard" tooltipText="Security Dashboard Help" />

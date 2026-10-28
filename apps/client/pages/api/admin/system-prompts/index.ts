@@ -1,6 +1,5 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { systemPromptRepository } from '@bike4mind/database';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
@@ -24,7 +23,10 @@ const CreateSystemPromptSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(
     /**
      * GET /api/admin/system-prompts
@@ -32,10 +34,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
      * Returns both code-defined defaults and database overrides.
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { category, enabled, search, source } = GetSystemPromptsQuerySchema.parse(req.query);
 
       // Load default prompts from code
@@ -150,10 +148,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
      * Create a new system prompt
      */
     async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const promptData = CreateSystemPromptSchema.parse(req.body);
 
       const existing = await systemPromptRepository.findOne({ promptId: promptData.promptId });
