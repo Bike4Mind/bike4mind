@@ -468,6 +468,27 @@ describe('getTurnstileToken', () => {
     expect(remove.mock.calls).toEqual([['widget-1'], ['widget-2']]);
   });
 
+  it('ignores a late interactive callback from a widget whose attempt already ended', async () => {
+    vi.useFakeTimers();
+    const page = document.createElement('main');
+    document.body.append(page);
+    const options: RenderOptions[] = [];
+    render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
+      options.push(opts);
+      if (options.length === 1) queueMicrotask(() => opts['error-callback']('300030'));
+      return `widget-${options.length}`;
+    });
+    const pending = getTurnstileToken('site', 'otc-send').catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    options[0]['before-interactive-callback']();
+    expect(document.querySelector('[data-testid="turnstile-challenge-card"]')!.getAttribute('role')).toBeNull();
+    expect(page.hasAttribute('inert')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_500 + 60_000);
+    expect(await pending).toMatchObject({ reason: 'timeout', attempts: 2 });
+    options[1]['before-interactive-callback']();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('keeps one card across retry attempts', async () => {
     vi.useFakeTimers();
     const page = document.createElement('main');

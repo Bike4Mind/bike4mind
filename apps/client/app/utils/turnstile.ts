@@ -130,7 +130,7 @@ async function solveOnce(
       let settled = false;
       const armTimeout = () => {
         clearTimeout(timer);
-        timer = setTimeout(() => reject(new TurnstileError('timeout', attempt)), CHALLENGE_TIMEOUT_MS);
+        timer = setTimeout(() => settle(() => reject(new TurnstileError('timeout', attempt))), CHALLENGE_TIMEOUT_MS);
       };
       armTimeout();
       const settle = (fn: () => void) => {
@@ -177,15 +177,15 @@ function retryDelay(signal: AbortSignal): Promise<void> {
       reject(new TurnstileCancelledError());
       return;
     }
-    const timer = setTimeout(resolve, RETRY_DELAY_MS);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(new TurnstileCancelledError());
-      },
-      { once: true }
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new TurnstileCancelledError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, RETRY_DELAY_MS);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
