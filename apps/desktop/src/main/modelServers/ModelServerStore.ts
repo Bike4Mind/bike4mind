@@ -52,8 +52,8 @@ const MAX_LISTED_MODELS = 200;
 
 // RFC 9110 token characters.
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/;
-// Bytes fetch and Node refuse in a header value.
-const INVALID_HEADER_VALUE = /[\0\r\n]|[^\0-\xff]/;
+// Anything but tab, printable ASCII and Latin-1: what Node's http refuses in a header value.
+const INVALID_HEADER_VALUE = /[^\t\x20-\x7e\x80-\xff]/;
 const RESERVED_HEADERS = new Set([
   'host',
   'content-length',
@@ -79,7 +79,7 @@ export function credentialHeaders(credential: ModelServerCredentialInput): Recor
     const token = credential.token.trim();
     if (!token) throw new Error('Enter the token.');
     if (token.length > MAX_SECRET_CHARS || INVALID_HEADER_VALUE.test(token) || /\s/.test(token)) {
-      throw new Error('The token contains a character HTTP does not allow.');
+      throw new Error('The token contains a control character, a space or a character HTTP does not allow.');
     }
     return { authorization: `Bearer ${token}` };
   }
@@ -89,7 +89,7 @@ export function credentialHeaders(credential: ModelServerCredentialInput): Recor
   if (RESERVED_HEADERS.has(name.toLowerCase())) throw new Error(`${name} cannot carry a credential.`);
   if (!value) throw new Error(`Enter the value for ${name}.`);
   if (value.length > MAX_SECRET_CHARS || INVALID_HEADER_VALUE.test(value)) {
-    throw new Error(`The value for ${name} contains a character HTTP does not allow.`);
+    throw new Error(`The value for ${name} contains a control character or a character HTTP does not allow.`);
   }
   return { [name.toLowerCase()]: value };
 }

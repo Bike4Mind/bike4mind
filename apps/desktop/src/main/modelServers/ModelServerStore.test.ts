@@ -211,6 +211,13 @@ describe('credentialHeaders', () => {
     expect(message).toMatch(/not allow/);
     expect(message).not.toContain(HEADER_VALUE);
     expect(() => credentialHeaders({ type: 'bearer', token: 'two words' })).toThrow(/not allow/);
+    for (const control of ['\x01', '\x1f', '\x7f']) {
+      expect(() => credentialHeaders({ type: 'header', name: 'X-Key', value: `a${control}b` })).toThrow(
+        /control character/
+      );
+      expect(() => credentialHeaders({ type: 'bearer', token: `a${control}b` })).toThrow(/control character/);
+    }
+    expect(credentialHeaders({ type: 'header', name: 'X-Key', value: 'a\tb' })).toEqual({ 'x-key': 'a\tb' });
     expect(() => credentialHeaders({ type: 'bearer', token: '   ' })).toThrow(/Enter the token/);
   });
 });
