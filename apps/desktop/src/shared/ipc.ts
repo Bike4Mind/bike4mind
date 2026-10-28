@@ -575,7 +575,8 @@ export interface DesktopApi {
     dismissPull(key: string): Promise<void>;
     remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
     onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
-    onInstalledChanged(listener: () => void): () => void;
+    /** Called with the id of the server (`local` for this computer) whose models changed. */
+    onInstalledChanged(listener: (serverId: string) => void): () => void;
   };
   auth: {
     getState(): Promise<AuthState>;

@@ -133,10 +133,13 @@ interface Bridge {
   search: HubSearchResult;
   detail: HubDetailResult;
   pulls: ModelPull[];
+  /** Holds the next installed list, as read when asked, until it settles. */
+  installedGate?: Promise<void>;
 }
 
 let bridge: Bridge;
 let pushPulls: (pulls: ModelPull[]) => void = () => {};
+let pushInstalled: (serverId: string) => void = () => {};
 let pushServers: (servers: ModelServerView[]) => void = () => {};
 const calls = {
   pull: vi.fn(),
@@ -179,7 +182,11 @@ beforeEach(() => {
       },
       listInstalled: async (serverId?: string) => {
         calls.listInstalled(serverId);
-        return (serverId && bridge.remote[serverId]?.installed) || bridge.installed;
+        const result = (serverId && bridge.remote[serverId]?.installed) || bridge.installed;
+        const gate = bridge.installedGate;
+        bridge.installedGate = undefined;
+        await gate;
+        return result;
       },
       search: async (request: unknown) => {
         calls.search(request);
@@ -199,7 +206,10 @@ beforeEach(() => {
         pushPulls = listener;
         return () => {};
       },
-      onInstalledChanged: () => () => {},
+      onInstalledChanged: (listener: (serverId: string) => void) => {
+        pushInstalled = listener;
+        return () => {};
+      },
     },
   };
 });
@@ -752,6 +762,64 @@ describe('ModelsScreen servers', () => {
     expect(q('models-pull-keep-open')).toBeNull();
     await click(q('models-pull-resume-btn'));
     expect(calls.resumePull).toHaveBeenCalledWith(`gpu/${REPO}#q`);
+  });
+
+  const llama = { ...qwen, name: 'llama3.2:1b' };
+  const rowNames = () => all('models-installed-row').map(row => row.dataset.name);
+
+  it('reloads only the shown server models when a pull or removal on it finishes', async () => {
+    await mount();
+    await pickServer('gpu');
+    expect(rowNames()).toEqual(['qwen2.5:0.5b']);
+    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
+    calls.getStatus.mockClear();
+    calls.listInstalled.mockClear();
+
+    act(() => pushInstalled('local'));
+    await flush();
+    expect(calls.listInstalled).not.toHaveBeenCalled();
+
+    act(() => pushInstalled('gpu'));
+    await flush();
+    expect(calls.listInstalled.mock.calls).toEqual([['gpu']]);
+    expect(calls.getStatus).not.toHaveBeenCalled();
+    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
+  });
+
+  it('keeps the newer models list when an older request answers last', async () => {
+    await mount();
+    await pickServer('gpu');
+    let release: () => void = () => {};
+    bridge.installedGate = new Promise(resolve => (release = resolve));
+    act(() =>
+      pushPulls([
+        {
+          key: `gpu/${REPO}#q`,
+          serverId: 'gpu',
+          serverName: 'gpu box',
+          repo: REPO,
+          buildId: 'q',
+          quant: 'Q4_K_M',
+          ref: null,
+          phase: 'failed',
+          completedBytes: 0,
+          totalBytes: null,
+          expectedBytes: 1,
+          error: { kind: 'connection-lost', message: 'Lost the connection to gpu box.' },
+        },
+      ])
+    );
+    await flush();
+    expect(calls.listInstalled).toHaveBeenLastCalledWith('gpu');
+
+    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
+    act(() => pushInstalled('gpu'));
+    await flush();
+    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
+
+    release();
+    await flush();
+    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
   });
 
   const changeServers = async (servers: ModelServerView[]) => {

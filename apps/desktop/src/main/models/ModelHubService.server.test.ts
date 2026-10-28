@@ -249,7 +249,20 @@ describe('ModelHubService on a saved model server', () => {
     expect(picker.find(model => model.name === REF)?.unavailable).toBeUndefined();
   });
 
-  it('pauses a pull when the server goes quiet without closing, and resume finishes it', async () => {
+  it('lists the resumed model for chat right away, once the recheck the pull started settles', async () => {
+    const { registry, service, serverId, installedChanged } = await setup('manage');
+    await service.pull(request(serverId));
+    expect((await registry.views()).find(view => view.id === serverId)?.health.state).toBe('unreachable');
+
+    expect(await service.resume(service.pulls()[0].key)).toEqual({ ok: true, ref: REF });
+    expect(installedChanged).toHaveBeenCalledTimes(1);
+    const picker = await registry.models();
+
+    expect(picker.find(model => model.name === REF)).toMatchObject({ server: { id: serverId } });
+    expect(picker.find(model => model.name === REF)?.unavailable).toBeUndefined();
+  });
+
+  it('pauses a pull when the server goes quiet without closing, keeps it Online for chat, and resumes', async () => {
     const { fake, registry, service, serverId, keepAwake } = await setup('manage', {
       first: 'quiet',
       idleTimeoutMs: 50,
@@ -262,7 +275,7 @@ describe('ModelHubService on a saved model server', () => {
     expect(paused.error?.message).toContain('lost the connection to gpu box');
     expect(paused.error?.message).not.toContain('srv-');
     const health = (await registry.views()).find(view => view.id === serverId)?.health;
-    expect(health).toMatchObject({ state: 'unreachable', error: 'gpu box: it stopped sending data' });
+    expect(health).toMatchObject({ state: 'online', error: null });
     expect(keepAwake.mock.calls).toEqual([[true], [false]]);
 
     expect(await service.resume(paused.key)).toEqual({ ok: true, ref: REF });
@@ -290,16 +303,20 @@ describe('ModelHubService on a saved model server', () => {
   });
 
   it.each([
-    ['set to Chat only', (registry: ModelServerRegistry, id: string) => registry.update(id, { access: 'chat' })],
-    ['removed', (registry: ModelServerRegistry, id: string) => registry.remove(id)],
-  ] as const)('stops a running pull once its server is %s, and lets the computer sleep', async (_label, change) => {
+    [
+      'set to Chat only',
+      'not-allowed',
+      (registry: ModelServerRegistry, id: string) => registry.update(id, { access: 'chat' }),
+    ],
+    ['removed', 'not-found', (registry: ModelServerRegistry, id: string) => registry.remove(id)],
+  ] as const)('stops a running pull and its wake lock once its server is %s', async (_label, kind, change) => {
     const { service, registry, serverId, keepAwake } = await setup('manage', { first: 'stall', followSettings: true });
     const running = service.pull(request(serverId));
     await vi.waitFor(() => expect(service.pulls()).toMatchObject([{ phase: 'downloading', completedBytes: 400 }]));
 
     await change(registry, serverId);
 
-    await expect(running).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+    await expect(running).resolves.toMatchObject({ ok: false, error: { kind }, listed: false });
     expect(service.pulls()).toEqual([]);
     expect(keepAwake.mock.calls).toEqual([[true], [false]]);
   });

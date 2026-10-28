@@ -99,6 +99,8 @@ interface PullEntry {
   controller: AbortController;
   /** The verified name Ollama pulls; a resume asks for the same one. */
   ref: string | null;
+  /** Why the pull was stopped when its server was removed or set to no longer allow it. */
+  stopped?: ModelHubError;
 }
 
 const SERVER_GONE = 'That model server is no longer saved. Pick another under Models.';
@@ -266,6 +268,7 @@ export class ModelHubService {
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #awake = false;
+  #disposed = false;
 
   constructor(deps: ModelHubServiceDeps) {
     this.#deps = deps;
@@ -394,7 +397,7 @@ export class ModelHubService {
 
     const refuse = (error: ModelHubError): ModelPullResult => {
       this.#drop(key, entry);
-      return { ok: false, error, listed: false };
+      return { ok: false, error: entry.stopped ?? error, listed: false };
     };
 
     let ref: string | null;
@@ -484,7 +487,7 @@ export class ModelHubService {
     } catch (error) {
       if (signal.aborted) {
         this.#drop(key, entry);
-        return { ok: false, error: hubError('cancelled', 'Download cancelled.'), listed: false };
+        return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
       }
       if (!target.local && error instanceof ServerUnreachableError) return this.#pause(key, entry, target);
       return this.#fail(key, entry, pullEofError(error, ref) ?? diskFullError(error, target) ?? toModelHubError(error));
@@ -510,9 +513,11 @@ export class ModelHubService {
   /** Called when a saved server changes or is removed: stops and clears its pulls once it no longer allows them. */
   serverChanged(serverId: string): void {
     const target = this.#target(serverId);
-    if (target && !manageRefusal(target)) return;
+    const reason = target ? manageRefusal(target) : hubError('not-found', SERVER_GONE);
+    if (!reason) return;
     for (const [key, entry] of this.#pulls) {
       if (entry.view.serverId !== serverId) continue;
+      entry.stopped = reason;
       entry.controller.abort();
       this.#drop(key, entry);
     }
@@ -534,6 +539,8 @@ export class ModelHubService {
   }
 
   dispose(): void {
+    // Set first: each aborted pull settles after this and must not wake the computer or push again.
+    this.#disposed = true;
     for (const entry of this.#pulls.values()) entry.controller.abort();
     if (this.#pushTimer) clearTimeout(this.#pushTimer);
     this.#pushTimer = null;
@@ -542,6 +549,7 @@ export class ModelHubService {
   }
 
   #pause(key: string, entry: PullEntry, target: Target): ModelPullResult {
+    if (entry.stopped) return { ok: false, error: entry.stopped, listed: false };
     const error = hubError(
       'connection-lost',
       `Paused: lost the connection to ${target.name}. Resume continues from the part it already downloaded. ` +
@@ -555,6 +563,7 @@ export class ModelHubService {
   }
 
   #fail(key: string, entry: PullEntry, error: ModelHubError): ModelPullResult {
+    if (entry.stopped) return { ok: false, error: entry.stopped, listed: false };
     if (this.#pulls.get(key) === entry) {
       entry.view = { ...entry.view, phase: 'failed', error };
       this.#push(true);
@@ -569,6 +578,7 @@ export class ModelHubService {
   }
 
   #push(now: boolean): void {
+    if (this.#disposed) return;
     const awake = [...this.#pulls.values()].some(
       ({ view }) => view.serverId !== LOCAL_SERVER_ID && view.phase !== 'paused' && view.phase !== 'failed'
     );

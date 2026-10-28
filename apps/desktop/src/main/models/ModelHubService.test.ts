@@ -548,3 +548,61 @@ describe('ModelHubService reads', () => {
     expect(installedChanged).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ModelHubService saved servers', () => {
+  /** Servers `a` and `b`, each set to Chat and manage and backed by its own deferred runtime. */
+  function servers() {
+    const local = harness();
+    const runtimes = { a: harness().runtime, b: harness().runtime };
+    const saved = new Set(['a', 'b']);
+    for (const [id, runtime] of Object.entries(runtimes)) {
+      runtime.health.mockImplementation(async () =>
+        saved.has(id)
+          ? { ok: true, version: '0.40.11', error: null }
+          : { ok: false, version: null, error: `${id} did not answer.` }
+      );
+    }
+    const keepAwake = vi.fn();
+    const service = new ModelHubService({
+      runtime: local.runtime,
+      server: id =>
+        saved.has(id) && (id === 'a' || id === 'b')
+          ? { name: `box ${id}`, management: 'allowed', runtime: runtimes[id] }
+          : null,
+      hub: local.hub,
+      onPullsChanged: () => {},
+      onInstalledChanged: () => {},
+      keepAwake,
+      progressIntervalMs: 0,
+    });
+    return { service, runtimes, saved, keepAwake, hub: local.hub };
+  }
+
+  it('does not wake the computer again while dispose stops several server pulls', async () => {
+    const { service, runtimes, keepAwake } = servers();
+    const first = service.pull({ ...request, serverId: 'a' });
+    const second = service.pull({ ...request, serverId: 'b' });
+    await vi.waitFor(() => expect(runtimes.b.pull).toHaveBeenCalled());
+    await vi.waitFor(() => expect(runtimes.a.pull).toHaveBeenCalled());
+
+    service.dispose();
+    await Promise.all([first, second]);
+
+    expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('says the server was removed when that happens while a pull is still being checked', async () => {
+    const { service, saved, hub } = servers();
+    let release = () => {};
+    hub.getModel.mockImplementationOnce(() => new Promise(resolve => (release = () => resolve(detail()))));
+    const result = service.pull({ ...request, serverId: 'a' });
+    await vi.waitFor(() => expect(service.pulls()).toHaveLength(1));
+
+    saved.delete('a');
+    service.serverChanged('a');
+    release();
+
+    expect(await result).toMatchObject({ ok: false, error: { kind: 'not-found' }, listed: false });
+    expect(service.pulls()).toEqual([]);
+  });
+});

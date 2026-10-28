@@ -80,7 +80,7 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsPullsChanged, handler);
     },
     onInstalledChanged: listener => {
-      const handler = () => listener();
+      const handler = (_event: unknown, serverId: string) => listener(serverId);
       ipcRenderer.on(IPC_CHANNELS.modelsInstalledChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsInstalledChanged, handler);
     },

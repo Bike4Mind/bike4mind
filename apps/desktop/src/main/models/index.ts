@@ -1,7 +1,6 @@
 import { ipcMain, powerSaveBlocker } from 'electron';
 import { HuggingFaceHub, OllamaRuntime } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
-import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import type { ModelPull } from '@shared/models';
 import type { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { appWindows } from '../windows';
@@ -15,9 +14,7 @@ const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
  * The Models screen's backend. Hugging Face is only reached from here, never the renderer. The app keeps no
  * Hugging Face token, so gated and private repos cannot be verified or pulled yet.
  */
-export function registerModels(
-  servers: Pick<ModelServerRegistry, 'hubServer' | 'check' | 'onServerSaved'>
-): ModelHubService {
+export function registerModels(servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved'>): ModelHubService {
   const send = (channel: string, payload?: ModelPull[] | string) => {
     for (const window of appWindows()) window.webContents.send(channel, payload);
   };
@@ -28,15 +25,8 @@ export function registerModels(
     server: id => servers.hubServer(id),
     hub: new HuggingFaceHub(),
     onPullsChanged: pulls => send(IPC_CHANNELS.modelsPullsChanged, pulls),
-    onInstalledChanged: serverId => {
-      send(IPC_CHANNELS.modelsInstalledChanged, serverId);
-      if (serverId === LOCAL_SERVER_ID) return;
-      // Again after the recheck, so the picker's reload finds the server online and its saved list current.
-      void servers
-        .check(serverId)
-        .catch(() => undefined)
-        .then(() => send(IPC_CHANNELS.modelsInstalledChanged, serverId));
-    },
+    // Once, right away: the picker's reload waits for any recheck the pull or removal started.
+    onInstalledChanged: serverId => send(IPC_CHANNELS.modelsInstalledChanged, serverId),
     keepAwake: on => {
       if (on && blocker === null) blocker = powerSaveBlocker.start('prevent-app-suspension');
       if (!on && blocker !== null) {

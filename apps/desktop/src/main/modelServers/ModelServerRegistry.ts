@@ -114,6 +114,7 @@ export class ModelServerRegistry {
   private timer: ReturnType<typeof setInterval> | undefined;
   private loaded: Promise<void> | null = null;
   private readonly savedListeners = new Set<(id: string) => void>();
+  private readonly checking = new WeakMap<Entry, Promise<void>>();
 
   constructor(private readonly deps: ModelServerRegistryDeps) {}
 
@@ -290,6 +291,8 @@ export class ModelServerRegistry {
     const lists = await Promise.all(
       [...this.entries.values()].map(async entry => {
         const server = { id: entry.record.id, name: entry.record.name };
+        // A check already running (say, after a pull) decides whether the server is back.
+        await this.checking.get(entry);
         // A picker refresh retries a server that was down, without hammering one that keeps failing.
         if (entry.health.state !== 'online' && entry.health.state !== 'unknown' && this.stale(entry)) {
           await this.checkEntry(entry);
@@ -383,6 +386,9 @@ export class ModelServerRegistry {
     } catch (raw) {
       if (signal?.aborted) throw raw;
       const err = this.unwrapFailure(raw, entry);
+      // A stalled pull says nothing about chat, so the server's health is left as it was.
+      if (err instanceof PullIdleTimeoutError)
+        throw new ServerUnreachableError(entry.record.name, describeFailure(err), { cause: err });
       const health = failureHealth(err, entry.record.name);
       if (!health) throw raw;
       entry.health = health;
@@ -434,7 +440,16 @@ export class ModelServerRegistry {
     }
   }
 
-  private async checkEntry(entry: Entry): Promise<void> {
+  /** One check per server at a time; callers during a check share its result. */
+  private checkEntry(entry: Entry): Promise<void> {
+    const running = this.checking.get(entry);
+    if (running) return running;
+    const done = this.probeEntry(entry).finally(() => this.checking.delete(entry));
+    this.checking.set(entry, done);
+    return done;
+  }
+
+  private async probeEntry(entry: Entry): Promise<void> {
     entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
     if (this.deps.store.credentialMissing(entry.record)) {
       this.setHealth(entry, {
@@ -664,7 +679,6 @@ function failureHealth(err: unknown, label: string): ModelServerHealth | null {
   const connection =
     err instanceof TypeError ||
     (err instanceof Error && err.name === 'TimeoutError') ||
-    err instanceof PullIdleTimeoutError ||
     (err instanceof Error && err.cause instanceof TypeError) ||
     DROP_CODES.has(errorCode(err) ?? '') ||
     (err instanceof Error && /ended (the reply )?before|stream ended/i.test(err.message));
