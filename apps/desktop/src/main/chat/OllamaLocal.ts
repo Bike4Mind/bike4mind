@@ -808,7 +808,7 @@ let sizingGeneration = 0;
 const failedLoads = new Set<string>();
 /** The num_ctx each model last answered at, which a failed larger load falls back to. */
 const loadedByModel = new Map<string, number>();
-/** These three are keyed by `modelKey`, so two servers with the same model name keep apart. */
+/** These three are keyed by `key()`, so two servers with the same model name keep apart. */
 const tagFacts = new Map<string, { sizeBytes?: number; digest?: string }>();
 /** The last /api/show answer per model, kept so a slow daemon does not drop the model or its tools. */
 const knownInspections = new Map<string, Inspection>();

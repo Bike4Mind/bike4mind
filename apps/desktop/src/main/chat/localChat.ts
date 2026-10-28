@@ -1,7 +1,7 @@
 import type { CompletionRequest } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
-/** What ChatService needs from a device-side model runtime; OllamaLocal and ServerChat implement it. */
+/** What ChatService needs from a device-side model runtime; OllamaLocal, OpenAICompatibleChat and LocalModels implement it. */
 export interface LocalChat {
   stream(
     request: CompletionRequest,
