@@ -24,8 +24,9 @@ fi
 # `nextRouteForContract` (the contract adapter, server/middlewares/defineNextRoute.ts)
 # is auth-enforced: it builds on baseApi and applies the contract's scopes. A handler
 # routed through it is authenticated exactly like a baseApi() handler, so it satisfies
-# this check without a direct baseApi import.
-violators=$(grep -rLE "baseApi|nextRouteForContract" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='premium-*' | sort)
+# this check without a direct baseApi import. `adminApi` (server/middlewares/adminApi.ts)
+# is likewise baseApi plus a per-method admin-permission guard.
+violators=$(grep -rLE "baseApi|adminApi|nextRouteForContract" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='premium-*' | sort)
 
 allowed=$(grep -v '^#' "$ALLOWLIST" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort)
 
