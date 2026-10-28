@@ -19,6 +19,7 @@ const {
   mockDescription,
   mockSystemPrompt,
   mockEnhance,
+  rateLimitBuckets,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindUser: vi.fn(),
@@ -28,6 +29,7 @@ const {
   mockDescription: vi.fn(),
   mockSystemPrompt: vi.fn(),
   mockEnhance: vi.fn(),
+  rateLimitBuckets: [] as string[],
 }));
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
@@ -38,7 +40,10 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
-  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  rateLimit: (options: { bucket: string }) => {
+    rateLimitBuckets.push(options.bucket);
+    return (_req: unknown, _res: unknown, next: () => void) => next();
+  },
 }));
 
 vi.mock('@bike4mind/services', async orig => {
@@ -191,6 +196,24 @@ describe.each(ROUTES)('POST /api/v1/agents/{id}/$name', ({ name, handler, core, 
     const res = await fire(handler, name, body);
     expect(res._getStatusCode()).toBe(400);
     expect(res._getJSONData().error).toBe('The assistant is disabled');
+  });
+});
+
+describe('authoring assistants - shared limits', () => {
+  it('all four routes draw on one per-user rate limit bucket', () => {
+    expect(rateLimitBuckets).toHaveLength(4);
+    expect(new Set(rateLimitBuckets).size).toBe(1);
+  });
+
+  it.each([
+    ['field_name over 100 characters', { field_name: 'q'.repeat(101), current_value: 'x' }],
+    ['current_value over 2000 characters', { field_name: 'quirk', current_value: 'x'.repeat(2001) }],
+    ['agent_name over 200 characters', { field_name: 'quirk', current_value: 'x', agent_name: 'a'.repeat(201) }],
+  ])('enhance-field rejects %s with a 422 before any model call', async (_label, body) => {
+    withScopes([ApiKeyScope.WRITE_AGENTS]);
+    const res = await fire(enhanceField, 'enhance-field', body);
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockEnhance).not.toHaveBeenCalled();
   });
 });
 
