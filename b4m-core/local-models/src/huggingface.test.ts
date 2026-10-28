@@ -10,7 +10,16 @@ import {
   RuntimeHttpError,
   RuntimeProtocolError,
 } from './errors';
-import { HuggingFaceHub, MAX_VERIFY_TAGS, ggufQuantLabel, hubResolveUrl, type HubModelDetail } from './huggingface';
+import {
+  HuggingFaceHub,
+  MAX_VERIFY_TAGS,
+  ggufQuantLabel,
+  hubResolveUrl,
+  ollamaModelKey,
+  ollamaPullRef,
+  ollamaRefAliases,
+  type HubModelDetail,
+} from './huggingface';
 import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
 import {
   gatedInfo,
@@ -530,6 +539,30 @@ describe('HuggingFaceHub Ollama refs', () => {
     expect(await hub.verifyOllamaRef(pinned, f16)).toBe(`hf.co/${llama}:Instruct-F16`);
     const changed = { ...f16, files: [{ ...f16.files[0]!, sha256: Q4_OID }] };
     expect(await hub.verifyOllamaRef(pinned, changed)).toBeNull();
+  });
+
+  it('verifies a gated or private repo to its huggingface.co name and a public one to hf.co', async () => {
+    const server = await serve({
+      ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
+      [`GET /v2/${llama}/manifests/BF16`]: manifest(BF16_OID),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const detail = await hub.getModel(llama);
+    const bf16 = detail.builds.find(build => build.quant === 'BF16')!;
+    expect(await hub.verifyOllamaRef({ ...detail, ollamaNeedsSshKey: false }, bf16)).toBe(`hf.co/${llama}:BF16`);
+    expect(await hub.verifyOllamaRef({ ...detail, ollamaNeedsSshKey: true }, bf16)).toBe(
+      `huggingface.co/${llama}:BF16`
+    );
+  });
+
+  it('treats hf.co and huggingface.co names of one repo as the same installed model', () => {
+    expect(ollamaPullRef('hf.co/a/b:Q4', true)).toBe('huggingface.co/a/b:Q4');
+    expect(ollamaPullRef('hf.co/a/b:Q4', false)).toBe('hf.co/a/b:Q4');
+    expect(ollamaModelKey('huggingface.co/A/b:Q4')).toBe(ollamaModelKey('hf.co/a/B:q4'));
+    expect(ollamaModelKey('qwen2.5:0.5b')).toBe('qwen2.5:0.5b');
+    expect(ollamaRefAliases('hf.co/A/b:Q4')).toEqual(['hf.co/a/b:q4', 'huggingface.co/a/b:q4']);
+    expect(ollamaRefAliases('huggingface.co/A/b:Q4')).toEqual(['hf.co/a/b:q4', 'huggingface.co/a/b:q4']);
+    expect(ollamaRefAliases('qwen2.5:0.5b')).toEqual(['qwen2.5:0.5b']);
   });
 
   it('skips the request for builds no tag can pull and maps registry access errors', async () => {

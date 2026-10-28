@@ -111,7 +111,14 @@ export function HuggingFaceToken({
   onChanged: (status: HfTokenStatus) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   if (!status) return null;
+
+  const remove = async () => {
+    const result = await window.b4m.models.clearHfToken();
+    setRemoveError(result.ok ? null : result.error.message);
+    if (result.ok) onChanged(result.status);
+  };
 
   const label = !status.set
     ? 'Hugging Face token: not set. Gated and private repos need one.'
@@ -130,6 +137,11 @@ export function HuggingFaceToken({
       <Typography level="body-xs" textColor="text.tertiary" sx={{ flex: 1 }} data-testid="models-hf-token-status">
         {label}
       </Typography>
+      {removeError && (
+        <Typography level="body-xs" color="danger" data-testid="models-hf-token-remove-error">
+          {removeError}
+        </Typography>
+      )}
       <Button
         size="sm"
         variant="plain"
@@ -144,7 +156,7 @@ export function HuggingFaceToken({
           size="sm"
           variant="plain"
           color="neutral"
-          onClick={() => void window.b4m.models.clearHfToken().then(onChanged)}
+          onClick={() => void remove()}
           data-testid="models-hf-token-remove-btn"
         >
           Remove

@@ -88,6 +88,8 @@ export interface HubBuildView {
   sizeBytes: number;
   /** The name Ollama would list it under, as planned from the file list: `hf.co/...`, or `huggingface.co/...` when gated or private. */
   ollamaRef: string | null;
+  /** Lower-case names an installed copy of this build may be listed under: the repo can be pulled as hf.co or huggingface.co. */
+  installedNames: string[];
   /** Why the build cannot be pulled; null when it can be offered (the registry check still runs first). */
   blockedReason: string | null;
 }

@@ -13,6 +13,7 @@ import {
   detectRuntimes,
   isAbliteratedModel,
   isHubRepoId,
+  ollamaModelKey,
   type DetectedRuntime,
   type HubGgufBuild,
   type HubModelDetail,
@@ -322,7 +323,7 @@ export async function listInstalled(
   return models.map(model => ({
     ...model,
     loaded: loadedNames.has(model.name),
-    default: model.name === defaultModel,
+    default: !!defaultModel && sameModelName(model.name, defaultModel),
   }));
 }
 
@@ -333,13 +334,28 @@ export function normalizeModelName(name: string): string {
     : `${withoutLibrary}:latest`;
 }
 
+/** Whether two names are one model, counting hf.co and huggingface.co as the same Hugging Face repo. */
+export function sameModelName(a: string, b: string): boolean {
+  return ollamaModelKey(normalizeModelName(a)) === ollamaModelKey(normalizeModelName(b));
+}
+
+export function findInstalledModel<T extends { name: string }>(models: T[], name: string): T | undefined {
+  const wanted = name.replace(/^library\//i, '');
+  return (
+    models.find(model => model.name === name || model.name === wanted) ??
+    models.find(model => model.name === `${wanted}:latest`) ??
+    models.find(model => sameModelName(model.name, name))
+  );
+}
+
 export function requireRemovable(target: RuntimeTarget): void {
   if (!target.runtime.capabilities.canRemove) throw new Error(`${runtimeLabel(target)} cannot remove models.`);
 }
 
 export async function removeInstalled(target: RuntimeTarget, name: string, signal: AbortSignal): Promise<void> {
   try {
-    await abortable(target.runtime.remove(name), signal);
+    const installed = findInstalledModel(await abortable(target.runtime.list(), signal), name);
+    await abortable(target.runtime.remove(installed?.name ?? name), signal);
   } catch (error) {
     if (error instanceof ModelNotFoundError)
       throw new Error(`No model named ${clean(name)} on ${runtimeLabel(target)}.`);

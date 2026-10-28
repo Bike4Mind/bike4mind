@@ -5,6 +5,7 @@ import {
   LocalRuntimeError,
   ModelNotFoundError,
   RuntimeConnectionError,
+  ollamaPullRef,
   type HubGgufBuild,
   type HubModelDetail,
   type HubSearchPage,
@@ -14,6 +15,7 @@ import {
 } from '@bike4mind/local-models';
 import { pullKey, type ModelPull } from '@shared/models';
 import { describe, expect, it, vi } from 'vitest';
+import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import { ModelHubService, type HubTokenPort, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -107,8 +109,8 @@ function harness(
     endpoint: 'https://huggingface.co',
     search: vi.fn(async (): Promise<HubSearchPage> => ({ models: [], nextCursor: null })),
     getModel: vi.fn(async (_repo: string) => options.detail ?? detail()),
-    verifyOllamaRef: vi.fn(async (): Promise<string | null> =>
-      options.verified === undefined ? `hf.co/${REPO}:Q4_K_M` : options.verified
+    verifyOllamaRef: vi.fn(async (found: Pick<HubModelDetail, 'ollamaNeedsSshKey'>): Promise<string | null> =>
+      options.verified === undefined ? ollamaPullRef(`hf.co/${REPO}:Q4_K_M`, found.ollamaNeedsSshKey) : options.verified
     ),
     checkToken: vi.fn(async () => true),
   } satisfies ModelHubPort;
@@ -571,9 +573,23 @@ describe('ModelHubService Hugging Face token', () => {
     await service.search({ query: 'qwen' });
     expect(createHub).toHaveBeenCalledWith(TOKEN);
 
-    expect(await service.clearToken()).toEqual({ set: false, persisted: true });
+    expect(await service.clearToken()).toEqual({ ok: true, status: { set: false, persisted: true } });
     expect(tokens.clear).toHaveBeenCalledTimes(1);
     expect(createHub).toHaveBeenLastCalledWith(null);
+  });
+
+  it('keeps showing the token as set, and reports the failure, when removing it fails', async () => {
+    const { service, createHub, tokens } = harness({ token: TOKEN });
+    expect(await service.tokenStatus()).toEqual({ set: true, persisted: true });
+    tokens.clear.mockRejectedValueOnce(new Error(`EACCES writing ${TOKEN}`));
+
+    const result = await service.clearToken();
+    expect(result).toEqual({ ok: false, error: expect.objectContaining({ kind: 'failed' }) });
+    expect(JSON.stringify(result)).not.toContain(TOKEN);
+    expect(await service.tokenStatus()).toEqual({ set: true, persisted: true });
+    expect(createHub).not.toHaveBeenCalledWith(null);
+
+    expect(await service.clearToken()).toEqual({ ok: true, status: { set: false, persisted: true } });
   });
 
   it('says a refusal with a token is about the token', async () => {
@@ -726,5 +742,47 @@ describe('ModelHubService Hugging Face token', () => {
     expect(JSON.stringify(runtime.pull.mock.calls)).not.toContain(TOKEN);
     expect(JSON.stringify(runtime.health.mock.calls)).not.toContain(TOKEN);
     expect(JSON.stringify(results)).not.toContain(TOKEN);
+  });
+});
+
+describe('removing the token with the real store', () => {
+  const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
+  const cipher = {
+    isEncryptionAvailable: () => true,
+    encryptString: (plain: string) => Buffer.from(`enc:${Buffer.from(plain).toString('hex')}`),
+    decryptString: (blob: Buffer) => Buffer.from(blob.toString().slice(4), 'hex').toString(),
+  };
+
+  it('does not return the token on the next launch when the file write fails', async () => {
+    let contents: string | null = null;
+    let failWrites = false;
+    const file = {
+      read: async () => contents,
+      write: async (next: string) => {
+        if (failWrites) throw new Error('EACCES');
+        contents = next;
+      },
+    };
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const hub = harness().hub;
+    const launch = () =>
+      new ModelHubService({
+        runtime: harness().runtime,
+        createHub: () => hub,
+        tokens: new HuggingFaceTokenStore(cipher, file, logger),
+        onPullsChanged: () => undefined,
+        onInstalledChanged: () => undefined,
+      });
+
+    const first = launch();
+    expect((await first.setToken(TOKEN)).ok).toBe(true);
+    failWrites = true;
+    expect(await first.clearToken()).toMatchObject({ ok: false });
+    expect(await first.tokenStatus()).toEqual({ set: true, persisted: true });
+
+    failWrites = false;
+    expect(await launch().tokenStatus()).toEqual({ set: true, persisted: true });
+    expect(await first.clearToken()).toMatchObject({ ok: true, status: { set: false } });
+    expect(await launch().tokenStatus()).toEqual({ set: false, persisted: true });
   });
 });

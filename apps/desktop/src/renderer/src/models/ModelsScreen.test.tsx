@@ -67,6 +67,7 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
         quant: 'Q4_K_M',
         sizeBytes: 491_400_032,
         ollamaRef: `hf.co/${REPO}:Q4_K_M`,
+        installedNames: [`hf.co/${REPO}:q4_k_m`.toLowerCase(), `huggingface.co/${REPO}:q4_k_m`.toLowerCase()],
         blockedReason: null,
       },
     ],
@@ -118,7 +119,7 @@ beforeEach(() => {
   });
   calls.clearHfToken.mockImplementation(async () => {
     bridge.token = { ...bridge.token, set: false };
-    return bridge.token;
+    return { ok: true, status: bridge.token };
   });
   (window as unknown as { b4m: unknown }).b4m = {
     shell: { openExternal: vi.fn() },
@@ -351,6 +352,31 @@ describe('ModelsScreen installed', () => {
 });
 
 describe('ModelsScreen explore', () => {
+  it.each([`hf.co/${REPO}:Q4_K_M`, `huggingface.co/${REPO}:Q4_K_M`])(
+    'shows a build installed as %s as installed',
+    async name => {
+      bridge.installed = {
+        ok: true,
+        models: [
+          {
+            name,
+            sizeBytes: 397_000_000,
+            quantization: 'Q4_K_M',
+            family: 'qwen2',
+            parameterSize: '494M',
+            modifiedAt: null,
+            capabilities,
+            loaded: false,
+          },
+        ],
+      };
+      await mount();
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      expect(q('models-build-installed-chip')).not.toBeNull();
+    }
+  );
+
   it('hides abliterated results until the toggle is on, then labels them', async () => {
     bridge.search = {
       ok: true,
@@ -647,6 +673,19 @@ describe('ModelsScreen explore', () => {
     expect(calls.clearHfToken).toHaveBeenCalledTimes(1);
     expect(q('models-hf-token')?.dataset.state).toBe('unset');
     expect(calls.search.mock.calls.length).toBe(searches + 2);
+  });
+
+  it('keeps the token shown as set and says so when removing it fails', async () => {
+    bridge.token = { set: true, persisted: true };
+    calls.clearHfToken.mockResolvedValueOnce({
+      ok: false,
+      error: { kind: 'failed', message: 'Could not remove the token. Try again.', retryAfterMs: null },
+    });
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-remove-btn'));
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+    expect(q('models-hf-token-remove-error')?.textContent).toBe('Could not remove the token. Try again.');
   });
 
   it('says a token lasts only until quit without a keychain', async () => {

@@ -26,6 +26,16 @@ function disk(initial: string | null = null) {
 const logger = () => ({ debug: vi.fn(), warn: vi.fn() });
 
 describe('HuggingFaceTokenStore', () => {
+  it('keeps the token when removing it fails to write', async () => {
+    const file = disk();
+    const store = new HuggingFaceTokenStore(cipher(), file, logger());
+    await store.set(TOKEN);
+    file.write.mockRejectedValueOnce(new Error('EACCES'));
+    await expect(store.clear()).rejects.toThrow('EACCES');
+    expect(await store.get()).toBe(TOKEN);
+    expect(await new HuggingFaceTokenStore(cipher(), file, logger()).get()).toBe(TOKEN);
+  });
+
   it('keeps the token encrypted on disk and reads it back in a new run', async () => {
     const file = disk();
     await new HuggingFaceTokenStore(cipher(), file, logger()).set(TOKEN);

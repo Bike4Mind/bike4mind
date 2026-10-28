@@ -580,7 +580,7 @@ export interface DesktopApi {
     getHfToken(): Promise<HfTokenStatus>;
     /** Saves the token once Hugging Face accepts it. */
     setHfToken(token: string): Promise<HfTokenResult>;
-    clearHfToken(): Promise<HfTokenStatus>;
+    clearHfToken(): Promise<HfTokenResult>;
     onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
     onInstalledChanged(listener: () => void): () => void;
   };

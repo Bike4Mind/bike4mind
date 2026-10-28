@@ -27,7 +27,7 @@ import {
   hubAccessMessage,
   licenseFor,
   listInstalled,
-  normalizeModelName,
+  findInstalledModel,
   pickBuild,
   planPull,
   rankSearchHits,
@@ -37,6 +37,7 @@ import {
   requireUnchangedManifest,
   resolveRuntimeTarget,
   runtimeLabel,
+  sameModelName,
   shortDigest,
   type HubClient,
   type LicenseInfo,
@@ -387,7 +388,7 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
   }
   await removeInstalled(target, name, deps.signal);
   deps.log(`Removed ${clean(name)}.`);
-  if (deps.config.defaultModel && normalizeModelName(deps.config.defaultModel) === normalizeModelName(name)) {
+  if (deps.config.defaultModel && sameModelName(deps.config.defaultModel, name)) {
     deps.log('It was your default model; pick another with: b4m models use <name>');
   }
   return 0;
@@ -400,10 +401,7 @@ export async function useModel(name: string, deps: ModelsDeps): Promise<number> 
   if (runtime.kind !== 'ollama')
     throw new Error(`The CLI chats with local models through Ollama; ${runtimeLabel(target)} is not Ollama.`);
   const models = await abortable(runtime.list(), deps.signal);
-  const wanted = name.replace(/^library\//i, '');
-  const model =
-    models.find(entry => entry.name === name || entry.name === wanted) ??
-    models.find(entry => entry.name === `${wanted}:latest`);
+  const model = findInstalledModel(models, name);
   if (!model) throw new Error(`No model named ${clean(name)} on ${runtimeLabel(target)}. See: b4m models ls`);
   await deps.config.save({
     defaultModel: model.name,

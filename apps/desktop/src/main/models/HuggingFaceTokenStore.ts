@@ -41,8 +41,8 @@ export class HuggingFaceTokenStore {
 
   async clear(): Promise<void> {
     await (this.#ready ??= this.#load());
-    this.#token = null;
     await this.file.write(JSON.stringify({ version: 1 } satisfies TokenDocument));
+    this.#token = null;
   }
 
   async #load(): Promise<void> {

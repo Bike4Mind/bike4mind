@@ -341,7 +341,7 @@ function ModelDetail({
               repo={model.id}
               build={build}
               pull={pulls.find(entry => entry.key === pullKey(model.id, build.id))}
-              installed={!!build.ollamaRef && installedNames.has(build.ollamaRef.toLowerCase())}
+              installed={build.installedNames.some(name => installedNames.has(name))}
               runtimeReady={runtimeReady}
               onPull={() => setConfirming(build)}
             />

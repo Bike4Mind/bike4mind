@@ -3,7 +3,6 @@ import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
   isAbliteratedModel,
-  type InstalledModel,
   type PullOptions,
 } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -24,7 +23,7 @@ import {
   hiddenAbliteratedMessage,
   hubAccessMessage,
   listInstalled,
-  normalizeModelName,
+  findInstalledModel,
   planPull,
   rankSearchHits,
   removeInstalled,
@@ -33,6 +32,7 @@ import {
   requireUnchangedManifest,
   resolveRuntimeTarget,
   runtimeLabel,
+  sameModelName,
   shortDigest,
   type HubClient,
   type ModelSourceDeps,
@@ -217,14 +217,6 @@ function pullProgress(extra: Extra): PullOptions['onProgress'] {
   };
 }
 
-function findInstalled(models: InstalledModel[], name: string): InstalledModel | undefined {
-  const wanted = name.replace(/^library\//i, '');
-  return (
-    models.find(model => model.name === name || model.name === wanted) ??
-    models.find(model => model.name === `${wanted}:latest`)
-  );
-}
-
 export function localModelToolsDeps(configStore: ConfigStore | undefined): ModelToolsDeps {
   let hub: HubClient | undefined;
   return {
@@ -398,7 +390,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
       run(async () => {
         const target: RuntimeTarget = await abortable(deps.resolveRuntime(), extra.signal);
         requireRemovable(target);
-        const model = findInstalled(await abortable(target.runtime.list(), extra.signal), args.name);
+        const model = findInstalledModel(await abortable(target.runtime.list(), extra.signal), args.name);
         if (!model)
           return errorResult(`No model named ${clean(args.name)} on ${runtimeLabel(target)}. See models_list.`);
         const summary = {
@@ -441,7 +433,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
 
         await removeInstalled(target, model.name, extra.signal);
         const defaultModel = await deps.defaultModel();
-        const wasDefault = !!defaultModel && normalizeModelName(defaultModel) === normalizeModelName(model.name);
+        const wasDefault = !!defaultModel && sameModelName(defaultModel, model.name);
         return toResult({ status: 'removed', removed: true, ...summary, wasDefault });
       })
   );

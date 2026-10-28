@@ -6,6 +6,8 @@ import {
   RuntimeConnectionError,
   RuntimeHttpError,
   isAbliteratedModel,
+  ollamaPullRef,
+  ollamaRefAliases,
   type HubGgufBuild,
   type HubModelDetail,
   type HubModelSummary,
@@ -53,7 +55,7 @@ export interface ModelHubPort {
   search(options: HubSearchOptions): Promise<HubSearchPage>;
   getModel(repo: string, options?: { signal?: AbortSignal }): Promise<HubModelDetail>;
   verifyOllamaRef(
-    detail: Pick<HubModelDetail, 'id' | 'builds'>,
+    detail: Pick<HubModelDetail, 'id' | 'builds' | 'ollamaNeedsSshKey'>,
     build: HubGgufBuild,
     options?: { signal?: AbortSignal }
   ): Promise<string | null>;
@@ -196,14 +198,6 @@ function blockedReason(detail: HubModelDetail, build: HubGgufBuild, tokenSent: b
   return null;
 }
 
-/**
- * The name Ollama pulls a gated or private repo by. Ollama refuses to sign a pull whose auth realm (huggingface.co)
- * is not the host it asked (hf.co redirects there), so these are pulled by their huggingface.co name instead.
- */
-export function signedPullRef(ref: string): string {
-  return ref.replace(/^hf\.co\//, 'huggingface.co/');
-}
-
 function hubAccess(detail: HubModelDetail, tokenSent: boolean): HubAccess {
   if (!tokenSent) return 'no-token';
   if (detail.canDownload === null) return 'unknown';
@@ -227,7 +221,8 @@ function toView(endpoint: string, detail: HubModelDetail, tokenSent: boolean): H
     id: build.id,
     quant: build.quant,
     sizeBytes: build.sizeBytes,
-    ollamaRef: build.ollamaRef && detail.ollamaNeedsSshKey ? signedPullRef(build.ollamaRef) : build.ollamaRef,
+    ollamaRef: build.ollamaRef && ollamaPullRef(build.ollamaRef, detail.ollamaNeedsSshKey),
+    installedNames: build.ollamaRef ? ollamaRefAliases(build.ollamaRef) : [],
     blockedReason: blockedReason(detail, build, tokenSent),
   }));
   const url = licenseUrl(endpoint, detail);
@@ -313,10 +308,15 @@ export class ModelHubService {
     return { ok: true, status: await this.tokenStatus() };
   }
 
-  async clearToken(): Promise<HfTokenStatus> {
+  /** The session only forgets the token once the stored one is gone, so a failed removal still shows it as set. */
+  async clearToken(): Promise<HfTokenResult> {
+    try {
+      await this.#deps.tokens.clear();
+    } catch {
+      return { ok: false, error: hubError('failed', 'Could not remove the token. Try again.') };
+    }
     this.#session = Promise.resolve({ hub: this.#deps.createHub(null), token: false });
-    await this.#deps.tokens.clear().catch(() => undefined);
-    return this.tokenStatus();
+    return { ok: true, status: await this.tokenStatus() };
   }
 
   async status(): Promise<ModelRuntimeStatus> {
@@ -424,7 +424,6 @@ export class ModelHubService {
         return this.#fail(key, entry, hubError('runtime-unavailable', 'Ollama is not running. Start it, then retry.'));
       // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
       ref = await hub.verifyOllamaRef(detail, build, { signal: controller.signal });
-      if (ref && detail.ollamaNeedsSshKey) ref = signedPullRef(ref);
     } catch (error) {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       return this.#fail(key, entry, toModelHubError(error, token));
