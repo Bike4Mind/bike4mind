@@ -10,9 +10,19 @@ const makeSubscription = (overrides: Partial<Stripe.Subscription> = {}): Stripe.
     currency: 'usd',
     customer: 'cus_123',
     cancel_at_period_end: false,
+    cancel_at: null,
     trial_end: null,
     items: {
-      data: [{ price: { id: 'price_123', unit_amount: 2000, currency: 'usd', recurring: { interval: 'month' } } }],
+      data: [
+        {
+          price: {
+            id: 'price_123',
+            unit_amount: 2000,
+            currency: 'usd',
+            recurring: { interval: 'month', interval_count: 1 },
+          },
+        },
+      ],
     },
     ...overrides,
   }) as unknown as Stripe.Subscription;
@@ -23,7 +33,9 @@ describe('stripeMirrorFields', () => {
       unitAmount: 2000,
       currency: 'usd',
       interval: 'month',
+      intervalCount: 1,
       cancelAtPeriodEnd: false,
+      cancelAt: null,
       trialEndsAt: null,
       stripeCustomerId: 'cus_123',
       lastSyncedAt: SYNCED_AT,
@@ -39,6 +51,11 @@ describe('stripeMirrorFields', () => {
     expect(mirror.cancelAtPeriodEnd).toBe(true);
   });
 
+  it('carries a cancel scheduled on a custom date, which leaves cancel_at_period_end false', () => {
+    const mirror = stripeMirrorFields(makeSubscription({ cancel_at: 1798761600 }), SYNCED_AT);
+    expect(mirror).toMatchObject({ cancelAtPeriodEnd: false, cancelAt: new Date('2027-01-01T00:00:00Z') });
+  });
+
   it('reads the id from an expanded customer', () => {
     const mirror = stripeMirrorFields(
       makeSubscription({ customer: { id: 'cus_expanded' } as Stripe.Customer }),
@@ -50,13 +67,23 @@ describe('stripeMirrorFields', () => {
   it('stores a null amount for a price with no flat unit amount', () => {
     const subscription = makeSubscription({
       items: {
-        data: [{ price: { id: 'price_tiered', unit_amount: null, currency: 'eur', recurring: { interval: 'year' } } }],
+        data: [
+          {
+            price: {
+              id: 'price_tiered',
+              unit_amount: null,
+              currency: 'eur',
+              recurring: { interval: 'month', interval_count: 3 },
+            },
+          },
+        ],
       } as unknown as Stripe.ApiList<Stripe.SubscriptionItem>,
     });
     expect(stripeMirrorFields(subscription, SYNCED_AT)).toMatchObject({
       unitAmount: null,
       currency: 'eur',
-      interval: 'year',
+      interval: 'month',
+      intervalCount: 3,
     });
   });
 
@@ -69,6 +96,7 @@ describe('stripeMirrorFields', () => {
       unitAmount: null,
       currency: 'gbp',
       interval: null,
+      intervalCount: null,
     });
   });
 });

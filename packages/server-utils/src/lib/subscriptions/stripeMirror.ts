@@ -4,7 +4,15 @@ import type { ISubscription } from './types';
 export type SubscriptionStripeMirror = Required<
   Pick<
     ISubscription,
-    'unitAmount' | 'currency' | 'interval' | 'cancelAtPeriodEnd' | 'trialEndsAt' | 'stripeCustomerId' | 'lastSyncedAt'
+    | 'unitAmount'
+    | 'currency'
+    | 'interval'
+    | 'intervalCount'
+    | 'cancelAtPeriodEnd'
+    | 'cancelAt'
+    | 'trialEndsAt'
+    | 'stripeCustomerId'
+    | 'lastSyncedAt'
   >
 >;
 
@@ -15,25 +23,30 @@ export type SubscriptionStripeMirror = Required<
  */
 export type StripeSubscriptionMirrorSource = Pick<
   Stripe.Subscription,
-  'currency' | 'cancel_at_period_end' | 'trial_end'
+  'currency' | 'cancel_at_period_end' | 'cancel_at' | 'trial_end'
 > & {
   customer: string | { id: string };
   items: {
     data: ReadonlyArray<{
       price: Pick<Stripe.Price, 'unit_amount' | 'currency'> & {
-        recurring: Pick<Stripe.Price.Recurring, 'interval'> | null;
+        recurring: Pick<Stripe.Price.Recurring, 'interval' | 'interval_count'> | null;
       };
     }>;
   };
 };
 
+const fromUnix = (seconds: number | null): Date | null => (seconds ? new Date(seconds * 1000) : null);
+
 /**
- * The Subscription mirror fields projected from a Stripe subscription. Every path that writes a
- * Stripe-managed row spreads this in, so list rows, counts and MRR read from Mongo alone (see
- * docs/admin-subscriptions-spec.md section 6.1). The write paths: the create and admin-grant flip
- * in apps/workers/src/lib/userSubscriptions/serverUtils.ts, the customer.subscription.updated
- * worker, the customer.subscription.deleted branch of pages/api/stripe/webhook.ts, and the
- * backfill in packages/scripts.
+ * The Subscription mirror fields projected from a Stripe subscription. Every path that syncs a row
+ * from a Stripe subscription object spreads this in, so list rows, counts and MRR read from Mongo
+ * alone (see docs/admin-subscriptions-spec.md section 6.1). Those paths: the create and admin-grant
+ * flip in apps/workers/src/lib/userSubscriptions/serverUtils.ts, the customer.subscription.updated
+ * worker, the customer.subscription.deleted branch of pages/api/stripe/webhook.ts, and the backfill
+ * in packages/scripts. Writers holding no subscription object (markPastDue, setSeats) leave the
+ * mirror alone; the customer.subscription.updated that follows them re-syncs it.
+ *
+ * `syncedAt` defaults to now; pass the time of the Stripe read when the write may land later.
  */
 export const stripeMirrorFields = (
   subscription: StripeSubscriptionMirrorSource,
@@ -45,8 +58,10 @@ export const stripeMirrorFields = (
     unitAmount: price?.unit_amount ?? null,
     currency: price?.currency ?? subscription.currency,
     interval: price?.recurring?.interval ?? null,
+    intervalCount: price?.recurring?.interval_count ?? null,
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
-    trialEndsAt: subscription.trial_end ? new Date(subscription.trial_end * 1000) : null,
+    cancelAt: fromUnix(subscription.cancel_at),
+    trialEndsAt: fromUnix(subscription.trial_end),
     stripeCustomerId: typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id,
     lastSyncedAt: syncedAt,
   };

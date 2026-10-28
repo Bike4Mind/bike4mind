@@ -97,12 +97,18 @@ const buildSubscription = (): Stripe.Subscription =>
     customer: 'cus_test',
     currency: 'usd',
     cancel_at_period_end: false,
+    cancel_at: null,
     trial_end: null,
     items: {
       data: [
         {
           quantity: 4,
-          price: { id: 'price_org', unit_amount: 1500, currency: 'usd', recurring: { interval: 'month' } },
+          price: {
+            id: 'price_org',
+            unit_amount: 1500,
+            currency: 'usd',
+            recurring: { interval: 'month', interval_count: 1 },
+          },
           current_period_start: 1700000000,
           current_period_end: 1702592000,
         },
@@ -115,7 +121,9 @@ const orgMirror = {
   unitAmount: 1500,
   currency: 'usd',
   interval: 'month',
+  intervalCount: 1,
   cancelAtPeriodEnd: false,
+  cancelAt: null,
   trialEndsAt: null,
   stripeCustomerId: 'cus_test',
   lastSyncedAt: expect.any(Date),
@@ -624,11 +632,17 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
       customer: 'cus_user',
       currency: 'usd',
       cancel_at_period_end: false,
+      cancel_at: null,
       trial_end: 1700604800,
       items: {
         data: [
           {
-            price: { id: priceId, unit_amount: 2000, currency: 'usd', recurring: { interval: 'year' } },
+            price: {
+              id: priceId,
+              unit_amount: 2000,
+              currency: 'usd',
+              recurring: { interval: 'year', interval_count: 1 },
+            },
             current_period_start: 1700000000,
             current_period_end: 1702592000,
           },
@@ -754,7 +768,9 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
         unitAmount: 2000,
         currency: 'usd',
         interval: 'year',
+        intervalCount: 1,
         cancelAtPeriodEnd: false,
+        cancelAt: null,
         trialEndsAt: new Date(1700604800 * 1000),
         stripeCustomerId: 'cus_user',
         lastSyncedAt: expect.any(Date),

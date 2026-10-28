@@ -314,13 +314,19 @@ describe('customerSubscriptionUpdated — stage guard', () => {
   it('mirrors price, currency, interval, cancel state, trial end and customer onto the row', async () => {
     (stripe.subscriptions.retrieve as any).mockResolvedValue({
       ...buildUserSub({ cancelAtPeriodEnd: true }),
+      cancel_at: 1702592000,
       currency: 'usd',
       trial_end: 1700604800,
       items: {
         data: [
           {
             ...buildUserSub().items.data[0],
-            price: { id: 'price_pro', unit_amount: 2000, currency: 'usd', recurring: { interval: 'month' } },
+            price: {
+              id: 'price_pro',
+              unit_amount: 2000,
+              currency: 'usd',
+              recurring: { interval: 'month', interval_count: 1 },
+            },
           },
         ],
       },
@@ -335,7 +341,9 @@ describe('customerSubscriptionUpdated — stage guard', () => {
         unitAmount: 2000,
         currency: 'usd',
         interval: 'month',
+        intervalCount: 1,
         cancelAtPeriodEnd: true,
+        cancelAt: new Date(1702592000 * 1000),
         trialEndsAt: new Date(1700604800 * 1000),
         stripeCustomerId: 'cus_u',
         lastSyncedAt: expect.any(Date),

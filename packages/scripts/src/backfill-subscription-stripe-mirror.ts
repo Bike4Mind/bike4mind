@@ -18,7 +18,7 @@ import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
 import Stripe from 'stripe';
 import { Config } from '../utils/config';
-import { backfillSubscriptionStripeMirror } from './backfillSubscriptionStripeMirror';
+import { backfillSubscriptionStripeMirror, retrieveFromStripe } from './backfillSubscriptionStripeMirror';
 
 async function main() {
   // Strict: an unknown or malformed flag fails instead of running as something else.
@@ -38,16 +38,7 @@ async function main() {
   const result = await backfillSubscriptionStripeMirror({
     dryRun,
     resync: values.resync,
-    retrieve: async subscriptionId => {
-      try {
-        return await stripe.subscriptions.retrieve(subscriptionId);
-      } catch (error) {
-        if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
-          return null;
-        }
-        throw error;
-      }
-    },
+    retrieve: retrieveFromStripe(stripe),
   });
   if (dryRun) console.log('Dry run only. Re-run with --execute to apply.');
   process.exit(result.failed > 0 ? 1 : 0);

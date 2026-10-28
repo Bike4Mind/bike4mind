@@ -184,8 +184,20 @@ const mirrorPayload = {
   customer: 'cus_1',
   currency: 'usd',
   cancel_at_period_end: false,
+  cancel_at: null,
   trial_end: null,
-  items: { data: [{ price: { id: 'price_1', unit_amount: 2000, currency: 'usd', recurring: { interval: 'month' } } }] },
+  items: {
+    data: [
+      {
+        price: {
+          id: 'price_1',
+          unit_amount: 2000,
+          currency: 'usd',
+          recurring: { interval: 'month', interval_count: 1 },
+        },
+      },
+    ],
+  },
 };
 
 describe('customer.subscription.deleted', () => {
@@ -236,7 +248,9 @@ describe('customer.subscription.deleted', () => {
       unitAmount: 2000,
       currency: 'usd',
       interval: 'month',
+      intervalCount: 1,
       cancelAtPeriodEnd: false,
+      cancelAt: null,
       trialEndsAt: null,
       stripeCustomerId: 'cus_1',
       lastSyncedAt: expect.any(Date),

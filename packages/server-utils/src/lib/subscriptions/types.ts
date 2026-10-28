@@ -164,17 +164,28 @@ export interface ISubscription {
   /** When the owner was emailed that dunning cancelled the subscription; the once-only claim. */
   nonPaymentCancelNotifiedAt?: Date;
   /**
-   * Mirror of the Stripe subscription, written by every Stripe write path through
-   * `stripeMirrorFields` (./stripeMirror.ts). Absent on admin grants and on rows not yet
-   * synced or backfilled. `unitAmount` is per unit in minor units; null when the price
-   * has no flat unit amount (tiered or decimal pricing).
+   * Mirror of the Stripe subscription, written through `stripeMirrorFields` (./stripeMirror.ts)
+   * by every path that syncs from a Stripe subscription object. Absent on admin grants and on
+   * rows not yet synced or backfilled. `unitAmount` is per unit in minor units, before discounts;
+   * null when the price has no flat unit amount (tiered or decimal pricing).
    */
   unitAmount?: number | null;
   currency?: string;
   interval?: Stripe.Price.Recurring.Interval | null;
+  /** Billed every `intervalCount` intervals (3 with `month` is quarterly). */
+  intervalCount?: number | null;
   cancelAtPeriodEnd?: boolean;
+  /**
+   * When a scheduled cancel takes effect. Set for a period-end cancel and for one on a custom
+   * date (which leaves `cancelAtPeriodEnd` false), so this is the "will end" signal.
+   */
+  cancelAt?: Date | null;
   trialEndsAt?: Date | null;
   stripeCustomerId?: string;
+  /**
+   * When the mirror was last written from a Stripe read, not when Stripe's state was current:
+   * a redelivered deleted event carries an older payload.
+   */
   lastSyncedAt?: Date;
 }
 

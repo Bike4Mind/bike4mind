@@ -3,9 +3,26 @@ import {
   stripeMirrorFields,
   type StripeSubscriptionMirrorSource,
 } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
+import Stripe from 'stripe';
 
 /** Reads one subscription from Stripe; null when Stripe no longer has it. Must never write. */
 export type RetrieveStripeSubscription = (subscriptionId: string) => Promise<StripeSubscriptionMirrorSource | null>;
+
+type StripeSubscriptionReader = {
+  subscriptions: { retrieve: (subscriptionId: string) => Promise<StripeSubscriptionMirrorSource> };
+};
+
+/** `subscriptions.retrieve`, with Stripe's "no such subscription" mapped to null. */
+export const retrieveFromStripe =
+  (stripe: StripeSubscriptionReader): RetrieveStripeSubscription =>
+  async subscriptionId => {
+    try {
+      return await stripe.subscriptions.retrieve(subscriptionId);
+    } catch (error) {
+      if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') return null;
+      throw error;
+    }
+  };
 
 export interface BackfillSubscriptionStripeMirrorOptions {
   dryRun: boolean;
@@ -18,6 +35,8 @@ export interface BackfillSubscriptionStripeMirrorOptions {
 export interface BackfillSubscriptionStripeMirrorResult {
   scanned: number;
   updated: number;
+  /** Rows a webhook re-synced between this run's Stripe read and its write; left as the webhook wrote them. */
+  skippedNewer: number;
   missingInStripe: number;
   failed: number;
 }
@@ -26,7 +45,9 @@ export interface BackfillSubscriptionStripeMirrorResult {
  * Writes the Stripe mirror fields (stripeMirrorFields) onto Stripe-managed Subscription rows, one
  * Stripe read per row. Stripe is only read; Mongo is the only thing written. By default only rows
  * without `lastSyncedAt` are touched, so a re-run picks up where a failed one stopped and is
- * otherwise a no-op. A row whose Stripe read fails is counted and skipped, never guessed at.
+ * otherwise a no-op. A row whose Stripe read fails is counted and skipped, never guessed at. The
+write is guarded on `lastSyncedAt`, so a webhook sync landing after this run's read is never
+overwritten with the older state.
  */
 export async function backfillSubscriptionStripeMirror(
   options: BackfillSubscriptionStripeMirrorOptions
@@ -39,7 +60,13 @@ export async function backfillSubscriptionStripeMirror(
   // updatedAt on every row, which is not a change to the subscription.
   const subscriptions = db.collection('subscriptions');
   const filter = resync ? { source: 'stripe' } : { source: 'stripe', lastSyncedAt: { $exists: false } };
-  const result: BackfillSubscriptionStripeMirrorResult = { scanned: 0, updated: 0, missingInStripe: 0, failed: 0 };
+  const result: BackfillSubscriptionStripeMirrorResult = {
+    scanned: 0,
+    updated: 0,
+    skippedNewer: 0,
+    missingInStripe: 0,
+    failed: 0,
+  };
 
   for await (const row of subscriptions.find(filter, { projection: { subscriptionId: 1 } })) {
     result.scanned += 1;
@@ -51,14 +78,26 @@ export async function backfillSubscriptionStripeMirror(
     }
 
     try {
+      const readAt = new Date();
       const subscription = await retrieve(subscriptionId);
       if (!subscription) {
         log(`[backfill-subscription-stripe-mirror] ${subscriptionId} not found in Stripe, skipping`);
         result.missingInStripe += 1;
         continue;
       }
-      if (!dryRun) await subscriptions.updateOne({ _id: row._id }, { $set: stripeMirrorFields(subscription) });
-      result.updated += 1;
+      if (dryRun) {
+        result.updated += 1;
+        continue;
+      }
+      const notSyncedSinceRead = resync
+        ? { $or: [{ lastSyncedAt: { $exists: false } }, { lastSyncedAt: { $lt: readAt } }] }
+        : { lastSyncedAt: { $exists: false } };
+      const { matchedCount } = await subscriptions.updateOne(
+        { _id: row._id, ...notSyncedSinceRead },
+        { $set: stripeMirrorFields(subscription, readAt) }
+      );
+      if (matchedCount) result.updated += 1;
+      else result.skippedNewer += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(`[backfill-subscription-stripe-mirror] ${subscriptionId} failed: ${message}`);
@@ -68,7 +107,7 @@ export async function backfillSubscriptionStripeMirror(
 
   log(
     `[backfill-subscription-stripe-mirror] scanned ${result.scanned}, ${dryRun ? 'would update' : 'updated'} ` +
-      `${result.updated}, missing in Stripe ${result.missingInStripe}, failed ${result.failed}`
+      `${result.updated}, skipped as newer ${result.skippedNewer}, missing in Stripe ${result.missingInStripe}, failed ${result.failed}`
   );
   return result;
 }
