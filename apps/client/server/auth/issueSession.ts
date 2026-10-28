@@ -33,6 +33,7 @@ export async function issueSessionForRequest(
     createdVia: AuthSessionCreatedVia;
     tokenVersion: number;
     impersonatedBy?: string | null;
+    impersonationExpiresAt?: Date;
     clientId?: string | null;
     device?: IAuthSessionDevice;
   }
@@ -43,6 +44,7 @@ export async function issueSessionForRequest(
       createdVia: params.createdVia,
       tokenVersion: params.tokenVersion,
       impersonatedBy: params.impersonatedBy,
+      impersonationExpiresAt: params.impersonationExpiresAt,
       clientId: params.clientId,
       device: params.device ?? buildSessionDevice(req),
     },

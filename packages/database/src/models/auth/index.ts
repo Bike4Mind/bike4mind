@@ -4,6 +4,7 @@ export * from './ApiKeyUsageLogModel';
 export * from './AuthEventModel';
 export * from './AuthFailLogModel';
 export * from './AuthSessionModel';
+export * from './SupportAccessModel';
 export * from './BlockedIPModel';
 export * from './CcBridgeDeviceModel';
 export * from './CcBridgePairingTokenModel';
