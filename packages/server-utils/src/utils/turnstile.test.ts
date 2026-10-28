@@ -139,6 +139,12 @@ describe('verifyTurnstile with a Cloudflare test secret', () => {
     });
   });
 
+  it('keeps the strict checks when allowTestSecret is omitted', async () => {
+    const { allowTestSecret: _omitted, ...strict } = testBase;
+    const fetchImpl = respond({ success: true, action: 'test', hostname: 'localhost' });
+    expect(await verifyTurnstile({ ...strict, fetchImpl })).toMatchObject({ errorCodes: ['action-mismatch'] });
+  });
+
   it('keeps the action and hostname checks for a real secret even when test secrets are allowed', async () => {
     const real = { ...base, token: 'tok', allowTestSecret: true };
     expect(await verifyTurnstile({ ...real, fetchImpl: respond({ success: true }) })).toMatchObject({

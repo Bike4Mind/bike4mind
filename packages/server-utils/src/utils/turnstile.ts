@@ -37,7 +37,8 @@ export function isTurnstileSecretConfigured(secret: string | undefined): secret 
 
 /**
  * Cloudflare's published test secrets (always pass, always fail, token already spent). They are
- * public, so a deployment configured with one accepts anyone: local development only.
+ * public, so they are honored only off production (see `allowTestSecret`); on production they keep
+ * the strict checks and every token is rejected.
  * See https://developers.cloudflare.com/turnstile/troubleshooting/testing/
  */
 export const TURNSTILE_TEST_SECRETS: ReadonlySet<string> = new Set([
