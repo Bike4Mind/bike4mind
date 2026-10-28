@@ -288,6 +288,72 @@ describe('HuggingFaceHub cache', () => {
   });
 });
 
+describe('HuggingFaceHub rate limit backoff', () => {
+  const limited = (retryAfter: string) => () =>
+    new Response('{"error":"Too many requests"}', { status: 429, headers: { 'retry-after': retryAfter } });
+  const ok = () => new Response(JSON.stringify(searchPage), { headers: { 'content-type': 'application/json' } });
+  const hubWith = (responses: (() => Response)[], options: { maxRateLimitWaitMs?: number } = {}) => {
+    const fetch = vi.fn(async () => (responses.shift() ?? ok)());
+    return { fetch, hub: new HuggingFaceHub({ fetch, ...options }) };
+  };
+
+  it.each([
+    ['seconds', () => '2'],
+    ['an HTTP date', () => new Date(Date.now() + 2000).toUTCString()],
+  ])('retries a 429 after Retry-After given as %s, then succeeds', async (_name, header) => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00.000Z') });
+    const { fetch, hub } = hubWith([limited(header())]);
+    const pending = hub.search();
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await pending).models.length).toBeGreaterThan(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('backs off exponentially when the 429 names no wait', async () => {
+    vi.useFakeTimers();
+    const none = () => new Response('', { status: 429 });
+    const { fetch, hub } = hubWith([none, none]);
+    const pending = hub.search();
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('surfaces HubRateLimitError once the total wait would pass the cap', async () => {
+    vi.useFakeTimers();
+    const { fetch, hub } = hubWith([limited('1'), limited('1'), limited('1')], { maxRateLimitWaitMs: 2500 });
+    const error = caught(hub.search());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await error).toBeInstanceOf(HubRateLimitError);
+    expect(await error).toMatchObject({ status: 429, retryAfterMs: 1000 });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not wait at all when Retry-After is longer than the cap', async () => {
+    const { fetch, hub } = hubWith([limited('30')]);
+    expect(await caught(hub.search())).toMatchObject({ name: 'HubRateLimitError', retryAfterMs: 30_000 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops waiting when the caller aborts, without another request', async () => {
+    vi.useFakeTimers();
+    const { fetch, hub } = hubWith([limited('3')]);
+    const controller = new AbortController();
+    const error = caught(hub.search({ signal: controller.signal }));
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+    expect(await error).toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('HuggingFaceHub.getModel', () => {
   it('pins the commit and lists each quant with its size, sha256, resolve URL and Ollama ref', async () => {
     const server = await serve(repoRoutes('Qwen/Qwen2.5-0.5B-Instruct-GGUF', qwenSha, qwenInfo, qwenTree));
@@ -868,7 +934,7 @@ describe('HuggingFaceHub errors', () => {
       [infoPath]: withHeaders({ error: 'slow down' }, { ratelimit: '"api";r=0;t=53' }, 429),
       'GET /api/models/a/c/revision/main': json({ error: 'slow down' }, 429),
     });
-    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, maxRateLimitWaitMs: 0 });
     const search = await caught(hub.search());
     expect(search).toBeInstanceOf(HubRateLimitError);
     expect(search).toBeInstanceOf(RuntimeHttpError);
