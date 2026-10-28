@@ -112,7 +112,7 @@ describe('useSendOTC challenge gate', () => {
     postMock.mockResolvedValue({ data: undefined });
     const { result } = renderHook(() => useSendOTC(), { wrapper });
     await expect(result.current.mutateAsync({ email: 'x@test.com' })).rejects.toMatchObject({
-      message: expect.stringContaining('verification check'),
+      message: expect.stringContaining('verification check (error 300030)'),
     });
     expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', {
       action: 'otc-send',
@@ -129,7 +129,7 @@ describe('useSendOTC challenge gate', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { result } = renderHook(() => useSendOTC(), { wrapper });
     await expect(result.current.mutateAsync({ email: 'x@test.com' })).rejects.toMatchObject({
-      message: expect.stringContaining('verification check'),
+      message: expect.stringContaining('verification check (unavailable)'),
     });
     expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', {
       action: 'otc-send',

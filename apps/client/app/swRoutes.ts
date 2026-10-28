@@ -14,16 +14,24 @@ export function isApiPath(pathname: string): boolean {
   return pathname === '/api' || pathname.startsWith('/api/');
 }
 
-/**
- * Cloudflare Turnstile loads its script and widget frame from this origin. They must always come live
- * from Cloudflare, so the service worker never answers them: `defaultCache` would otherwise proxy every
- * cross-origin request through NetworkFirst (a cached `api.js` fallback after a 10s timeout), and a
- * worker fetch is checked against the worker script's own CSP rather than the document's. Letting the
- * browser fetch natively keeps the document's CSP authoritative. Prompted by sign-in failures from
- * workers installed before this origin was added to the CSP.
- */
-export const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+/** The only cross-origin hosts the service worker caches; every other cross-origin request bypasses it. */
+export const CACHED_CROSS_ORIGIN_HOSTS: ReadonlySet<string> = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
 
-export function bypassesServiceWorker(url: URL): boolean {
-  return url.origin === TURNSTILE_ORIGIN;
+/**
+ * True when the service worker must leave `request` to the browser: no `respondWith`, so the page's
+ * own CSP and fetch semantics apply instead of the worker's.
+ *
+ * A fetch the worker makes is checked against the CSP of the `/serwist/sw.js` response it was
+ * installed from, not the page's. A worker installed before a CSP change keeps the old policy until
+ * it updates, so routing third-party loads through it (Serwist's `defaultCache` ends in a catch-all
+ * `!sameOrigin` NetworkFirst route) blocks hosts the page itself allows - sign-in broke when such a
+ * worker refused the Turnstile script. That route bought only an hour-long fallback cache (and for
+ * Turnstile, a stale `api.js` after a 10s timeout), so only Google Fonts is still cached.
+ *
+ * Worker entrypoints are bypassed for a different reason, see the fetch listener in `sw.ts`.
+ */
+export function bypassesServiceWorker(request: Pick<Request, 'url' | 'destination'>, origin: string): boolean {
+  if (request.destination === 'worker' || request.destination === 'sharedworker') return true;
+  if (request.url.startsWith(`${origin}/`)) return false;
+  return !CACHED_CROSS_ORIGIN_HOSTS.has(new URL(request.url).hostname);
 }

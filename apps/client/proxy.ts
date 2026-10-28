@@ -222,6 +222,10 @@ export function proxy(request: NextRequest) {
   const socialImageHosts =
     ' https://cdn.bsky.app https://video.bsky.app https://video.cdn.bsky.app https://*.fbcdn.net https://i.ytimg.com';
 
+  // An installed service worker keeps the CSP of the /serwist/sw.js response it was installed from
+  // and only picks up a change here when it updates, which needs new worker bytes: the per-commit
+  // precache revision in app/serwist/[path]/route.ts provides them. Cross-origin requests bypass the
+  // worker (bypassesServiceWorker in app/swRoutes.ts), so third-party hosts answer to this page CSP.
   const cspHeader = `
     default-src 'self';
     script-src ${scriptSrcPolicy}${pyodideHost};

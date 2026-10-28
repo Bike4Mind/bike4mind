@@ -126,8 +126,16 @@ async function solveTurnstileIfRequired(
     return await getTurnstileToken(config.turnstileSiteKey, action);
   } catch (error) {
     reportTurnstileFailure(action, error);
-    throw new Error('Could not complete the verification check. Please refresh and try again.');
+    throw new Error(
+      `Could not complete the verification check (${turnstileFailureCode(error)}). Please refresh and try again.`
+    );
   }
+}
+
+/** Short code for the sign-in toast, so a user's report says which step of the challenge failed. */
+function turnstileFailureCode(error: unknown): string {
+  if (!(error instanceof TurnstileError)) return 'unavailable';
+  return error.errorCode ? `${error.reason} ${error.errorCode}` : error.reason;
 }
 
 /**

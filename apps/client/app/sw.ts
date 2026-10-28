@@ -4,7 +4,7 @@
 import { defaultCache } from '@serwist/turbopack/worker';
 import type { PrecacheEntry, SerwistGlobalConfig } from 'serwist';
 import { Serwist, StaleWhileRevalidate, NetworkOnly } from 'serwist';
-import { bypassesServiceWorker, isApiPath } from './swRoutes';
+import { bypassesServiceWorker, CACHED_CROSS_ORIGIN_HOSTS, isApiPath } from './swRoutes';
 
 // TypeScript declaration for the precache-manifest injection point
 // (`self.__SW_MANIFEST`), replaced with the actual manifest at build time.
@@ -38,7 +38,7 @@ const serwist = new Serwist({
     ...defaultCache,
     // Additional Google Fonts caching
     {
-      matcher: ({ url }) => url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com',
+      matcher: ({ url }) => CACHED_CROSS_ORIGIN_HOSTS.has(url.hostname),
       handler: new StaleWhileRevalidate(),
     },
   ],
@@ -54,7 +54,9 @@ const serwist = new Serwist({
   },
 });
 
-// Let Web Worker / Shared Worker entrypoint requests bypass the service worker.
+// Requests matched by `bypassesServiceWorker` (swRoutes.ts) skip the service worker: cross-origin
+// ones because a worker fetch runs under the worker's own, possibly stale, CSP (see swRoutes.ts),
+// and Web Worker / Shared Worker entrypoints because of their URL fragment:
 //
 // Turbopack (Next 16.2.x) loads module workers via a tiny bootstrap entrypoint chunk
 // and passes the chunk manifest in the worker URL **fragment** (`#params=...`) for
@@ -65,15 +67,13 @@ const serwist = new Serwist({
 // with "Uncaught Error: Missing worker bootstrap config" (breaks the OptiHashi solver race
 // and the pyodide runner in prod, where the SW is active; dev has no SW so it works).
 //
-// Do NOT `respondWith` here - even a NetworkOnly response drops the fragment. Running
-// first and calling `stopImmediatePropagation()` keeps Serwist's fetch handler from
-// responding, so the browser performs its native fetch and the worker location keeps its
-// fragment. Registered BEFORE `serwist.addEventListeners()` so it runs first.
-//
-// The Turnstile origin takes the same exit (see bypassesServiceWorker).
+// Do NOT `respondWith` here - a NetworkOnly route still fetches from the worker under its CSP,
+// and its response drops the fragment. Running first and calling `stopImmediatePropagation()`
+// keeps Serwist's fetch handler from responding, so the browser performs its native fetch under
+// the page's CSP and the worker location keeps its fragment. Registered BEFORE
+// `serwist.addEventListeners()` so it runs first.
 self.addEventListener('fetch', (event: FetchEvent) => {
-  const dest = event.request.destination;
-  if (dest === 'worker' || dest === 'sharedworker' || bypassesServiceWorker(new URL(event.request.url))) {
+  if (bypassesServiceWorker(event.request, self.location.origin)) {
     event.stopImmediatePropagation();
   }
 });

@@ -24,21 +24,43 @@ describe('isApiPath', () => {
 });
 
 describe('bypassesServiceWorker', () => {
-  it('lets the Turnstile script and widget frame bypass the worker', () => {
+  const origin = 'https://app.example.com';
+  const request = (url: string, destination: RequestDestination = '') => ({ url, destination });
+
+  it('leaves Turnstile and other third-party requests to the browser', () => {
     expect(
-      bypassesServiceWorker(new URL('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'))
+      bypassesServiceWorker(
+        request('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit', 'script'),
+        origin
+      )
     ).toBe(true);
     expect(
       bypassesServiceWorker(
-        new URL('https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/abc')
+        request(
+          'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/abc',
+          'iframe'
+        ),
+        origin
       )
     ).toBe(true);
+    expect(bypassesServiceWorker(request('https://js.stripe.com/v3/', 'script'), origin)).toBe(true);
+    expect(bypassesServiceWorker(request('https://tile.openstreetmap.org/1/0/0.png', 'image'), origin)).toBe(true);
+    // A host that only shares the origin as a prefix is still cross-origin
+    expect(bypassesServiceWorker(request('https://app.example.com.evil.test/x.js', 'script'), origin)).toBe(true);
   });
 
-  it('keeps every other request on the normal caching path', () => {
-    expect(bypassesServiceWorker(new URL('https://app.bike4mind.com/login'))).toBe(false);
-    expect(bypassesServiceWorker(new URL('https://app.bike4mind.com/challenges.cloudflare.com'))).toBe(false);
-    expect(bypassesServiceWorker(new URL('https://challenges.cloudflare.com.example.com/x'))).toBe(false);
-    expect(bypassesServiceWorker(new URL('https://fonts.gstatic.com/s/inter.woff2'))).toBe(false);
+  it('keeps same-origin static assets and Google Fonts on the service worker', () => {
+    expect(bypassesServiceWorker(request(`${origin}/_next/static/chunks/main.js`, 'script'), origin)).toBe(false);
+    expect(bypassesServiceWorker(request(`${origin}/`, 'document'), origin)).toBe(false);
+    expect(bypassesServiceWorker(request(`${origin}/challenges.cloudflare.com`, 'document'), origin)).toBe(false);
+    expect(bypassesServiceWorker(request('https://fonts.googleapis.com/css2?family=Inter', 'style'), origin)).toBe(
+      false
+    );
+    expect(bypassesServiceWorker(request('https://fonts.gstatic.com/s/inter/v1/a.woff2', 'font'), origin)).toBe(false);
+  });
+
+  it('leaves same-origin worker entrypoints to the browser', () => {
+    expect(bypassesServiceWorker(request(`${origin}/_next/static/chunks/w.js#params=x`, 'worker'), origin)).toBe(true);
+    expect(bypassesServiceWorker(request(`${origin}/_next/static/chunks/s.js`, 'sharedworker'), origin)).toBe(true);
   });
 });
