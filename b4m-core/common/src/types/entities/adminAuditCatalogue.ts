@@ -64,6 +64,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
   // notice, not info: the same entry carries an admin's change to another user's email, password, tags and ban state.
   'user.profile.updated': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.note.created': { category: 'support', severity: 'info', write: 'strict' },
+  'user.note.edited': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.note.deleted': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.note.restored': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.tags.updated': { category: 'account', severity: 'notice', write: 'strict' },
 
   'org.seats.changed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
