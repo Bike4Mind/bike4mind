@@ -343,8 +343,9 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
             status: 'too-large',
             downloaded: false,
             ...summary,
-            message:
-              'Nothing was downloaded: the fit check rates this model too large for this machine. Tell the user, and suggest a smaller quant or model. Call again with force: true only if the user then asks to download it anyway.',
+            message: fit.gpuUnread
+              ? 'Nothing was downloaded: the fit check rates this model too large from system RAM alone, since the GPU could not be read. Tell the user that; if their GPU can hold it and they ask to download it anyway, call again with force: true.'
+              : 'Nothing was downloaded: the fit check rates this model too large for this machine. Tell the user, and suggest a smaller quant or model. Call again with force: true only if the user then asks to download it anyway.',
           });
         }
 
