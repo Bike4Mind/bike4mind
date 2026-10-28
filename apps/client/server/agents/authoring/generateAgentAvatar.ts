@@ -118,7 +118,8 @@ export async function generateAgentAvatar(
 ): Promise<{ portraitUrl: string; generationPrompt: string }> {
   const userId = user.id;
   // Get operations model for text generation (LLM for prompt generation)
-  const { modelId, llm } = await OperationsModelService.getOperationsModel();
+  const operationsModel = await OperationsModelService.getOperationsModel();
+  const { modelId, llm } = operationsModel;
 
   if (!llm) {
     throw new Error('Failed to initialize text model for prompt generation');
@@ -159,9 +160,8 @@ export async function generateAgentAvatar(
     imageLogger.info(`Using user-selected image model: ${imageModelId}`);
   } else {
     // Fall back to operations model
-    const operationsResult = await OperationsModelService.getOperationsModel();
-    imageModelId = operationsResult.imageModelId;
-    imageModelInfo = operationsResult.imageModelInfo;
+    imageModelId = operationsModel.imageModelId;
+    imageModelInfo = operationsModel.imageModelInfo;
 
     if (!imageModelId || !imageModelInfo) {
       throw new BadRequestError(
