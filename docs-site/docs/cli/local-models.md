@@ -27,7 +27,7 @@ b4m --ollama-host <url>
 On startup you'll see:
 
 ```
-Ollama connected: 2 model(s) added to picker
+Self-hosted Ollama: 2 model(s) added to picker
 ```
 
 Open the model picker (`/model`) to see both B4M cloud models and Ollama models listed together.
