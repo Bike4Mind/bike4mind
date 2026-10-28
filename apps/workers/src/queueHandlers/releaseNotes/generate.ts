@@ -198,6 +198,8 @@ const MAX_CUSTOMER_NOTE_CHARS = 600;
 export interface TriageResult {
   /** Customer-facing note per PR number; PRs judged internal are absent. */
   notes: Map<number, string>;
+  /** PRs the model never classified, treated as internal; surfaced to the reviewer of the note. */
+  omitted: number[];
   usage: TokenUsage;
 }
 
@@ -260,7 +262,7 @@ export async function triageReleaseNotes(
     if (authored) notes.set(pr.number, authored);
     else untriaged.push(pr);
   }
-  if (untriaged.length === 0) return { notes, usage };
+  if (untriaged.length === 0) return { notes, omitted: [], usage };
 
   const entries = await triageBatch(untriaged, complete, usage, logger);
   const missing = notTriaged(untriaged, entries);
@@ -272,16 +274,15 @@ export async function triageReleaseNotes(
       logger?.warn(`[releaseNotes] triage retry for omitted pull requests failed (${reason})`);
     }
   }
-  const dropped = notTriaged(untriaged, entries);
-  if (dropped.length > 0) {
-    const numbers = dropped.map(pr => pr.number).join(', ');
-    logger?.warn(`[releaseNotes] triage omitted pull requests ${numbers}; treating them as internal`);
+  const omitted = notTriaged(untriaged, entries).map(pr => pr.number);
+  if (omitted.length > 0) {
+    logger?.warn(`[releaseNotes] triage omitted pull requests ${omitted.join(', ')}; treating them as internal`);
   }
 
   for (const entry of entries) {
     if (entry.customerFacing && entry.note.trim()) notes.set(entry.number, entry.note.trim());
   }
-  return { notes, usage };
+  return { notes, omitted, usage };
 }
 
 /**

@@ -179,10 +179,11 @@ describe('generateReleaseNotes', () => {
     );
     const logger = { warn: vi.fn() };
 
-    const { notes } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
+    const { notes, omitted } = await triageReleaseNotes([pr(1), pr(2)], complete, { logger });
 
     expect(complete).toHaveBeenCalledTimes(4);
     expect(notes).toEqual(new Map([[1, 'One.']]));
+    expect(omitted).toEqual([2]);
     expect(logger.warn).toHaveBeenCalledWith(
       '[releaseNotes] triage omitted pull requests 2; treating them as internal'
     );
