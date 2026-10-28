@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks.update }));
+vi.mock('./useAdminUserTagsUpdate', () => ({ useAdminUserTagsUpdate: () => mocks.update }));
+vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: ['pilot', 'Developer'] }) }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 vi.mock('../../ProductAccess', () => ({
   default: ({ user, onFieldChange }: ProductAccessStubProps) => (
@@ -61,7 +63,7 @@ describe('access dialogs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.currentUser = { id: 'admin-1' };
-    mocks.update.mockResolvedValue(undefined);
+    mocks.update.mockImplementation(async (input: { tags?: string[] }) => input.tags ?? []);
   });
 
   describe('ChangeRoleDialog', () => {
@@ -165,10 +167,20 @@ describe('access dialogs', () => {
       pickReason('manage-tags-dialog');
       fireEvent.click(confirmButton('manage-tags-dialog'));
 
-      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ tags: ['Developer', 'vip', 'beta', 'pilot'] }));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({
+          before: ['Developer', 'vip'],
+          tags: ['Developer', 'vip', 'beta', 'pilot'],
+        })
+      );
       expect(onClose).toHaveBeenCalled();
       fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
-      await waitFor(() => expect(mocks.update).toHaveBeenLastCalledWith({ tags: ['Developer', 'vip'] }));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenLastCalledWith({
+          before: ['Developer', 'vip', 'beta', 'pilot'],
+          tags: ['Developer', 'vip'],
+        })
+      );
     });
 
     it('adds on Enter and ignores duplicates and managed tags', async () => {
@@ -180,7 +192,9 @@ describe('access dialogs', () => {
       pickReason('manage-tags-dialog');
       fireEvent.click(confirmButton('manage-tags-dialog'));
 
-      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ tags: ['Developer', 'vip', 'fresh'] }));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({ before: ['Developer', 'vip'], tags: ['Developer', 'vip', 'fresh'] })
+      );
     });
 
     it('removes a free-form tag but never offers to remove a managed one', async () => {
@@ -192,7 +206,26 @@ describe('access dialogs', () => {
       pickReason('manage-tags-dialog');
       fireEvent.click(confirmButton('manage-tags-dialog'));
 
-      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ tags: ['Developer'] }));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({ before: ['Developer', 'vip'], tags: ['Developer'] })
+      );
+    });
+    it('deduplicates comma-separated input case-insensitively before saving', async () => {
+      renderTags([]);
+      fireEvent.change(screen.getByTestId('manage-tags-dialog-input'), { target: { value: 'pilot,PILOT,pilot' } });
+      fireEvent.click(screen.getByTestId('manage-tags-dialog-add-btn'));
+      pickReason('manage-tags-dialog');
+      fireEvent.click(confirmButton('manage-tags-dialog'));
+      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ before: [], tags: ['pilot'] }));
+    });
+    it('explains the tag length limit before submitting an invalid replacement', () => {
+      renderTags([]);
+      fireEvent.change(screen.getByTestId('manage-tags-dialog-input'), { target: { value: 'x'.repeat(65) } });
+      fireEvent.click(screen.getByTestId('manage-tags-dialog-add-btn'));
+      pickReason('manage-tags-dialog');
+      expect(confirmButton('manage-tags-dialog')).toBeDisabled();
+      expect(screen.getByTestId('manage-tags-dialog-hint')).toHaveTextContent('1 to 64 characters');
+      expect(mocks.update).not.toHaveBeenCalled();
     });
 
     it('is blocked again when an added tag is removed before saving', () => {
@@ -204,6 +237,41 @@ describe('access dialogs', () => {
       pickReason('manage-tags-dialog');
 
       expect(confirmButton('manage-tags-dialog')).toBeDisabled();
+    });
+
+    it('offers existing custom tags as autocomplete options', () => {
+      renderTags([]);
+      expect(screen.getByTestId('user-tags-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('manage-tags-dialog-input')).toHaveAttribute(
+        'list',
+        screen.getByTestId('user-tags-suggestions').id
+      );
+      expect(screen.getByTestId('user-tags-suggestions').innerHTML).toContain('pilot');
+      expect(screen.getByTestId('user-tags-suggestions').innerHTML).not.toContain('Developer');
+    });
+    it('keeps the original conflict snapshot when the profile refetches during a draft', async () => {
+      const props = { onClose: vi.fn(), user: buildProfile({ tags: ['original'] }) };
+      const view = render(<ManageTagsDialog {...props} />, { wrapper: ProfileTestWrapper });
+      fireEvent.change(screen.getByTestId('manage-tags-dialog-input'), { target: { value: 'draft' } });
+      fireEvent.click(screen.getByTestId('manage-tags-dialog-add-btn'));
+      view.rerender(<ManageTagsDialog {...props} user={buildProfile({ tags: ['concurrent'] })} />);
+      pickReason('manage-tags-dialog');
+      fireEvent.click(confirmButton('manage-tags-dialog'));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({ before: ['original'], tags: ['original', 'draft'] })
+      );
+    });
+    it('uses the persisted normalized snapshot when undoing a tag edit', async () => {
+      mocks.update.mockResolvedValueOnce(['legacy', 'pilot']);
+      renderTags([' legacy ']);
+      fireEvent.change(screen.getByTestId('manage-tags-dialog-input'), { target: { value: 'pilot' } });
+      fireEvent.click(screen.getByTestId('manage-tags-dialog-add-btn'));
+      pickReason('manage-tags-dialog');
+      fireEvent.click(confirmButton('manage-tags-dialog'));
+      fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenLastCalledWith({ before: ['legacy', 'pilot'], tags: [' legacy '] })
+      );
     });
   });
 

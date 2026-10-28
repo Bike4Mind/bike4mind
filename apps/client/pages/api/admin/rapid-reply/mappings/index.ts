@@ -4,9 +4,9 @@ import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, RapidReplyResponseStyleCommon } from '@bike4mind/common';
 import { findRottedRapidModelIds } from '@server/rapidReply/rapidMappingHealth';
 
@@ -28,22 +28,17 @@ async function listRunnableModels(mappings: { rapidModelId: string }[], userId: 
   return getAvailableModels(apiKeys);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const mappings = await rapidReplyMappingRepository.findAll();
     const models = await listRunnableModels(mappings, req.user.id);
 
     return res.json({ mappings, unavailableRapidModelIds: findRottedRapidModelIds(mappings, models) });
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const {
       mainModelId,
       rapidModelId,

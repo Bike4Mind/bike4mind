@@ -3,6 +3,7 @@ import { BadRequestError, UnauthorizedError } from '@bike4mind/common';
 import type { NodeStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireUser } from '@server/middlewares/requireUser';
 import { requireExperimentalFeature } from '@server/middlewares/requireExperimentalFeature';
@@ -16,7 +17,7 @@ import { z } from 'zod';
 
 // Each run dispatches a billable agent execution, so this is deliberately
 // tighter than the graph-editing routes.
-const runRateLimit = rateLimit({ limit: 20, windowMs: 60000 });
+const runRateLimit = rateLimit({ limit: blockedAtZeroTierLimit(20), windowMs: 60000 });
 
 // No `organizationId`: accepting one from the caller would bill an arbitrary
 // org's credit pool, and the membership validation that makes it safe (see

@@ -146,6 +146,7 @@ vi.mock('@server/utils/apiKeyAccessGate', () => ({
   CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
   SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
   isApiKeyAccessAllowed: async () => true,
+  describeApiKeyAccess: async () => ({ mode: 'all', allowed: true, basis: 'open_to_all' }),
   assertApiKeyAccessAllowed: async () => undefined,
   assertCliSessionAllowed: async () => undefined,
 }));

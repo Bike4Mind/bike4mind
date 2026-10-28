@@ -59,12 +59,14 @@ const loadHelpIndex = async (accessToken: string | null): Promise<HelpIndex> => 
  */
 export const useHelpIndex = () => {
   const accessToken = useAccessToken(state => state.accessToken);
+  const impersonating = useAccessToken(state => state.impersonating);
   // Hash the token for a session-unique cache key that busts immediately on login/logout
   // without exposing the JWT in React Query DevTools or telemetry
   const sessionKey = accessToken ? hashForCacheKey(accessToken) : 'anonymous';
 
   return useQuery({
     queryKey: ['help-index', sessionKey],
+    enabled: !impersonating,
     queryFn: () => loadHelpIndex(accessToken),
     staleTime: 5 * 60 * 1000, // 5 minutes - matches server cache
     gcTime: 30 * 60 * 1000, // 30 minutes

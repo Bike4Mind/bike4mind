@@ -9,13 +9,14 @@ import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealth
 import { useUser } from '@client/app/contexts/UserContext';
 import { Box, TabPanel, Tabs } from '@mui/joy';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
-import { lazy, useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '@client/app/contexts/ApiContext';
+import { lazy, useCallback } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
 import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
 import { useGetSession } from '@client/app/hooks/data/sessions';
 import { useAdminChatLayout } from './useAdminChatLayout';
+import { useAdminAssistantSession } from './useAdminAssistantSession';
+import { useAdminAssistantChatContext } from './useAdminAssistantChatContext';
 import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
@@ -121,35 +122,8 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
 
   // Admin Floating Chat (docked-session floating chat pattern)
-  const ADMIN_SESSION_KEY = 'admin-assistant-session-id';
-  const [adminSessionId, setAdminSessionId] = useState<string | null>(null);
-  const adminInitialized = useRef(false);
-
-  useEffect(() => {
-    if (adminInitialized.current || !currentUser?.isAdmin) return;
-    adminInitialized.current = true;
-
-    (async () => {
-      const savedId = localStorage.getItem(ADMIN_SESSION_KEY);
-      if (savedId) {
-        try {
-          await api.get(`/api/sessions/${savedId}`);
-          setAdminSessionId(savedId);
-          return;
-        } catch {
-          localStorage.removeItem(ADMIN_SESSION_KEY);
-        }
-      }
-      try {
-        const { data } = await api.post('/api/sessions/create', { name: 'Admin Assistant' });
-        localStorage.setItem(ADMIN_SESSION_KEY, data.id);
-        setAdminSessionId(data.id);
-      } catch (err) {
-        console.error('Failed to create Admin Assistant session:', err);
-      }
-    })();
-  }, [currentUser?.isAdmin]);
-
+  const adminSessionId = useAdminAssistantSession(!!currentUser?.isAdmin);
+  useAdminAssistantChatContext(activeTab);
   const adminSession = useGetSession(adminSessionId);
 
   // Mount the assistant as the minimized pill so it is on hand without covering the page; restore on unmount

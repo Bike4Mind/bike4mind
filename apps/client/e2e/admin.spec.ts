@@ -68,27 +68,22 @@ test.describe('Admin - User Search & Sort', () => {
     await adminPage.searchUser(searchTerm);
 
     // Verify search results contain a user row with the admin email
-    await expect(adminPage.page.getByTestId('admin-user-card').filter({ hasText: admin.email }).first()).toBeVisible({
-      timeout: TIMEOUTS.ACTION,
-    });
+    await expect(adminPage.getUserRow(admin.email).first()).toBeVisible({ timeout: TIMEOUTS.ACTION });
   });
 
   test('should sort user list', async ({ adminPage }) => {
     await adminPage.gotoAdmin();
     await adminPage.navigateToUsersTab();
 
-    // Sort by name
-    await adminPage.setSortBy('name');
-
-    // Toggle to ascending
-    await adminPage.toggleSortOrder();
-
-    // Verify that the sort controls reflect the new state
-    const sortButton = adminPage.page.getByTestId('admin-sort-order-btn');
-    await expect(sortButton).toBeVisible();
+    // First click sorts by name ascending, the second flips it
+    const header = adminPage.page.getByRole('columnheader', { name: 'User' });
+    await adminPage.sortByColumn('user');
+    await expect(header).toHaveAttribute('aria-sort', 'ascending');
+    await adminPage.sortByColumn('user');
+    await expect(header).toHaveAttribute('aria-sort', 'descending');
 
     // Verify at least one user is displayed after sorting
-    await expect(adminPage.page.locator('[data-testid^="user-name-"]').first()).toBeVisible({
+    await expect(adminPage.page.locator('tr[data-testid^="admin-users-row-"]').first()).toBeVisible({
       timeout: TIMEOUTS.VISIBLE,
     });
   });
@@ -125,7 +120,8 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.saveProfileChanges();
       await adminPage.closeModal();
 
-      // Verify the edit persisted by searching for the new name
+      // Verify the edit persisted by searching for the new name (the edit happened on the profile page)
+      await adminPage.navigateToUsersTab();
       await adminPage.searchUser(EDITED_NAME);
       await adminPage.waitForUserVisible(EDITED_NAME);
     });
@@ -136,7 +132,7 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.searchUser(EDITED_NAME);
       await adminPage.waitForUserVisible(EDITED_NAME);
 
-      await adminPage.clickUserAdminButton(EDITED_NAME);
+      await adminPage.openUserProfile(EDITED_NAME);
       await adminPage.clickDeleteUserButton();
       await adminPage.fillDeleteReason();
       await adminPage.typeDeleteConfirmation();
@@ -144,7 +140,7 @@ test.describe('Admin - User CRUD', () => {
 
       // Verify user no longer appears in search
       await adminPage.searchUser(EDITED_NAME);
-      await expect(adminPage.page.getByTestId(`user-name-${EDITED_NAME}`)).toBeHidden({ timeout: TIMEOUTS.ACTION });
+      await expect(adminPage.getUserRow(EDITED_NAME)).toBeHidden({ timeout: TIMEOUTS.ACTION });
     });
   });
 });

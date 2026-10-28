@@ -183,6 +183,29 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
   }
 
   /**
+   * Per-key request counts over the trailing 24 hours and 7 days, in a single aggregation
+   * bounded by the {userId, keyId, timestamp} index. Keys with no requests in 7 days are absent.
+   */
+  async countRequestsByKeyWindows(
+    userId: string,
+    now: Date
+  ): Promise<Record<string, { last24h: number; last7d: number }>> {
+    const from24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const from7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const rows = await this.model.aggregate<{ _id: string; last24h: number; last7d: number }>([
+      { $match: { userId, timestamp: { $gte: from7d, $lte: now } } },
+      {
+        $group: {
+          _id: '$keyId',
+          last7d: { $sum: 1 },
+          last24h: { $sum: { $cond: [{ $gte: ['$timestamp', from24h] }, 1, 0] } },
+        },
+      },
+    ]);
+    return Object.fromEntries(rows.map(row => [row._id, { last24h: row.last24h, last7d: row.last7d }]));
+  }
+
+  /**
    * Platform-wide endpoint/latency rollup over a trailing window (default 30
    * days; pass `hours` for finer windows). Every row here is API-key-authed
    * traffic, so `source` only ever narrows to api vs cli (the handler decides
