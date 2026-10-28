@@ -8,6 +8,37 @@ interface ExportOptions {
   customTransform?: (data: any) => any;
 }
 
+const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const NEEDS_QUOTING = /[",\r\n]/;
+const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
+
+/** Serialises one value as an RFC 4180 CSV field; string cells that start like a formula are neutralised. */
+export const toCsvCell = (value: unknown, dateFormat = 'YYYY-MM-DD'): string => {
+  if (value === null || value === undefined) return '';
+  if (dayjs.isDayjs(value)) return dayjs(value).format(dateFormat);
+
+  let text: string;
+  if (typeof value === 'string') {
+    text = ISO_DATE_PREFIX.test(value) ? dayjs(value).format(dateFormat) : value;
+    // OWASP CSV-injection guard: spreadsheets evaluate cells starting with these characters.
+    if (FORMULA_PREFIX.test(text)) text = `'${text}`;
+  } else if (typeof value === 'object') {
+    text = JSON.stringify(value);
+  } else {
+    text = String(value);
+  }
+
+  return NEEDS_QUOTING.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+export const toCsv = (rows: Record<string, unknown>[], columns: string[], dateFormat = 'YYYY-MM-DD'): string =>
+  [
+    columns.map(column => toCsvCell(column)),
+    ...rows.map(row => columns.map(column => toCsvCell(row[column], dateFormat))),
+  ]
+    .map(cells => cells.join(','))
+    .join('\n');
+
 export const useExportToCSV = () => {
   const exportToCSV = useCallback((data: any[], options: ExportOptions = {}) => {
     if (!data?.length) return;
@@ -18,27 +49,7 @@ export const useExportToCSV = () => {
 
     const headers = customHeaders || Object.keys(transformedData[0]);
 
-    const csvContent = [
-      headers.join(','),
-      ...transformedData.map(item =>
-        headers
-          .map(header => {
-            const value = item[header];
-            if (value === null || value === undefined) return '';
-            if (dayjs.isDayjs(value) || (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/))) {
-              return dayjs(value).format(dateFormat);
-            }
-            if (typeof value === 'object') {
-              return `"${JSON.stringify(value).replace(/"/g, '""')}"`;
-            }
-            if (typeof value === 'string' && value.includes(',')) {
-              return `"${value.replace(/"/g, '""')}"`;
-            }
-            return value;
-          })
-          .join(',')
-      ),
-    ].join('\n');
+    const csvContent = toCsv(transformedData, headers, dateFormat);
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -48,6 +59,7 @@ export const useExportToCSV = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }, []);
 
   return exportToCSV;
