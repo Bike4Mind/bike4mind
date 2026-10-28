@@ -20,6 +20,24 @@ describe('AnthropicBedrockBackend empty effective messages', () => {
     );
   });
 
+  it('repairs a leading tool_result whose tool_use only appears later', () => {
+    const toolUse = { type: 'tool_use', id: 'toolu_1', name: 'lookup', input: {} };
+    const toolResult = { type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' };
+    const body = JSON.parse(
+      payload([
+        { role: 'user', content: [toolResult] },
+        { role: 'assistant', content: [toolUse] },
+        { role: 'user', content: [toolResult] },
+      ] as IMessage[]).body
+    ) as { messages: IMessage[] };
+
+    expect(body.messages).toEqual([
+      { role: 'user', content: '[Tool results removed during adjacency repair]' },
+      { role: 'assistant', content: [toolUse] },
+      { role: 'user', content: [toolResult] },
+    ]);
+  });
+
   it('continues to preserve a valid non-empty conversation', () => {
     const body = JSON.parse(payload([{ role: 'user', content: 'hello' }]).body) as { messages: IMessage[] };
     expect(body.messages).toEqual([{ role: 'user', content: 'hello' }]);
