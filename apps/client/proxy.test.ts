@@ -87,17 +87,17 @@ describe('proxy CSP header', () => {
     }
   });
 
-  // connect-src too: the service worker's image cache re-fetches tiles, and a worker fetch is
-  // checked against connect-src, so img-src alone leaves the map blank once the SW is active.
-  it.each(['img-src', 'connect-src'])('%s allows the OpenStreetMap tiles the inline location map loads', directive => {
+  // img-src only: the tiles load as <img>, and the service worker no longer re-fetches cross-origin
+  // images under its own connect-src (app/swRoutes.ts).
+  it('allows the OpenStreetMap tiles the inline location map loads as images only', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
-    expect(values).toContain('https://tile.openstreetmap.org');
+    const values = (directive: string) => (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values('img-src')).toContain('https://tile.openstreetmap.org');
+    expect(values('connect-src')).not.toContain('https://tile.openstreetmap.org');
   });
 
-  // Social post thumbnails load straight from each network's image CDN. connect-src as well, for
-  // the same service-worker re-fetch as the map tiles above. video.cdn.bsky.app is where
+  // Social post thumbnails load straight from each network's image CDN. video.cdn.bsky.app is where
   // video.bsky.app redirects every poster frame, and CSP checks each redirect hop.
   const socialImageHosts = [
     'https://cdn.bsky.app',
@@ -107,20 +107,20 @@ describe('proxy CSP header', () => {
     'https://i.ytimg.com',
   ];
 
-  it.each(['img-src', 'connect-src'])('%s allows the social CDN hosts that serve post thumbnails', directive => {
+  it('img-src allows the social CDN hosts that serve post thumbnails', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';
-    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    const values = (csp.match(/img-src ([^;]*)/)?.[1] ?? '').split(/\s+/);
     expect(values).toEqual(expect.arrayContaining(socialImageHosts));
   });
 
-  // These CDNs serve whatever their users upload, so they may load images and be fetched, never
-  // run as script, frame or media.
+  // These CDNs serve whatever their users upload, so they may load images, never be fetched or run
+  // as script, frame or media.
   it('keeps the social CDN hosts out of every other directive', () => {
     const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy') ?? '';
     for (const directive of csp.split(';')) {
       const [name, ...sources] = directive.trim().split(/\s+/);
-      if (name === 'img-src' || name === 'connect-src') continue;
+      if (name === 'img-src') continue;
       for (const host of socialImageHosts) expect(sources, name).not.toContain(host);
     }
   });
@@ -681,13 +681,15 @@ describe("proxy upstream What's New feed origin", () => {
       .find(([directive]) => directive === name)!
       .slice(1);
 
-  it('lets media, posters and the service worker load from the upstream origin', () => {
+  it('lets media and posters load from the upstream origin', () => {
     vi.stubEnv('WHATS_NEW_FEED_URL', 'https://upstream.example.invalid/api/v1/whats-new');
     const csp = policy();
-    for (const name of ['connect-src', 'img-src', 'media-src']) {
+    for (const name of ['img-src', 'media-src']) {
       expect(sourcesOf(csp, name)).toContain('https://upstream.example.invalid');
     }
-    expect(sourcesOf(csp, 'script-src')).not.toContain('https://upstream.example.invalid');
+    for (const name of ['connect-src', 'script-src']) {
+      expect(sourcesOf(csp, name)).not.toContain('https://upstream.example.invalid');
+    }
   });
 
   it('adds nothing for an unset or non-https feed', () => {

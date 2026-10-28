@@ -204,21 +204,18 @@ export function proxy(request: NextRequest) {
   const mirrorOrigin = resolvePyodideMirrorOrigin(process.env.PYODIDE_BASE_URL);
   const pyodideHost = mirrorOrigin ? ` ${mirrorOrigin}` : '';
 
-  // Inline location-map tiles (TILE_URL in app/components/Session/LocationMap.tsx). In both img-src
-  // and connect-src because the service worker's image runtime cache re-fetches <img> loads, and a
-  // fetch from the worker is checked against connect-src.
+  // Inline location-map tiles (TILE_URL in app/components/Session/LocationMap.tsx). img-src only: they
+  // load as <img>, and the service worker leaves cross-origin requests to the browser (app/swRoutes.ts).
   const mapTileHost = ' https://tile.openstreetmap.org';
   const objectStoreOrigin = resolveObjectStoreOrigin(process.env.S3_PRESIGN_ENDPOINT);
   const objectStoreHost = objectStoreOrigin ? ` ${objectStoreOrigin}` : '';
-  // Upstream release notes play their uploaded videos from the upstream's own media route. connect-src
-  // too, for the service worker's re-fetch (see mapTileHost).
+  // Upstream release notes play their uploaded videos from the upstream's own media route (see mapTileHost).
   const whatsNewUpstreamOrigin = resolveWhatsNewUpstreamOrigin(process.env.WHATS_NEW_FEED_URL);
   const whatsNewUpstreamHost = whatsNewUpstreamOrigin ? ` ${whatsNewUpstreamOrigin}` : '';
   // The desktop download page reads its latest release from the GitHub API (app/utils/desktopReleases.ts).
   const desktopReleasesApiHost = ' https://api.github.com';
   // Social post thumbnails. video.bsky.app redirects every poster frame to video.cdn.bsky.app and CSP
-  // checks each redirect hop; Facebook's per-region edge hosts are why fbcdn.net is a wildcard.
-  // connect-src too, for the service worker's re-fetch (see mapTileHost).
+  // checks each redirect hop; Facebook's per-region edge hosts are why fbcdn.net is a wildcard (see mapTileHost).
   const socialImageHosts =
     ' https://cdn.bsky.app https://video.bsky.app https://video.cdn.bsky.app https://*.fbcdn.net https://i.ytimg.com';
 
@@ -232,7 +229,7 @@ export function proxy(request: NextRequest) {
     style-src ${styleSrcPolicy};
     img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost}${socialImageHosts}${objectStoreHost}${whatsNewUpstreamHost};
     font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com data:;
-    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://challenges.cloudflare.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${desktopReleasesApiHost}${mapTileHost}${socialImageHosts}${objectStoreHost}${whatsNewUpstreamHost};
+    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://challenges.cloudflare.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${desktopReleasesApiHost}${objectStoreHost};
     frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
     media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${objectStoreHost}${whatsNewUpstreamHost};
