@@ -535,12 +535,12 @@ describe('ModelsScreen curated', () => {
         gpuName: 'AMD Radeon 8060S Graphics',
         confidence: 'high',
       },
-      'This computer has 62 GiB of RAM, and its GPU (AMD Radeon 8060S Graphics) can use 64 GiB of shared memory.',
+      'This computer has 62 GiB of RAM, and its GPU (AMD Radeon 8060S Graphics) can use 64 GiB of memory.',
     ],
     [
       'a Strix Halo budget that could not be confirmed as a lower bound',
       { memoryKind: 'unified', totalMemoryBytes: 62 * GIB, gpuMemoryBytes: 31 * GIB, gpuName: null, confidence: 'low' },
-      'This computer has 62 GiB of RAM, and its GPU can use at least 31 GiB of shared memory. The exact amount could not be confirmed.',
+      'This computer has 62 GiB of RAM, and its GPU can use at least 31 GiB of memory. The exact amount could not be confirmed.',
     ],
     [
       'unified memory whose GPU budget could not be measured',

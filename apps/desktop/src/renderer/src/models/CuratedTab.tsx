@@ -42,11 +42,13 @@ function machineText(machine: MachineView): string {
   const memory = formatMemory(machine.totalMemoryBytes);
   const gpuName = machine.gpuName ? ` (${machine.gpuName})` : '';
   // Only AMD unified memory reports gpuMemoryBytes, sized from what ROCm can allocate rather than the RAM the OS sees.
+  // The probe does not say whether that is a firmware reserve (Windows, BIOS) or Linux GTT shared with the system, so
+  // the wording must hold for both.
   if (machine.memoryKind === 'unified' && machine.gpuMemoryBytes) {
-    const shared = formatMemory(machine.gpuMemoryBytes);
+    const usable = formatMemory(machine.gpuMemoryBytes);
     return machine.confidence === 'low'
-      ? `This computer has ${memory} of RAM, and its GPU${gpuName} can use at least ${shared} of shared memory. The exact amount could not be confirmed.`
-      : `This computer has ${memory} of RAM, and its GPU${gpuName} can use ${shared} of shared memory.`;
+      ? `This computer has ${memory} of RAM, and its GPU${gpuName} can use at least ${usable} of memory. The exact amount could not be confirmed.`
+      : `This computer has ${memory} of RAM, and its GPU${gpuName} can use ${usable} of memory.`;
   }
   if (machine.memoryKind === 'unified')
     return machine.confidence === 'low'

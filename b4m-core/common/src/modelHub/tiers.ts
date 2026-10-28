@@ -16,7 +16,10 @@ export function hardwareClass(hw: HardwareProfile): HardwareClass {
   // Only AMD unified memory reports gpuMemoryBytes: what ROCm can allocate, which a firmware carve-out keeps outside
   // totalMemoryBytes. A low-confidence figure is already the smaller of the pools ROCm might use.
   if (hw.memoryKind === 'unified')
-    return { memoryKind: 'unified', memoryBytes: hw.gpuMemoryBytes ?? hw.totalMemoryBytes };
+    return {
+      memoryKind: 'unified',
+      memoryBytes: hw.gpuMemoryBytes && hw.gpuMemoryBytes > 0 ? hw.gpuMemoryBytes : hw.totalMemoryBytes,
+    };
   // gpuMemoryBytes sums every GPU, which Ollama splits layers across.
   if (hw.memoryKind === 'discrete' && hw.gpuMemoryBytes)
     return { memoryKind: 'discrete', memoryBytes: hw.gpuMemoryBytes };

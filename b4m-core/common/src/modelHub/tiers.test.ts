@@ -63,4 +63,9 @@ describe('curatedTier', () => {
     expect(hardwareClass(machine('unified', 64))).toEqual({ memoryKind: 'unified', memoryBytes: 64 * GIB });
     expect(hardwareClass(strixHalo(62, 64))).toEqual({ memoryKind: 'unified', memoryBytes: 64 * GIB });
   });
+
+  it('falls back to total memory on unified memory when the GPU budget is 0', () => {
+    expect(hardwareClass(strixHalo(62, 0))).toEqual({ memoryKind: 'unified', memoryBytes: 62 * GIB });
+    expect(curatedTier(UNIFIED_TIERS, strixHalo(62, 0))).toMatchObject({ memoryKind: 'unified', minGiB: 64 });
+  });
 });
