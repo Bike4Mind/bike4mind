@@ -1,10 +1,10 @@
 import React from 'react';
 import { Autocomplete, Button, Input, Option, Select, Stack, Typography } from '@mui/joy';
-import type { CompletionSource } from '@bike4mind/common';
 import {
   EMPTY_LEDGER_FILTER,
   SOURCE_FILTER_OPTIONS,
   hasLedgerFilter,
+  isCompletionSource,
   isLedgerRangeInverted,
   type LedgerFilterState,
 } from './creditLedgerModel';
@@ -18,6 +18,9 @@ type LedgerFilterBarProps = {
 
 // Joy Select shows its placeholder for null but has no null option, so "any source" is the empty string.
 const ANY_SOURCE = '';
+// Native date inputs accept 5- and 6-digit years, which the server's ISO date check rejects.
+const MIN_DAY = '2000-01-01';
+const MAX_DAY = '9999-12-31';
 
 /** Model, source and date-range filters for the ledger; the type filter sits in the row above. */
 export const LedgerFilterBar: React.FC<LedgerFilterBarProps> = ({ value, onChange, modelOptions }) => {
@@ -48,7 +51,7 @@ export const LedgerFilterBar: React.FC<LedgerFilterBarProps> = ({ value, onChang
       <Select
         size="sm"
         value={value.source ?? ANY_SOURCE}
-        onChange={(_, source) => patch({ source: source ? (source as CompletionSource) : null })}
+        onChange={(_, source) => patch({ source: source && isCompletionSource(source) ? source : null })}
         aria-label="Source"
         sx={{ minWidth: 140 }}
         slotProps={{ button: { 'data-testid': 'user-credits-source-filter' } }}
@@ -67,7 +70,12 @@ export const LedgerFilterBar: React.FC<LedgerFilterBarProps> = ({ value, onChang
         onChange={event => patch({ from: event.target.value })}
         error={inverted}
         slotProps={{
-          input: { 'aria-label': 'From (UTC)', max: value.to || undefined, 'data-testid': 'user-credits-from' },
+          input: {
+            'aria-label': 'From (UTC)',
+            min: MIN_DAY,
+            max: value.to || MAX_DAY,
+            'data-testid': 'user-credits-from',
+          },
         }}
       />
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
@@ -80,7 +88,12 @@ export const LedgerFilterBar: React.FC<LedgerFilterBarProps> = ({ value, onChang
         onChange={event => patch({ to: event.target.value })}
         error={inverted}
         slotProps={{
-          input: { 'aria-label': 'To (UTC)', min: value.from || undefined, 'data-testid': 'user-credits-to' },
+          input: {
+            'aria-label': 'To (UTC)',
+            min: value.from || MIN_DAY,
+            max: MAX_DAY,
+            'data-testid': 'user-credits-to',
+          },
         }}
       />
       <Typography level="body-xs" sx={{ color: inverted ? 'admin.status.bad.foreground' : 'admin.inkMuted' }}>

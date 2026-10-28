@@ -61,7 +61,7 @@ const ROWS: AdminLedgerRow[] = [
     balanceAfter: 12450,
     model: 'claude-sonnet-5-5',
     source: 'web',
-    requestId: 'quest-123',
+    questId: 'quest-123',
     description: 'Chat reply',
   },
   {

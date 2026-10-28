@@ -31,13 +31,15 @@ const CSV_HEADER = [
   'Model',
   'Source',
   'API key prefix',
-  'Request id',
   'Input tokens',
   'Output tokens',
   'Description',
   'Reason',
   'Admin',
   'Admin note',
+  // Appended, not inserted, so spreadsheets that read earlier exports by column position still line up.
+  'Request id',
+  'Quest id',
 ];
 
 // A number is not a formula, so numeric cells stay raw (escaping would turn -412 into '-412).
@@ -53,13 +55,14 @@ const toCsvLine = (row: AdminLedgerRow): string =>
     escapeCsvCell(row.model),
     escapeCsvCell(row.source),
     escapeCsvCell(row.apiKeyPrefix),
-    escapeCsvCell(row.requestId),
     numberCell(row.inputTokens),
     numberCell(row.outputTokens),
     escapeCsvCell(row.description),
     escapeCsvCell(row.reason),
     escapeCsvCell(row.actorName ?? row.actorId),
     escapeCsvCell(row.note),
+    escapeCsvCell(row.requestId),
+    escapeCsvCell(row.questId),
   ].join(',');
 
 type ExportRequestQuery = {
@@ -74,8 +77,8 @@ type ExportRequestQuery = {
 /**
  * GET /api/admin/users/[userId]/credit-ledger-export?kind=&model=&source=&from=&to=
  *
- * Streams the user's ledger, narrowed by the same filter as the credit-ledger route, as CSV, newest first, in keyset pages of 500 rows
- * up to ADMIN_LEDGER_EXPORT_MAX_ROWS. Truncation is only known after the last allowed page, when
+ * Streams the user's ledger, narrowed by the same filter as the credit-ledger route, as CSV, newest
+ * first, in keyset pages of 500 rows up to ADMIN_LEDGER_EXPORT_MAX_ROWS. Truncation is only known after the last allowed page, when
  * the headers are long gone, so a truncated export ends with a `# Truncated at N rows` line instead
  * of an `X-Export-Truncated` header. Balance-after follows the same rule as the ledger route.
  */
@@ -141,10 +144,10 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
         if (pageIndex === 0) {
           const day = new Date().toISOString().slice(0, 10);
           res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-          res.setHeader(
-            'Content-Disposition',
-            `attachment; filename="credits-${user.id}-${filter.kind ?? 'all'}-${day}.csv"`
-          );
+          // Only the kind is spelled out; other filters just mark the file so it is not mistaken for a full one.
+          const narrowed = filter.model || filter.source || filter.from || filter.to ? '-filtered' : '';
+          const fileName = `credits-${user.id}-${filter.kind ?? 'all'}${narrowed}-${day}.csv`;
+          res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
           res.write(`${CSV_HEADER.map(escapeCsvCell).join(',')}\n`);
         }
         if (rows.length > 0) res.write(`${rows.map(toCsvLine).join('\n')}\n`);

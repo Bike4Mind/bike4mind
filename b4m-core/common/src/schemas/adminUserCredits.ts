@@ -109,8 +109,10 @@ export const adminLedgerRowSchema = z.object({
   source: z.string().optional(),
   apiKeyId: z.string().optional(),
   apiKeyPrefix: z.string().optional(),
-  /** The API request id on completion API rows, or the chat message (quest) id on chat usage rows. */
+  /** The usage event's request id, stamped on completion API rows. */
   requestId: z.string().optional(),
+  /** The chat message (quest) a web usage row paid for. */
+  questId: z.string().optional(),
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
   description: z.string().optional(),

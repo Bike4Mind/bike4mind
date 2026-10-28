@@ -145,8 +145,8 @@ export async function buildLedgerRows(
       source: asString(record.source),
       apiKeyId,
       apiKeyPrefix: apiKeyId ? lookups.apiKeyPrefixes.get(apiKeyId) : undefined,
-      // Completion API rows stamp the usage event's request id; a chat row's request is its quest.
-      requestId: asString(metadata.requestId) ?? asString(record.questId),
+      requestId: asString(metadata.requestId),
+      questId: asString(record.questId),
       inputTokens: asNumber(record.inputTokens),
       outputTokens: asNumber(record.outputTokens),
       description: asString(record.description),

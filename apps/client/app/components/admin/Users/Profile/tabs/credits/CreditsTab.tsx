@@ -57,10 +57,10 @@ const Muted: React.FC<{ children: React.ReactNode; 'data-testid'?: string }> = (
 const CREDITS_PER_DAY_FORMAT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
 /** One line of monospace text, cut with an ellipsis; the full value stays on hover. */
-const CodeText: React.FC<{ text: string }> = ({ text }) => (
+const CodeText: React.FC<{ text: string; title?: string }> = ({ text, title = text }) => (
   <Box
     component="span"
-    title={text}
+    title={title}
     sx={{
       display: 'block',
       fontFamily: 'code',
@@ -107,8 +107,12 @@ const LEDGER_COLUMNS: readonly DataColumn<AdminLedgerRow>[] = [
   { id: 'source', label: 'Source', render: row => row.source ?? DASH },
   {
     id: 'request',
-    label: 'Request id',
-    render: row => (row.requestId ? <CodeText text={row.requestId} /> : DASH),
+    label: 'Request',
+    render: row => {
+      if (row.requestId) return <CodeText text={row.requestId} title={`API request id: ${row.requestId}`} />;
+      if (row.questId) return <CodeText text={row.questId} title={`Chat message (quest) id: ${row.questId}`} />;
+      return DASH;
+    },
   },
   {
     id: 'change',

@@ -277,7 +277,7 @@ describe('GET /api/admin/users/[userId]/credit-ledger', () => {
     expect(res._getJSONData().rows[0].balanceAfter).toBe(1000);
   });
 
-  it('reports the API request id, falling back to the chat quest id', async () => {
+  it('reports the API request id and the chat quest id as separate fields', async () => {
     h.findLedgerPage.mockResolvedValue([
       doc(3, { type: 'completion_api_usage', credits: -1, metadata: { requestId: 'completion-k1-1' } }),
       doc(2, { type: 'text_generation_usage', credits: -1, questId: 'q-42' }),
@@ -287,10 +287,11 @@ describe('GET /api/admin/users/[userId]/credit-ledger', () => {
     const { res, promise } = run();
     await promise;
 
-    expect(res._getJSONData().rows.map((r: { requestId?: string }) => r.requestId)).toEqual([
-      'completion-k1-1',
-      'q-42',
-      undefined,
+    const rows = res._getJSONData().rows as Array<{ requestId?: string; questId?: string }>;
+    expect(rows.map(r => [r.requestId, r.questId])).toEqual([
+      ['completion-k1-1', undefined],
+      [undefined, 'q-42'],
+      [undefined, undefined],
     ]);
   });
 });

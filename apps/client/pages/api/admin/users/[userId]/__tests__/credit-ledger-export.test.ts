@@ -194,6 +194,7 @@ describe('GET /api/admin/users/[userId]/credit-ledger-export', () => {
     );
     expect(h.sumNewer).not.toHaveBeenCalled();
     expect(lines(res)[1]).toContain(',-1,,');
+    expect(res.getHeader('Content-Disposition')).toMatch(/filename="credits-u1-all-filtered-\d{4}-\d{2}-\d{2}\.csv"/);
   });
 
   it('rejects a start date after the end date before any read', async () => {
@@ -215,14 +216,17 @@ describe('GET /api/admin/users/[userId]/credit-ledger-export', () => {
     expect(second).toContain(',-1,141,');
   });
 
-  it('writes the request id column', async () => {
+  it('appends the request id and quest id columns after the existing ones', async () => {
     h.findLedgerPage.mockResolvedValue([
-      doc(1, { type: 'completion_api_usage', credits: -1, metadata: { requestId: 'completion-k1-1' } }),
+      doc(2, { type: 'completion_api_usage', credits: -1, metadata: { requestId: 'completion-k1-1' } }),
+      doc(1, { type: 'text_generation_usage', credits: -1, questId: 'q-42' }),
     ]);
     const { res, promise } = run();
     await promise;
 
-    expect(lines(res)[0]).toContain('"API key prefix","Request id"');
-    expect(lines(res)[1]).toContain('"completion-k1-1"');
+    const [header, api, chat] = lines(res);
+    expect(header.endsWith('"Admin note","Request id","Quest id"')).toBe(true);
+    expect(api.endsWith(',"completion-k1-1",""')).toBe(true);
+    expect(chat.endsWith(',"","q-42"')).toBe(true);
   });
 });

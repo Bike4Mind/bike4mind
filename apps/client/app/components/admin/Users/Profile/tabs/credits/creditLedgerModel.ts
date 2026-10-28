@@ -103,7 +103,7 @@ export const SOURCE_FILTER_OPTIONS: readonly { value: CompletionSource; label: s
   source => ({ value: source, label: SOURCE_LABELS[source] })
 );
 
-const isCompletionSource = (value: string): value is CompletionSource =>
+export const isCompletionSource = (value: string): value is CompletionSource =>
   (COMPLETION_SOURCES as readonly string[]).includes(value);
 
 /** The bars of one breakdown; past this many, the smallest fold into one "Other" bar. */
