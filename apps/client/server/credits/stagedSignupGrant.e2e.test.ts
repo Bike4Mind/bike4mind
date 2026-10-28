@@ -525,6 +525,18 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(40);
   });
 
+  it('skips signal collection for a disabled policy', async () => {
+    const failingCollector = vi.fn(async () => {
+      throw new Error('lookup timeout');
+    });
+    const user = await createUser();
+    expect(
+      (await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals: failingCollector }))
+        .creditsGranted
+    ).toBe(12);
+    expect(failingCollector).not.toHaveBeenCalled();
+  });
+
   it('rejects unbounded validator entitlements and banned accounts', async () => {
     const user = await createUser();
     await userService.releaseSignupTranche(user.id, adapters);
@@ -538,7 +550,8 @@ describe('staged signup ledger', () => {
     expect((await userService.unlockSignupGrant(user.id, 'activity', adapters)).creditsGranted).toBe(0);
   });
 
-  it('returns the persisted signup stage from a new verified OTC registration', async () => {
+  it('returns the persisted signup stage from a new verified OTC registration and scores it with its collector', async () => {
+    const collectRiskSignals = vi.fn(async () => ({ datacenter: false }));
     const result = await userService.registerViaOTC(
       {
         username: 'synthetic-otc',
@@ -556,13 +569,35 @@ describe('staged signup ledger', () => {
             findBySettingName: async name =>
               name === 'allowOpenRegistration'
                 ? ({ settingName: name, settingValue: 'true' } as never)
-                : adminSettings.findBySettingName(name),
+                : name === 'signupGrantRiskPolicy'
+                  ? ({
+                      settingValue: JSON.stringify({
+                        enabled: true,
+                        version: 'test',
+                        rules: [
+                          {
+                            signal: 'datacenter',
+                            comparison: 'eq',
+                            threshold: 1,
+                            weight: 2,
+                            missing: 'review',
+                            missingWeight: 0,
+                          },
+                        ],
+                        reducedAt: 1,
+                        reviewAt: 3,
+                        reducedFraction: 0.5,
+                      }),
+                    } as never)
+                  : adminSettings.findBySettingName(name),
           },
           registrationInvites: { findByCode: async () => null, update: async () => undefined },
         },
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+        collectRiskSignals,
       }
     );
+    expect(collectRiskSignals).toHaveBeenCalledWith(expect.objectContaining({ email: 'otc@example.test' }));
     expect(result.currentCredits).toBe(12);
     expect(result.emailVerified).toBe(true);
     expect(result.signupGrant?.stage).toBe('signup');

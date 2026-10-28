@@ -68,7 +68,7 @@
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "yauzl": "^3.4.0"
   }
 }

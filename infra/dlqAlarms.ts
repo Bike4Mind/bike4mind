@@ -20,6 +20,7 @@
 
 import { secrets } from './secrets';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
+import { businessMetricAlertsDLQ } from './businessMetricAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -619,6 +620,15 @@ if (isMonitoredStage) {
     displayName: 'Completion Events',
     application: 'Completions',
     queue: completionEventsDeadLetter.queue,
+  });
+}
+
+if (businessMetricAlertsDLQ && dlqAlarmTopic) {
+  createDlqAlarms({
+    label: 'business-metric-alerts',
+    displayName: 'Business Metric Alerts',
+    application: 'Analytics',
+    queue: businessMetricAlertsDLQ,
   });
 }
 
