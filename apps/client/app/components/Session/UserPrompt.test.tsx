@@ -65,3 +65,11 @@ it('still renders text and fenced code', () => {
   expect(screen.getByText('hello world')).toBeInTheDocument();
   expect(screen.getByTestId('highlighted-code')).toHaveTextContent('const a = 1;');
 });
+
+it('draws empty fences as empty code blocks, not the word undefined', () => {
+  const { container } = render(ui('```\n```\n\n```ts\n```'));
+  const blocks = screen.getAllByTestId('highlighted-code');
+  expect(blocks).toHaveLength(2);
+  blocks.forEach(block => expect(block).toBeEmptyDOMElement());
+  expect(container.textContent).not.toContain('undefined');
+});

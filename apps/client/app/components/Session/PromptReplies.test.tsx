@@ -766,3 +766,24 @@ describe('artifact card ids agree with the rows persistence writes', () => {
     expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
   });
 });
+
+describe('empty fences in a reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  it('draws an empty fence and an empty tagged fence as empty code blocks, not the word undefined', () => {
+    const { container } = render(
+      <CssVarsProvider theme={appTheme}>
+        <ReplyCompleteContext.Provider value>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: createCodeComponent() }}>
+            {'```\n```\n\n```ts\n```'}
+          </ReactMarkdown>
+        </ReplyCompleteContext.Provider>
+      </CssVarsProvider>
+    );
+
+    const codes = container.querySelectorAll('pre code');
+    expect(codes).toHaveLength(2);
+    codes.forEach(code => expect(code.textContent).toBe(''));
+    expect(container.textContent).not.toContain('undefined');
+  });
+});
