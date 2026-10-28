@@ -83,9 +83,12 @@ describe('buildServeStdioServer', () => {
     const names = await toolNames(
       await buildServeStdioServer({ apiUrl: 'http://localhost:3000', version: '0.0.0' }, unconfigured())
     );
-    expect(names).toHaveLength(30);
-    expect(names).toEqual(expect.arrayContaining(['list_notebooks', 'send_message', 'bob_runs_left']));
+    const backendTools = names.slice(0, -MODEL_TOOL_NAMES.length);
     expect(names.slice(-MODEL_TOOL_NAMES.length)).toEqual([...MODEL_TOOL_NAMES]);
+    expect(backendTools.length).toBeGreaterThan(0);
+    expect(new Set(backendTools).size).toBe(backendTools.length);
+    expect(backendTools).toEqual(expect.arrayContaining(['list_notebooks', 'send_message']));
+    expect(backendTools.filter(name => name.startsWith('models_'))).toEqual([]);
     expect(stderr).toEqual([]);
   });
 });

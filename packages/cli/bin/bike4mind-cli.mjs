@@ -19,6 +19,7 @@ import { dirname, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { splitEnvFlags } from './envFlags.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -30,34 +31,14 @@ const require = createRequire(import.meta.url);
 const { version: cliVersion } = require('../package.json');
 
 // --- API environment flags (--dev / --prod) ---
-// Intercept these BEFORE yargs parses argv. They're accepted with either a
-// single or double dash (e.g. `b4m -prod` and `b4m --prod` both work), but
-// single-dash multi-char tokens would otherwise be split into clustered short
-// flags by yargs (`-prod` -> `-p -r -o -d`, colliding with -p/--prompt). We pull
-// them out here, record the target, and strip them so yargs sees a clean argv.
-const ENV_FLAG_MAP = {
-  '--dev': 'dev', '-dev': 'dev', '--local': 'dev', '-local': 'dev',
-  '--prod': 'prod', '-prod': 'prod', '--production': 'prod', '-production': 'prod',
-};
-let envTarget = null;
-{
-  const cleaned = [];
-  const args = process.argv.slice(2);
-  const mcpIndex = args.indexOf('mcp');
-  // `mcp serve --local` is serve's own flag (local model tools only), not the --dev alias.
-  const isMcpServe = mcpIndex !== -1 && args[mcpIndex + 1] === 'serve';
-  for (const token of args) {
-    if (isMcpServe && (token === '--local' || token === '-local')) {
-      cleaned.push('--local');
-    } else if (Object.prototype.hasOwnProperty.call(ENV_FLAG_MAP, token)) {
-      envTarget = ENV_FLAG_MAP[token]; // last one wins
-    } else {
-      cleaned.push(token);
-    }
-  }
-  // Rebuild argv without the env tokens so yargs doesn't choke on them.
-  process.argv = [process.argv[0], process.argv[1], ...cleaned];
+// Intercept these BEFORE yargs parses argv (see envFlags.mjs) and strip them so
+// yargs sees a clean argv.
+const { cleaned: cleanedArgs, envTarget, envFlags, mcpServe, serveLocal } = splitEnvFlags(process.argv.slice(2));
+if (serveLocal && envTarget) {
+  process.stderr.write(`Error: mcp serve --local ignores the backend; drop ${envFlags.join(' ')}.\n`);
+  process.exit(1);
 }
+process.argv = [process.argv[0], process.argv[1], ...cleanedArgs];
 
 const argv = await yargs(hideBin(process.argv))
   // --dev / --prod are declared here ONLY so they appear in `--help`. The actual
@@ -513,7 +494,14 @@ if (envTarget) {
       ({ applyEnvironmentFlag } = await import('../dist/commands/envCommand.mjs'));
     }
 
-    await applyEnvironmentFlag(envTarget);
+    // On `mcp serve` stdout is the JSON-RPC stream, so the banner goes to stderr.
+    const log = console.log;
+    if (mcpServe) console.log = console.error;
+    try {
+      await applyEnvironmentFlag(envTarget);
+    } finally {
+      console.log = log;
+    }
   } catch (error) {
     console.error('Failed to switch API environment:', error.message);
     process.exit(1);
