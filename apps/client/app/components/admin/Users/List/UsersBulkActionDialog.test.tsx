@@ -9,6 +9,7 @@ import type {
   AdminUsersBulkPreview,
   AdminUsersBulkResult,
   AdminUsersBulkTarget,
+  AdminUsersBulkUndoResult,
 } from '@client/app/utils/adminUsersBulk';
 
 const apiPost = vi.hoisted(() => vi.fn());
@@ -32,6 +33,7 @@ const preview = (overrides: Partial<AdminUsersBulkPreview> = {}): AdminUsersBulk
   creditsDelta: 900,
   creditsOverCap: false,
   cohortHash: 'c'.repeat(64),
+  emailDomains: null,
   sample: [{ id: 'a'.repeat(24), name: 'Ada', email: 'ada@example.test' }],
   ...overrides,
 });
@@ -44,6 +46,15 @@ const executeResult = (overrides: Partial<AdminUsersBulkResult> = {}): AdminUser
   undoExpiresAt: '',
   partial: false,
   remaining: 0,
+  blockedDomains: [],
+  ...overrides,
+});
+
+const undoResult = (overrides: Partial<AdminUsersBulkUndoResult> = {}): AdminUsersBulkUndoResult => ({
+  restored: 2,
+  failed: [],
+  unblockedDomains: [],
+  stillBlockedDomains: [],
   ...overrides,
 });
 
@@ -85,7 +96,7 @@ describe('UsersBulkActionDialog', () => {
     apiPost.mockImplementation(async (url: string) => {
       if (url.endsWith('/preview')) return { data: preview() };
       if (url.endsWith('/execute')) return { data: executeResult() };
-      return { data: { restored: 2, failed: [] } };
+      return { data: undoResult() };
     });
     const { onClose, onDone } = renderDialog('contain');
 
@@ -118,6 +129,51 @@ describe('UsersBulkActionDialog', () => {
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
     await waitFor(() => expect(callsTo('/api/admin/users/bulk/undo')[0][1]).toEqual({ batchId: 'batch-1' }));
     await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Restored 2 users'));
+  });
+
+  it('sends blockEmailDomains in the preview and the commit once the box is checked, and lists the domains', async () => {
+    const emailDomains = { toBlock: ['acme.com'], alreadyBlocked: ['old.com'], notOwned: ['gmail.com'] };
+    apiPost.mockImplementation(async (url: string, body: { action: { blockEmailDomains?: boolean } }) => {
+      if (url.endsWith('/preview'))
+        return { data: preview({ emailDomains: body.action.blockEmailDomains ? emailDomains : null }) };
+      return { data: executeResult({ blockedDomains: ['acme.com'] }) };
+    });
+    const { onDone } = renderDialog('contain');
+    await screen.findByTestId('admin-users-bulk-dry-run');
+    expect(screen.getByTestId('admin-users-bulk-dry-run')).not.toHaveTextContent('email domain');
+
+    fireEvent.click(screen.getByTestId('admin-users-bulk-block-domains-checkbox'));
+    await waitFor(() => expect(callsTo('/api/admin/users/bulk/preview')).toHaveLength(2));
+    expect(callsTo('/api/admin/users/bulk/preview')[1][1]).toEqual({
+      target: TARGET,
+      action: { type: 'contain', blockEmailDomains: true },
+    });
+    const dryRun = await screen.findByTestId('admin-users-bulk-dry-run');
+    await waitFor(() => expect(dryRun).toHaveTextContent('1 email domain: acme.com'));
+    expect(dryRun).toHaveTextContent('Already blocked: old.com.');
+    expect(dryRun).toHaveTextContent('Public mail domains are never blocked: gmail.com.');
+
+    fireEvent.click(screen.getByTestId('admin-users-bulk-contain-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('admin-users-bulk-contain-confirm-btn'));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(callsTo('/api/admin/users/bulk/execute')[0][1]).toMatchObject({
+      action: { type: 'contain', blockEmailDomains: true },
+    });
+  });
+
+  it('warns when undo could not release a blocked domain', async () => {
+    apiPost.mockImplementation(async (url: string) => {
+      if (url.endsWith('/preview')) return { data: preview() };
+      if (url.endsWith('/execute')) return { data: executeResult({ blockedDomains: ['acme.com'] }) };
+      return { data: undoResult({ stillBlockedDomains: ['acme.com'] }) };
+    });
+    renderDialog('contain');
+    await screen.findByTestId('admin-users-bulk-dry-run');
+    fireEvent.click(screen.getByTestId('admin-users-bulk-contain-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('admin-users-bulk-contain-confirm-btn'));
+    fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+
+    await waitFor(() => expect(toastMock.warning).toHaveBeenCalledWith(expect.stringContaining('acme.com')));
   });
 
   it('defaults Adjust credits to "set to 0" and previews that', async () => {

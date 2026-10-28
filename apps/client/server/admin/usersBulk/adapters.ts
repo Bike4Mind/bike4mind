@@ -15,6 +15,11 @@ import type { Logger } from '@bike4mind/observability';
 import { adminUsersPipeline } from '@server/admin/usersList/listAdminUsers';
 import { LIVE_API_KEY_STATUS } from '@server/admin/usersList/adminUsersQuery';
 import { loadCreditGrantPolicy, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import {
+  addBlockedEmailDomains,
+  readBlockedEmailDomains,
+  removeBlockedEmailDomains,
+} from '@server/admin/blockedEmailDomains';
 import type { ExecuteDeps } from './execute';
 import type { UsersBulkAuditEntry, UsersBulkDb } from './ports';
 import type { BulkUser, PreviewDeps, ResolveDeps } from './resolve';
@@ -101,6 +106,7 @@ export const usersBulkPreviewDeps: PreviewDeps = {
     ]);
     return new Map(rows.map(row => [row._id, row.count]));
   },
+  blockedEmailDomains: readBlockedEmailDomains,
 };
 
 export const usersBulkDb: UsersBulkDb = {
@@ -188,6 +194,12 @@ export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?:
         reason,
         details,
       }),
+    blockEmailDomains: (domains, batchId) =>
+      addBlockedEmailDomains(
+        req,
+        domains,
+        added => `blocked signups from ${added.join(', ')} in bulk contain batch ${batchId}`
+      ),
     endRealtimeConnections: userId =>
       authSessionService.endRealtimeConnections(
         { userId },
@@ -203,6 +215,12 @@ export function usersBulkUndoDeps(req: AuditRequest, logger?: Logger): UndoDeps 
     store: cacheRepository,
     withTransaction: runInTransaction(logger),
     audit: auditFor(req, 'Undo of a bulk action within its undo window'),
+    unblockEmailDomains: (domains, batchId) =>
+      removeBlockedEmailDomains(
+        req,
+        domains,
+        removed => `unblocked signups from ${removed.join(', ')} undoing bulk batch ${batchId}`
+      ),
     logger,
   };
 }

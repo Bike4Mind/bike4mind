@@ -23,6 +23,8 @@ export type UndoDeps = {
   withTransaction: RunInTransaction;
   /** Strict: called inside the user's transaction. */
   audit: (entry: UsersBulkAuditEntry) => Promise<unknown>;
+  /** Removes exactly these domains from blockedEmailDomains in one audited write; returns those removed. */
+  unblockEmailDomains: (domains: string[], batchId: string) => Promise<string[]>;
   logger?: UsersBulkLogger;
   now?: () => Date;
 };
@@ -106,8 +108,8 @@ async function revertUser(snapshot: UserUndoSnapshot, record: UndoRecord, deps: 
  * Reverts a batch within ADMIN_USERS_BULK_UNDO_WINDOW_MS of executing it. Only the admin who ran it
  * may undo it, and the record is taken atomically, so two undos never both run. Refused with 410
  * Gone once the window has passed (or the record is gone), 409 when another undo already took it.
- * Users that fail are written back as a record of their own, same admin and deadline, so a retry
- * can finish them.
+ * Users that fail, and blocked domains that could not be released, are written back as a record of
+ * their own, same admin and deadline, so a retry can finish them.
  */
 export async function undoAdminUsersBulk(
   batchId: string,
@@ -133,23 +135,46 @@ export async function undoAdminUsersBulk(
     }
   });
   const failures = outcomes.flatMap(outcome => (outcome ? [outcome] : []));
-  if (failures.length > 0)
+  const stillBlockedDomains = await unblockDomains(record, deps);
+  if (failures.length > 0 || stillBlockedDomains.length > 0)
     await storeRetryRecord(
       record,
       failures.map(failure => failure.snapshot),
+      stillBlockedDomains,
       deps
     );
+  const stillBlocked = new Set(stillBlockedDomains);
   return {
     restored: record.users.length - failures.length,
     failed: failures.map(failure => ({ userId: failure.snapshot.userId, error: failure.error })),
+    unblockedDomains: (record.blockedDomains ?? []).filter(domain => !stillBlocked.has(domain)),
+    stillBlockedDomains,
   };
 }
 
-async function storeRetryRecord(record: UndoRecord, users: UserUndoSnapshot[], deps: UndoDeps): Promise<void> {
+/** Releases the domains the batch blocked. Returns the ones still blocked because the write failed. */
+async function unblockDomains(record: UndoRecord, deps: UndoDeps): Promise<string[]> {
+  const domains = record.blockedDomains ?? [];
+  if (domains.length === 0) return [];
+  try {
+    await deps.unblockEmailDomains(domains, record.batchId);
+    return [];
+  } catch (error) {
+    deps.logger?.error('Users bulk undo failed to unblock email domains', { batchId: record.batchId, error });
+    return domains;
+  }
+}
+
+async function storeRetryRecord(
+  record: UndoRecord,
+  users: UserUndoSnapshot[],
+  blockedDomains: string[],
+  deps: UndoDeps
+): Promise<void> {
   try {
     await deps.store.createOrUpdate({
       key: undoKey(record.batchId),
-      result: { ...record, users } satisfies UndoRecord,
+      result: { ...record, users, blockedDomains } satisfies UndoRecord,
       expiresAt: new Date(new Date(record.undoExpiresAt).getTime() + UNDO_RECORD_GRACE_MS),
     });
   } catch (error) {

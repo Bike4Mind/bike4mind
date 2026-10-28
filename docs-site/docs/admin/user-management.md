@@ -59,13 +59,14 @@ While rows are selected, a bar under the table offers these actions (on a narrow
 | **Adjust credits** | Sets, adds or removes credits; every change is written to the credit ledger |
 | **Revoke API keys** | Disables every active API key the users own |
 | **Add tag** | Adds a tag to users who do not have it yet |
-| **Contain** | Suspends the users, sets their credits to 0 and revokes their API keys, together for each user |
+| **Contain** | Suspends the users, sets their credits to 0 and revokes their API keys, together for each user. Optionally also blocks new signups from their email domains |
 
 Each action opens a dialog with a dry run: how many users will change, who is excluded (you and other admins are never included), and how many API keys and credits are affected. A reason is required and is recorded in the audit log for every user.
 
 - A batch is limited to 500 users. If more match, narrow the filters first.
+- **Block email domains** (Contain only) adds the users' email domains to the blocked email domains setting before any user is changed. The dry run lists the domains it would block and the ones already blocked. Public mail domains such as gmail.com are never blocked. It needs permission to edit admin settings.
 - If the matching users change between the dry run and the confirm, nothing is applied and the dialog shows the new count to confirm again.
-- After a bulk action, an **Undo** button is shown for 30 seconds. It restores the whole batch. Sessions that were ended stay ended.
+- After a bulk action, an **Undo** button is shown for 30 seconds. It restores the whole batch and unblocks the email domains the batch added (domains that were already blocked stay blocked). Sessions that were ended stay ended.
 
 ### Recent activity
 

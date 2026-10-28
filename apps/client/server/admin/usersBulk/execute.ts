@@ -7,7 +7,9 @@ import {
   type AdminUsersBulkAction,
   type AdminUsersBulkExecuteRequest,
   type AdminUsersBulkResult,
+  blocksEmailDomains,
 } from '@client/app/utils/adminUsersBulk';
+import { emailDomainsOf } from './emailDomains';
 import {
   cohortHashOf,
   creditDeltaFor,
@@ -44,6 +46,11 @@ export type ExecuteDeps = ResolveDeps & {
   audit: (entry: UsersBulkAuditEntry) => Promise<unknown>;
   /** The per-batch summary entry; best-effort, as every user is already committed when it is written. */
   auditSummary: (entry: { summary: string; details: Record<string, unknown> }) => Promise<unknown>;
+  /**
+   * Adds owned domains to blockedEmailDomains in one audited write, outside any user's transaction.
+   * Returns the domains actually added (one already covered by the list is skipped).
+   */
+  blockEmailDomains: (domains: string[], batchId: string) => Promise<string[]>;
   /** Ends the user's realtime sockets after a ban or key revoke commits. Must not throw. */
   endRealtimeConnections: (userId: string) => Promise<unknown>;
   logger?: UsersBulkLogger;
@@ -202,10 +209,13 @@ export async function executeAdminUsersBulk(
   if (!claim.claimed) return replay(claim.existingData);
 
   let users: BulkUser[];
+  let blockedDomains: string[];
   try {
     users = await confirmedCohort(request, actor, deps, new Date(startedAt));
+    // Before any user, so no new account can sign up on these domains while the batch runs.
+    blockedDomains = blocksEmailDomains(request.action) ? await blockDomainsOf(users, batchId, deps) : [];
   } catch (error) {
-    // Nothing was touched, so release the key and let the admin retry with it.
+    // Nothing was touched (the domain write is one transaction), so release the key and let the admin retry with it.
     await deps.store.casDeleteDedup(idemKey, 'batchId', batchId).catch((releaseError: unknown) => {
       deps.logger?.error('Failed to release a users bulk idempotency key', { idemKey, error: releaseError });
     });
@@ -217,7 +227,16 @@ export async function executeAdminUsersBulk(
   const snapshots: UserUndoSnapshot[] = [];
   const failed: AdminUsersBulkResult['failed'] = [];
   let attempted = 0;
+  const undoRecord = () => ({
+    batchId,
+    adminId: actor.id,
+    action: request.action.type,
+    users: snapshots,
+    blockedDomains,
+  });
   let undoExpiresAt = new Date(startedAt).toISOString();
+  // Undoable even when every user is skipped, so the domains this batch blocked can be released.
+  if (blockedDomains.length > 0) undoExpiresAt = await storeUndoRecord(undoRecord(), now(), deps);
   // The first chunk always runs, so every batch makes progress however slow the database is.
   while (attempted < users.length && (attempted === 0 || now().getTime() < deadline)) {
     const chunk = users.slice(attempted, attempted + USERS_BULK_CONCURRENCY);
@@ -231,11 +250,7 @@ export async function executeAdminUsersBulk(
       } else if (outcome.status === 'failed') failed.push({ userId: outcome.userId, error: outcome.error });
     }
     if (changed) {
-      undoExpiresAt = await storeUndoRecord(
-        { batchId, adminId: actor.id, action: request.action.type, users: snapshots },
-        now(),
-        deps
-      );
+      undoExpiresAt = await storeUndoRecord(undoRecord(), now(), deps);
     }
   }
 
@@ -248,6 +263,7 @@ export async function executeAdminUsersBulk(
     partial: remaining > 0,
     remaining,
     undoExpiresAt,
+    blockedDomains,
   };
 
   const stored = await deps.store
@@ -262,7 +278,8 @@ export async function executeAdminUsersBulk(
     .auditSummary({
       summary:
         `bulk ${request.action.type}: ${result.applied} applied, ${result.skipped} skipped, ${failed.length} failed` +
-        (result.partial ? `, ${remaining} not attempted (time budget)` : ''),
+        (result.partial ? `, ${remaining} not attempted (time budget)` : '') +
+        (blockedDomains.length > 0 ? `, ${blockedDomains.length} email domain(s) blocked` : ''),
       details: {
         batchId,
         target: request.target,
@@ -271,6 +288,7 @@ export async function executeAdminUsersBulk(
         skipped: result.skipped,
         partial: result.partial,
         remaining,
+        blockedDomains,
         // A failed user's own entry rolled back with it, so this is the only record of the failure.
         failed,
       },
@@ -280,6 +298,11 @@ export async function executeAdminUsersBulk(
     );
 
   return result;
+}
+
+async function blockDomainsOf(users: readonly BulkUser[], batchId: string, deps: ExecuteDeps): Promise<string[]> {
+  const { owned } = emailDomainsOf(users);
+  return owned.length > 0 ? deps.blockEmailDomains(owned, batchId) : [];
 }
 
 /** Re-resolves the target and refuses anything but the exact cohort the admin confirmed. */
