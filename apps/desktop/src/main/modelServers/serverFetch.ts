@@ -90,6 +90,8 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
         method: init.method ?? 'GET',
         headers,
         lookup: lookup as never,
+        // The shared agent pools sockets by host and port, so a reused one would skip the lookup check.
+        agent: false,
         ...(init.signal ? { signal: init.signal } : {}),
       });
       request.once('response', resolve);

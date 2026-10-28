@@ -123,6 +123,27 @@ describe('createServerFetch', () => {
     expect(target.seen[0].headers.host).toBe(`models.example.test:${target.port}`);
   });
 
+  it('re-runs the address check on a second request instead of reusing a pooled socket', async () => {
+    const target = await serve(ok);
+    let address = '127.0.0.1';
+    let lookups = 0;
+    const lookup: ServerFetchDeps['lookup'] = (_hostname, options, callback) => {
+      lookups += 1;
+      if ('all' in options && options.all) callback(null, [{ address, family: 4 }]);
+      else callback(null, address, 4);
+    };
+    const origin = `http://models.example.test:${target.port}`;
+    const fetch = createServerFetch(endpoint(origin), { lookup });
+
+    const first = await fetch(`${origin}/api/version`);
+    await first.json();
+    address = '192.168.1.20';
+    const second = await failure(fetch(`${origin}/api/version`));
+    expect(lookups).toBe(2);
+    expect(second).toBeInstanceOf(ServerTransportError);
+    expect(target.seen).toHaveLength(1);
+  });
+
   it('rejects a refused connection like fetch does, without the credential in the error', async () => {
     const target = await serve(ok);
     const { port } = target;
