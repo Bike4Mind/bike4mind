@@ -192,7 +192,7 @@ export async function adminUpdateUser(
   if (rawDelta < 0 && previousBalance <= 0) {
     throw new BadRequestError('Balance is already at or below zero; nothing to deduct');
   }
-  const creditDelta = rawDelta < 0 ? Math.max(rawDelta, -Math.max(previousBalance, 0)) : rawDelta;
+  const creditDelta = rawDelta < 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
   const note = creditReason?.trim() || undefined;
 
   // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
