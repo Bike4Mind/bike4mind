@@ -8,6 +8,10 @@ import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 export const perUserRateLimit = (bucket: string) =>
   rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user, req), windowMs: 60 * 1000, bucket });
 
+// One bucket for all four authoring assistants: each is a model call, so rotating across the routes
+// must not multiply the caller's per-minute quota.
+export const AUTHORING_RATE_LIMIT_BUCKET = 'POST /api/v1/agents/[id]/authoring';
+
 // A malformed or unknown id, a soft-deleted agent and a system/org agent all come back null or
 // ownerless from findById, so assertAgentAccess answers 404 for every one of them.
 export async function findOwnedAgent(id: string, userId: string) {
