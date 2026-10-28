@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { impersonationDecision } from './impersonationGate';
+import { describe, it, expect, vi } from 'vitest';
+import type { Request, Response } from 'express';
+vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
+  readAdminReturnCookie: (req: Request) => req.headers.cookie,
+}));
+import { impersonationDecision, impersonationAnonymousGate } from './impersonationGate';
 
 describe('impersonation route policy', () => {
   it.each([
@@ -35,6 +39,26 @@ describe('impersonation route policy', () => {
   it('does not assume an unreviewed GET is a read', () => {
     expect(impersonationDecision('GET', '/api/files/f/do-something', false)).toBe('readonly');
   });
+  it('admits only reviewed public reads and recovery with a parked admin cookie', () => {
+    const next = vi.fn();
+    for (const url of ['/api/settings/logo', '/api/v1/whats-new?limit=5']) {
+      impersonationAnonymousGate(
+        { method: 'GET', url, headers: { cookie: 'parked' } } as Request,
+        {} as Response,
+        next
+      );
+    }
+    expect(next).toHaveBeenCalledTimes(2);
+    for (const [method, url] of [
+      ['POST', '/api/email/verify-change'],
+      ['GET', '/api/oauth/authorize'],
+      ['POST', '/api/settings/logo'],
+    ]) {
+      expect(() =>
+        impersonationAnonymousGate({ method, url, headers: { cookie: 'parked' } } as Request, {} as Response, next)
+      ).toThrow('End support access');
+    }
+  });
   it('allows reviewed reads and explicit escalation but rejects ordinary writes by default', () => {
     expect(impersonationDecision('GET', '/api/identify?x=1', false)).toBe('allow');
     expect(impersonationDecision('POST', '/api/files', false)).toBe('readonly');
@@ -45,12 +69,27 @@ describe('impersonation route policy', () => {
     '/api/sessions/shared',
     '/api/sessions/count',
     '/api/sessions/favorites',
+    '/api/sessions/recent-proactive-messages',
     '/api/sessions/012345678901234567890123/chat',
     '/api/sessions/012345678901234567890123/chat/012345678901234567890124',
     '/api/sessions/012345678901234567890123/agents',
     '/api/settings/fetch',
     '/api/modals',
     '/api/organizations',
+    '/api/inbox',
+    '/api/invites',
+    '/api/projects',
+    '/api/models',
+    '/api/entitlements',
+    '/api/chat-completion-status',
+    '/api/users/012345678901234567890123/userInvites',
+    '/api/users/012345678901234567890123/friend-requests',
+    '/api/users/012345678901234567890123/activities',
+    '/api/gears/status',
+    '/api/models/stats',
+    '/api/help/recently-viewed',
+    '/api/v1/video-models',
+    '/api/v1/music-models',
   ])('admits notebook navigation without enabling writes: %s', path => {
     expect(impersonationDecision('GET', path, false)).toBe('allow');
     expect(impersonationDecision('POST', path, false)).toBe('readonly');
@@ -70,6 +109,8 @@ describe('impersonation route policy', () => {
     expect(impersonationDecision('PATCH', '/api/agents/012345678901234567890123', true)).toBe('sensitive');
     expect(impersonationDecision('POST', '/api/briefcase/catalog', false)).toBe('allow');
     expect(impersonationDecision('GET', '/api/google-drive/token', false)).toBe('sensitive');
+    expect(impersonationDecision('GET', '/api/mcp-servers', true)).toBe('sensitive');
+    expect(impersonationDecision('POST', '/api/gears/claim', true)).toBe('readonly');
     expect(impersonationDecision('GET', '/api/notebooks/download', false)).toBe('readonly');
     expect(impersonationDecision('POST', '/api/notebooks/export', false)).toBe('readonly');
     expect(impersonationDecision('POST', '/api/unknown', true)).toBe('readonly');

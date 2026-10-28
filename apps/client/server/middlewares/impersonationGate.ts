@@ -6,6 +6,11 @@ import { readAdminReturnCookie } from '@bike4mind/server-utils/auth/refreshCooki
 const READS = [
   /^\/api\/(identify|serverConfig|server-config|config|branding-settings)$/,
   /^\/api\/(modals|organizations)$/,
+  /^\/api\/(inbox|invites|projects)$/,
+  /^\/api\/(models|entitlements|chat-completion-status)$/,
+  /^\/api\/users\/[^/]+\/(userInvites|friend-requests|activities)$/,
+  /^\/api\/(gears\/status|models\/stats|help\/recently-viewed)$/,
+  /^\/api\/v1\/(video-models|music-models)$/,
   /^\/api\/security\/(user-summary|user-recent|support-access)$/,
   /^\/api\/auth\/impersonation$/,
   /^\/api\/users\/me\/(sessions|storage-breakdown)$/,
@@ -17,7 +22,7 @@ const READS = [
   /^\/api\/users\/[^/]+\/organizations?$/,
   /^\/api\/settings\/serverConfig$/,
   /^\/api\/settings\/fetch$/,
-  /^\/api\/sessions\/(shared|count|favorites)$/,
+  /^\/api\/sessions\/(shared|count|favorites|recent-proactive-messages)$/,
   /^\/api\/sessions\/[0-9a-f]{24}\/(chat(?:\/[0-9a-f]{24})?|agents|files|generated-media)$/,
   /^\/api\/quests\/[0-9a-f]{24}\/context$/,
 ];
@@ -78,7 +83,14 @@ export function impersonationAnonymousGate(req: Request, _res: Response, next: N
   if (req.method === 'POST' && ['/api/auth/refreshToken', '/api/auth/returnToAdmin'].includes(path)) return next();
   if (
     ['GET', 'HEAD'].includes(req.method) &&
-    ['/api/settings/serverConfigPublic', '/api/settings/serverStatus', '/api/ping', '/api/health'].includes(path)
+    [
+      '/api/settings/serverConfigPublic',
+      '/api/settings/serverStatus',
+      '/api/settings/logo',
+      '/api/ping',
+      '/api/health',
+      '/api/v1/whats-new',
+    ].includes(path)
   )
     return next();
   throw new ForbiddenError('End support access before using this unauthenticated action.');
