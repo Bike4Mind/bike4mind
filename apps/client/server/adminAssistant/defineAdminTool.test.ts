@@ -66,6 +66,19 @@ describe('defineAdminTool', () => {
     expect(toolSchema.parameters.required).toEqual(['limit']);
   });
 
+  it('does not mark defaulted fields as required in the JSON schema', () => {
+    const { context } = makeContext(true);
+    const tool = defineAdminTool({
+      name: 'admin_get_health',
+      description: 'dummy',
+      input: z.object({ days: z.number().default(30), limit: z.number() }),
+      run: vi.fn(),
+    }).implementation(context, undefined);
+
+    expect(tool.toolSchema.parameters.required).toEqual(['limit']);
+    expect(tool.toolSchema.parameters.properties.days).toMatchObject({ default: 30 });
+  });
+
   it('returns the run result as JSON for an admin', async () => {
     const run = vi.fn(async (args: { limit: number }) => ({ ok: true as const, data: { echoed: args.limit } }));
     const { context } = makeContext(true);

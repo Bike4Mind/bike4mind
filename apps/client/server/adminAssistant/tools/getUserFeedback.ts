@@ -28,12 +28,13 @@ export const getUserFeedbackTool = defineAdminTool({
     const docs = await FeedbackModel.find({ userId: user.id })
       .select(FEEDBACK_SELECT)
       .sort({ createdAt: -1 })
-      .limit(limit);
-    const items = await hydrateFeedbackText(docs.map(toRedactedFeedback));
+      .limit(limit + 1);
+    const items = await hydrateFeedbackText(docs.slice(0, limit).map(toRedactedFeedback));
 
     return {
       ok: true,
       data: {
+        truncated: docs.length > limit,
         items: items.map(item => ({
           id: item.id,
           createdAt: new Date(item.createdAt).toISOString(),
@@ -41,6 +42,7 @@ export const getUserFeedbackTool = defineAdminTool({
           subject: item.subject,
           status: item.status,
           text: item.content?.slice(0, MAX_TEXT_CHARS) ?? null,
+          textExpired: item.contentExpired,
         })),
       },
     };

@@ -6,6 +6,10 @@ vi.mock('../resolveAdminUserRef', async importOriginal => ({
   ...(await importOriginal<typeof import('../resolveAdminUserRef')>()),
   resolveAdminUserRef: (...args: unknown[]) => resolveAdminUserRef(...args),
 }));
+const buildActorDirectory = vi.fn();
+vi.mock('../../utils/userActivity', () => ({
+  buildActorDirectory: (...args: unknown[]) => buildActorDirectory(...args),
+}));
 const findByOwnerWithFilters = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: { findByOwnerWithFilters: (...args: unknown[]) => findByOwnerWithFilters(...args) },
@@ -40,6 +44,7 @@ describe('getUserCreditsTool', () => {
   beforeEach(() => {
     resolveAdminUserRef.mockReset().mockResolvedValue({ id: USER_ID, currentCredits: 42 });
     findByOwnerWithFilters.mockReset().mockResolvedValue([]);
+    buildActorDirectory.mockReset().mockResolvedValue(new Map());
   });
 
   it('returns not_found for an unknown user', async () => {
@@ -61,11 +66,20 @@ describe('getUserCreditsTool', () => {
     expect(findByOwnerWithFilters).toHaveBeenCalledWith(USER_ID, 'User', {
       days: 30,
       transactionTypes: ['generic_add', 'generic_deduct'],
-      limit: 20,
+      limit: 21,
     });
     expect(result.data).toEqual({
       balance: 42,
-      transactions: [{ at: '2026-10-01T00:00:00.000Z', type: 'generic_add', amount: 100, reason: 'admin_adjustment' }],
+      truncated: false,
+      transactions: [
+        {
+          at: '2026-10-01T00:00:00.000Z',
+          type: 'generic_add',
+          amount: 100,
+          reason: 'admin_adjustment',
+          actorName: 'Unknown admin',
+        },
+      ],
     });
   });
 
@@ -84,7 +98,7 @@ describe('getUserCreditsTool', () => {
     expect(findByOwnerWithFilters).toHaveBeenLastCalledWith(USER_ID, 'User', {
       days: 7,
       transactionTypes: ['generic_add', 'generic_deduct'],
-      limit: 5,
+      limit: 6,
     });
 
     await runTool({ userId: USER_ID, includePurchases: true });
@@ -95,9 +109,52 @@ describe('getUserCreditsTool', () => {
     );
   });
 
+  it('adds the admin note and actor display name for admin_adjustment rows only', async () => {
+    buildActorDirectory.mockResolvedValue(new Map([['admin-9', { name: 'Grace Admin', email: 'grace@example.com' }]]));
+    findByOwnerWithFilters.mockResolvedValue([
+      transaction({ metadata: { actorId: 'admin-9', note: 'goodwill credit', internalNote: 'raw-metadata-value' } }),
+      transaction({
+        id: 't2',
+        type: 'generic_deduct',
+        credits: -5,
+        reason: 'credit_expiry',
+        metadata: { actorId: 'admin-9', note: 'should not surface' },
+      }),
+    ]);
+
+    const raw = await runRaw({ userId: USER_ID });
+    const { transactions } = JSON.parse(raw).data;
+
+    expect(buildActorDirectory).toHaveBeenCalledWith(['admin-9']);
+    expect(transactions[0]).toMatchObject({
+      reason: 'admin_adjustment',
+      note: 'goodwill credit',
+      actorName: 'Grace Admin',
+    });
+    expect(transactions[1]).toEqual({
+      at: '2026-10-01T00:00:00.000Z',
+      type: 'generic_deduct',
+      amount: -5,
+      reason: 'credit_expiry',
+    });
+    for (const leaked of ['grace@example.com', 'admin-9', 'raw-metadata-value', 'should not surface']) {
+      expect(raw).not.toContain(leaked);
+    }
+  });
+
+  it('reports truncated when more rows exist than the limit', async () => {
+    findByOwnerWithFilters.mockResolvedValue([transaction({ id: 'a' }), transaction({ id: 'b' })]);
+
+    const result = await runTool({ userId: USER_ID, limit: 1 });
+
+    expect(result.data.transactions).toHaveLength(1);
+    expect(result.data.truncated).toBe(true);
+  });
+
   it('hands the model userId, email and the tool fields in its JSON schema', () => {
     const { parameters } = getUserCreditsTool.implementation(context, undefined).toolSchema;
 
+    expect((parameters as { required?: string[] }).required ?? []).not.toContain('days');
     expect(Object.keys((parameters as { properties: object }).properties)).toEqual([
       'userId',
       'email',

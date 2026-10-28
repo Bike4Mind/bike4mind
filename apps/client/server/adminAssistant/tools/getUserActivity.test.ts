@@ -69,6 +69,7 @@ describe('getUserActivityTool', () => {
     const raw = await runRaw({ userId: USER_ID });
 
     expect(JSON.parse(raw).data).toEqual({
+      truncated: false,
       entries: [
         {
           at: '2026-10-02T00:00:00.000Z',
@@ -88,6 +89,12 @@ describe('getUserActivityTool', () => {
     ]) {
       expect(raw).not.toContain(leaked);
     }
+  });
+
+  it('reports truncated when the helper has more entries', async () => {
+    listUserActivity.mockResolvedValue({ entries: [entry()], nextCursor: { occurredAt: new Date(), id: 'e1' } });
+
+    expect((await runTool({ userId: USER_ID })).data.truncated).toBe(true);
   });
 
   it('hands the model userId, email and limit in its JSON schema', () => {

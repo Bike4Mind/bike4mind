@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { USER_SECRET_FIELDS } from '@bike4mind/common';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
 
 const resolveAdminUserRef = vi.fn();
@@ -27,8 +28,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-import { ADMIN_ASSISTANT_USER_FIELDS } from '../resolveAdminUserRef';
-import { getUserTool } from './getUser';
+import { ADMIN_ASSISTANT_USER_FIELDS, getUserTool } from './getUser';
 
 const USER_ID = '65f1a2b3c4d5e6f708192a3b';
 
@@ -143,10 +143,10 @@ describe('getUserTool', () => {
     }
   });
 
-  it('caps organizations at 20', async () => {
+  it('requests 20 organizations and reports truncation from the search hasMore flag', async () => {
     resolveAdminUserRef.mockResolvedValue(userDoc());
     search.mockResolvedValue({
-      data: Array.from({ length: 25 }, (_, index) => ({ id: `o${index}`, name: `Org ${index}`, userId: 'x' })),
+      data: Array.from({ length: 20 }, (_, index) => ({ id: `o${index}`, name: `Org ${index}`, userId: 'x' })),
       hasMore: true,
       total: 25,
     });
@@ -174,5 +174,12 @@ describe('getUserTool', () => {
     const { parameters } = getUserTool.implementation(context, undefined).toolSchema;
 
     expect(Object.keys((parameters as { properties: object }).properties)).toEqual(['userId', 'email']);
+  });
+});
+
+describe('ADMIN_ASSISTANT_USER_FIELDS', () => {
+  it('whitelist excludes every USER_SECRET_FIELDS entry', () => {
+    const secrets: readonly string[] = USER_SECRET_FIELDS;
+    expect(ADMIN_ASSISTANT_USER_FIELDS.filter(field => secrets.includes(field))).toEqual([]);
   });
 });

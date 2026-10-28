@@ -20,7 +20,7 @@ export const getUserActivityTool = defineAdminTool({
     if (!user) return { ok: false, error: 'not_found', message: 'No user matches that id or email.' };
 
     // includeSecurity stays false: those rows carry IPs and user agents.
-    const { entries } = await listUserActivity(
+    const { entries, nextCursor } = await listUserActivity(
       { id: user.id, name: user.name, email: user.email ?? undefined, isAdmin: user.isAdmin },
       { direction: 'target', includeSecurity: false, limit }
     );
@@ -28,6 +28,7 @@ export const getUserActivityTool = defineAdminTool({
     return {
       ok: true,
       data: {
+        truncated: nextCursor !== null,
         entries: entries.map(entry => ({
           at: entry.occurredAt.toISOString(),
           action: entry.action,

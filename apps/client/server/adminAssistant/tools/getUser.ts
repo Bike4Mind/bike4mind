@@ -6,10 +6,29 @@ import { getActiveSubscriptionsForUser } from '../../entitlements/activeSubscrip
 import { SubscriptionOwnerType, resolveSubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { defineAdminTool } from '../defineAdminTool';
-import { ADMIN_ASSISTANT_USER_FIELDS, resolveAdminUserRef } from '../resolveAdminUserRef';
+import { resolveAdminUserRef } from '../resolveAdminUserRef';
 import { AdminUserRefSchema } from '../schemas';
 
 const MAX_ORGANIZATIONS = 20;
+
+/**
+ * The only user fields the admin assistant may emit. Mirrors the non-secret subset of
+ * ADMIN_USER_LIST_FIELDS (apps/client/app/utils/adminUserProjection.ts); `lastActiveAt` is the
+ * schema's last-seen timestamp. Output is always built by picking these, never by spreading a doc.
+ */
+export const ADMIN_ASSISTANT_USER_FIELDS = [
+  'id',
+  'name',
+  'username',
+  'email',
+  'createdAt',
+  'lastActiveAt',
+  'isAdmin',
+  'emailVerified',
+  'currentCredits',
+  'apiKeyTrustApproved',
+  'organizationId',
+] as const;
 
 type OrgRole = 'owner' | 'admin' | 'member';
 
@@ -47,6 +66,7 @@ export const getUserTool = defineAdminTool({
     if (!user) return { ok: false, error: 'not_found', message: 'No user matches that id or email.' };
 
     const [orgs, subscriptions] = await Promise.all([
+      // search() has no projection option, so full org docs load; bounded by MAX_ORGANIZATIONS.
       organizationRepository.search(
         '',
         { userId: user.id },
@@ -66,12 +86,12 @@ export const getUserTool = defineAdminTool({
       ok: true,
       data: {
         user: profile,
-        organizations: orgs.data.slice(0, MAX_ORGANIZATIONS).map(org => ({
+        organizations: orgs.data.map(org => ({
           id: org.id,
           name: org.name,
           role: orgRoleOf(org, user.id),
         })),
-        organizationsTruncated: orgs.hasMore || orgs.data.length > MAX_ORGANIZATIONS,
+        organizationsTruncated: orgs.hasMore,
         subscriptions: subscriptions.map(subscription => ({
           plan: planNameOf(subscription.priceId),
           status: subscription.status,

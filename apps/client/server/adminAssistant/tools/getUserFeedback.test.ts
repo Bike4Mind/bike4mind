@@ -10,12 +10,11 @@ const limit = vi.fn();
 const sort = vi.fn(() => ({ limit }));
 const select = vi.fn(() => ({ sort }));
 const find = vi.fn(() => ({ select }));
+const textLean = vi.fn();
+const findText = vi.fn(() => ({ lean: textLean }));
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: { find: (...args: unknown[]) => find(...(args as [])) },
-}));
-vi.mock('../../utils/redactedFeedback', () => ({
-  toRedactedFeedback: (doc: { toJSON: () => unknown }) => doc.toJSON(),
-  hydrateFeedbackText: async (items: unknown[]) => items,
+  FeedbackTextModel: { find: (...args: unknown[]) => findText(...(args as [])) },
 }));
 
 import { getUserFeedbackTool } from './getUserFeedback';
@@ -39,6 +38,7 @@ const feedbackDoc = (extra: Record<string, unknown> = {}) => ({
     subject: 'turn',
     status: 'open',
     content: 'It broke',
+    contentStored: false,
     userEmail: 'ada@example.com',
     promptMeta: { prompt: 'prompt-meta-value' },
     ...extra,
@@ -50,6 +50,7 @@ describe('getUserFeedbackTool', () => {
     resolveAdminUserRef.mockReset().mockResolvedValue({ id: USER_ID });
     limit.mockReset().mockResolvedValue([]);
     find.mockClear();
+    textLean.mockReset().mockResolvedValue([]);
   });
 
   it('returns not_found for an unknown user', async () => {
@@ -68,7 +69,7 @@ describe('getUserFeedbackTool', () => {
 
     expect(find).toHaveBeenCalledWith({ userId: USER_ID });
     expect(sort).toHaveBeenCalledWith({ createdAt: -1 });
-    expect(limit).toHaveBeenCalledWith(10);
+    expect(limit).toHaveBeenCalledWith(11);
   });
 
   it('returns picked fields and never promptMeta or userEmail', async () => {
@@ -84,6 +85,7 @@ describe('getUserFeedbackTool', () => {
         subject: 'turn',
         status: 'open',
         text: 'It broke',
+        textExpired: false,
       },
     ]);
     for (const leaked of ['promptMeta', 'prompt-meta-value', 'userEmail', 'ada@example.com']) {
@@ -97,6 +99,38 @@ describe('getUserFeedbackTool', () => {
     const result = await runTool({ userId: USER_ID });
 
     expect(result.data.items[0].text).toHaveLength(500);
+  });
+
+  it('selects contentStored and hydrates text from the FeedbackText sibling', async () => {
+    limit.mockResolvedValue([feedbackDoc({ content: undefined, contentStored: true })]);
+    textLean.mockResolvedValue([{ _id: { toString: () => 'f1' }, content: 'Stored text', contentTruncated: false }]);
+
+    const result = await runTool({ userId: USER_ID });
+
+    expect(select).toHaveBeenCalledWith(expect.stringContaining('contentStored'));
+    expect(result.data.items[0]).toMatchObject({ text: 'Stored text', textExpired: false });
+  });
+
+  it('flags text whose stored copy has expired, unlike a report that never had text', async () => {
+    limit.mockResolvedValue([
+      feedbackDoc({ id: 'f1', content: undefined, contentStored: true }),
+      feedbackDoc({ id: 'f2', content: undefined, contentStored: false }),
+    ]);
+
+    const result = await runTool({ userId: USER_ID });
+
+    expect(result.data.items.map((item: { textExpired: boolean }) => item.textExpired)).toEqual([true, false]);
+    expect(result.data.items.map((item: { text: string | null }) => item.text)).toEqual([null, null]);
+  });
+
+  it('reports truncated when more reports exist than the limit', async () => {
+    limit.mockResolvedValue([feedbackDoc({ id: 'f1' }), feedbackDoc({ id: 'f2' })]);
+
+    const result = await runTool({ userId: USER_ID, limit: 1 });
+
+    expect(result.data.items).toHaveLength(1);
+    expect(result.data.truncated).toBe(true);
+    expect((await runTool({ userId: USER_ID, limit: 2 })).data.truncated).toBe(false);
   });
 
   it('hands the model userId, email and limit in its JSON schema', () => {

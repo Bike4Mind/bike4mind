@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { USER_SECRET_FIELDS } from '@bike4mind/common';
 
 const findById = vi.fn();
 const findByEmail = vi.fn();
@@ -11,7 +10,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import { ADMIN_ASSISTANT_USER_FIELDS, resolveAdminUserRef } from './resolveAdminUserRef';
+import { resolveAdminUserRef } from './resolveAdminUserRef';
 import { AdminUserRefFields, AdminUserRefSchema, withExactlyOneUserRef } from './schemas';
 
 const USER_ID = '65f1a2b3c4d5e6f708192a3b';
@@ -22,11 +21,11 @@ describe('resolveAdminUserRef', () => {
     findByEmail.mockReset();
   });
 
-  it('trims the email and delegates to findByEmail (case-insensitivity is its collation)', async () => {
+  it('delegates an email lookup to findByEmail (case-insensitivity is its collation)', async () => {
     const user = { id: USER_ID, email: 'Ada@Example.com' };
     findByEmail.mockResolvedValue(user);
 
-    await expect(resolveAdminUserRef({ email: ' ADA@example.com ' })).resolves.toBe(user);
+    await expect(resolveAdminUserRef({ email: 'ADA@example.com' })).resolves.toBe(user);
     expect(findByEmail).toHaveBeenCalledWith('ADA@example.com');
     expect(findById).not.toHaveBeenCalled();
   });
@@ -35,6 +34,17 @@ describe('resolveAdminUserRef', () => {
     findById.mockResolvedValue({ id: USER_ID });
 
     await expect(resolveAdminUserRef({ userId: USER_ID })).resolves.toEqual({ id: USER_ID });
+  });
+
+  it('treats null and empty-string fields as absent', async () => {
+    findById.mockResolvedValue({ id: USER_ID });
+
+    await resolveAdminUserRef({ userId: USER_ID, email: null });
+    await resolveAdminUserRef({ userId: USER_ID, email: '' });
+    expect(findById).toHaveBeenCalledTimes(2);
+    expect(findByEmail).not.toHaveBeenCalled();
+
+    await expect(resolveAdminUserRef({ userId: null, email: '' })).resolves.toBeNull();
   });
 
   it('returns null for an unknown email', async () => {
@@ -52,17 +62,26 @@ describe('AdminUserRefSchema', () => {
     expect(AdminUserRefSchema.safeParse({ email: 'a@example.com' }).success).toBe(true);
   });
 
+  it('accepts null or empty for the unused field and still requires exactly one', () => {
+    expect(AdminUserRefSchema.safeParse({ userId: USER_ID, email: null }).success).toBe(true);
+    expect(AdminUserRefSchema.safeParse({ userId: '', email: 'a@example.com' }).success).toBe(true);
+    expect(AdminUserRefSchema.safeParse({ userId: null, email: '' }).success).toBe(false);
+    expect(AdminUserRefSchema.safeParse({ userId: USER_ID, email: 'a@example.com' }).success).toBe(false);
+  });
+
+  it('tells the model to provide exactly one of userId or email', () => {
+    const { properties } = z.toJSONSchema(AdminUserRefSchema, { io: 'input' }) as {
+      properties: Record<string, { description?: string }>;
+    };
+
+    expect(properties.userId?.description).toContain('exactly one of userId or email');
+    expect(properties.email?.description).toContain('exactly one of userId or email');
+  });
+
   it('composes with extra fields through the unrefined base', () => {
     const schema = withExactlyOneUserRef(AdminUserRefFields.extend({ days: z.number().max(90) }));
 
     expect(schema.safeParse({ email: 'a@example.com', days: 7 }).success).toBe(true);
     expect(schema.safeParse({ days: 7 }).success).toBe(false);
-  });
-});
-
-describe('ADMIN_ASSISTANT_USER_FIELDS', () => {
-  it('whitelist excludes every USER_SECRET_FIELDS entry', () => {
-    const secrets: readonly string[] = USER_SECRET_FIELDS;
-    expect(ADMIN_ASSISTANT_USER_FIELDS.filter(field => secrets.includes(field))).toEqual([]);
   });
 });
