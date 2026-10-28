@@ -1343,6 +1343,9 @@ UserSchema.pre('save', function (next) {
   next();
 });
 
+// Stripe-customer resolution for business metrics.
+UserSchema.index({ stripeCustomerId: 1 }, { name: 'user_stripeCustomerId' });
+
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({
   username: 1,

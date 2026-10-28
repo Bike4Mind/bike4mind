@@ -6,6 +6,7 @@
  */
 
 import { BadRequestError } from '@bike4mind/utils';
+import { checkSkillFiles, type ISkillFile } from '@bike4mind/common';
 import { splitAllowedTools } from '@bike4mind/common/utils/skillMd';
 import { validateToolList } from './agentValidation';
 
@@ -68,6 +69,15 @@ export function validateSkillArgumentHint(value: unknown): string | undefined {
 export function validateSkillAllowedTools(value: unknown): string[] | undefined {
   // Reuse the agent validator - same 100-entry / 256-char-per-entry bounds apply.
   return validateToolList(value, 'allowedTools');
+}
+
+/** Supporting files, sorted by path. `undefined` leaves a skill's files unchanged; `[]` clears them. */
+export function validateSkillFiles(value: unknown): ISkillFile[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new BadRequestError('files must be an array');
+  const result = checkSkillFiles(value as ISkillFile[]);
+  if (!result.ok) throw new BadRequestError(result.error);
+  return result.files;
 }
 
 /**
