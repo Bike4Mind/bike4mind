@@ -100,7 +100,8 @@ const revokeAndCleanUp = async (ownerId: string, fileId: string, recipientId: st
   );
   await sharingService.cleanUpRevokedFileReferences(fileId, recipientId, {
     db,
-    resolveAttachmentLakeAccess: user => createAttachmentLakeAccess(user as never, logger)(),
+    resolveAttachmentLakeAccess: user =>
+      createAttachmentLakeAccess(user as never, logger, { requireCompleteView: true })(),
     logger,
   });
 };

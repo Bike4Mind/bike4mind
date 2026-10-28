@@ -61,7 +61,9 @@ const handler = baseApi().use(
         db: { users: userRepository, fabFiles: fabFileRepository, sessions: sessionRepository },
         // Imported at call time, like the session routes: the resolver's graph reaches the Mongoose models.
         resolveAttachmentLakeAccess: async user =>
-          (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, req.logger)(),
+          (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, req.logger, {
+            requireCompleteView: true,
+          })(),
         logger: req.logger,
       });
     }
