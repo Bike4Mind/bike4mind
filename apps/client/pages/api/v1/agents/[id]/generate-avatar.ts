@@ -6,9 +6,11 @@
  * message, where the SPA route flattens them to a 500 body. A sharee gets the same 404 as a stranger.
  */
 import { generateAgentAvatarContract } from '@bike4mind/common';
-import { checkStorageLimit } from '@bike4mind/utils';
+import { checkStorageLimit, logImageGenerationFailure } from '@bike4mind/utils';
+import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { generateAgentAvatar } from '@server/agents/authoring/generateAgentAvatar';
-import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent, perUserRateLimit } from '@server/agents/v1AgentRoute';
+import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -30,7 +32,10 @@ const handler = nextRouteForContract(generateAgentAvatarContract, {
     );
     return res.json({ portrait_url: portraitUrl, generation_prompt: generationPrompt });
   } catch (error) {
-    req.logger.error('Error generating agent avatar:', error);
+    logImageGenerationFailure(imageLogger, 'Error generating agent avatar:', error, {
+      agentId: agent.id,
+      userId: req.user.id,
+    });
     throw toV1AuthoringError(error);
   }
 });
