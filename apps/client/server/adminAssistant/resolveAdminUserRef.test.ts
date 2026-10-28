@@ -22,7 +22,7 @@ describe('resolveAdminUserRef', () => {
     findByEmail.mockReset();
   });
 
-  it('finds a user by email regardless of case', async () => {
+  it('trims the email and delegates to findByEmail (case-insensitivity is its collation)', async () => {
     const user = { id: USER_ID, email: 'Ada@Example.com' };
     findByEmail.mockResolvedValue(user);
 

@@ -1,8 +1,10 @@
+import type { IUserDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 import { userApiKeyService } from '@bike4mind/services';
 import { toEntitlementUser, getUserEntitlements } from '../../entitlements';
 import { getActiveSubscriptionsForUser } from '../../entitlements/activeSubscriptions';
 import { SubscriptionOwnerType, resolveSubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { defineAdminTool } from '../defineAdminTool';
 import { ADMIN_ASSISTANT_USER_FIELDS, resolveAdminUserRef } from '../resolveAdminUserRef';
 import { AdminUserRefSchema } from '../schemas';
@@ -10,6 +12,27 @@ import { AdminUserRefSchema } from '../schemas';
 const MAX_ORGANIZATIONS = 20;
 
 type OrgRole = 'owner' | 'admin' | 'member';
+
+type OrgRoleSubject = { userId?: string; adminUserIds?: string[]; users?: { userId: string }[] };
+
+// Same admin rule as OrganizationModel.findIdsAdministeredBy: a manager id counts only with a member row.
+const orgRoleOf = (org: OrgRoleSubject, userId: string): OrgRole => {
+  if (org.userId === userId) return 'owner';
+  const isManager = org.adminUserIds?.includes(userId) === true;
+  const isMember = org.users?.some(member => member.userId === userId) === true;
+  return isManager && isMember ? 'admin' : 'member';
+};
+
+// Plan names, never the Stripe price id.
+const planNameOf = (priceId: string): string =>
+  SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId)?.name ?? 'unknown';
+
+const toUserFieldValue = (user: IUserDocument, field: (typeof ADMIN_ASSISTANT_USER_FIELDS)[number]): unknown => {
+  if (field === 'id') return user.id;
+  if (field === 'organizationId') return user.organizationId ? String(user.organizationId) : null;
+  const value: unknown = user[field];
+  return value instanceof Date ? value.toISOString() : (value ?? null);
+};
 
 const toIso = (value: Date | string | null | undefined): string | null =>
   value ? new Date(value).toISOString() : null;
@@ -35,28 +58,22 @@ export const getUserTool = defineAdminTool({
     const entitlementKeys = await getUserEntitlements(toEntitlementUser(user), subscriptions);
     const hasPaidStanding = await userApiKeyService.hasPaidStanding(user, async () => subscriptions.length > 0);
 
-    const picked: Record<string, unknown> = {};
-    for (const field of ADMIN_ASSISTANT_USER_FIELDS) {
-      const value: unknown = field === 'id' ? user.id : user[field];
-      picked[field] = value instanceof Date ? value.toISOString() : (value ?? null);
-    }
-    picked.organizationId = user.organizationId ? String(user.organizationId) : null;
+    const profile = Object.fromEntries(
+      ADMIN_ASSISTANT_USER_FIELDS.map(field => [field, toUserFieldValue(user, field)])
+    );
 
     return {
       ok: true,
       data: {
-        user: picked,
+        user: profile,
         organizations: orgs.data.slice(0, MAX_ORGANIZATIONS).map(org => ({
           id: org.id,
           name: org.name,
-          role: (org.userId === user.id
-            ? 'owner'
-            : org.adminUserIds?.includes(user.id)
-              ? 'admin'
-              : 'member') as OrgRole,
+          role: orgRoleOf(org, user.id),
         })),
+        organizationsTruncated: orgs.hasMore || orgs.data.length > MAX_ORGANIZATIONS,
         subscriptions: subscriptions.map(subscription => ({
-          plan: subscription.priceId,
+          plan: planNameOf(subscription.priceId),
           status: subscription.status,
           source: resolveSubscriptionSource(subscription),
           periodEndsAt: toIso(subscription.periodEndsAt),

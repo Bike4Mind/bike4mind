@@ -14,6 +14,9 @@ const getActiveSubscriptionsForUser = vi.fn();
 vi.mock('../../entitlements/activeSubscriptions', () => ({
   getActiveSubscriptionsForUser: (...args: unknown[]) => getActiveSubscriptionsForUser(...args),
 }));
+vi.mock('@client/lib/userSubscriptions/constants', () => ({
+  SUBSCRIPTION_PLANS: [{ priceId: 'price_pro', name: 'Professional' }],
+}));
 vi.mock('../../entitlements', () => ({
   toEntitlementUser: (user: { id: string }) => ({ id: user.id }),
   getUserEntitlements: async () => ['base', 'plan:paid'],
@@ -24,6 +27,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+import { ADMIN_ASSISTANT_USER_FIELDS } from '../resolveAdminUserRef';
 import { getUserTool } from './getUser';
 
 const USER_ID = '65f1a2b3c4d5e6f708192a3b';
@@ -69,7 +73,8 @@ describe('getUserTool', () => {
     search.mockResolvedValue({
       data: [
         { id: 'o1', name: 'Owned', userId: USER_ID, adminUserIds: [] },
-        { id: 'o2', name: 'Managed', userId: 'other', adminUserIds: [USER_ID] },
+        { id: 'o2', name: 'Managed', userId: 'other', adminUserIds: [USER_ID], users: [{ userId: USER_ID }] },
+        { id: 'o4', name: 'StaleAdmin', userId: 'other', adminUserIds: [USER_ID], users: [] },
         { id: 'o3', name: 'Joined', userId: 'other', adminUserIds: [] },
       ],
       hasMore: false,
@@ -103,11 +108,14 @@ describe('getUserTool', () => {
     expect(result.data.organizations).toEqual([
       { id: 'o1', name: 'Owned', role: 'owner' },
       { id: 'o2', name: 'Managed', role: 'admin' },
+      { id: 'o4', name: 'StaleAdmin', role: 'member' },
       { id: 'o3', name: 'Joined', role: 'member' },
     ]);
+    expect(result.data.organizationsTruncated).toBe(false);
+    expect(Object.keys(result.data.user)).toEqual([...ADMIN_ASSISTANT_USER_FIELDS]);
     expect(result.data.subscriptions).toEqual([
       {
-        plan: 'price_pro',
+        plan: 'Professional',
         status: 'active',
         source: 'stripe',
         periodEndsAt: '2026-12-01T00:00:00.000Z',
@@ -147,6 +155,19 @@ describe('getUserTool', () => {
 
     expect(search).toHaveBeenCalledWith('', { userId: USER_ID }, { page: 1, limit: 20 }, expect.anything());
     expect(result.data.organizations).toHaveLength(20);
+    expect(result.data.organizationsTruncated).toBe(true);
+  });
+
+  it('never emits an unknown price id as the plan', async () => {
+    resolveAdminUserRef.mockResolvedValue(userDoc());
+    getActiveSubscriptionsForUser.mockResolvedValue([
+      { priceId: 'price_secret_xyz', status: 'active', ownerType: 'User', periodEndsAt: new Date() },
+    ]);
+
+    const raw = await getUserTool.implementation(context, undefined).toolFn({ userId: USER_ID });
+
+    expect(JSON.parse(raw).data.subscriptions[0].plan).toBe('unknown');
+    expect(raw).not.toContain('price_secret_xyz');
   });
 
   it('hands the model userId and email properties in its JSON schema', () => {
