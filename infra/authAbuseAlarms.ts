@@ -7,13 +7,14 @@
  */
 import { dlqAlarmTopic } from './dlqAlarms';
 import { web } from './web';
+import { oauthSignupsRefusedMetricName } from './authAbuseMetric';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
 
 const NAMESPACE = 'Lumina5/AuthSecurity';
-const METRIC_NAME = 'OAuthSignupsRefused';
+const METRIC_NAME = oauthSignupsRefusedMetricName($app.stage);
 const DEFAULT_THRESHOLD_PER_5MIN = 25;
 
 const threshold = Number(process.env.OAUTH_SIGNUP_REFUSED_ALARM_PER_5MIN) || DEFAULT_THRESHOLD_PER_5MIN;

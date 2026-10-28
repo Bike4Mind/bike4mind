@@ -1,3 +1,4 @@
+import { parseOauthAbuseEscalationMinutes } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   authFailLogRepository,
@@ -11,17 +12,10 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DEFAULT_SCHEDULE_MINUTES = [10, 60, 1440];
 
 /**
- * AuthFailLog reasons that count as abuse of the shared OAuth flow. Deliberately excludes `internal`
- * and `state_expired` (our own faults and slow users): a bug on our side must not auto-block an
- * office. Keep in sync with OAUTH_FAILURE_REASONS in apps/client/server/utils/auth/oauthFailureReason.ts.
+ * Only refusals reached after obtaining a provider profile count toward an automatic IP block.
+ * State failures are forgeable without a provider round trip and must not lock out a shared NAT.
  */
-export const OAUTH_ABUSE_REASONS = [
-  'registration_closed',
-  'state_invalid',
-  'state_missing',
-  'duplicate_account',
-  'forbidden_system_user',
-] as const;
+export const OAUTH_ABUSE_REASONS = ['registration_closed', 'duplicate_account', 'forbidden_system_user'] as const;
 
 /**
  * Strategies served by the shared `[strategy]` OAuth routes. SAML and Okta have their own callbacks
@@ -67,9 +61,7 @@ export interface OauthAbuseAutoBlockResult {
 
 /** Positive whole minutes from a CSV; blank or any malformed entry falls back to the default schedule. */
 export function parseEscalationMinutes(raw: string): number[] {
-  const parts = raw.split(',').map(p => p.trim());
-  const minutes = parts.map(p => (/^\d+$/.test(p) ? Number(p) : 0));
-  return minutes.length > 0 && minutes.every(m => m > 0) ? minutes : [...DEFAULT_SCHEDULE_MINUTES];
+  return parseOauthAbuseEscalationMinutes(raw) ?? [...DEFAULT_SCHEDULE_MINUTES];
 }
 
 /** Step `level` of the schedule, clamped to the last step. */

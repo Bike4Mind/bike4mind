@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { oauthSignupsRefusedMetricName } from '../authAbuseMetric';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (p: string) => readFileSync(path.join(REPO_ROOT, p), 'utf8');
@@ -40,11 +41,17 @@ describe('oauth signups refused alarm', () => {
 
   it('feeds Lumina5/AuthSecurity OAuthSignupsRefused, summed over 5 minutes', () => {
     expect(ALARMS).toMatch(/NAMESPACE = 'Lumina5\/AuthSecurity'/);
-    expect(ALARMS).toMatch(/METRIC_NAME = 'OAuthSignupsRefused'/);
+    expect(ALARMS).toContain('const METRIC_NAME = oauthSignupsRefusedMetricName($app.stage);');
     expect(ALARMS).toMatch(
       /metricName: METRIC_NAME,\s*namespace: NAMESPACE,\s*period: 300,[^\n]*\n\s*statistic: 'Sum'/
     );
     expect(ALARMS).toMatch(/treatMissingData: 'notBreaching'/);
+  });
+
+  it('isolates monitored stages sharing an account without resetting production history', () => {
+    expect(oauthSignupsRefusedMetricName('production')).toBe('OAuthSignupsRefused');
+    const names = ['production', 'dev', 'pr123', 'pr456'].map(oauthSignupsRefusedMetricName);
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it('routes alarm and recovery to the DLQ alarm topic', () => {

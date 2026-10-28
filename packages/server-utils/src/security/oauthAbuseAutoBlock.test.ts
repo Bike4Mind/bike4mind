@@ -244,6 +244,15 @@ describe('default deps and policy', () => {
     );
   });
 
+  it('excludes forgeable state failures from both the initial query and the post-block recount', async () => {
+    h.getSettingsMap.mockResolvedValue({});
+    await runOauthAbuseAutoBlock({ now: NOW });
+
+    const providerRefusals = ['registration_closed', 'duplicate_account', 'forbidden_system_user'];
+    expect(h.getIPs).toHaveBeenCalledWith(ago(10 * MIN), 20, providerRefusals, OAUTH_ABUSE_STRATEGIES);
+    expect(h.countForIP).toHaveBeenCalledWith('9.9.9.9', ago(MIN), providerRefusals, OAUTH_ABUSE_STRATEGIES);
+  });
+
   it('does nothing when the kill switch is off', async () => {
     h.getSettingsMap.mockResolvedValue({ oauthAbuseAutoBlockEnabled: 'false' });
     await runOauthAbuseAutoBlock({ now: NOW });
@@ -258,9 +267,12 @@ describe('escalation helpers', () => {
     expect(resolveBlockDurationMs(99, [1, 2, 3])).toBe(3);
   });
 
-  it.each(['', '   ', 'abc', '10,0', '10,,60', '-5', '1.5'])('falls back to the default schedule for %j', raw => {
-    expect(parseEscalationMinutes(raw)).toEqual([10, 60, 1440]);
-  });
+  it.each(['', '   ', 'abc', '10,0', '10,,60', '-5', '1.5', '1000000000000', '9'.repeat(400)])(
+    'falls back to the default schedule for %j',
+    raw => {
+      expect(parseEscalationMinutes(raw)).toEqual([10, 60, 1440]);
+    }
+  );
 
   it('parses a valid schedule', () => {
     expect(parseEscalationMinutes('5, 30,120')).toEqual([5, 30, 120]);

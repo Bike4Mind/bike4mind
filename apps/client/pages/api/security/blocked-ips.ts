@@ -29,7 +29,7 @@ const handler = baseApi()
     if (!parsed.success) return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     const { ip, reason } = parsed.data;
     const doc = await withTransaction(async () => {
-      // block() returns an existing active block untouched, so only a new block is audited.
+      // block() only extends an existing active block; only a new block is audited.
       const { doc: blocked, created } = await blockedIPRepository.block(ip, reason);
       if (!created) return blocked;
       await recordAdminActionFromRequest(req, {

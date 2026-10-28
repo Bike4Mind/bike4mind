@@ -1019,9 +1019,22 @@ export function isBlankSettingValue(raw: unknown): boolean {
   return raw == null || (typeof raw === 'string' && raw.trim() === '');
 }
 
-/** Blank (reverts to the default) or comma-separated positive whole numbers. Mirrors parseEscalationMinutes in server-utils. */
+/** Shared by settings validation and the runner so stored values cannot produce invalid expiry dates. */
+export function parseOauthAbuseEscalationMinutes(value: string): number[] | null {
+  const parts = value.split(',').map(part => part.trim());
+  if (!parts.every(part => /^\d+$/.test(part))) return null;
+
+  const minutes = parts.map(Number);
+  const now = Date.now();
+  const valid = minutes.every(duration => {
+    const durationMs = duration * 60_000;
+    return duration > 0 && Number.isSafeInteger(durationMs) && Number.isFinite(new Date(now + durationMs).getTime());
+  });
+  return valid ? minutes : null;
+}
+
 function isEscalationScheduleOrBlank(value: string): boolean {
-  return value.trim() === '' || value.split(',').every(part => /^\d+$/.test(part.trim()) && Number(part) > 0);
+  return value.trim() === '' || parseOauthAbuseEscalationMinutes(value) !== null;
 }
 
 function withSchema<T extends object, S extends z.ZodTypeAny>(setting: T, schema: S) {
@@ -3313,7 +3326,7 @@ export const settingsMap = {
       order: 4,
     }),
     z.string().refine(isEscalationScheduleOrBlank, {
-      message: 'Use comma-separated whole minutes greater than 0, e.g. 10,60,1440',
+      message: 'Use comma-separated positive whole minutes with valid expiry dates, e.g. 10,60,1440',
     })
   ),
   oauthAbuseLookbackHours: makeNumberSetting({

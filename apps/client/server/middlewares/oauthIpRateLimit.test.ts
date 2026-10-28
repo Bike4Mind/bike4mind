@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   tryIncrement: vi.fn(),
   clientIp: vi.fn(),
   e2e: vi.fn(),
+  getSettingsMap: vi.fn(),
   settings: {} as Record<string, string>,
 }));
 
@@ -15,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
-  getSettingsMap: async () => h.settings,
+  getSettingsMap: h.getSettingsMap,
 }));
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: h.clientIp }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: h.e2e }));
@@ -36,6 +37,7 @@ describe('oauthIpRateLimit', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     h.settings = {};
+    h.getSettingsMap.mockImplementation(async () => h.settings);
     h.clientIp.mockReturnValue('203.0.113.7');
     h.e2e.mockReturnValue(false);
     h.tryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
@@ -96,5 +98,17 @@ describe('oauthIpRateLimit', () => {
     await oauthIpRateLimit('oauth-init')(req, makeRes(), next);
     expect(next).toHaveBeenCalledWith();
     expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('OAuth rate limit'), expect.any(Error));
+  });
+
+  it('fails open with a warning when settings cannot be read', async () => {
+    const error = new Error('settings unavailable');
+    h.getSettingsMap.mockRejectedValueOnce(error);
+    const req = makeReq();
+    const next = vi.fn();
+    await oauthIpRateLimit('oauth-init')(req, makeRes(), next);
+    expect(next).toHaveBeenCalledWith();
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(h.tryIncrement).not.toHaveBeenCalled();
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('OAuth rate limit'), error);
   });
 });

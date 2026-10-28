@@ -20,7 +20,7 @@ const handler = baseApi().post(async (req, res) => {
         try {
           await withTransaction(async () => {
             ipBlocked = false;
-            // block() returns an existing active block untouched, so only a new block is audited.
+            // block() only extends an existing active block; only a new block is audited.
             const result = await blockedIPRepository.block(ip, reason, options);
             if (!result.created) return;
             ipBlocked = true;
