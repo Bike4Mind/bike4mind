@@ -197,6 +197,8 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
   const currentItems = modelLogsQuery.data?.logs ?? [];
 
   const isLoadingLogs = loading || modelLogsQuery.isLoading;
+  // keepPreviousData leaves isLoading false on a refetch, so the old rows stay up under this.
+  const isFetchingLogs = loading || modelLogsQuery.isFetching;
 
   return (
     <Box>
@@ -211,7 +213,7 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
           color="neutral"
           startDecorator={<RefreshIcon />}
           onClick={handleRefresh}
-          disabled={isLoadingLogs}
+          disabled={isFetchingLogs}
           data-testid="model-logs-refresh-btn"
         >
           Refresh
@@ -267,8 +269,11 @@ export const ModelLogsTab: React.FC<ModelLogsTabProps> = ({ loading, onRefresh }
         View detailed logs of model responses, including performance metrics, token usage, and execution tracking.
       </Alert>
 
+      {/* Only the results swap while loading: re-rendering the filters in another layout would
+          remount them and drop focus on every keystroke. */}
+      {!isLoadingLogs && isFetchingLogs && <LinearProgress sx={{ mb: 2 }} data-testid="model-logs-refetching" />}
       {isLoadingLogs ? (
-        <LinearProgress />
+        <LinearProgress data-testid="model-logs-loading" />
       ) : modelLogsQuery.isError ? (
         <Card variant="outlined" sx={{ p: 2 }} data-testid="model-logs-error">
           <ErrorState message="Could not load model logs." onRetry={() => modelLogsQuery.refetch()} />

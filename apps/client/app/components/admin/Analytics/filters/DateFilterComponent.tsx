@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, FormControl, FormLabel, Input, Stack, Button } from '@mui/joy';
 import dayjs from 'dayjs';
 import { useAnalyticsStore } from '../store';
@@ -6,6 +6,33 @@ import { useAnalyticsStore } from '../store';
 const getLocalDate = (daysOffset = 0) => {
   const now = dayjs();
   return daysOffset < 0 ? now.subtract(Math.abs(daysOffset), 'day').format('YYYY-MM-DD') : now.format('YYYY-MM-DD');
+};
+
+/**
+ * The value a date input shows, updated on every keystroke. A parent that commits the change
+ * asynchronously (a router navigate) re-renders with the old value first, and React writing that
+ * back into the input resets the browser's year-typing buffer. So a prop change is only adopted
+ * while the input is not focused, and on blur.
+ */
+const useDateDraft = (value: string) => {
+  const [draft, setDraft] = useState(value);
+  const isFocused = useRef(false);
+
+  useEffect(() => {
+    if (!isFocused.current) setDraft(value);
+  }, [value]);
+
+  return {
+    draft,
+    setDraft,
+    onFocus: () => {
+      isFocused.current = true;
+    },
+    onBlur: () => {
+      isFocused.current = false;
+      setDraft(value);
+    },
+  };
 };
 
 interface DateFilterComponentProps {
@@ -25,6 +52,8 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
 }) => {
   const { dateFilters, setDateFilters } = useAnalyticsStore();
   const [activeRange, setActiveRange] = useState<number | null>(null);
+  const startDraft = useDateDraft(startDate);
+  const endDraft = useDateDraft(endDate);
 
   // Set initial active range based on date difference
   useEffect(() => {
@@ -35,9 +64,9 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
 
     if (diffDays === 0 && end.format('YYYY-MM-DD') === today) {
       setActiveRange(0); // Today
-    } else if (diffDays === 6 && end.format('YYYY-MM-DD') === today) {
+    } else if (diffDays === 7 && end.format('YYYY-MM-DD') === today) {
       setActiveRange(7); // Last 7 days
-    } else if (diffDays === 29 && end.format('YYYY-MM-DD') === today) {
+    } else if (diffDays === 30 && end.format('YYYY-MM-DD') === today) {
       setActiveRange(30); // Last 30 days
     } else {
       setActiveRange(null); // Custom range
@@ -46,6 +75,7 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
 
   const handleStartDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newStartDate = e.target.value;
+    startDraft.setDraft(newStartDate);
     setActiveRange(null); // Custom range when manually changed
     onStartDateChange(newStartDate);
 
@@ -58,6 +88,7 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
 
   const handleEndDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newEndDate = e.target.value;
+    endDraft.setDraft(newEndDate);
     setActiveRange(null); // Custom range when manually changed
     onEndDateChange(newEndDate);
 
@@ -104,8 +135,10 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
           <FormLabel>Start Date</FormLabel>
           <Input
             type="date"
-            value={startDate}
+            value={startDraft.draft}
             onChange={handleStartDateChange}
+            onFocus={startDraft.onFocus}
+            onBlur={startDraft.onBlur}
             slotProps={{ input: { max: endDate || getLocalDate() } }}
           />
         </FormControl>
@@ -113,8 +146,10 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
           <FormLabel>End Date</FormLabel>
           <Input
             type="date"
-            value={endDate}
+            value={endDraft.draft}
             onChange={handleEndDateChange}
+            onFocus={endDraft.onFocus}
+            onBlur={endDraft.onBlur}
             slotProps={{ input: { max: getLocalDate(), min: startDate } }}
           />
         </FormControl>
@@ -125,6 +160,7 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
         <Button
           size="sm"
           variant={activeRange === 0 ? 'solid' : 'outlined'}
+          aria-pressed={activeRange === 0}
           onClick={() => handleRangeSelect(0)}
           sx={{ flex: { xs: 1, sm: 'none' } }}
         >
@@ -133,6 +169,7 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
         <Button
           size="sm"
           variant={activeRange === 7 ? 'solid' : 'outlined'}
+          aria-pressed={activeRange === 7}
           onClick={() => handleRangeSelect(7)}
           sx={{ flex: { xs: 1, sm: 'none' } }}
         >
@@ -141,6 +178,7 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({
         <Button
           size="sm"
           variant={activeRange === 30 ? 'solid' : 'outlined'}
+          aria-pressed={activeRange === 30}
           onClick={() => handleRangeSelect(30)}
           sx={{ flex: { xs: 1, sm: 'none' } }}
         >

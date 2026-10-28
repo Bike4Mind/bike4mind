@@ -328,6 +328,32 @@ describe('ModelLogsTab', () => {
     expect(refetch).toHaveBeenCalled();
   });
 
+  it('shows a progress bar over the old rows and disables Refresh while refetching', () => {
+    mocks.useModelLogDetail.mockReturnValue({ data: undefined, isError: false });
+    mocks.useModelLogs.mockReturnValue(queryResult({ data: { logs: [summary('log-1')], total: 1 }, isFetching: true }));
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+    renderTab();
+
+    expect(screen.getByTestId('model-logs-refetching')).toBeTruthy();
+    expect(screen.queryByTestId('model-logs-loading')).toBeNull();
+    expect(screen.queryByTestId('model-logs-empty')).toBeNull();
+    expect(screen.getByTestId('model-logs-refresh-btn').hasAttribute('disabled')).toBe(true);
+  });
+
+  it.each([
+    ['Last 7 Days', '2026-10-14'],
+    ['Last 30 Days', '2026-09-21'],
+  ])('highlights %s once it sets the range', async (name, startDate) => {
+    mocks.useModelLogs.mockReturnValue(queryResult({}));
+    act(() => fakeAdminRouter.reset({ tab: 'model-logs', modelLogsFrom: '2026-10-01', modelLogsTo: '2026-10-02' }));
+    renderTab();
+
+    await userEvent.click(screen.getByRole('button', { name }));
+
+    expect(screen.getByLabelText('Start Date')).toHaveValue(startDate);
+    expect(screen.getByRole('button', { name, pressed: true })).toBeTruthy();
+  });
+
   describe('while a filter change refetches', () => {
     // useModelLogs keeps previous data once a load has succeeded, so the filters only lose their
     // data after a failed first load: errored for the first query key, loading for any other.
@@ -356,6 +382,37 @@ describe('ModelLogsTab', () => {
 
       expect(search).toHaveValue('sonnet');
       expect(search).toHaveFocus();
+    });
+
+    // The real router commits a navigate after React re-renders, so the old date comes back in
+    // first; writing it into the input resets the browser's year-typing buffer.
+    it.each(['Start Date', 'End Date'])('keeps each year digit in %s when the URL commits late', async label => {
+      failOnlyFirstKey();
+      act(() => fakeAdminRouter.reset({ tab: 'model-logs' }));
+      const commit = fakeAdminRouter.navigate.getMockImplementation()!;
+      fakeAdminRouter.navigate.mockImplementation(options => {
+        setTimeout(() => commit(options));
+      });
+      try {
+        renderTab();
+
+        const input = screen.getByLabelText(label);
+        act(() => input.focus());
+        for (const value of ['0002-10-01', '0020-10-01', '0202-10-01', '2026-10-01']) {
+          fireEvent.change(input, { target: { value } });
+          expect(input).toHaveValue(value);
+        }
+
+        await waitFor(() =>
+          expect(fakeAdminRouter.search).toMatchObject({
+            [label === 'Start Date' ? 'modelLogsFrom' : 'modelLogsTo']: '2026-10-01',
+          })
+        );
+        expect(input).toHaveValue('2026-10-01');
+        expect(input).toHaveFocus();
+      } finally {
+        fakeAdminRouter.navigate.mockImplementation(commit);
+      }
     });
 
     it.each(['Start Date', 'End Date'])('keeps each typed year digit and focus in %s', label => {
