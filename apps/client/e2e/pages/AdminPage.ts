@@ -180,9 +180,19 @@ export class AdminPage extends BasePage {
     return this.page.getByTestId('admin-user-card').filter({ has: this.page.getByTestId(`user-name-${name}`) });
   }
 
+  /**
+   * Row buttons are activated from the keyboard: at 1280x720 the Users page header (signups chart,
+   * filters) leaves the scrolling list almost no height, so the bottom pager covers the row and a
+   * pointer click never lands.
+   */
+  private async activateRowButton(name: string, testId: string) {
+    const button = this.getUserRow(name).getByTestId(testId);
+    await button.focus();
+    await button.press('Enter');
+  }
+
   async clickUserAdminButton(name: string) {
-    const row = this.getUserRow(name);
-    await row.getByTestId('admin-user-admin-btn').click();
+    await this.activateRowButton(name, 'admin-user-admin-btn');
     // Navigates to the /admin/users/$userId profile page
     await expect(this.page.getByTestId('user-profile-view')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
@@ -194,8 +204,7 @@ export class AdminPage extends BasePage {
   }
 
   async clickUserProfileButton(name: string) {
-    const row = this.getUserRow(name);
-    await row.getByTestId('admin-user-profile-btn').click();
+    await this.activateRowButton(name, 'admin-user-profile-btn');
     // Wait for AdminProfileModal to open
     await expect(this.page.getByTestId('admin-profile-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
