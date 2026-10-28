@@ -134,10 +134,13 @@ export async function listAdminUsers(
   };
 }
 
-/** Hard ceiling on one CSV export; the response says when the filter matched more. */
-export const USERS_EXPORT_MAX_ROWS = 50_000;
-// ms. An export reads far more rows than a page, so it gets more time than a list read.
-const EXPORT_MAX_TIME_MS = 60_000;
+/**
+ * Hard ceiling on one CSV export; the response says when the filter matched more. Sized so the JSON
+ * body (~260 bytes per row, ~430 worst case) stays under the 6 MB buffered Lambda response limit.
+ */
+export const USERS_EXPORT_MAX_ROWS = 15_000;
+// ms. Reads more rows than a page, but must finish inside the 60 s server Lambda timeout.
+const EXPORT_MAX_TIME_MS = 45_000;
 
 export type AdminUsersExportRow = Pick<
   IUserObject,

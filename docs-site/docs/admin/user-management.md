@@ -194,7 +194,7 @@ The **Export CSV** button exports all users matching the current search and filt
 | Is Admin | Yes/No |
 | Is Banned | Yes/No |
 
-The export includes all matching users, not just the current page, up to 50,000 rows. If the export hits that cap, a warning asks you to narrow the filters to export the rest.
+The export includes all matching users, not just the current page, up to 15,000 rows. If the export hits that cap, a warning asks you to narrow the filters to export the rest.
 
 ## Best Practices
 
