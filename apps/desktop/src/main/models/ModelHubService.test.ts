@@ -63,11 +63,13 @@ interface Deferred {
   options: PullOptions | undefined;
 }
 
+type Health = { ok: boolean; version: string | null; error: string | null };
+
 function harness(options: { detail?: HubModelDetail; verified?: string | null; healthy?: boolean } = {}) {
   const pulls: Deferred[] = [];
   const runtime = {
     baseUrl: 'http://127.0.0.1:11434',
-    health: vi.fn(async () =>
+    health: vi.fn(async (): Promise<Health> =>
       options.healthy === false
         ? { ok: false, version: null, error: 'connection refused' }
         : { ok: true, version: '0.40.11', error: null }
@@ -152,8 +154,8 @@ describe('ModelHubService pulls', () => {
 
   it('reports a cancel during the Ollama check as a cancel, not as Ollama being down', async () => {
     const { service, runtime, pulls } = harness();
-    let release: (health: { ok: boolean; version: string | null; error: string | null }) => void = () => undefined;
-    runtime.health.mockImplementationOnce(() => new Promise(resolve => (release = resolve)));
+    let release: (health: Health) => void = () => undefined;
+    runtime.health.mockImplementationOnce(() => new Promise<Health>(resolve => (release = resolve)));
     const result = service.pull(request);
     await vi.waitFor(() => expect(runtime.health).toHaveBeenCalledTimes(1));
 
