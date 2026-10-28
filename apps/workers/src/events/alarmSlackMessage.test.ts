@@ -242,6 +242,14 @@ describe('formatAlarmSlackMessage on production', () => {
     expect(contextOf(message)).toContain('level warn');
   });
 
+  it('escapes markup characters in the resolved fallback text', () => {
+    const message = formatAlarmSlackMessage(
+      { ...sample, AlarmName: 'x-a<b&c-alarm', NewStateValue: 'OK', OldStateValue: 'ALARM' },
+      'production'
+    );
+    expect(message?.text).toContain('a&lt;b&amp;c');
+  });
+
   it('renders OK as a quiet green resolved message with no header', () => {
     const message = formatAlarmSlackMessage({ ...sample, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production');
     expect(message?.text).toBe(':white_check_mark: Resolved: Sign-in code emails above the hourly ceiling');

@@ -553,7 +553,7 @@ export function formatAlarmSlackMessage(
 
   if (alarm.NewStateValue === 'OK') {
     const back = when ? `back to normal at ${formatClock(when)} UTC` : 'back to normal';
-    const text = `:white_check_mark: Resolved: ${title}`;
+    const text = `:white_check_mark: Resolved: ${escapeMrkdwn(title)}`;
     const context = [escapeMrkdwn(alarm.AlarmName), link].filter(Boolean) as string[];
     return {
       text,
