@@ -3,7 +3,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
-import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { agentRepository } from '@bike4mind/database';
 import { ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { generateAgentSystemPrompt } from '@server/agents/authoring/generateAgentSystemPrompt';
@@ -18,7 +18,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
   Request<{ id: string }, GenerateSystemPromptResponse, {}>
 >(
   withRequestCompletionQuota(async (req, res) => {
-    assertAiAccessAllowed(req.user);
+    await assertOutboundActionAllowed(req.user, req);
     const { id } = req.query;
     const userId = req.user!.id;
 

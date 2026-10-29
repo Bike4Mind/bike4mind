@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact, liveShareTokens } from '@bike4mind/database';
@@ -164,6 +165,7 @@ const handler = baseApi()
     // the gate in the before/after comparison, not just the visibility level.
     const wasOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
     if (parsed.data.visibility !== undefined) {
+      if (parsed.data.visibility === 'public') await assertOutboundActionAllowed(req.user, req);
       // Validate the requested visibility against the artifact's scope-tier policy
       // (same rules as publish) so PATCH can't set a tier-invalid visibility.
       const viz = resolveVisibility(artifact.tier, parsed.data.visibility);

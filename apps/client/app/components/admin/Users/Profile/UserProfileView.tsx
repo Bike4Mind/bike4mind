@@ -142,7 +142,8 @@ const StatusBanner: React.FC<{ user: AdminUserProfile; onReinstate: () => void; 
           </>
         ) : (
           <>
-            <strong>Restricted.</strong> They can sign in but cannot use AI features.
+            <strong>Restricted.</strong> They can sign in but cannot use AI features, send email or invites, use tools,
+            or publish.
           </>
         )}
       </Typography>

@@ -84,7 +84,7 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
       emailVerified?: boolean;
     } | null>,
   ]);
-  // A missing createdAt predates mongoose timestamps, so the account is old (matches userApiKeyService/trust.ts).
+  // A missing createdAt predates mongoose timestamps, so the account is old.
   const accountAgeInDays = user?.createdAt
     ? (Date.now() - user.createdAt.getTime()) / (1000 * 60 * 60 * 24)
     : Number.POSITIVE_INFINITY;

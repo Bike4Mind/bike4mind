@@ -9,11 +9,16 @@ import bcrypt from 'bcryptjs';
  * No real database; the artifact doc is a plain mutable object with save()/toJSON().
  */
 
-const { findOne, deletePublishThumbnails } = vi.hoisted(() => ({
+const { findOne, deletePublishThumbnails, assertOutbound } = vi.hoisted(() => ({
+  assertOutbound: vi.fn(async (_user: unknown, _req: unknown) => undefined as void),
   findOne: vi.fn(),
   deletePublishThumbnails: vi.fn(async (_publicIds: string[], _logger: unknown) => 0),
 }));
 
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: assertOutbound,
+}));
 vi.mock('@bike4mind/server-utils/utils/publishThumbnails', () => ({ deletePublishThumbnails }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -95,6 +100,7 @@ async function patchGate(allowedDomains: string[], artifact = makeArtifact()) {
 
 beforeEach(() => {
   findOne.mockReset();
+  assertOutbound.mockClear();
 });
 
 /** A public artifact carrying owner/moderation/storage internals. */
@@ -705,5 +711,35 @@ describe('PATCH /api/publish/artifacts/[id] - title/description purge the cached
   it('does NOT purge a renamed gated public artifact - it is not cache-eligible', async () => {
     const gated = titled({ accessGate: { kind: 'passphrase', passphraseHash: 'x' } });
     expect(await patchBody({ title: 'New title' }, gated)).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/publish/artifacts/[id] - outbound gate on going public', () => {
+  async function patch(
+    body: Record<string, unknown>,
+    artifact = Object.assign(makeArtifact(), { visibility: 'private' })
+  ) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, artifact };
+  }
+
+  it('rejects making a page public when the gate refuses, without saving', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+    assertOutbound.mockRejectedValueOnce(new ForbiddenError('restricted'));
+    const artifact = Object.assign(makeArtifact(), { visibility: 'private' });
+    await expect(patch({ visibility: 'public' }, artifact)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the gate for a title-only edit', async () => {
+    const { res } = await patch({ title: 'Renamed' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(assertOutbound).not.toHaveBeenCalled();
   });
 });

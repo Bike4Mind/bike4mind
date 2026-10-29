@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
@@ -75,6 +79,7 @@ describe('POST /api/projects/:id/invites', () => {
 
   it('rate limits invite creation per user with a route-wide bucket', () => {
     expect(mockRefs.postMiddleware).toEqual([
+      expect.any(Function),
       { rateLimitOptions: expect.objectContaining({ bucket: 'POST /api/projects/[id]/invites' }) },
     ]);
   });

@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { sessionRepository, fabFileRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailSendRequestSchema } from '../../../types/api';
@@ -8,7 +9,7 @@ import { z } from 'zod';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { sendEmailWithAttachments } from '@server/utils/mailer/emailAttachments';
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   try {
     const brand = process.env.APP_NAME || '';
     const userId = req.user?.id;

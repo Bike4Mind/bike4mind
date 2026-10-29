@@ -1,3 +1,4 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   assertProjectsReadScope,
@@ -111,6 +112,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
     return res.json({ ...result, data: await toSharerInviteViews(result.data, req.user!) });
   })
   .post(
+    outboundActionGate(),
     rateLimit(PROJECT_INVITE_RATE_LIMIT),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
       assertProjectsWriteScope(req);

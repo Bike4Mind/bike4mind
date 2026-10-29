@@ -24,7 +24,7 @@ const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
   { action: 'productAccess', label: 'Manage product access' },
   'divider',
   { action: 'compliance', label: 'Compliance record' },
-  { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict AI features' },
+  { action: 'restrict', label: user.isModerated ? 'Lift restriction' : 'Restrict account' },
   { action: 'delete', label: 'Delete user', danger: true },
 ];
 
