@@ -73,6 +73,13 @@ export const isSuspectedSignup = (signals: readonly SignupSignal[]): boolean =>
 export const SIGNUP_TIMESERIES_RANGES = ['24h', '7d', '30d', '90d'] as const;
 export type SignupTimeseriesRange = (typeof SIGNUP_TIMESERIES_RANGES)[number];
 
+export const SIGNUP_TIMESERIES_RANGE_LABELS: Record<SignupTimeseriesRange, string> = {
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+  '90d': 'Last 90 days',
+};
+
 export type SignupSignalCounts = Record<SignupSignal, number>;
 
 export type SignupTimeseriesBucket = {
@@ -100,6 +107,15 @@ export type SignupTimeseries = {
   /** The API key scan hit its cap; `earlyApiKey` counts are lower bounds. */
   keysTruncated: boolean;
 };
+
+/** One account's verdict from the chart's classifier; the signals say why. */
+export type SignupVerdict = { suspected: boolean; signals: SignupSignal[] };
+
+/** Response of /api/admin/users/signup-verdicts: null for an account the chart did not classify. */
+export type SignupVerdicts = { verdicts: Record<string, SignupVerdict | null> };
+
+/** Most ids one verdict request may carry: the largest Users page. */
+export const SIGNUP_VERDICTS_MAX_IDS = 100;
 
 export const emptySignalCounts = (): SignupSignalCounts =>
   Object.fromEntries(SIGNUP_SIGNALS.map(signal => [signal, 0])) as SignupSignalCounts;

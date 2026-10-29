@@ -11,6 +11,7 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
 import type { AdminUsersBulkActionType, AdminUsersBulkTarget } from '@client/app/utils/adminUsersBulk';
 import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
+import type { SignupTimeseriesRange } from '@client/app/utils/signupSignals';
 import AdminProfileModal from '../AdminProfileModal';
 import {
   AdminPageHeader,
@@ -23,6 +24,7 @@ import {
 import { adminFocus } from '../shared/adminStyles';
 import { AnomalyBanner } from './AnomalyBanner';
 import { SignupActivityPanel } from '../Signups/SignupActivityPanel';
+import { useSignupVerdicts } from '../Signups/useSignupTimeseries';
 import ComplianceModal from './ComplianceModal';
 import CreateUserModal, { useCreateUserModal } from './CreateUserModal';
 import { exportUsersCsv } from './exportUsersCsv';
@@ -95,6 +97,7 @@ const UsersTab: React.FC = () => {
   // The target is frozen when the dialog opens, so a list refetch cannot change what it acts on.
   const [bulkRun, setBulkRun] = useState<{ type: AdminUsersBulkActionType; target: AdminUsersBulkTarget } | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [signupRange, setSignupRange] = useState<SignupTimeseriesRange>('7d');
 
   // Seeded from the persisted params so a restored search is not wiped on mount.
   const {
@@ -119,9 +122,17 @@ const UsersTab: React.FC = () => {
 
   const rows = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data]);
   const totalUsers = usersQuery.data?.totalUsers ?? 0;
+  const rowIds = useMemo(() => rows.map(row => row.id), [rows]);
+  const verdictsQuery = useSignupVerdicts(signupRange, rowIds);
+  const verdicts = verdictsQuery.data?.verdicts;
   const columns = useMemo(
-    () => usersColumns({ now: new Date(), maxSpend: Math.max(0, ...rows.map(row => row.spend30d ?? 0)) }),
-    [rows]
+    () =>
+      usersColumns({
+        now: new Date(),
+        maxSpend: Math.max(0, ...rows.map(row => row.spend30d ?? 0)),
+        verdict: { range: signupRange, verdicts },
+      }),
+    [rows, signupRange, verdicts]
   );
 
   // A selection made under one filter must not ride into a bulk run under another.
@@ -246,7 +257,11 @@ const UsersTab: React.FC = () => {
         }}
       />
       {anomalyQuery.isError && <Alert color="warning">Could not check signup anomalies. Refresh to retry.</Alert>}
-      <SignupActivityPanel onSelectWindow={window => setParams({ ...window, signedUp: undefined, page: 1 })} />
+      <SignupActivityPanel
+        range={signupRange}
+        onRangeChange={setSignupRange}
+        onSelectWindow={window => setParams({ ...window, signedUp: undefined, page: 1 })}
+      />
 
       {showRecentActivity ? (
         <RecentActivityView />

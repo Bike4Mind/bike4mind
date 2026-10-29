@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { SignupTimeseries, SignupTimeseriesRange } from '@client/app/utils/signupSignals';
+import type { SignupTimeseries, SignupTimeseriesRange, SignupVerdicts } from '@client/app/utils/signupSignals';
 
 // Nested under ['users'] so every user mutation's prefix invalidation (create, delete, ...) refreshes the chart.
 export const signupTimeseriesQueryKey = (range: SignupTimeseriesRange) =>
@@ -17,6 +17,21 @@ export function useSignupTimeseries(range: SignupTimeseriesRange) {
           params: { range, tzOffset: -new Date().getTimezoneOffset() },
         })
       ).data,
+    staleTime: 60000,
+  });
+}
+
+/** The chart's verdict for each listed account, under the range the chart is showing. */
+export function useSignupVerdicts(range: SignupTimeseriesRange, userIds: readonly string[]) {
+  return useQuery({
+    queryKey: ['users', 'signup-verdicts', range, userIds] as const,
+    queryFn: async () =>
+      (
+        await api.get<SignupVerdicts>('/api/admin/users/signup-verdicts', {
+          params: { range, tzOffset: -new Date().getTimezoneOffset(), ids: userIds.join(',') },
+        })
+      ).data,
+    enabled: userIds.length > 0,
     staleTime: 60000,
   });
 }

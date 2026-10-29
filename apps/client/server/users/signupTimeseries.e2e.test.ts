@@ -3,7 +3,12 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { getSignupTimeseries, TIMESERIES_KEY_SCAN_LIMIT, TIMESERIES_SCAN_LIMIT } from './signupTimeseries';
+import {
+  getSignupTimeseries,
+  getSignupVerdicts,
+  TIMESERIES_KEY_SCAN_LIMIT,
+  TIMESERIES_SCAN_LIMIT,
+} from './signupTimeseries';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -179,5 +184,60 @@ describe('getSignupTimeseries', () => {
     const result = await getSignupTimeseries({ range: '24h' }, NOW);
     expect(result.keysTruncated).toBe(true);
     expect(result.truncated).toBe(false);
+  });
+});
+
+describe('getSignupVerdicts', () => {
+  const insertMixedCohort = async () => {
+    const farm = Array.from({ length: 30 }, (_, i) => ({
+      email: `zz-${100 + i}-${i}@farm.test`,
+      createdAt: new Date(NOW.getTime() - 5 * HOUR + i * 138 * 1000),
+    }));
+    const humans = [7, 19, 41].map((minutes, i) => ({
+      email: `someone${'abc'[i]}@gmail.com`,
+      createdAt: new Date(NOW.getTime() - minutes * MIN),
+    }));
+    const { insertedIds } = await insertUsers([...farm, ...humans]);
+    const ids = Object.values(insertedIds).map(String);
+    return { farmIds: ids.slice(0, farm.length), humanIds: ids.slice(farm.length) };
+  };
+
+  it('gives each account the verdict the chart counted it under', async () => {
+    const { farmIds, humanIds } = await insertMixedCohort();
+    const userIds = [...farmIds, ...humanIds];
+
+    const [{ verdicts }, series] = await Promise.all([
+      getSignupVerdicts({ range: '24h', userIds }, NOW),
+      getSignupTimeseries({ range: '24h' }, NOW),
+    ]);
+
+    const suspected = userIds.filter(id => verdicts[id]?.suspected).length;
+    expect(suspected).toBe(series.totals.suspected);
+    expect(userIds.length - suspected).toBe(series.totals.likelyLegit);
+    expect(verdicts[farmIds[0]]).toEqual({ suspected: true, signals: expect.arrayContaining(['domainCadence']) });
+    expect(verdicts[humanIds[0]]).toEqual({ suspected: false, signals: [] });
+  });
+
+  it('returns null for accounts outside the range and ids that match no account', async () => {
+    const { humanIds } = await insertMixedCohort();
+    const { insertedIds } = await insertUsers([
+      { email: 'old@company.test', createdAt: new Date(NOW.getTime() - 3 * 24 * HOUR) },
+    ]);
+    const oldId = String(insertedIds[0]);
+    const missingId = String(new mongoose.Types.ObjectId());
+
+    const { verdicts } = await getSignupVerdicts({ range: '24h', userIds: [humanIds[0], oldId, missingId] }, NOW);
+
+    expect(verdicts[humanIds[0]]).not.toBeNull();
+    expect(verdicts[oldId]).toBeNull();
+    expect(verdicts[missingId]).toBeNull();
+  });
+
+  it('answers a page of accounts that are all outside the range with nulls', async () => {
+    const { insertedIds } = await insertUsers([
+      { email: 'old@company.test', createdAt: new Date(NOW.getTime() - 3 * 24 * HOUR) },
+    ]);
+    const oldId = String(insertedIds[0]);
+    expect(await getSignupVerdicts({ range: '24h', userIds: [oldId] }, NOW)).toEqual({ verdicts: { [oldId]: null } });
   });
 });
