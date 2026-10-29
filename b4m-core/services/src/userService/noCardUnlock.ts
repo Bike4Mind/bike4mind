@@ -334,14 +334,15 @@ export async function grantNoCardUnlock(
   if (!pre.ok) return refused(pre.refusal);
   const { user, settings, reasonCredits, transactionId } = pre;
 
+  // Before the validator, which can spend something external (the phone reason consumes the SMS code).
+  const grantedBefore = await sumGranted(db, userId);
+  if (Math.min(reasonCredits, settings.maxCredits - grantedBefore) <= 0) return refused('cap_reached');
+
   // A budget-held signup tranche is paid before any unlock, so no account holds the remainder without it.
   if (user.signupGrantHeldReason === 'budget_exhausted') return refused('signup_grant_pending');
 
   const check = await validators[reason]({ id: user.id, email: user.email ?? '' });
   if (!check.ok) return refused(check.refusal);
-
-  const grantedBefore = await sumGranted(db, userId);
-  if (Math.min(reasonCredits, settings.maxCredits - grantedBefore) <= 0) return refused('cap_reached');
 
   const commit = check.commit ? await check.commit() : null;
   if (commit && !commit.ok) return refused(commit.refusal);

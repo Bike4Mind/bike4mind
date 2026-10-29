@@ -285,6 +285,23 @@ describe('phone unlock start + verify', () => {
     expect(twilioCalls()).toEqual([]);
   });
 
+  it('refuses verify on a cap filled after the send without spending the code check', async () => {
+    const id = await seedUser();
+    await startPhoneUnlock(id, NUMBER, req());
+    await CreditTransaction.create({
+      ownerId: id,
+      ownerType: CreditHolderType.User,
+      credits: 15,
+      type: 'generic_add',
+      reason: 'no_card_unlock:github_verified',
+      transactionId: noCardUnlockTransactionId('github_verified', id),
+    });
+    expect(await runNoCardUnlock('phone_verified', id, { phoneCode: '123456' })).toMatchObject({
+      refusal: 'cap_reached',
+    });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/VerificationCheck'))).toBe(false);
+  });
+
   it('caps sends per number country from the admin setting', async () => {
     await AdminSettings.create({ settingName: 'noCardUnlockPhoneCountryDailyCap', settingValue: 1 });
     expect(await startPhoneUnlock(await seedUser(), NUMBER, req('81.2.70.1'))).toEqual({
