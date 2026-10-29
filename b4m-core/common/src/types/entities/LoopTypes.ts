@@ -7,9 +7,9 @@ import { IBaseRepository } from './BaseTypes';
  * notebook, then folds the run's `loop-memory` block back into `memory` so the
  * next run picks up where this one stopped.
  */
-export type LoopStatus = 'draft' | 'live' | 'paused' | 'needs_you' | 'error';
+export const LOOP_STATUSES = ['draft', 'live', 'paused', 'needs_you', 'error'] as const;
 
-export const LOOP_STATUSES: readonly LoopStatus[] = ['draft', 'live', 'paused', 'needs_you', 'error'];
+export type LoopStatus = (typeof LOOP_STATUSES)[number];
 
 export const DEFAULT_LOOP_STAGES: readonly string[] = ['todo', 'doing', 'done'];
 
@@ -63,11 +63,19 @@ export interface ILoop {
 export interface ILoopRepository extends IBaseRepository<ILoop> {
   listForUser(userId: string): Promise<ILoop[]>;
   findByIdAndUserId(id: string, userId: string): Promise<ILoop | null>;
-  /** Scoped update - a `null` in `patch` unsets the field. Returns null when missing or not owned. */
-  updateForUser(id: string, userId: string, patch: Record<string, unknown>): Promise<ILoop | null>;
+  /**
+   * Scoped update - a `null` in `patch` unsets the field. With `expectedStatus` it only applies while
+   * the loop still has that status. Returns null when nothing matched.
+   */
+  updateForUser(
+    id: string,
+    userId: string,
+    patch: Record<string, unknown>,
+    expectedStatus?: LoopStatus
+  ): Promise<ILoop | null>;
   deleteForUser(id: string, userId: string): Promise<boolean>;
-  /** Atomically leases one due `live` loop with no run in flight, or returns null. */
-  claimDue(now: Date, leaseMs: number): Promise<ILoop | null>;
+  /** Atomically leases one due `live` loop with no run in flight and not in `skipIds`, or returns null. */
+  claimDue(now: Date, leaseMs: number, skipIds?: string[]): Promise<ILoop | null>;
   releaseLease(id: string): Promise<void>;
   markDispatched(id: string, executionId: string, nextRunAt: Date): Promise<void>;
   listInFlight(): Promise<ILoop[]>;
@@ -81,4 +89,6 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
     executionId: string,
     update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
   ): Promise<boolean>;
+  /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
+  markErroredIfFailing(id: string, maxFailures: number): Promise<void>;
 }

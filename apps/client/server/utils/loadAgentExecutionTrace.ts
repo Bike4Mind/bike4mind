@@ -45,7 +45,7 @@ export type AgentExecutionTrace = {
  * breaking the documented `tools` pre-approval remedy. Unflagged is the default, so a
  * new failure path leaks nothing until someone deliberately opts it in.
  */
-function toCallerSafeError(error: { message?: string; callerSafe?: boolean } | null | undefined): string | null {
+export function toCallerSafeError(error: { message?: string; callerSafe?: boolean } | null | undefined): string | null {
   if (!error?.message) return null;
   return error.callerSafe ? error.message : toUserFacingFailureMessage(error.message);
 }

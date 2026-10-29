@@ -7,6 +7,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
+import { toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import { Resource } from 'sst';
 import { buildLoopSystemContext, parseLoopMemory } from './loopMemory';
 
@@ -49,25 +50,32 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
     }
   }
 
+  // A loop not started this tick (lease released) is still due; skipping it keeps it from being
+  // re-claimed in a hot loop and starving every other due loop.
+  const claimed: string[] = [];
   for (let dispatched = 0; dispatched < MAX_DISPATCH_PER_TICK; dispatched++) {
-    const loop = await loopRepository.claimDue(now, LOOP_LEASE_MS);
+    const loop = await loopRepository.claimDue(now, LOOP_LEASE_MS, claimed);
     if (!loop) break;
+    claimed.push(loop.id);
     try {
       await dispatchLoop(loop, now, logger);
     } catch (error) {
       logger.error(`[Loops] Failed to dispatch loop ${loop.id}`, error as Error);
-      await loopRepository.releaseLease(loop.id);
     }
   }
 }
+
+/** Parents waiting on children legitimately idle for hours; the executor's own stale sweep skips them too. */
+const WAITING_ON_CHILDREN = ['awaiting_subagent', 'awaiting_dag_children'];
 
 async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   const executionId = loop.activeExecutionId!;
   const execution = await agentExecutionRepository.findById(executionId);
 
   if (execution && ACTIVE_AGENT_EXECUTION_STATUSES.includes(execution.status)) {
-    // ponytail: updatedAt heuristic, same threshold as the start-time stale sweep. A legitimately
-    // long-quiet run is folded as failed here; the executor's per-user cap still counts it.
+    if (WAITING_ON_CHILDREN.includes(execution.status)) return;
+    // ponytail: updatedAt heuristic, same threshold and statuses as the start-time stale sweep, which
+    // aborts the doc on the owner's next start. A legitimately long-quiet run is folded as failed here.
     if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return;
   }
 
@@ -98,36 +106,41 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     : execution.status === 'aborted'
       ? 'Run aborted'
       : execution.status === 'failed'
-        ? (execution.error?.message ?? 'Run failed')
+        ? (toCallerSafeError(execution.error) ?? 'Run failed')
         : 'Run stalled';
-  const failures = loop.consecutiveFailures + 1;
-  await loopRepository.foldRun(loop.id, executionId, {
-    $set: {
-      statusReason: reason,
-      lastRunAt: execution?.completedAt ?? now,
-      ...(failures >= MAX_CONSECUTIVE_FAILURES && loop.status === 'live' && { status: 'error' }),
-    },
+  const folded = await loopRepository.foldRun(loop.id, executionId, {
+    $set: { statusReason: reason, lastRunAt: execution?.completedAt ?? now },
     $inc: { consecutiveFailures: 1 },
   });
+  // A separate conditional write, so an owner's pause landing mid-tick is never overwritten.
+  if (folded) await loopRepository.markErroredIfFailing(loop.id, MAX_CONSECUTIVE_FAILURES);
 }
 
 async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<void> {
-  const result = await startAgentExecution(
-    {
-      userId: loop.userId,
-      sessionId: loop.sessionId,
-      questId: loop.sessionId,
-      query: loop.goal,
-      model: loop.model,
-      connectionId: HEADLESS_CONNECTION_ID,
-      apiKeyInfo: undefined,
-      ...(loop.organizationId && { organizationId: loop.organizationId }),
-      ...(loop.agentId && { agentId: loop.agentId }),
-      enabledTools: loop.tools,
-      systemContext: buildLoopSystemContext(loop.memory),
-    },
-    logger
-  );
+  let result: Awaited<ReturnType<typeof startAgentExecution>>;
+  try {
+    result = await startAgentExecution(
+      {
+        userId: loop.userId,
+        sessionId: loop.sessionId,
+        questId: loop.sessionId,
+        query: loop.goal,
+        model: loop.model,
+        connectionId: HEADLESS_CONNECTION_ID,
+        apiKeyInfo: undefined,
+        ...(loop.organizationId && { organizationId: loop.organizationId }),
+        ...(loop.agentId && { agentId: loop.agentId }),
+        enabledTools: loop.tools,
+        systemContext: buildLoopSystemContext(loop.memory),
+      },
+      logger
+    );
+  } catch (error) {
+    // Nothing was started, so the loop may retry next tick. Once an execution exists the lease is left
+    // to run out instead, so a failed markDispatched doesn't free the loop for an immediate second run.
+    await loopRepository.releaseLease(loop.id);
+    throw error;
+  }
 
   if (result.ok) {
     await loopRepository.markDispatched(
@@ -140,8 +153,9 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
   }
 
   if (result.reason === 'dispatch_failed' && result.executionId) {
-    // The execution doc exists and may yet run (an unconfirmed HTTP dispatch), so track it rather
-    // than risk a second, overlapping run; reconcile folds it and the loop retries right after.
+    // The execution doc exists. It may yet run (an unconfirmed self-host HTTP dispatch) or stay
+    // pending (a rejected invoke); either way track it rather than risk an overlapping run.
+    // Reconcile folds it once terminal or stale, and the loop retries right after.
     await loopRepository.markDispatched(loop.id, result.executionId, now);
     logger.warn(`[Loops] Dispatch of loop ${loop.id} unconfirmed; tracking ${result.executionId}`);
     return;

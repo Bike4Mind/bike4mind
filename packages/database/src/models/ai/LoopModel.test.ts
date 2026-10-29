@@ -83,6 +83,11 @@ describe('LoopRepository', () => {
       expect(await loopRepository.claimDue(now, LEASE_MS)).toBeNull();
     });
 
+    it('skips the ids it is told to', async () => {
+      const loop = await create({ status: 'live', nextRunAt: past });
+      expect(await loopRepository.claimDue(now, LEASE_MS, [loop.id])).toBeNull();
+    });
+
     it('reclaims a loop whose lease has expired', async () => {
       await create({ status: 'live', nextRunAt: past, leaseUntil: past });
       expect(await loopRepository.claimDue(now, LEASE_MS)).not.toBeNull();
@@ -99,6 +104,27 @@ describe('LoopRepository', () => {
     const after = await loopRepository.findByIdAndUserId(loop.id, USER);
     expect(after?.runCount).toBe(1);
     expect(after?.activeExecutionId).toBeUndefined();
+  });
+
+  it('updateForUser unsets nulls and honours expectedStatus', async () => {
+    const loop = await create({ agentId: 'agent-1', budgetCreditsPerDay: 10 });
+    const cleared = await loopRepository.updateForUser(loop.id, USER, { agentId: null, budgetCreditsPerDay: null });
+    expect(cleared?.agentId).toBeUndefined();
+    expect(cleared?.budgetCreditsPerDay).toBeUndefined();
+
+    expect(await loopRepository.updateForUser(loop.id, USER, { name: 'x' }, 'live')).toBeNull();
+    expect((await loopRepository.updateForUser(loop.id, USER, { name: 'x' }, 'draft'))?.name).toBe('x');
+  });
+
+  it('markErroredIfFailing only moves a live loop at the limit', async () => {
+    const atLimit = await create({ status: 'live', consecutiveFailures: 3 });
+    const below = await create({ status: 'live', consecutiveFailures: 2 });
+    const paused = await create({ status: 'paused', consecutiveFailures: 3 });
+    for (const loop of [atLimit, below, paused]) await loopRepository.markErroredIfFailing(loop.id, 3);
+
+    expect((await loopRepository.findByIdAndUserId(atLimit.id, USER))?.status).toBe('error');
+    expect((await loopRepository.findByIdAndUserId(below.id, USER))?.status).toBe('live');
+    expect((await loopRepository.findByIdAndUserId(paused.id, USER))?.status).toBe('paused');
   });
 
   it('scopes reads, updates and deletes to the owner', async () => {

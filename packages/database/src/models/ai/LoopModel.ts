@@ -1,5 +1,5 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
-import { DEFAULT_LOOP_STAGES, ILoop, ILoopRepository, LOOP_STATUSES } from '@bike4mind/common';
+import { DEFAULT_LOOP_STAGES, ILoop, ILoopRepository, LOOP_STATUSES, LoopStatus } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 const ModelName = 'Loop';
@@ -23,7 +23,12 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result?.toJSON() ?? null;
   }
 
-  async updateForUser(id: string, userId: string, patch: Record<string, unknown>): Promise<ILoop | null> {
+  async updateForUser(
+    id: string,
+    userId: string,
+    patch: Record<string, unknown>,
+    expectedStatus?: LoopStatus
+  ): Promise<ILoop | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     const set: Record<string, unknown> = {};
     const unset: Record<string, ''> = {};
@@ -32,7 +37,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       else if (value !== undefined) set[key] = value;
     }
     const result = await this.loopModel.findOneAndUpdate(
-      { _id: id, userId },
+      { _id: id, userId, ...(expectedStatus && { status: expectedStatus }) },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),
@@ -48,9 +53,10 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result.deletedCount > 0;
   }
 
-  async claimDue(now: Date, leaseMs: number): Promise<ILoop | null> {
+  async claimDue(now: Date, leaseMs: number, skipIds: string[] = []): Promise<ILoop | null> {
     const result = await this.loopModel.findOneAndUpdate(
       {
+        ...(skipIds.length > 0 && { _id: { $nin: skipIds } }),
         status: 'live',
         nextRunAt: { $lte: now },
         activeExecutionId: { $exists: false },
@@ -91,6 +97,13 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       { ...update, $unset: { ...update.$unset, activeExecutionId: '' } }
     );
     return result.modifiedCount > 0;
+  }
+
+  async markErroredIfFailing(id: string, maxFailures: number): Promise<void> {
+    await this.loopModel.updateOne(
+      { _id: id, status: 'live', consecutiveFailures: { $gte: maxFailures } },
+      { $set: { status: 'error' } }
+    );
   }
 }
 

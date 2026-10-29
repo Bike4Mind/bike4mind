@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { adminSettingsRepository, agentExecutionRepository, Loop } from '@bike4mind/database';
+import { adminSettingsRepository, agentExecutionRepository, Loop, loopRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -17,7 +17,7 @@ vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: h.startAgentExecution }));
 
-import { MAX_CONSECUTIVE_FAILURES, runLoopSchedulerTick } from './loopScheduler';
+import { LOOP_LEASE_MS, MAX_CONSECUTIVE_FAILURES, runLoopSchedulerTick } from './loopScheduler';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -138,7 +138,7 @@ describe('runLoopSchedulerTick', () => {
       consecutiveFailures: MAX_CONSECUTIVE_FAILURES - 2,
       nextRunAt: new Date(NOW.getTime() + 60_000),
     });
-    executions['exec-0'] = { status: 'failed', error: { message: 'LLM API returned 500' } };
+    executions['exec-0'] = { status: 'failed', error: { message: 'LLM API returned 500', callerSafe: true } };
     await runLoopSchedulerTick(NOW, logger);
     expect(await reload(loop.id)).toMatchObject({ status: 'live', statusReason: 'LLM API returned 500' });
 
@@ -146,6 +146,47 @@ describe('runLoopSchedulerTick', () => {
     executions['exec-00'] = { status: 'aborted' };
     await runLoopSchedulerTick(NOW, logger);
     expect(await reload(loop.id)).toMatchObject({ status: 'error', statusReason: 'Run aborted' });
+  });
+
+  it('never shows the owner a raw executor error', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    executions['exec-0'] = {
+      status: 'failed',
+      error: { message: 'connect ECONNREFUSED internal-db.cluster.local:27017' },
+    };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(loop.id)).statusReason).toBe('Agent execution failed');
+  });
+
+  it('records a run whose execution doc is gone as a failure', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    await runLoopSchedulerTick(NOW, logger);
+    expect(await reload(loop.id)).toMatchObject({ statusReason: 'Run not found', consecutiveFailures: 1 });
+  });
+
+  it('does not move a loop the owner paused to error', async () => {
+    const loop = await createLoop({
+      status: 'paused',
+      activeExecutionId: 'exec-0',
+      consecutiveFailures: MAX_CONSECUTIVE_FAILURES - 1,
+    });
+    executions['exec-0'] = { status: 'aborted' };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await reload(loop.id)).toMatchObject({ status: 'paused', consecutiveFailures: MAX_CONSECUTIVE_FAILURES });
+  });
+
+  it('never stale-folds a run that is waiting on its children', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0' });
+    executions['exec-0'] = { status: 'awaiting_subagent', updatedAt: new Date(NOW.getTime() - 5 * 60 * 60_000) };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(loop.id)).activeExecutionId).toBe('exec-0');
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
   });
 
   it('folds a run that went quiet past the stale threshold as a failure', async () => {
@@ -163,10 +204,59 @@ describe('runLoopSchedulerTick', () => {
 
     await runLoopSchedulerTick(NOW, logger);
 
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
     const after = await reload(loop.id);
     expect(after.leaseUntil).toBeUndefined();
     expect(after.nextRunAt).toEqual(PAST);
     expect(after.status).toBe('live');
+  });
+
+  it('does not let a loop that could not start block the other due loops', async () => {
+    const stuck = await createLoop({ nextRunAt: new Date(PAST.getTime() - 60_000) });
+    const other = await createLoop({ userId: 'user-2' });
+    h.startAgentExecution.mockResolvedValueOnce({ ok: false, reason: 'dispatch_failed', message: 'invoke failed' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution.mock.calls.map(([input]) => input.userId)).toEqual(['user-1', 'user-2']);
+    expect((await reload(stuck.id)).leaseUntil).toBeUndefined();
+    expect((await reload(other.id)).activeExecutionId).toBe('exec-1');
+  });
+
+  it('tracks a dispatch_failed run that already has an execution doc', async () => {
+    const loop = await createLoop();
+    h.startAgentExecution.mockResolvedValue({
+      ok: false,
+      reason: 'dispatch_failed',
+      message: 'unconfirmed',
+      executionId: 'exec-7',
+    });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const after = await reload(loop.id);
+    expect(after).toMatchObject({ activeExecutionId: 'exec-7', lastExecutionId: 'exec-7' });
+    expect(after.nextRunAt).toEqual(NOW);
+  });
+
+  it('releases the lease when starting the run throws', async () => {
+    const loop = await createLoop();
+    h.startAgentExecution.mockRejectedValue(new Error('db down'));
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect((await reload(loop.id)).leaseUntil).toBeUndefined();
+  });
+
+  it('keeps the lease when a started run could not be recorded', async () => {
+    const loop = await createLoop();
+    vi.spyOn(loopRepository, 'markDispatched').mockRejectedValue(new Error('db blip'));
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect((await reload(loop.id)).leaseUntil).toEqual(new Date(NOW.getTime() + LOOP_LEASE_MS));
   });
 
   it('parks the loop at needs_you when its notebook is gone', async () => {
