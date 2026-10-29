@@ -28,7 +28,7 @@ import type {
   ModelServerUpdateInput,
   ModelServerView,
 } from '@shared/modelServers';
-import type { HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
+import type { HfTokenStatus, HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
 import {
   IPC_CHANNELS,
   type BrowserFreezeFrameRequest,
@@ -78,6 +78,14 @@ const api: DesktopApi = {
     cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
     remove: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name),
+    getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
+    setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
+    clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),
+    onHfTokenChanged: listener => {
+      const handler = (_event: unknown, status: HfTokenStatus) => listener(status);
+      ipcRenderer.on(IPC_CHANNELS.modelsHfAccessChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsHfAccessChanged, handler);
+    },
     onPullsChanged: listener => {
       const handler = (_event: unknown, pulls: ModelPull[]) => listener(pulls);
       ipcRenderer.on(IPC_CHANNELS.modelsPullsChanged, handler);
@@ -172,6 +180,11 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId, removeWorktree),
     inspectWorktreeRemoval: (sessionId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatInspectWorktreeRemoval, sessionId),
+    listWorktrees: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListWorktrees, directory),
+    removeWorktrees: (directory: string, paths?: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRemoveWorktrees, directory, paths),
+    revealWorktree: (directory: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRevealWorktree, directory, path),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),

@@ -5,7 +5,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -35,6 +35,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
 
     const { userId, subscriptionId } = req.query as RequestQuery;
     const { creditsPerCycle } = UpdateCreditsSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
@@ -64,6 +65,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
         target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
         organizationId,
         summary: `set subscription credits to ${creditsPerCycle} per billing cycle`,
+        reason,
         changes: [
           {
             field: 'customCreditsPerCycle',

@@ -737,7 +737,7 @@ const ManifestEnvelopeSchema = z.object({
   notesUrl: HttpsUrlSchema.nullable().optional(),
   changelog: z.unknown().optional(),
   tiers: z.unknown().optional(),
-  policy: z.record(z.string(), z.unknown()).optional(),
+  policy: z.record(z.string(), z.unknown()).nullable().optional(),
   families: z.record(z.string(), z.unknown()).refine(maxKeys(MAX_FAMILIES), 'too many families'),
   rankings: z.record(z.string(), z.unknown()).refine(maxKeys(16), 'too many rankings'),
   entries: z.array(z.unknown()).max(MAX_ENTRIES),
@@ -945,7 +945,7 @@ function deepFreeze<T>(value: T): T {
 export function parseHubManifest(input: unknown): HubManifestParse {
   const envelope = ManifestEnvelopeSchema.parse(input);
   const reader = new TolerantReader();
-  const policy = reader.policy(envelope.policy);
+  const policy = reader.policy(envelope.policy ?? undefined);
   const families = reader.families(envelope.families);
   const entries: HubEntry[] = [];
   envelope.entries.forEach((raw, i) => {

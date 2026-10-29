@@ -97,6 +97,14 @@ const CounterLogsQuerySchema = z.object({
     .string()
     .optional()
     .transform(val => (val ? val.split(',').map(v => decodeURIComponent(v)) : undefined)),
+  excludeNoOrg: z
+    .string()
+    .optional()
+    .transform(val => val === 'true'),
+  excludeStaff: z
+    .string()
+    .optional()
+    .transform(val => val === 'true'),
   report: z
     .string()
     .optional()
@@ -204,6 +212,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         events,
         orgs,
         excludeOrgs,
+        excludeNoOrg,
+        excludeStaff,
         report,
         includeInsights,
         weeklyReport,
@@ -271,6 +281,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
             events?.join(',') ?? '',
             orgs?.join(',') ?? '',
             excludeOrgs?.join(',') ?? '',
+            String(excludeNoOrg),
+            String(excludeStaff),
             counterName ?? '',
             userEmail ?? '',
             JSON.stringify(metadataFilters ?? []),
@@ -304,6 +316,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           events,
           orgs,
           excludeOrgs,
+          excludeNoOrg,
+          excludeStaff,
           counterName,
           userEmail,
           metadataFilters,

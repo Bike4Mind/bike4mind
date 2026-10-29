@@ -53,7 +53,7 @@ export function PullDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog size="md" sx={{ maxWidth: 520 }} data-testid="models-pull-dialog">
-        <DialogTitle>Download {build.quant ?? build.id}?</DialogTitle>
+        <DialogTitle>Download {build.label}?</DialogTitle>
         <DialogContent>
           {/* Joy's checkbox hit area sits 1px outside its box, which otherwise scrolls this content both ways. */}
           <Stack spacing={1.25} sx={{ p: '1px' }}>
@@ -104,7 +104,7 @@ export function PullDialog({
                   size="sm"
                   checked={confirmAccess}
                   onChange={event => setConfirmAccess(event.target.checked)}
-                  label="I have access to this repo and added my Ollama key to Hugging Face."
+                  label="I added Ollama's public key to the Hugging Face account that has access."
                   slotProps={{ input: { 'data-testid': 'models-pull-dialog-access-checkbox' } }}
                 />
               </>

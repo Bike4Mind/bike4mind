@@ -114,9 +114,10 @@ function VisionChip({ entry }: { entry: CuratedEntryView }) {
 function rowBuild(build: CuratedBuildView): HubBuildView {
   return {
     id: build.pullBuildId,
-    quant: build.quant,
+    label: build.quant,
     sizeBytes: build.sizeBytes,
     ollamaRef: build.ollamaRef,
+    installedNames: [build.ollamaRef.toLowerCase()],
     blockedReason: build.blockedReason,
     fit: build.fit,
   };

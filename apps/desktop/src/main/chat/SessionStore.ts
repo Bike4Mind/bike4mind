@@ -14,6 +14,7 @@ import type {
   ReasoningEffortSetting,
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import type { WorkspaceOwner } from '@shared/worktreeRemoval';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
@@ -497,6 +498,11 @@ export class SessionStore {
 
   /** Only workspace bindings cross account scopes; conversation contents stay private. */
   async workspaceProjectsExcept(sessionId: string): Promise<ChatProject[]> {
+    return (await this.workspaceOwnersExcept(sessionId)).flatMap(owner => (owner.project ? [owner.project] : []));
+  }
+
+  /** Folder references cross scopes for preservation; titles stay within the current scope. */
+  async workspaceOwnersExcept(sessionId: string): Promise<WorkspaceOwner[]> {
     const currentDirectory = await this.directoryFor(false);
     if (!currentDirectory) throw new Error('No conversation scope is available');
     const entries = await readdir(this.baseDirectory, { withFileTypes: true });
@@ -507,20 +513,39 @@ export class SessionStore {
         .filter(entry => entry.isDirectory())
         .map(entry => join(this.baseDirectory, assertScopeKey(entry.name))),
     ];
-    const projects: ChatProject[] = [];
-    const schema = z.object({ project: z.unknown().optional() });
+    const owners: WorkspaceOwner[] = [];
+    const directorySchema = z.string().min(1).refine(isAbsolute);
+    const schema = z.object({
+      project: z
+        .object({ contextDirectories: z.array(directorySchema).optional() })
+        .passthrough()
+        .nullish(),
+      grantedDirectories: z.array(directorySchema).optional(),
+      title: z.unknown().optional(),
+    });
     for (const directory of directories) {
       for (const name of await readdir(directory)) {
         if (!name.endsWith('.json')) continue;
         if (directory === currentDirectory && name === `${sessionId}.json`) continue;
         const record = schema.parse(JSON.parse(await readFile(join(directory, name), 'utf8')));
-        if (record.project == null) continue;
-        const project = normalizeProject(record.project);
-        if (!project) throw new Error('Cannot verify all conversation workspaces');
-        projects.push(project);
+        const project = record.project == null ? undefined : normalizeProject(record.project);
+        if (project === null) throw new Error('Cannot verify all conversation workspaces');
+        const directories = [
+          ...(project ? [project.directory, project.workingDirectory, ...project.contextDirectories] : []),
+          ...(record.grantedDirectories ?? []),
+        ];
+        if (directories.length === 0) continue;
+        owners.push({
+          ...(project ? { project } : {}),
+          directories: [...new Set(directories)],
+          title:
+            directory === currentDirectory
+              ? (typeof record.title === 'string' && record.title.trim()) || UNTITLED
+              : 'Another conversation',
+        });
       }
     }
-    return projects;
+    return owners;
   }
 
   private summaryIndex(directory: string): Promise<Map<string, IndexedSummary>> {

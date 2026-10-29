@@ -3,7 +3,6 @@ import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
   isAbliteratedModel,
-  type InstalledModel,
   type PullOptions,
 } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -19,12 +18,13 @@ import {
   CancelledError,
   NO_LICENSE,
   abortable,
+  buildTag,
   clean,
   formatBytes,
   hiddenAbliteratedMessage,
   hubAccessMessage,
   listInstalled,
-  normalizeModelName,
+  findInstalledModel,
   planPull,
   rankSearchHits,
   removeInstalled,
@@ -33,6 +33,7 @@ import {
   requireUnchangedManifest,
   resolveRuntimeTarget,
   runtimeLabel,
+  sameModelName,
   shortDigest,
   type HubClient,
   type ModelSourceDeps,
@@ -101,7 +102,7 @@ function pullSummary(plan: PullPlan) {
   return {
     source: 'huggingface' as const,
     model: plan.id,
-    quant: clean(build.quant),
+    label: clean(build.label),
     files: build.files.map(file => ({ path: clean(file.path), sizeBytes: file.sizeBytes })),
     sizeBytes: build.sizeBytes,
     size: formatBytes(build.sizeBytes),
@@ -145,7 +146,7 @@ function licenseSentence(summary: PullSummary): string {
 
 function pullMessage(summary: PullSummary): string {
   return [
-    `Download ${summary.model}${'quant' in summary ? ` ${summary.quant}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
+    `Download ${summary.model}${'label' in summary ? ` ${summary.label}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
     ...('files' in summary ? [`File: ${summary.files.map(file => file.path).join(', ')}`] : []),
     ...(summary.revision ? [`Revision: ${summary.revision}`] : []),
     ...('digest' in summary ? [`Digest: ${summary.digest}`] : []),
@@ -190,9 +191,7 @@ function terminalCommand(target: RuntimeTarget, subcommand: 'pull' | 'rm', subje
 /** The ref `b4m models pull` resolves to the same build. */
 function pullRef(plan: PullPlan): string {
   if (plan.kind === 'ollama') return plan.name;
-  const ref = plan.build.ollamaRef;
-  const tag = ref ? ref.slice(ref.lastIndexOf(':') + 1) : plan.build.quant;
-  return `${plan.detail.id}:${tag}`;
+  return `${plan.detail.id}:${buildTag(plan.build)}`;
 }
 
 function pullProgress(extra: Extra): PullOptions['onProgress'] {
@@ -215,14 +214,6 @@ function pullProgress(extra: Extra): PullOptions['onProgress'] {
       })
       .catch(() => {});
   };
-}
-
-function findInstalled(models: InstalledModel[], name: string): InstalledModel | undefined {
-  const wanted = name.replace(/^library\//i, '');
-  return (
-    models.find(model => model.name === name || model.name === wanted) ??
-    models.find(model => model.name === `${wanted}:latest`)
-  );
 }
 
 export function localModelToolsDeps(configStore: ConfigStore | undefined): ModelToolsDeps {
@@ -398,7 +389,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
       run(async () => {
         const target: RuntimeTarget = await abortable(deps.resolveRuntime(), extra.signal);
         requireRemovable(target);
-        const model = findInstalled(await abortable(target.runtime.list(), extra.signal), args.name);
+        const model = findInstalledModel(await abortable(target.runtime.list(), extra.signal), args.name);
         if (!model)
           return errorResult(`No model named ${clean(args.name)} on ${runtimeLabel(target)}. See models_list.`);
         const summary = {
@@ -441,7 +432,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
 
         await removeInstalled(target, model.name, extra.signal);
         const defaultModel = await deps.defaultModel();
-        const wasDefault = !!defaultModel && normalizeModelName(defaultModel) === normalizeModelName(model.name);
+        const wasDefault = !!defaultModel && sameModelName(defaultModel, model.name);
         return toResult({ status: 'removed', removed: true, ...summary, wasDefault });
       })
   );

@@ -325,6 +325,12 @@ describe('parseHubManifest', () => {
     expect(dropped.map(d => d.path)).toEqual(['policy.abliterated']);
   });
 
+  it('reads a null policy as an absent one', () => {
+    const { manifest, dropped } = parseHubManifest({ ...fixtureManifest(), policy: null });
+    expect(manifest.policy).toEqual(parseHubManifest(fixtureManifest()).manifest.policy);
+    expect(dropped).toEqual([]);
+  });
+
   it('rejects a manifest whose envelope it cannot read', () => {
     expect(() => parseHubManifest({ ...fixtureManifest(), schemaVersion: 3 })).toThrow();
     expect(() =>

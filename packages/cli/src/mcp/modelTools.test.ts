@@ -17,6 +17,7 @@ function build(quant: string, sizeBytes: number): HubGgufBuild {
   return {
     id: path.replace(/\.gguf$/, ''),
     quant,
+    label: quant,
     files: [{ path, sizeBytes, sha256: 'a'.repeat(64), url: `${ENDPOINT}/${REPO}/resolve/main/${path}` }],
     sizeBytes,
     split: false,
@@ -232,7 +233,7 @@ describe('model tools', () => {
           status: 'confirm-in-terminal',
           downloaded: false,
           model: REPO,
-          quant: 'Q4_K_M',
+          label: 'Q4_K_M',
           sizeBytes: 491_400_032,
           size: '491 MB',
           revision: 'b'.repeat(40),
@@ -462,7 +463,9 @@ describe('model tools', () => {
       expect((await call('models_remove', { name: 'smollm2:135m' })).data.removed).toBe(false);
       expect(prompts[0].params.message).toContain('Remove smollm2:135m');
       expect(runtime.remove).not.toHaveBeenCalled();
+      const listsBeforeRemoval = vi.mocked(runtime.list).mock.calls.length;
       const removed = await call('models_remove', { name: 'smollm2:135m' });
+      expect(runtime.list).toHaveBeenCalledTimes(listsBeforeRemoval + 1);
       expect(removed.data).toEqual(expect.objectContaining({ status: 'removed', removed: true, wasDefault: false }));
       expect(runtime.remove).toHaveBeenCalledWith('smollm2:135m');
     });

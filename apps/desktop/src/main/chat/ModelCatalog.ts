@@ -154,7 +154,12 @@ export class ModelCatalog {
     return withCurrentContexts(this.localCache.models);
   }
 
-  /** After the local context setting changes, so the next list sizes every local model again. */
+  /** The last local list however old, without a round trip; null before the first list or after forgetLocal. */
+  lastLocal(): ChatModelOption[] | null {
+    return this.localCache ? withCurrentContexts(this.localCache.models) : null;
+  }
+
+  /** After the local context setting changes or a model turns out removed, so the next list reads Ollama again. */
   forgetLocal(): void {
     this.localCache = null;
   }
