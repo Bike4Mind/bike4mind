@@ -177,7 +177,7 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 |---|---|---|
 | `AdminPageHeader` | Title, count or meta, page actions | Actions sit top-right and wrap below the title on small screens. |
 | `EntityHeader` | Identity of a user, org or key | IDs and emails have a copy button. Times are relative, with the exact UTC time on hover. |
-| `StatStrip` / `StatTile` | 3 to 5 key numbers | Label, value, comparison line. Optional sparkline. No decorative icons. |
+| `StatStrip` / `StatTile` | 3 to 5 key numbers | Label, value, comparison line. Optional sparkline, and an optional `help` control beside the label that defines the term (16 px icon). No decorative icons. |
 | `SectionCard` | A group of facts | Title, optional ghost action, definition list. No form inputs inside. |
 | `DataTable` | Every admin list | Sticky header, sortable columns, row selection, horizontal scroll on mobile, skeleton, empty and error states. Page sizes 25, 50, 100. |
 | `FilterBar` / `SavedViews` | Narrowing a list | Every filter is kept in the URL. Dashed chip = unset, solid chip = set and removable. |
@@ -200,6 +200,17 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 - State the consequence: "Requests using them start failing immediately.", not "This action may have side effects."
 - Numbers people can scan: thousands separator, tabular figures, signed deltas (+2,000, -412), unit named once in the column header.
 - Errors say what to do: "Reason must be at least 5 characters", not "Invalid input".
+
+### Money
+
+Every money value goes through `formatMoney` in `shared/formatMoney.ts`, so these rules live in one function.
+
+- Amounts are stored and sent in minor units with Stripe's lowercase currency code. `formatMoney(minorUnits, currency)` displays them with `Intl.NumberFormat('en-US', { style: 'currency', currency })`, using Stripe's minor-unit exponent for the currency (2 by default; 0 for JPY and the other zero-decimal currencies; 3 for KWD, BHD, JOD, OMR, TND), not the digits Intl would show: "$1,234.56", and "CA$19.00" for another currency.
+- Only a `StatTile` value goes compact (`{ compact: true }`): "$12.3K" from 10,000 major units up, with no trailing zero on round values ("$10K").
+- Table cells are right-aligned and tabular (a `numeric` column), with the currency named once in the column header: "MRR (USD)".
+- Negative money is "-$12.00" (refunds), never in parentheses.
+- Credits are integers with a thousands separator and never carry a currency symbol. A credits value next to a money value is labeled "credits".
+- A value that is not revenue (a comp) or not known yet is an `inkMuted` dash, never "$0.00" and never a list price read from the plan catalog. A row that should have an amount but Stripe sends none shows a neutral "No amount" chip instead, so it differs from a row that is not counted.
 
 ## 7. Accessibility, keyboard and states
 
@@ -228,7 +239,7 @@ Shortcuts:
 ## 8. Rollout
 
 1. **Tokens and toolkit.** Admin tokens in the Joy theme; the components above in `components/admin/shared` with tests.
-2. **Users first.** Rebuild the users list and user profile on the toolkit; split `FullUsersView` into the profile shell and section cards.
+2. **Users first.** Rebuild the users list and user profile on the toolkit; the old `FullUsersView` is gone, replaced by the profile shell and section cards.
 3. **Every other admin tab.** Organizations, credits, API keys, security, settings and audit log move onto the same page anatomy, one PR per tab.
 4. **Lock it in.** A lint rule against raw Joy `Card`, `Modal` and `Table` in admin code outside `shared/`, and a design-review checkbox in the PR template.
 

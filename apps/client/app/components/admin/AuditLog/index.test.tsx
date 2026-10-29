@@ -79,7 +79,7 @@ vi.mock('@client/app/contexts/SnackbarContext', () => ({ useSnackbar: () => ({ s
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useSearchOrganizations: () => ({ data: { data: [] }, isLoading: false }),
 }));
-vi.mock('@client/app/components/admin/Users/Details/UserSelector', () => ({
+vi.mock('@client/app/components/admin/shared/UserSelector', () => ({
   default: ({ label }: { label: string }) => <div data-testid={`mock-user-selector-${label}`} />,
 }));
 

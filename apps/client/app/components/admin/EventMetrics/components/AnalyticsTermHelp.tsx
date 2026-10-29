@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { IconButton, Tooltip } from '@mui/joy';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 
 type AnalyticsTermHelpProps = {
   term: string;
-  description: string;
+  description: ReactNode;
+  testId?: string;
 };
 
-export function AnalyticsTermHelp({ term, description }: AnalyticsTermHelpProps) {
+export function AnalyticsTermHelp({ term, description, testId }: AnalyticsTermHelpProps) {
   const [open, setOpen] = useState(false);
   // Set by a click, so a second click closes the help while a click after hover/focus-open keeps it.
   const pinned = useRef(false);
@@ -55,6 +56,7 @@ export function AnalyticsTermHelp({ term, description }: AnalyticsTermHelpProps)
         onClick={onClick}
         onFocus={() => setOpen(true)}
         onBlur={close}
+        data-testid={testId}
         sx={{ verticalAlign: 'middle' }}
       >
         <HelpOutlineIcon fontSize="small" />

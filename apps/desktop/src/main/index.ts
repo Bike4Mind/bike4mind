@@ -129,7 +129,6 @@ void app.whenReady().then(async () => {
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
-  const models = registerModels();
   const {
     service: chat,
     background,
@@ -138,11 +137,13 @@ void app.whenReady().then(async () => {
     pullRequests,
     claudeImport,
     spareWorktrees,
+    localContext,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
   });
+  const models = registerModels({ localContext: () => localContext.read() });
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;

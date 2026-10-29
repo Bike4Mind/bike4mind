@@ -11,15 +11,18 @@ import {
   RuntimeProtocolError,
 } from './errors';
 import {
+  BodyTooLargeError,
   DEFAULT_REQUEST_TIMEOUT_MS,
   assertHeaderValues,
   combinedSignal,
   describeError,
   parseJson,
+  readCapped,
   runtimeEndpointId,
   type HttpClient,
 } from './http';
-import type { FetchLike } from './types';
+import { OLLAMA_MODEL_LAYER, REGISTRY_MANIFEST_ACCEPT, registryLayers, registryManifestSchema } from './ollamaRegistry';
+import type { FetchLike, OllamaRegistryLayers } from './types';
 
 export const DEFAULT_HUGGING_FACE_ENDPOINT = 'https://huggingface.co';
 
@@ -248,8 +251,6 @@ const QUANT_RE = new RegExp(
 const OLLAMA_TAG_RE = /^[A-Za-z0-9_][\w.-]{0,79}$/;
 const OLLAMA_TAG_MAX = 80;
 const OLLAMA_NAME_PART_MAX = 80;
-const OLLAMA_MODEL_LAYER = 'application/vnd.ollama.image.model';
-const REGISTRY_MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json';
 
 const SHARD_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
 // Draft heads named so at the start of a folder or the stem, or the end of the stem. The registry skips drafts by GGUF
@@ -312,10 +313,6 @@ const treeEntrySchema = z.object({
 });
 
 const errorBodySchema = z.object({ error: z.string() });
-
-const manifestSchema = z.object({
-  layers: z.array(z.object({ mediaType: z.string(), digest: z.string() })),
-});
 
 type ModelEntry = z.infer<typeof modelEntrySchema>;
 type TreeEntry = z.infer<typeof treeEntrySchema>;
@@ -736,8 +733,6 @@ function retryAfterMs(headers: Headers): number | null {
   return reset ? Number(reset[1]) * 1000 : null;
 }
 
-class BodyTooLargeError extends Error {}
-
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason);
@@ -781,25 +776,7 @@ export function clearHubCache(): void {
 }
 
 async function readText(response: Response, maxBytes: number): Promise<string> {
-  if (Number(response.headers.get('content-length')) > maxBytes) throw new BodyTooLargeError();
-  if (!response.body) return '';
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let text = '';
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > maxBytes) throw new BodyTooLargeError();
-      text += decoder.decode(value, { stream: true });
-    }
-    return text + decoder.decode();
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
+  return new TextDecoder().decode(await readCapped(response, maxBytes));
 }
 
 /**
@@ -956,9 +933,13 @@ export class HuggingFaceHub {
     const plan = (tagPlans.get(detail.builds) ?? planOllamaTags(detail.builds)).get(build.id);
     const context = { signal: options.signal, repo: detail.id, accept: REGISTRY_MANIFEST_ACCEPT, manifest: true };
     for (const tag of plan?.tags.slice(0, MAX_VERIFY_TAGS) ?? []) {
-      let manifest: z.infer<typeof manifestSchema>;
+      let manifest: z.infer<typeof registryManifestSchema>;
       try {
-        ({ data: manifest } = await this.#getJson(`/v2/${detail.id}/manifests/${tag}`, manifestSchema, context));
+        ({ data: manifest } = await this.#getJson(
+          `/v2/${detail.id}/manifests/${tag}`,
+          registryManifestSchema,
+          context
+        ));
       } catch (error) {
         // 400 is the registry's "not available", "sharded" and "not a valid quantization scheme".
         if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) continue;
@@ -1001,6 +982,27 @@ export class HuggingFaceHub {
       destination,
       options
     );
+  }
+
+  /**
+   * The layers Ollama's registry serves for `repo:tag`, from the manifest a pull reads; null when it has no such tag.
+   * Template and params come from the repo's `main`, so they can change without the GGUF changing.
+   */
+  async ollamaLayers(
+    repo: string,
+    tag: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<OllamaRegistryLayers | null> {
+    assertRepoId(repo);
+    if (!OLLAMA_TAG_RE.test(tag)) throw new LocalRuntimeError('Invalid Ollama tag', this.id);
+    const context = { signal: options.signal, repo, accept: REGISTRY_MANIFEST_ACCEPT, manifest: true };
+    try {
+      const { data } = await this.#getJson(`/v2/${repo}/manifests/${tag}`, registryManifestSchema, context);
+      return registryLayers(data);
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) return null;
+      throw error;
+    }
   }
 
   async #canDownload(

@@ -1,3 +1,4 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -116,6 +117,7 @@ const handler = baseApi().post(async (req, res) => {
   const reservedCredits = usdToCredits(REALTIME_VOICE_RESERVE_USD);
 
   const realtimeModel = 'gpt-realtime-1.5';
+  await (await createModelAdmission(req.user!)).assert(realtimeModel);
 
   const openaiApiKey = await apiKeyService.getEffectiveApiKey(
     req.user?.id,

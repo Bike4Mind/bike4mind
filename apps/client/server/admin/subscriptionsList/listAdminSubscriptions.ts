@@ -25,6 +25,7 @@ import {
   viewConditions,
   type PlanCatalog,
 } from './adminSubscriptionsQuery';
+import { billedIntervalOf, mrrGroupStages, mrrTotal, subscriptionMrr, type MrrGroup } from './subscriptionMrr';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 const LIST_MAX_TIME_MS = 10_000;
@@ -47,6 +48,10 @@ type SubscriptionDoc = {
   periodEndsAt: Date;
   canceledAt?: Date | null;
   createdAt: Date;
+  unitAmount?: number | null;
+  currency?: string | null;
+  interval?: string | null;
+  intervalCount?: number | null;
 };
 
 type ResolvedSearch = { condition?: Condition; truncated: boolean };
@@ -191,10 +196,12 @@ export async function toAdminSubscriptionRows(
     ownerId: doc.ownerId,
     owner: owners.get(`${doc.ownerType}:${doc.ownerId}`) ?? null,
     plan: planOf(doc.priceId, catalog),
+    billedInterval: doc.source === 'admin_grant' ? null : billedIntervalOf(doc.interval, doc.intervalCount),
     status: doc.status,
     source: doc.source ?? 'stripe',
     quantity: doc.quantity,
     customCreditsPerCycle: doc.customCreditsPerCycle ?? null,
+    mrr: subscriptionMrr(doc),
     periodStartsAt: doc.periodStartsAt.toISOString(),
     periodEndsAt: doc.periodEndsAt.toISOString(),
     canceledAt: isoOrNull(doc.canceledAt),
@@ -247,6 +254,8 @@ export async function adminSubscriptionsSummary(
       pastDue: [{ $match: views.pastDue }, { $count: 'count' }],
       comped: [{ $match: views.comped }, { $count: 'count' }],
       churned: [{ $match: views.churned }, { $count: 'count' }],
+      mrr: mrrGroupStages(),
+      pastDueMrr: mrrGroupStages(views.pastDue),
     },
     { maxTimeMS: LIST_MAX_TIME_MS }
   );
@@ -258,6 +267,8 @@ export async function adminSubscriptionsSummary(
       comped: countOf(result.comped),
       churned: countOf(result.churned),
     },
+    mrr: mrrTotal(result.mrr as MrrGroup[]),
+    pastDueMrr: mrrTotal(result.pastDueMrr as MrrGroup[]),
     searchTruncated,
   };
 }

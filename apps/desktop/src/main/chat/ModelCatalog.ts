@@ -39,6 +39,7 @@ interface WireModel {
   name?: unknown;
   type?: unknown;
   backend?: unknown;
+  releaseDate?: unknown;
   contextWindow?: unknown;
   max_tokens?: unknown;
   supportsTools?: unknown;
@@ -268,6 +269,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       id: model.id as string,
       name: typeof model.name === 'string' && model.name ? model.name : (model.id as string),
       ...(typeof model.backend === 'string' ? { backend: model.backend } : {}),
+      ...(typeof model.releaseDate === 'string' && model.releaseDate ? { releaseDate: model.releaseDate } : {}),
       ...(typeof model.contextWindow === 'number' ? { contextWindow: model.contextWindow } : {}),
       ...(typeof model.max_tokens === 'number' && model.max_tokens > 0 ? { maxOutputTokens: model.max_tokens } : {}),
       // Carried through only when the server stated it. Absent is "not said", which the

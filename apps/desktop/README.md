@@ -301,6 +301,20 @@ dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
 `https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
 destinations fail closed. PR builds have no signing credentials and are not published.
 
+For signed online Curated lists, set both source Actions variables
+`B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` to the same HTTPS `latest.json`
+URL. The first is baked into Desktop; the second is the release gate's expected URL.
+Leave both unset to keep the bundled list. A baked URL without the matching expected
+URL fails the release. Setting only `CURATED_PUBLIC_URL` leaves online updates off;
+the gate permits an empty baked URL. Production trusted keys must also be shipped
+before Desktop will fetch online lists.
+
+Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the runtime
+`B4M_CURATED_DEV_URL` override for a signed test list, including HTTP on loopback.
+The override is ignored in packaged apps and builds without test keys. Test-key
+builds use a separate cache directory and are rejected by `curated:check-build`;
+never enable the dev flag for a release.
+
 The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
 installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
 are embedded by electron-builder, and any external blockmaps are retained. Payload URLs
@@ -326,12 +340,14 @@ partial manifest. Published assets are not overwritten on retry.
    and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
    signing provides bundle integrity, not publisher identity or notarization.
    Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
-5. Merge through review, then inspect the first trusted run's signatures, notarization,
+5. When enabling online Curated lists, set `B4M_CURATED_MANIFEST_URL` and
+   `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset.
+6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
    `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
    the Developer ID path only). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
-6. Test two signed versions using a temporary installation and profile. Check, download,
+7. Test two signed versions using a temporary installation and profile. Check, download,
    and explicitly restart into the newer version. Never use a user's existing profile.
    Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
 

@@ -1,6 +1,7 @@
 import type { INetworkMeta } from '@bike4mind/common';
 import { ja4FingerprintSchema } from '@bike4mind/common';
 import { authEventRepository, User } from '@bike4mind/database';
+import { isDeployedStage } from '@bike4mind/server-utils/utils/config';
 import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { DATACENTER_ASNS } from './datacenterAsns';
@@ -22,7 +23,7 @@ export function readNetworkMeta(req: NetworkRequest): INetworkMeta {
   const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'];
   const { asn, country } = getClientNetwork(req);
-  const deployed = Boolean(process.env.ORIGIN_VERIFY_SECRET) && process.env.B4M_SELF_HOST !== 'true';
+  const deployed = isDeployedStage();
   const ja4 = deployed ? ja4FingerprintSchema.safeParse(req.headers[CLOUDFRONT_VIEWER_JA4_HEADER]) : null;
   // AWS WAF prefixes every header it inserts with x-amzn-waf-. Null unless the attached ACL carries
   // the label-forward rules (WAF_LABEL_FORWARDING, set in infra/web.ts), so "not checked" is never
