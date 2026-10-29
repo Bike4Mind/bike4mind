@@ -84,6 +84,15 @@ describe('detectSubscriptionChanges', () => {
     ).toEqual({ plan: null, cancel: null, ended: false });
   });
 
+  it('reports nothing for a row already canceled whose price differs from Stripe', () => {
+    expect(
+      detectSubscriptionChanges(
+        before({ status: 'canceled', canceledAt: new Date() }),
+        after({ status: 'canceled', priceId: 'price_pro', canceled_at: 1_790_000_000 })
+      )
+    ).toEqual({ plan: null, cancel: null, ended: false });
+  });
+
   it('still reports changes for a row leaving a status that is not terminal', () => {
     expect(detectSubscriptionChanges(before({ status: 'incomplete' }), after({ priceId: 'price_pro' })).plan).toEqual({
       fromPriceId: 'price_basic',

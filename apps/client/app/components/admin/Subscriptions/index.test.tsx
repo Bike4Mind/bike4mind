@@ -140,6 +140,16 @@ describe('AdminSubscriptions', () => {
     });
   });
 
+  it('shows a dash instead of a skeleton on the stat tiles when the summary fails', async () => {
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === SUMMARY_PATH) throw new Error('summary down');
+      return { data: listResponse() };
+    });
+    renderTab();
+    expect(await screen.findByTestId('admin-subscriptions-row-s1')).toBeTruthy();
+    await waitFor(() => expect(screen.queryAllByTestId('admin-stat-skeleton')).toHaveLength(0));
+  });
+
   it('marks a comped row with a neutral Comped chip and shows no price', async () => {
     renderTab();
     const comped = await screen.findByTestId('admin-subscriptions-row-s2');

@@ -48,6 +48,9 @@ import {
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
 
+// Shorter than the 10s default: the post precedes invoice voiding, which a hung webhook must not starve.
+const DELETED_SLACK_POST_TIMEOUT_MS = 3_000;
+
 const handler = baseApi({ auth: false }).post(async (req, res) => {
   if (!isStripeConfigured()) {
     req.logger.warn('Stripe webhook received but Stripe is not configured');
@@ -273,7 +276,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // Posted by whichever write moves the row into canceled (customerSubscriptionUpdated.ts may get
       // there first); a redelivery finds it canceled, so this precedes the slower work below.
       if (previous?.status !== 'canceled') {
-        await postSubscriptionLifecycleToSlack(endedLifecycleEvent(updated, subscription.cancellation_details?.reason));
+        await postSubscriptionLifecycleToSlack(
+          endedLifecycleEvent(updated, subscription.cancellation_details?.reason),
+          {
+            timeoutMs: DELETED_SLACK_POST_TIMEOUT_MS,
+          }
+        );
       }
 
       // Safely access userId from metadata (may be missing for legacy subscriptions)

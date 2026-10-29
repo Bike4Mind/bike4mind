@@ -286,12 +286,15 @@ describe('customer.subscription.deleted', () => {
     await deliver(deleted(reason));
 
     expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledOnce();
-    expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledWith({
-      kind: 'ended',
-      owner: { ownerType: SubscriptionOwnerType.User, ownerId: 'user_1' },
-      plan: { plan: 'unknown' },
-      reason: expected,
-    });
+    expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledWith(
+      {
+        kind: 'ended',
+        owner: { ownerType: SubscriptionOwnerType.User, ownerId: 'user_1' },
+        plan: { plan: 'unknown' },
+        reason: expected,
+      },
+      { timeoutMs: 3_000 }
+    );
     expect(mocks.updateByStripeSubscriptionId.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.postSubscriptionLifecycleToSlack.mock.invocationCallOrder[0]
     );

@@ -76,18 +76,30 @@ function SubscriptionRowActions({ row, onOpen }: { row: AdminSubscriptionRow; on
           </MenuItem>
         )}
         {row.source === 'stripe' && (
-          <MenuItem onClick={() => copyToClipboard(row.subscriptionId, 'Stripe subscription ID')}>
+          <MenuItem
+            onClick={() => copyToClipboard(row.subscriptionId, 'Stripe subscription ID')}
+            data-testid={`admin-subscriptions-row-copy-sub-${row.id}`}
+          >
             Copy Stripe subscription ID
           </MenuItem>
         )}
-        <MenuItem onClick={() => copyToClipboard(row.ownerId, 'Owner ID')}>Copy owner ID</MenuItem>
+        <MenuItem
+          onClick={() => copyToClipboard(row.ownerId, 'Owner ID')}
+          data-testid={`admin-subscriptions-row-copy-owner-${row.id}`}
+        >
+          Copy owner ID
+        </MenuItem>
       </Menu>
     </Dropdown>
   );
 }
 
-const tileValue = (value: number | string | undefined) =>
-  value === undefined ? <Skeleton variant="text" level="h3" width="3ch" data-testid="admin-stat-skeleton" /> : value;
+// A failed query has no value to wait for, so it reads as unavailable rather than loading forever.
+const tileValue = (value: number | string | undefined, isError = false) => {
+  if (value !== undefined) return value;
+  if (isError) return '\u2014';
+  return <Skeleton variant="text" level="h3" width="3ch" data-testid="admin-stat-skeleton" />;
+};
 
 const AdminSubscriptions: React.FC = () => {
   useSubscriptionsTabUrlSync();
@@ -235,22 +247,22 @@ const AdminSubscriptions: React.FC = () => {
       />
 
       <StatStrip aria-label="Subscription totals for the current filters">
-        <StatTile label="Paying" value={tileValue(summary?.views.paying)} />
+        <StatTile label="Paying" value={tileValue(summary?.views.paying, summaryQuery.isError)} />
         <StatTile
           label="MRR"
           help={<MrrDefinitionHelp />}
-          value={tileValue(mrr && formatMoney(mrr.amount, mrr.currency, { compact: true }))}
+          value={tileValue(mrr && formatMoney(mrr.amount, mrr.currency, { compact: true }), summaryQuery.isError)}
           comparison={mrr && mrrExclusionNote(mrr)}
         />
         <StatTile
           label="Past due"
-          value={tileValue(pastDue)}
+          value={tileValue(pastDue, summaryQuery.isError)}
           valueColor={pastDue ? 'admin.status.warn.foreground' : undefined}
           comparison={pastDue && summary?.pastDueMrr ? atRiskNote(summary.pastDueMrr) : undefined}
         />
         <StatTile
           label="Canceling"
-          value={cancelingCountable ? tileValue(cancelingQuery.data?.total) : '\u2014'}
+          value={cancelingCountable ? tileValue(cancelingQuery.data?.total, cancelingQuery.isError) : '\u2014'}
           comparison={cancelingCountable ? 'Cancel requested, still running' : undefined}
         />
       </StatStrip>

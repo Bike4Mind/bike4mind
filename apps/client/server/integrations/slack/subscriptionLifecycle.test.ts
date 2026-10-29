@@ -239,8 +239,17 @@ describe('postSubscriptionLifecycleToSlack', () => {
 
     expect(mocks.postMessageToSlack).toHaveBeenCalledWith(
       expect.stringContaining(':recycle: *Cancellation reverted*'),
-      'SlackSubscriptionsWebhookUrl'
+      'SlackSubscriptionsWebhookUrl',
+      {}
     );
+  });
+
+  it('passes a post timeout through to the Slack client', async () => {
+    await postSubscriptionLifecycleToSlack(event, { timeoutMs: 3_000 });
+
+    expect(mocks.postMessageToSlack).toHaveBeenCalledWith(expect.any(String), 'SlackSubscriptionsWebhookUrl', {
+      timeoutMs: 3_000,
+    });
   });
 
   it.each(['staging', 'pr123', 'dev-someone', undefined])('posts nothing from stage %s', async stage => {

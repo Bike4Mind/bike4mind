@@ -24,9 +24,9 @@ export function detectSubscriptionChanges(
   before: Pick<ISubscription, 'priceId' | 'status' | 'canceledAt'>,
   after: Pick<Stripe.Subscription, 'items' | 'status' | 'canceled_at'>
 ): SubscriptionChanges {
-  // Stripe never moves a subscription out of a terminal status, so a row leaving one is being
-  // overwritten by an update that fetched an older state: no plan move or cancel decision happened.
-  if (TERMINAL_SUBSCRIPTION_STATUSES.has(before.status) && !TERMINAL_SUBSCRIPTION_STATUSES.has(after.status)) {
+  // Stripe never moves a subscription out of a terminal status, so a row already in one is either
+  // being overwritten by an older state or re-synced after it ended: no plan move or cancel decision happened.
+  if (TERMINAL_SUBSCRIPTION_STATUSES.has(before.status)) {
     return { plan: null, cancel: null, ended: false };
   }
 

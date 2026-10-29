@@ -175,10 +175,17 @@ function postsFromThisStage(): boolean {
 }
 
 /** Never throws: callers are webhook and event handlers whose retry would repeat their writes. */
-export async function postSubscriptionLifecycleToSlack(event: SubscriptionLifecycleEvent): Promise<void> {
+export async function postSubscriptionLifecycleToSlack(
+  event: SubscriptionLifecycleEvent,
+  options: { timeoutMs?: number } = {}
+): Promise<void> {
   if (!postsFromThisStage()) return;
   try {
-    await postMessageToSlack(buildSubscriptionLifecycleMessage(event, appUrlFromEnv()), 'SlackSubscriptionsWebhookUrl');
+    await postMessageToSlack(
+      buildSubscriptionLifecycleMessage(event, appUrlFromEnv()),
+      'SlackSubscriptionsWebhookUrl',
+      options
+    );
   } catch (error) {
     Logger.error('Error posting subscription lifecycle event to Slack:', error);
   }
