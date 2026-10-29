@@ -28,7 +28,6 @@ export function toCsv(rows: unknown[][]): string {
 }
 
 const NEEDS_QUOTING = /[",\r\n]/;
-const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
 
 /**
  * Serializes one value as an RFC 4180 CSV field; string cells that start like a formula are neutralized.
@@ -37,10 +36,11 @@ const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
 export const toCsvCell = (value: unknown, dateFormat = 'YYYY-MM-DD'): string => {
   if (value === null || value === undefined) return '';
   if (dayjs.isDayjs(value)) return value.format(dateFormat);
+  if (value instanceof Date) return dayjs(value).format(dateFormat);
 
   let text: string;
   if (typeof value === 'string') {
-    text = ISO_DATE_PREFIX.test(value) ? dayjs(value).format(dateFormat) : value;
+    text = value;
     // OWASP CSV-injection guard: spreadsheets evaluate cells starting with these characters.
     if (CSV_FORMULA_PREFIX.test(text)) text = `'${text}`;
   } else if (typeof value === 'object') {

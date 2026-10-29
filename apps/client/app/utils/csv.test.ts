@@ -115,8 +115,12 @@ describe('toCsvCell', () => {
     expect(toCsvCell(undefined)).toBe('');
   });
 
-  it('formats ISO dates', () => {
-    expect(toCsvCell('2025-03-04T10:00:00')).toBe('2025-03-04');
+  it('formats Date instances with the given format', () => {
+    expect(toCsvCell(new Date(2025, 2, 4, 10, 30), 'YYYY-MM-DD HH:mm')).toBe('2025-03-04 10:30');
+  });
+
+  it('emits ISO-looking strings verbatim', () => {
+    expect(toCsvCell('2025-01-01 note')).toBe('2025-01-01 note');
   });
 
   it('formats Dayjs instances with the given format', () => {

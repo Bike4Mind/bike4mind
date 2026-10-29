@@ -5,6 +5,16 @@ import { CSV_BOM, toCsvFromRecords } from '@client/app/utils/csv';
 
 type CsvRow = Record<string, unknown>;
 
+const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
+
+const withParsedDates = (row: CsvRow): CsvRow =>
+  Object.fromEntries(
+    Object.entries(row).map(([key, value]) => [
+      key,
+      typeof value === 'string' && ISO_DATE_PREFIX.test(value) ? dayjs(value) : value,
+    ])
+  );
+
 interface ExportOptions {
   filename?: string;
   dateFormat?: string;
@@ -22,7 +32,7 @@ export const useExportToCSV = () => {
 
     const headers = customHeaders || Object.keys(transformedData[0]);
 
-    const csvContent = toCsvFromRecords(transformedData, headers, dateFormat);
+    const csvContent = toCsvFromRecords(transformedData.map(withParsedDates), headers, dateFormat);
 
     downloadData(CSV_BOM + csvContent, `${filename}_${dayjs().format('YYYY-MM-DD')}.csv`, 'text/csv;charset=utf-8;');
   }, []);
