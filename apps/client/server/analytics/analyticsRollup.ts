@@ -151,12 +151,15 @@ async function resolveSuspected(entries: [string, string | undefined][], options
   const suspected = new Set<string>();
   for (let i = 0; i < ids.length; i += USER_BATCH) {
     const slice = ids.slice(i, i + USER_BATCH);
-    const rows = await AnalyticsUserDay.find({ userId: { $in: slice } }, { userId: 1, suspected: 1 })
-      .maxTimeMS(QUERY_DEADLINE_MS)
-      .lean();
+    // One row per user (all of a user's rows share the verdict); reading every row would grow with history.
+    const rows = await AnalyticsUserDay.aggregate<{ _id: string; suspected: boolean }>([
+      { $match: { userId: { $in: slice } } },
+      { $sort: { userId: 1, day: 1 } },
+      { $group: { _id: '$userId', suspected: { $first: '$suspected' } } },
+    ]).option({ maxTimeMS: QUERY_DEADLINE_MS });
     for (const row of rows) {
-      known.add(row.userId);
-      if (row.suspected) suspected.add(row.userId);
+      known.add(row._id);
+      if (row.suspected) suspected.add(row._id);
     }
   }
   const cohorts = new Map<string, Set<string>>();

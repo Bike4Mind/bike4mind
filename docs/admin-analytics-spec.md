@@ -113,7 +113,7 @@ Money
 
 ### 3.3 Definitions every section shares
 
-- **Counted user**: a `users` row with `isSystem != true`, `isSynthetic != true`, `isAdmin != true`, not deleted, and not on the staff email domains. Suspended users are counted in history (they were active then) but excluded from "Top users". A footer note on the page says this once.
+- **Counted user**: any user that is not `isSystem`, `isSynthetic` or `isAdmin` and not on the staff email domains. A `userId` with no `users` row (deleted, or not an ObjectId) still counts, so DAU equals a direct distinct count over `usageevents`. Suspended users are counted in history (they were active then) but excluded from "Top users". A footer note on the page says this once.
 - **Active user (day D)**: a counted user with at least one `usageevents` row (any feature, `status: 'ok'`) on UTC day D. Why `UsageEvent`: it is written for every billable AI call on every surface (web, CLI, desktop, API, agent), it is indexed on `createdAt`, and it has no TTL. CounterLog is a product-event stream with free-form `userId` and is used only for feature adoption. `lastActiveAt` is socket-driven and misses API users, so it is not used.
 - **DAU / WAU / MAU (day D)**: distinct active users on D / in the 7 UTC days ending D / in the 28 UTC days ending D. 28 rather than 30 so MAU windows hold the same weekdays.
 - **Stickiness**: average DAU over the range / MAU at the range end, as a percent.
