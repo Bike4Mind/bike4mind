@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import path from 'path';
 import { blankStringLiterals } from './scopeCoverageHelpers';
 
@@ -10,8 +10,8 @@ import { blankStringLiterals } from './scopeCoverageHelpers';
  * (`req.user.isAdmin`, `ensureAdmin(`) locks delegates out and bypasses the permission model.
  *
  * Invariant: no `pages/api/admin` route gates on the raw flag unless it calls `adminApi(` or is in
- * RAW_GATE_ALLOWLIST. The allowlist only shrinks: migrate a route, then delete its entry.
- * Entries for routes that no longer exist or no longer gate raw are tolerated.
+ * RAW_GATE_ALLOWLIST. The allowlist only shrinks: migrate a route, then delete its entry. Every
+ * entry must name a route that exists and still gates raw, so a stale entry fails the suite.
  */
 
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'admin');
@@ -20,74 +20,28 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'abuse/bulk-execute.ts',
   'abuse/bulk-preview.ts',
   'activity-summary.ts',
-  'agent-executions/cleanup.ts',
-  'agent-executions/stuck.ts',
   'agent-ops-settings.ts',
-  'agent-ops-settings/repair.ts',
-  'agent-ops-settings/seed.ts',
-  'agent-ops-settings/versions/[version]/activate.ts',
-  'agent-ops-settings/versions/index.ts',
   'analytics.ts',
   'api-keys/scope-preflight.ts',
-  'audit-log/[id].ts',
-  'audit-log/alert-status.ts',
-  'audit-log/export.ts',
-  'audit-log/index.ts',
-  'audit-log/summary.ts',
   'bulk-create-users.ts',
   'context-telemetry.ts',
-  'context-telemetry/[id].ts',
-  'context-telemetry/[id]/analyze.ts',
-  'context-telemetry/[id]/create-issue.ts',
-  'context-telemetry/dry-run-results.ts',
-  'context-telemetry/export.ts',
-  'context-telemetry/integration-status.ts',
-  'context-telemetry/metrics.ts',
-  'context-telemetry/test-config.ts',
   'create-user.ts',
   'credit-adjustments.ts',
-  'dlq/history.ts',
-  'dlq/messages.ts',
-  'dlq/queues.ts',
-  'dlq/replay.ts',
   'embedding-limits.ts',
   'emergency-login.ts',
   'event-metrics.ts',
-  'gears/[key].ts',
-  'gears/index.ts',
   'generate-highlights.ts',
-  'github/connection.ts',
-  'github/rate-limit.ts',
-  'github/repositories.ts',
-  'github/rotate-key.ts',
-  'github/test.ts',
   'help-analytics.ts',
-  'identity-providers/[id].ts',
-  'identity-providers/index.ts',
-  'integration-audit-logs/index.ts',
   'integration-health-dashboard.ts',
-  'integrations/demand/[integrationId]/requesters.ts',
-  'integrations/demand/index.ts',
-  'liveops-triage-configs/[id].ts',
-  'liveops-triage-configs/[id]/health.ts',
-  'liveops-triage-configs/[id]/trigger.ts',
-  'liveops-triage-configs/index.ts',
-  'liveops-triage-configs/runs.ts',
   'liveops-triage-env.ts',
   'llm-models/configurations.ts',
-  'mementos/reembed-ledger.ts',
-  'mementos/reembed.ts',
   'model-deprecation-status.ts',
   'model-discovery.ts',
   'model-logs.ts',
-  'model-logs/[id].ts',
   'model-metrics.ts',
   'model-prices.ts',
   'moderation-incidents/[id]/verdict.ts',
   'moderation-incidents/index.ts',
-  'oauth-clients/[id]/index.ts',
-  'oauth-clients/[id]/rotate-secret.ts',
-  'oauth-clients/index.ts',
   'operations-model.ts',
   'organizations/[id]/convert-to-paid.ts',
   'organizations/[id]/group-types.ts',
@@ -97,23 +51,11 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'organizations/[id]/top-up.ts',
   'organizations/grant.ts',
   'organizations/grants.ts',
-  'overwatch/backfill-first-seen.ts',
-  'partner-signup-rules/[id].ts',
-  'partner-signup-rules/backfill.ts',
-  'partner-signup-rules/index.ts',
   'platform-usage.ts',
-  'platform-usage/endpoints.ts',
-  'pr-report/generate.ts',
-  'pr-report/send.ts',
   'provider-invoices.ts',
   'published-artifacts/[id]/reports.ts',
   'published-artifacts/[id]/takedown.ts',
   'published-artifacts/index.ts',
-  'qa/facets.ts',
-  'qa/overview.ts',
-  'qa/runs/[id].ts',
-  'qa/runs/index.ts',
-  'qa/tests.ts',
   'rate-limits.ts',
   'recalculate-message-counts.ts',
   'release-notes/[id].ts',
@@ -123,38 +65,22 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'retrieval-rate.ts',
   'saved-views/[id].ts',
   'saved-views/index.ts',
-  'scoped-settings/effective.ts',
-  'scoped-settings/index.ts',
-  'security-scan-schedule/[scanType].ts',
-  'security-scan-schedules/index.ts',
   'session-usage.ts',
   'sessions/[id]/index.ts',
   'sessions/[id]/quests.ts',
   'signup-anomaly.ts',
   'signup-domain-holds.ts',
   'signup-timeseries.ts',
-  'slack-app/create.ts',
-  'slack-app/manifest-status.ts',
-  'slack-app/reconnect.ts',
-  'slack-app/update-manifest.ts',
-  'slack-audit-logs/index.ts',
   'spend-reconciliation.ts',
   'spend.ts',
   'subscriptions/export.ts',
   'subscriptions/index.ts',
   'subscriptions/summary.ts',
   'system-health.ts',
-  'system-health/integration-health.ts',
-  'system-health/test-database.ts',
-  'system-health/test-email.ts',
-  'system-health/test-oauth.ts',
   'system-secrets/[id].ts',
   'system-secrets/index.ts',
   'system-secrets/tier1-status.ts',
   'team-members.ts',
-  'tool-definitions/[toolId].ts',
-  'tool-definitions/index.ts',
-  'tools/execute.ts',
   'upload-logo.ts',
   'usage-by-source.ts',
   'usage-margin.ts',
@@ -196,17 +122,12 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'users/export.ts',
   'users/index.ts',
   'users/summary.ts',
-  'voice-agents/[id].ts',
-  'voice-agents/index.ts',
-  'webhook-logs/[deliveryId].ts',
-  'webhook-logs/index.ts',
-  'webhook-logs/stats.ts',
   'whats-new-highlights-config.ts',
   'whats-new-highlights-preview.ts',
 ]);
 
 // Helpers that gate on the raw flag internally, so a route calling them is raw-gated even
-// though its own source never names isAdmin.
+// though its own source never names isAdmin. Add any new helper that wraps isAdmin here.
 const RAW_GATE_HELPER = /\b(?:authorizeSupportRead|canAdministerReleaseNotes)\s*\(/;
 const RAW_GATE = /\b(?:req\.user|user)\s*[?!]*\s*\.\s*isAdmin\b|\bensureAdmin\s*\(/;
 const ADMIN_API_CALL = /\badminApi\s*\(/;
@@ -279,5 +200,14 @@ describe('admin routes do not gate on the raw isAdmin flag', () => {
       usesRawIsAdminGate(readFileSync(file, 'utf8')),
       `${name} gates on raw isAdmin; use adminApi() with a per-method adminPermissions entry`
     ).toBe(false);
+  });
+
+  it.each([...RAW_GATE_ALLOWLIST])('allowlist entry %s exists and still gates raw', name => {
+    const file = path.join(ROUTES_DIR, name);
+    expect(existsSync(file), `${name} no longer exists; remove it from RAW_GATE_ALLOWLIST`).toBe(true);
+    expect(
+      usesRawIsAdminGate(readFileSync(file, 'utf8')),
+      `${name} no longer gates on raw isAdmin; remove it from RAW_GATE_ALLOWLIST`
+    ).toBe(true);
   });
 });
