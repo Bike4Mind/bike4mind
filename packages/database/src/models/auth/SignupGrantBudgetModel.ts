@@ -61,6 +61,10 @@ export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
       { $inc: { spent: -amount }, $pull: { reservedIds: transactionId } }
     ).session(null);
   },
+  async getSpent(day) {
+    const row = await SignupGrantBudgetDayModel.findById(day, { spent: 1 }, detached).lean();
+    return row?.spent ?? 0;
+  },
   async markAlerted(day, threshold) {
     const flag = threshold === 50 ? 'alerted50' : 'alerted100';
     const result = await SignupGrantBudgetDayModel.updateOne(
