@@ -45,6 +45,10 @@ const PROTECTIONS = [
 ];
 const LARGE = LARGE_SIGNUP_GRANT_CREDITS + 1;
 
+const expectRefusal = async (attempt: Promise<unknown>, message: RegExp) => {
+  await expect(attempt).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(message) });
+};
+
 const runHandler = async (key: string, value: unknown) => {
   const json = vi.fn((x: unknown) => x);
   const req = {
@@ -71,7 +75,7 @@ describe('settings/update large signup grant guard', () => {
   it.each(['defaultFreeCredits', 'signupGrantCredits', 'verifiedUnlockCredits'])(
     'refuses raising %s above the limit while protections are at their defaults',
     async key => {
-      await expect(runHandler(key, LARGE)).rejects.toThrow(/signupGrantRiskPolicy/);
+      await expectRefusal(runHandler(key, LARGE), /signupGrantRiskPolicy/);
       expect(findOneAndUpdate).not.toHaveBeenCalled();
       expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
         expect.anything(),
@@ -82,17 +86,17 @@ describe('settings/update large signup grant guard', () => {
 
   it('counts the stored signup grant when only the unlock grant is raised', async () => {
     rows = [{ settingName: 'signupGrantCredits', settingValue: 90 }];
-    await expect(runHandler('verifiedUnlockCredits', 20)).rejects.toThrow(/Refusing to raise/);
+    await expectRefusal(runHandler('verifiedUnlockCredits', 20), /Refusing to raise/);
   });
 
   it.each([150.5, 1e21])('refuses a flat grant of %s that is not a safe integer', async value => {
-    await expect(runHandler('defaultFreeCredits', value)).rejects.toThrow(/Refusing to raise/);
+    await expectRefusal(runHandler('defaultFreeCredits', value), /Refusing to raise/);
     expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('is not masked by a dormant staged total when the flat grant is raised', async () => {
     rows = [{ settingName: 'signupGrantCredits', settingValue: 500 }];
-    await expect(runHandler('defaultFreeCredits', 400)).rejects.toThrow(/Refusing to raise/);
+    await expectRefusal(runHandler('defaultFreeCredits', 400), /Refusing to raise/);
     expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 
@@ -117,7 +121,7 @@ describe('settings/update large signup grant guard', () => {
 
   it('still refuses when a single protection is left off', async () => {
     rows = PROTECTIONS.filter(row => row.settingName !== 'maxSignupsPerIpPerDay');
-    await expect(runHandler('defaultFreeCredits', LARGE)).rejects.toThrow(/maxSignupsPerIpPerDay/);
+    await expectRefusal(runHandler('defaultFreeCredits', LARGE), /maxSignupsPerIpPerDay/);
   });
 
   it('lets an operator lower an over-limit grant while protections are off', async () => {
