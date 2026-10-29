@@ -672,6 +672,23 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.signup_risk_review',
+    section: 'admin',
+    label: 'Risk review',
+    description: 'Review new accounts whose signup risk score reached the review threshold; approve or suspend them',
+    navigationType: 'tab',
+    target: '69', // AdminTab.SignupRiskReview
+    keywords: [
+      'risk review',
+      'risk score',
+      'flagged signups',
+      'suspicious accounts',
+      'signup abuse',
+      'approve account',
+    ],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.migrate_users',
     section: 'admin',
     label: 'Migration',
