@@ -10,6 +10,7 @@ vi.mock('electron-vite', async importOriginal => {
 
 const API_VARIABLE = 'B4M_DEFAULT_API_URL';
 const FEED_VARIABLE = 'B4M_UPDATE_FEED_URL';
+const CURATED_VARIABLE = 'B4M_CURATED_MANIFEST_URL';
 const PRODUCTION = 'https://app.bike4mind.com';
 
 function bakedDefinitions() {
@@ -20,6 +21,8 @@ describe('desktop build environment', () => {
   beforeEach(() => {
     vi.stubEnv(API_VARIABLE, undefined);
     vi.stubEnv(FEED_VARIABLE, undefined);
+    // Explicitly empty so the curated lookup never reaches loadEnv and only the backend and feed do.
+    vi.stubEnv(CURATED_VARIABLE, '');
     vi.mocked(loadEnv).mockReset();
     vi.mocked(loadEnv).mockReturnValue({});
   });

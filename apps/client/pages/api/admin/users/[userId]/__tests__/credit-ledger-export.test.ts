@@ -176,4 +176,57 @@ describe('GET /api/admin/users/[userId]/credit-ledger-export', () => {
     await expect(promise).rejects.toThrow('db down');
     expect(res._getData()).toBe('');
   });
+
+  it('exports under the same model, source and date filter as the ledger, without a balance', async () => {
+    h.findLedgerPage.mockResolvedValue([usageDoc(1)]);
+    const { res, promise } = run({ model: 'm1', source: 'api', from: '2026-01-01', to: '2026-01-02' });
+    await promise;
+
+    expect(h.findLedgerPage).toHaveBeenCalledWith(
+      'u1',
+      'User',
+      expect.objectContaining({
+        model: 'm1',
+        source: 'api',
+        createdFrom: new Date('2026-01-01T00:00:00.000Z'),
+        createdBefore: new Date('2026-01-03T00:00:00.000Z'),
+      })
+    );
+    expect(h.sumNewer).not.toHaveBeenCalled();
+    expect(lines(res)[1]).toContain(',-1,,');
+    expect(res.getHeader('Content-Disposition')).toMatch(/filename="credits-u1-all-filtered-\d{4}-\d{2}-\d{2}\.csv"/);
+  });
+
+  it('rejects a start date after the end date before any read', async () => {
+    await expect(run({ from: '2026-02-02', to: '2026-02-01' }).promise).rejects.toBeInstanceOf(BadRequestError);
+    expect(h.findLedgerPage).not.toHaveBeenCalled();
+  });
+
+  it('starts the balance of a range ending in the past below every newer row, inside the snapshot', async () => {
+    const seen: boolean[] = [];
+    h.sumNewer.mockImplementation(async () => (seen.push(h.inSnapshot), -40));
+    h.findLedgerPage.mockResolvedValue([usageDoc(2), usageDoc(1)]);
+
+    const { res, promise } = run({ to: '2026-01-01' });
+    await promise;
+
+    expect(seen).toEqual([true]);
+    const [, first, second] = lines(res);
+    expect(first).toContain(',-1,140,');
+    expect(second).toContain(',-1,141,');
+  });
+
+  it('appends the request id and quest id columns after the existing ones', async () => {
+    h.findLedgerPage.mockResolvedValue([
+      doc(2, { type: 'completion_api_usage', credits: -1, metadata: { requestId: 'completion-k1-1' } }),
+      doc(1, { type: 'text_generation_usage', credits: -1, questId: 'q-42' }),
+    ]);
+    const { res, promise } = run();
+    await promise;
+
+    const [header, api, chat] = lines(res);
+    expect(header.endsWith('"Admin note","Request id","Quest id"')).toBe(true);
+    expect(api.endsWith(',"completion-k1-1",""')).toBe(true);
+    expect(chat.endsWith(',"","q-42"')).toBe(true);
+  });
 });
