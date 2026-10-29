@@ -54,6 +54,16 @@ describe('admin layout primitives', () => {
     expect(screen.getByTestId('sparkline')).toBeVisible();
   });
 
+  it('puts a help control beside a stat label', () => {
+    renderToolkit(
+      <StatStrip>
+        <StatTile label="MRR" help={<button data-testid="mrr-help-btn">About MRR</button>} value="$19.00" />
+      </StatStrip>
+    );
+    expect(screen.getByTestId('admin-stat-strip')).toHaveTextContent('MRRAbout MRR$19.00');
+    expect(screen.getByTestId('mrr-help-btn')).toBeVisible();
+  });
+
   it('groups facts under a section heading with an action', () => {
     renderToolkit(
       <SectionCard title="Access" action={<button data-testid="view-audit">View audit</button>}>
