@@ -424,31 +424,6 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/files/[id]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/files/copy-generated-image.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/files/createFabFile.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/files/createFabFileURL.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/files/tags/toggle.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/friends/by-user/[id].ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -594,49 +569,9 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/users/[id]/activities/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/users/[id]/projects.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/users/activities/recent.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/users/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
   "apps/client/pages/api/v1/image-edits.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
-    }
-  },
-  "apps/client/pages/api/webhooks/github/subscriptions/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/webhooks/github/subscriptions/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/webhooks/jira/subscriptions/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/webhooks/jira/subscriptions/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
     }
   }
 }

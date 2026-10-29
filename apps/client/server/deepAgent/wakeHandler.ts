@@ -18,7 +18,9 @@ import { loadLinkedAgentContext } from './missions';
 import { bridgeWakeToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
+import { isFreeTierDailyCapError } from '@server/billing/freeTierDailyCapGate';
 import {
+  deferWakeUntilCapReset,
   isInsufficientCredits,
   MISSION_MODEL_REFUSED_BLOCKER,
   MISSION_NEEDS_CREDITS_BLOCKER,
@@ -120,6 +122,10 @@ export async function processWake(
   try {
     outcome = await runWakeCycle(payload.agentId, deps);
   } catch (err) {
+    if (isFreeTierDailyCapError(err)) {
+      await deferWakeUntilCapReset(payload.agentId, err, logger);
+      return;
+    }
     // Neither clears on retry, so pause instead of letting the cron re-claim the wake forever.
     const blocker = isInsufficientCredits(err)
       ? MISSION_NEEDS_CREDITS_BLOCKER

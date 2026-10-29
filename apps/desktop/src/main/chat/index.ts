@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { copyFile, readFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
@@ -77,7 +77,8 @@ import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService, type ChatServiceDeps } from './ChatService';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
-import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
+import { McpServerStore } from './mcp/McpServerStore';
+import { privateFile } from '../privateFile';
 import { MediaApiClient } from './media/MediaApiClient';
 import { MediaStore } from './media/MediaStore';
 import { VideoJobScheduler } from './media/VideoJobScheduler';
@@ -128,6 +129,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { devLog } from '../devlog/DevLogSink';
@@ -271,22 +273,10 @@ export interface RegisteredChat {
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
   spareWorktrees: SpareWorktrees;
-}
-
-/**
- * The MCP config file, written the same way the auth vault is: mode 0600 and write-then-rename,
- * because a crash mid-write would otherwise leave a truncated list of servers.
- */
-function mcpStoreFile(path: string): StoreFile {
-  return {
-    read: () => readFile(path, 'utf8').catch(() => null),
-    write: async contents => {
-      await mkdir(dirname(path), { recursive: true });
-      const temporary = `${path}.tmp`;
-      await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
-      await rename(temporary, path);
-    },
-  };
+  /** Saved model servers, which the Models screen also pulls to and removes from. */
+  modelServers: ModelServerRegistry;
+  /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
+  localContext: LocalContextPreference;
 }
 
 /**
@@ -397,6 +387,7 @@ export function registerChat(
     approvalModes,
     REASONING_EFFORT
   );
+  keepSessionWritesIn(store);
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
   // App-wide like approval-mode.json; see SidebarSectionStore.
@@ -455,7 +446,7 @@ export function registerChat(
   const localSizing = localContextSizing({ setting: () => localContext.read() });
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
-    store: new ModelServerStore(safeStorage, mcpStoreFile(join(userData, 'model-servers.json')), logger),
+    store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
     logger,
     changed: servers => {
       models.forgetLocal();
@@ -570,7 +561,7 @@ export function registerChat(
   // safeStorage for the same reason as the auth vault: an env variable holding an API key and a
   // header holding a bearer token are credentials, and neither goes to plain JSON in userData.
   const mcp = new McpManager(
-    new McpServerStore(safeStorage, mcpStoreFile(join(userData, 'mcp-servers.json')), logger),
+    new McpServerStore(safeStorage, privateFile(join(userData, 'mcp-servers.json')), logger),
     logger,
     (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
   );
@@ -1265,7 +1256,7 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees };
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, modelServers, localContext };
 }
 
 export { ChatService } from './ChatService';

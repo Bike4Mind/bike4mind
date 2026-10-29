@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { receiveFromQueue, sendToQueue, deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import type { Message } from '@aws-sdk/client-sqs';
@@ -47,9 +47,10 @@ interface ReplayResult {
  * - Batch: Receives messages from the DLQ (optionally filtered by `messageIds`),
  *   sends to source queue, then deletes from DLQ on success.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const result = BodySchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');

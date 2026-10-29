@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiKeyStatus, type AdminApiKeyAccess, type IUserApiKeyDocument } from '@bike4mind/common';
 import { ProfileTestWrapper, buildProfile } from '../../profileTestUtils';
 import { ApiKeysTab } from './ApiKeysTab';
@@ -36,6 +36,7 @@ const key = (overrides: Partial<IUserApiKeyDocument>): IUserApiKeyDocument =>
     keyPrefix: 'b4m_ab12',
     scopes: ['ai:*', 'files:read', 'notebooks:read'],
     status: ApiKeyStatus.ACTIVE,
+    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
     createdAt: new Date('2026-09-01T00:00:00Z'),
     lastUsedAt: new Date('2026-10-26T00:00:00Z'),
     ...overrides,
@@ -72,6 +73,8 @@ describe('ApiKeysTab', () => {
     respond();
   });
 
+  afterEach(() => vi.restoreAllMocks());
+
   it('lists every key with prefix, scopes, request counts and status', () => {
     renderTab();
 
@@ -103,6 +106,82 @@ describe('ApiKeysTab', () => {
 
     expect(screen.getByTestId('user-keys-access-chip')).toHaveTextContent('Blocked');
     expect(screen.getByTestId('user-keys-access')).toHaveTextContent('need an active paid subscription');
+  });
+
+  it.each([
+    { minute: 60, day: 999, limit: 'Per-minute', reset: '30s' },
+    { minute: 59, day: 1000, limit: 'Per-day', reset: '1h 0m' },
+  ])('shows live $limit exhaustion and its reset time', async ({ minute, day, limit, reset }) => {
+    const now = Math.floor(Date.now() / 1000);
+    vi.spyOn(Date, 'now').mockReturnValue(now * 1000);
+    respond({
+      data: {
+        apiKeys: [key({})],
+        liveUsage: { 'key-1': { minute, day, minuteResetAt: now + 30, dayResetAt: now + 3600 } },
+        requests: {},
+        access: PAID,
+      },
+    });
+    renderTab();
+
+    expect(within(row('key-1')).getByText('At limit')).toBeInTheDocument();
+    expect(within(row('key-1')).queryByText('Active')).not.toBeInTheDocument();
+    fireEvent.mouseOver(screen.getByTestId('user-keys-live-limit'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(`${limit} limit reached`);
+    expect(screen.getByRole('tooltip')).toHaveTextContent(`resets in ${reset}`);
+  });
+
+  it('keeps under-limit keys active and preserves revoked status even at the ceiling', () => {
+    respond({
+      data: {
+        apiKeys: [key({}), key({ id: 'revoked', status: ApiKeyStatus.DISABLED })],
+        liveUsage: { 'key-1': { minute: 59, day: 999 }, revoked: { minute: 60, day: 1000 } },
+        requests: {},
+        access: PAID,
+      },
+    });
+    renderTab();
+
+    expect(within(row('key-1')).getByText('Active')).toBeInTheDocument();
+    expect(within(row('revoked')).getByText('Revoked')).toBeInTheDocument();
+    expect(screen.queryByTestId('user-keys-live-limit')).not.toBeInTheDocument();
+  });
+
+  it('does not present expired counter windows as live limits', () => {
+    const resetAt = Math.floor(Date.now() / 1000) - 1;
+    respond({
+      data: {
+        apiKeys: [key({})],
+        liveUsage: { 'key-1': { minute: 60, day: 1000, minuteResetAt: resetAt, dayResetAt: resetAt } },
+        requests: {},
+        access: PAID,
+      },
+    });
+    renderTab();
+    expect(within(row('key-1')).getByText('Active')).toBeInTheDocument();
+  });
+
+  it('describes both exhausted windows and refreshes the status when counters clear', async () => {
+    respond({
+      data: {
+        apiKeys: [key({})],
+        liveUsage: { 'key-1': { minute: 61, day: 1001 } },
+        requests: {},
+        access: PAID,
+      },
+    });
+    const view = renderTab();
+    fireEvent.mouseOver(screen.getByTestId('user-keys-live-limit'));
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent('Per-minute limit reached (61/60); reset time unavailable.');
+    expect(tooltip).toHaveTextContent('Per-day limit reached (1001/1000); reset time unavailable.');
+
+    respond({
+      data: { apiKeys: [key({})], liveUsage: { 'key-1': { minute: 0, day: 0 } }, requests: {}, access: PAID },
+    });
+    view.rerender(<ApiKeysTab user={buildProfile()} />);
+    expect(within(row('key-1')).getByText('Active')).toBeInTheDocument();
+    expect(mocks.keys).toHaveBeenLastCalledWith(expect.any(String), { refetchInterval: 15_000 });
   });
 
   it('shows the empty and error states', () => {

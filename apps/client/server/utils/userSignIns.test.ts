@@ -16,6 +16,7 @@ const queryReturning = (rows: unknown[]) => {
 };
 
 vi.mock('@bike4mind/database', () => ({
+  USER_AUTH_AUDIT_LOG_RETENTION_SECONDS: 365 * 24 * 60 * 60,
   UserAuthAuditLogModel: { find: (...args: unknown[]) => mocks.authFind(...args) },
   User: { find: (...args: unknown[]) => mocks.userFind(...args) },
 }));
@@ -25,6 +26,7 @@ import {
   describeUserAgent,
   findSignupCluster,
   listUserSignIns,
+  listUserRiskSignIns,
   MAX_SIGNUP_CLUSTER_MATCHES,
   matchLoginRecord,
 } from './userSignIns';
@@ -159,6 +161,123 @@ describe('listUserSignIns', () => {
   it('reports no next page when the store is exhausted', async () => {
     mocks.authFind.mockReturnValue(queryReturning([row()]));
     expect((await listUserSignIns(USER_ID, [], { limit: 2 })).nextCursor).toBeNull();
+  });
+});
+
+describe('listUserRiskSignIns', () => {
+  const cursorQuery = (rows: UserAuthAuditRow[], error?: Error) => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const cursor = {
+      close,
+      async *[Symbol.asyncIterator]() {
+        for (const entry of rows) yield entry;
+        if (error) throw error;
+      },
+    };
+    const query = {
+      select: vi.fn(() => query),
+      sort: vi.fn(() => query),
+      maxTimeMS: vi.fn(() => query),
+      lean: vi.fn(() => query),
+      cursor: vi.fn(() => cursor),
+    };
+    return { query, close };
+  };
+
+  it('reads every batch with separate failure and retained-success bounds', async () => {
+    const rows = Array.from({ length: 405 }, (_, index) =>
+      row({
+        createdAt: new Date(AT.getTime() - index * 1000),
+        event: index >= 400 ? 'step_up_failed' : 'login_success',
+      })
+    );
+    const { query, close } = cursorQuery(rows);
+    mocks.authFind.mockReturnValue(query);
+    const entries = await listUserRiskSignIns(USER_ID, [], AT, 24);
+    expect(entries).toHaveLength(405);
+    expect(entries.filter(entry => entry.result === 'failed')).toHaveLength(5);
+    expect(mocks.authFind).toHaveBeenCalledWith({
+      userId: USER_ID,
+      createdAt: { $lte: AT },
+      $or: [
+        { event: { $in: ['login_success'] }, createdAt: { $gte: new Date(AT.getTime() - 365 * 24 * 3600_000) } },
+        {
+          event: {
+            $in: [
+              'step_up_failed',
+              'session_reuse_revoked',
+              'refresh_replay_capped',
+              'refresh_recovery_capped',
+              'oauth_refresh_reuse_revoked',
+            ],
+          },
+          createdAt: { $gte: new Date(AT.getTime() - 24 * 3600_000) },
+        },
+      ],
+    });
+    expect(query.select).toHaveBeenCalledWith('_id userId event strategy actorIp userAgent createdAt');
+    expect(query.maxTimeMS).toHaveBeenCalledWith(15_000);
+    expect(query.cursor).toHaveBeenCalledWith({ batchSize: 200 });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      userAgent: `${CHROME_MAC} Edg/130.0`,
+      browser: 'Edge',
+      operatingSystem: 'macOS',
+      clientBrowser: 'Chrome',
+      clientOs: 'macOS',
+    },
+    {
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Version/17.0 Mobile Safari/604.1',
+      browser: 'Safari',
+      operatingSystem: 'iOS',
+      clientBrowser: 'Safari',
+      clientOs: 'macOS',
+    },
+    {
+      userAgent: 'Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile Safari/537.36',
+      browser: 'Chrome',
+      operatingSystem: 'Android',
+      clientBrowser: 'Chrome',
+      clientOs: 'Linux',
+    },
+  ])('compares the same $browser/$operatingSystem device with and without a client record', async fixture => {
+    const recent = row({ userAgent: fixture.userAgent });
+    const prior = row({ userAgent: fixture.userAgent, createdAt: new Date(AT.getTime() - 10 * 24 * 3600_000) });
+    const { query } = cursorQuery([recent, prior]);
+    mocks.authFind.mockReturnValue(query);
+    const entries = await listUserRiskSignIns(
+      USER_ID,
+      [
+        record({
+          browser: fixture.clientBrowser,
+          operatingSystem: fixture.clientOs,
+        }),
+      ],
+      AT,
+      24
+    );
+    for (const entry of entries) {
+      expect(entry).toMatchObject({ browser: fixture.browser, operatingSystem: fixture.operatingSystem });
+    }
+  });
+
+  it('does not invent a comparable device from a client record when the audit user agent is absent', async () => {
+    const { query } = cursorQuery([row({ userAgent: undefined })]);
+    mocks.authFind.mockReturnValue(query);
+    const [entry] = await listUserRiskSignIns(USER_ID, [record()], AT, 24);
+    expect(entry.browser).toBeUndefined();
+    expect(entry.operatingSystem).toBeUndefined();
+  });
+
+  it('closes the cursor and rejects when a later batch fails', async () => {
+    const error = new Error('Later batch failed');
+    const { query, close } = cursorQuery([row()], error);
+    mocks.authFind.mockReturnValue(query);
+    await expect(listUserRiskSignIns(USER_ID, [], AT, 24)).rejects.toBe(error);
+    expect(close).toHaveBeenCalledOnce();
   });
 });
 

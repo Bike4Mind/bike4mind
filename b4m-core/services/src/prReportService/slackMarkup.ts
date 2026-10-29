@@ -7,21 +7,11 @@
  * pings the channel or a link that points anywhere.
  */
 
-/**
- * Escape the characters Slack reserves in message text.
- *
- * `&` must be replaced first, otherwise the `&` introduced by the `<`/`>`
- * replacements would be double-escaped into `&amp;lt;`.
- *
- * `*` and `_` are deliberately NOT escaped: Slack has no backslash escape for
- * them, and mangling them would corrupt ordinary identifiers like
- * `qa_passed`. Emphasis is instead kept unambiguous on the read side - the preview
- * tokenizer requires whitespace/edge boundaries, so a `_` inside an identifier
- * cannot falsely toggle italics.
- */
-export function escapeSlackText(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { escapeSlackText } from '@bike4mind/common';
+
+// `*` and `_` stay unescaped; the preview tokenizer requires whitespace/edge boundaries for
+// emphasis, so a `_` inside an identifier cannot falsely toggle italics.
+export { escapeSlackText };
 
 /**
  * A mention that actually notifies. `memberId` must be a real Slack member id.

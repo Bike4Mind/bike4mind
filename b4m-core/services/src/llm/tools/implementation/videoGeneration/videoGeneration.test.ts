@@ -12,7 +12,15 @@ const build = (
   const onStart = vi.fn();
   const onFinish = vi.fn();
   const config: VideoToolConfig = { usableModels: ['test-video'], createJob, deliveryNote };
-  const context = { userId: 'u1', organizationId: null, questId, statusUpdate, onStart, onFinish } as never;
+  const context = {
+    user: { id: 'u1', isAdmin: false },
+    userId: 'u1',
+    organizationId: null,
+    questId,
+    statusUpdate,
+    onStart,
+    onFinish,
+  } as never;
   return { tool: videoGenerationTool.implementation(context, config), statusUpdate, onStart, onFinish };
 };
 
@@ -22,7 +30,11 @@ describe('video_generation tool', () => {
     const { tool, statusUpdate } = build(createJob);
     const result = JSON.parse(await tool.toolFn({ model: 'test-video', prompt: 'a cat' }));
     expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 8 });
-    expect(createJob.mock.calls[0][0]).toMatchObject({ source: 'agent', questId: 'q1', user: { id: 'u1' } });
+    expect(createJob.mock.calls[0][0]).toMatchObject({
+      source: 'agent',
+      questId: 'q1',
+      user: { id: 'u1', adminRoleWithheld: true },
+    });
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'video' }] });
   });
 

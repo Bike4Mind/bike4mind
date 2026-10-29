@@ -34,6 +34,14 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
 
 interface User {
   _id: string;
@@ -97,8 +105,8 @@ const useVerifyEmail = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (userId: string) => {
-      const response = await api.post(`/api/admin/users/${userId}/verify-email`);
+    mutationFn: async ({ userId, reason }: { userId: string; reason: string }) => {
+      const response = await api.post(`/api/admin/users/${userId}/verify-email`, { reason });
       return response.data;
     },
     onSuccess: () => {
@@ -111,8 +119,8 @@ const useUnverifyEmail = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (userId: string) => {
-      const response = await api.post(`/api/admin/users/${userId}/unverify-email`);
+    mutationFn: async ({ userId, reason }: { userId: string; reason: string }) => {
+      const response = await api.post(`/api/admin/users/${userId}/unverify-email`, { reason });
       return response.data;
     },
     onSuccess: () => {
@@ -466,6 +474,9 @@ const EmailVerificationTab = () => {
     username: null,
     pendingEmail: null,
   });
+  // Only verify and unverify change the account, so only they ask for an audited reason.
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  const needsReason = confirmModal.type === 'verify' || confirmModal.type === 'unverify';
 
   const queryClient = useQueryClient();
   const users = useGetEmailVerificationUsers({
@@ -490,6 +501,7 @@ const EmailVerificationTab = () => {
     username: string,
     pendingEmail?: string
   ) => {
+    setReason(EMPTY_ADMIN_REASON);
     setConfirmModal({
       open: true,
       type,
@@ -513,6 +525,7 @@ const EmailVerificationTab = () => {
 
   const handleConfirmAction = async () => {
     if (!confirmModal.userId || !confirmModal.type) return;
+    if (needsReason && !isAdminReasonComplete(reason)) return;
 
     try {
       switch (confirmModal.type) {
@@ -521,11 +534,11 @@ const EmailVerificationTab = () => {
           toast.success(`Verification email resent to ${confirmModal.email}`);
           break;
         case 'verify':
-          await verifyEmail.mutateAsync(confirmModal.userId);
+          await verifyEmail.mutateAsync({ userId: confirmModal.userId, reason: composeAdminReason(reason) });
           toast.success(`Email verified for ${confirmModal.username}`);
           break;
         case 'unverify':
-          await unverifyEmail.mutateAsync(confirmModal.userId);
+          await unverifyEmail.mutateAsync({ userId: confirmModal.userId, reason: composeAdminReason(reason) });
           toast.success(`Email unverified for ${confirmModal.username}`);
           break;
         case 'resend-email-change':
@@ -786,6 +799,16 @@ const EmailVerificationTab = () => {
             {confirmModal.type === 'resend-email-change' &&
               `Are you sure you want to resend the email change verification to ${confirmModal.pendingEmail}?`}
           </Typography>
+          {needsReason && (
+            <Box sx={{ mt: 2 }}>
+              <ReasonPicker
+                presets={ADMIN_REASON_PRESETS.emailVerification}
+                value={reason}
+                onChange={setReason}
+                data-testid="email-verification-reason-input"
+              />
+            </Box>
+          )}
           <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
             <Button variant="outlined" color="neutral" onClick={closeConfirmModal}>
               Cancel
@@ -793,6 +816,7 @@ const EmailVerificationTab = () => {
             <Button
               color={confirmModal.type === 'unverify' ? 'danger' : 'primary'}
               onClick={handleConfirmAction}
+              disabled={needsReason && !isAdminReasonComplete(reason)}
               loading={
                 resendVerification.isPending ||
                 verifyEmail.isPending ||

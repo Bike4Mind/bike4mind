@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import type { ModelCatalog } from './ModelCatalog';
-import { OLLAMA_RUNTIME_ID, type OllamaLocal } from './OllamaLocal';
+import { LocalModelRemovedError, OLLAMA_RUNTIME_ID, type OllamaLocal } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -28,7 +28,13 @@ afterEach(() => {
 
 type Mode = 'signed-in' | 'device-local' | 'expired';
 
-async function fixture(options: { mode: Mode; local: ChatModelOption[]; remembered?: string | null }) {
+async function fixture(options: {
+  mode: Mode;
+  local: ChatModelOption[];
+  remembered?: string | null;
+  /** The catalog's last local list; left out, the catalog has no lastLocal at all. */
+  last?: ChatModelOption[] | null;
+}) {
   const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-signed-out-local-')), HOSTED_DEFAULT);
   const events: ChatStreamEvent[] = [];
   const stream = vi.fn<OllamaLocal['stream']>(async (_request, emit) => {
@@ -40,13 +46,24 @@ async function fixture(options: { mode: Mode; local: ChatModelOption[]; remember
   } as unknown as AuthenticatedApiClient;
   const local = { current: options.local };
   const record = vi.fn(async () => {});
+  const last = { current: options.last ?? null };
+  // Like ModelCatalog: a read refreshes the last list, and forgetLocal drops it.
+  const listLocal = vi.fn(async (_force?: boolean) => {
+    last.current = local.current;
+    return local.current;
+  });
+  const forgetLocal = vi.fn(() => {
+    last.current = null;
+  });
   const service = new ChatService({
     store,
     queue: new MessageQueue(() => undefined),
     models: {
       list: async () => ({ models: local.current }),
-      listLocal: async () => local.current,
+      listLocal,
       cached: () => local.current,
+      forgetLocal,
+      ...(options.last === undefined ? {} : { lastLocal: () => last.current }),
     } as unknown as ModelCatalog,
     modelMemory: { read: async () => options.remembered ?? null, record },
     local: { stream } as unknown as OllamaLocal,
@@ -60,7 +77,7 @@ async function fixture(options: { mode: Mode; local: ChatModelOption[]; remember
   });
   services.push(service);
   const settled = (id: string) => vi.waitUntil(() => events.some(e => e.type === 'done' && e.sessionId === id));
-  return { service, store, stream, local, events, record, settled };
+  return { service, store, stream, local, events, record, settled, listLocal, forgetLocal };
 }
 
 describe('device-local chat with no usable local model', () => {
@@ -96,6 +113,68 @@ describe('device-local chat with no usable local model', () => {
     await settled(session.id);
     expect((await store.get(session.id))?.model).toBe(QWEN.id);
     expect(stream.mock.calls.every(([request]) => request.model === QWEN.id)).toBe(true);
+  });
+
+  it('sends on the last local list without asking Ollama when it has the model, however old', async () => {
+    const { service, listLocal, settled } = await fixture({ mode: 'device-local', local: [QWEN], last: [QWEN] });
+    const session = await service.createSession();
+    expect(await service.send(session.id, 'hello')).toMatchObject({ ok: true });
+    await settled(session.id);
+    expect(await service.send(session.id, 'again')).toMatchObject({ ok: true });
+    await vi.waitUntil(() => !service.isSessionBusy(session.id));
+    expect(listLocal).not.toHaveBeenCalled();
+  });
+
+  it('rereads once, forced, when the last list lacks the model, then switches as before', async () => {
+    const { service, store, listLocal, settled } = await fixture({
+      mode: 'device-local',
+      local: [GEMMA],
+      last: [QWEN, GEMMA],
+    });
+    const session = await service.createSession();
+    await service.setSessionModel(session.id, localModelId(OLLAMA_RUNTIME_ID, 'llama3.2'));
+    expect(await service.send(session.id, 'hello')).toMatchObject({
+      ok: true,
+      notice: expect.stringContaining('llama3.2 is not available on this device'),
+    });
+    await settled(session.id);
+    expect(listLocal.mock.calls).toEqual([[true]]);
+    expect((await store.get(session.id))?.model).toBe(GEMMA.id);
+  });
+
+  it('reads Ollama once when there is no last list yet', async () => {
+    const { service, listLocal, settled } = await fixture({ mode: 'device-local', local: [QWEN], last: null });
+    const session = await service.createSession();
+    expect(await service.send(session.id, 'hello')).toMatchObject({ ok: true });
+    await settled(session.id);
+    expect(listLocal.mock.calls).toEqual([[true]]);
+  });
+
+  it('forgets the list when the model was removed outside the app, so the next send switches', async () => {
+    const { service, store, stream, local, listLocal, forgetLocal } = await fixture({
+      mode: 'device-local',
+      local: [QWEN, GEMMA],
+      last: [QWEN, GEMMA],
+    });
+    const session = await service.createSession();
+    await service.setSessionModel(session.id, QWEN.id);
+    local.current = [GEMMA];
+    // Every request to a removed model fails, the title request beside the turn included.
+    stream.mockImplementation(async (request, emit) => {
+      if (request.model === QWEN.id) throw new LocalModelRemovedError();
+      emit({ type: 'content', text: 'hi', stopReason: 'end_turn' });
+    });
+    expect(await service.send(session.id, 'hello')).toMatchObject({ ok: true });
+    await vi.waitUntil(() => forgetLocal.mock.calls.length > 0 && !service.isSessionBusy(session.id));
+    expect(listLocal).not.toHaveBeenCalled();
+
+    expect(await service.send(session.id, 'again')).toMatchObject({
+      ok: true,
+      notice: expect.stringContaining('qwen2.5:0.5b is not available on this device'),
+    });
+    await vi.waitUntil(() => !service.isSessionBusy(session.id));
+    expect(listLocal.mock.calls).toEqual([[true]]);
+    expect((await store.get(session.id))?.model).toBe(GEMMA.id);
   });
 
   it('moves a placeholder conversation without a notice', async () => {

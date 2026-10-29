@@ -10,6 +10,7 @@ export type AdminUserUpdate = Partial<IUser> & {
   creditDelta?: number;
   creditReason?: string;
   roleChangeReason?: string;
+  statusChangeReason?: string;
 };
 
 export const adminUpdateErrorMessage = (error: unknown, fallback: string): string => {

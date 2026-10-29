@@ -55,6 +55,7 @@ import {
   resolveSlackWebhookUrl,
   resolveFeedbackSlackRoute,
   postMessageToSlack,
+  postMessageToSlackWithOutcome,
   postFeedbackToSlack,
   postEmailMirrorToSlack,
   EMAIL_MIRROR_TIMEOUT_MS,
@@ -212,6 +213,7 @@ describe('postMessageToSlack', () => {
     mocks.config.SLACK_WEBHOOK_URL = '';
     mocks.post.mockReset();
     vi.mocked(Logger.error).mockClear();
+    vi.mocked(Logger.warn).mockClear();
   });
 
   it('returns false when no webhook is configured', async () => {
@@ -249,6 +251,32 @@ describe('postMessageToSlack', () => {
     });
     await expect(postMessageToSlack('signup sample addresses', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe(false);
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('warns once instead of erroring when security alerts are turned off', async () => {
+    // Fresh module state for the once-per-process flag; the re-imported Logger mock is the one it uses.
+    vi.resetModules();
+    const slack = await import('./slack');
+    const { Logger: freshLogger } = await import('@bike4mind/observability');
+    mocks.getSettingsMap.mockResolvedValue({ SlackSecurityAlertsWebhookUrl: '' });
+
+    await expect(slack.postMessageToSlackWithOutcome('held', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe(
+      'unconfigured'
+    );
+    await expect(slack.postMessageToSlackWithOutcome('held', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe(
+      'unconfigured'
+    );
+    expect(freshLogger.warn).toHaveBeenCalledTimes(1);
+    expect(freshLogger.error).not.toHaveBeenCalled();
+  });
+
+  it('reports a rejected post as failed, distinct from unconfigured', async () => {
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackSecurityAlertsWebhookUrl: 'https://hooks.slack.com/services/security',
+    });
+    mocks.post.mockRejectedValue(new Error('slack down'));
+
+    await expect(postMessageToSlackWithOutcome('held', 'SlackSecurityAlertsWebhookUrl')).resolves.toBe('failed');
   });
 
   it('bounds a security notification and reports a timed out delivery', async () => {

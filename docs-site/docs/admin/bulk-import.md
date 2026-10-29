@@ -93,6 +93,6 @@ After a successful import, the parsed user list is cleared. If errors occur, the
 
 ## Related Articles
 
-- [Subscribers](./subscribers.md)
+- [Waitlist](./waitlist.md)
 - [Invite Codes](./invite-codes.md)
 - [Credit Analytics](./credit-analytics.md)

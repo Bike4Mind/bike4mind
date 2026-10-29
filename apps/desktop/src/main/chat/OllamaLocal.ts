@@ -10,6 +10,7 @@ import {
   type LocalContextSetting,
 } from '@shared/localContextSetting';
 import type { CompletionMessage, CompletionRequest } from './completions';
+import { configuredNumCtx, positiveTokenCount } from './localChatContext';
 import {
   chatContextTokens,
   ContextOverflowError,
@@ -58,13 +59,20 @@ const showSchema = z.object({
   ...remoteFields,
 });
 
+/** The model is no longer installed; ChatService then rereads the local list on the next send. */
+export class LocalModelRemovedError extends Error {
+  constructor() {
+    super('This model was removed from Ollama. Pick another model.');
+    this.name = 'LocalModelRemovedError';
+  }
+}
+
 async function ollamaError(response: Response, server?: RemoteOllama): Promise<Error> {
   if (server && (response.status === 401 || response.status === 403))
     return new ServerCredentialsError(server.label, server.hasCredentials());
   const message = await httpError(response, server?.label ?? 'Ollama');
   // Ollama answers "model '...' not found" once the model is deleted, e.g. from the Models screen.
-  if (response.status === 404 && /model .* not found/i.test(message))
-    return new Error('This model was removed from Ollama. Pick another model.');
+  if (response.status === 404 && /model .* not found/i.test(message)) return new LocalModelRemovedError();
   return new Error(message);
 }
 
@@ -867,14 +875,5 @@ function contextBounds(inspection: Inspection): { limit: number | undefined; con
   const architectureLimit = Object.entries(inspection.model_info ?? {}).find(
     ([key, value]) => key.endsWith('.context_length') && positiveTokenCount(value) !== undefined
   )?.[1];
-  const configured = /^num_ctx[ \t]+(\S+)[ \t]*$/m.exec(inspection.parameters ?? '')?.[1];
-  return {
-    limit: positiveTokenCount(architectureLimit),
-    configured: positiveTokenCount(configured === undefined ? undefined : Number(configured)),
-  };
-}
-
-function positiveTokenCount(value: unknown): number | undefined {
-  const count = tokenCount(value);
-  return count !== undefined && count > 0 && Number.isSafeInteger(count) ? count : undefined;
+  return { limit: positiveTokenCount(architectureLimit), configured: configuredNumCtx(inspection.parameters) };
 }

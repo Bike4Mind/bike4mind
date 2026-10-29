@@ -55,6 +55,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
     'aa48c95e91e528e37c56987140eb2432dc050caa462b4c8f28e9043bf22d4a77'
   ),
+  hostedOnly(
+    'eventRule:infra/analyticsRollup.ts:AnalyticsRollupSchedule',
+    'ed227e7eb331eab93a361fb1ed64533da7ec06fe7e659b7adf747e794bab7abe',
+    'Hosted nightly product-analytics rollup; the self-host worker runner does not schedule it yet.'
+  ),
+  broker(
+    'queue:infra/analyticsRollup.ts:AnalyticsRollupDlq',
+    'ed51b5ae85080c544b6e72f1d517d7c42a55271b0cc262036b31cc42a2669c39'
+  ),
   broker(
     'queue:infra/businessMetricAlerts.ts:businessMetricAlertsDLQ',
     '673c6f139ed9d3c3cb6695ec42bdf0f2da000f8d79e5ed17a00060cdc353549e'
@@ -125,12 +134,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('event:infra/eventBus.ts:SreFixDispatch', 'fa1122e45e2de82ee4a61c73ce860a679f2f5ce735bc628dd56a35c82977a648'),
   gap(
     'event:infra/eventBus.ts:stripe-customer-subscription-updated',
-    '8f5037deab58d486aa279c634c26f8c5754125a767eed3823cf4ea73c4ff318c',
+    '4c4fc4ab9c35065deecb949f1fac91f03147e83a2d0e4d69d325a4cffbb41c35',
     ['cloudwatch:PutMetricData']
   ),
   gap(
     'event:infra/eventBus.ts:stripe-invoice-payment-succeeded',
-    'd8089deb5d5acdfc5eeadafe24844b1039b26c686ed26d7ed6079f71f437bffe',
+    '9bd7d67d91b7ed92af560f2bec4a2dc3a3fe76a8f907f503c253cd82811d556e',
     ['cloudwatch:PutMetricData']
   ),
   gap('event:infra/eventBus.ts:telemetry-alert', 'da2a32170866774933b17511f32fa3be3347981ebc58cde3f749a7bed484afe7', [

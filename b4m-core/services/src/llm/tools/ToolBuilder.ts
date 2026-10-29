@@ -128,6 +128,8 @@ export interface ToolBuilderConfig {
   db: IChatCompletionServiceOptions['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
   authOrigin: ToolContext['authOrigin'];
   /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
@@ -967,6 +969,7 @@ export class ToolBuilder {
         logger: this.deps.logger,
         db: this.deps.db,
         entitlementKeys: this.deps.entitlementKeys,
+        getEntitlements: this.deps.getEntitlements,
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
         attachedFileIds: this.deps.attachedFileIds,

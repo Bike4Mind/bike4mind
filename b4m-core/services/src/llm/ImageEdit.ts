@@ -5,6 +5,7 @@ import {
   ISessionDocument,
   OpenAIImageGenerationInput,
   IUserDocument,
+  LLMEventPayload,
   LLMEvents,
   BFL_SAFETY_TOLERANCE,
   IChatHistoryItemRepository,
@@ -107,6 +108,7 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   image: z.string(),
   /** Minted per invoke(); see ImageGenerationBodySchema.generationId. */
   generationId: z.string().optional(),
+  adminRoleWithheld: z.boolean().optional(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
   // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
@@ -139,10 +141,14 @@ interface IImageEditServiceOptions {
   startImageEditProcess: (body: ImageEditBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
   creditHolds: ImageCreditHolds;
+  assertModelAdmission: (user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean) => Promise<void>;
   deleteFabFile: (userId: string, fileId: string) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
-  logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
+  logEvent: (
+    event: LLMEventPayload,
+    options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
+  ) => Promise<void>;
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
@@ -169,6 +175,7 @@ export class ImageEditService {
   private db: IImageEditServiceOptions['db'];
   private startImageEditProcess: IImageEditServiceOptions['startImageEditProcess'];
   private creditHolds: ImageCreditHolds;
+  private assertModelAdmission: IImageEditServiceOptions['assertModelAdmission'];
   private wsHttpsUrl: string;
   private logEvent: IImageEditServiceOptions['logEvent'];
   private abilityGetter: IImageEditServiceOptions['abilityGetter'];
@@ -185,6 +192,7 @@ export class ImageEditService {
     this.db = options.db;
     this.startImageEditProcess = options.startImageEditProcess;
     this.creditHolds = options.creditHolds;
+    this.assertModelAdmission = options.assertModelAdmission;
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.logEvent = options.logEvent;
     this.storage = options.storage;
@@ -198,7 +206,15 @@ export class ImageEditService {
     this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
   }
 
-  public async invoke({ body, userId }: { body: z.infer<typeof EditImageRequestBodySchema>; userId: string }) {
+  public async invoke({
+    body,
+    userId,
+    adminRoleWithheld,
+  }: {
+    adminRoleWithheld?: boolean;
+    body: z.infer<typeof EditImageRequestBodySchema>;
+    userId: string;
+  }) {
     const now = new Date();
 
     const {
@@ -220,6 +236,7 @@ export class ImageEditService {
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
 
+    await this.assertModelAdmission(userId, model, adminRoleWithheld);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
 
@@ -293,6 +310,7 @@ export class ImageEditService {
           fabFileIds,
           organizationId,
           generationId: uuidv4(),
+          adminRoleWithheld,
         })
       );
     } catch (error) {
@@ -435,6 +453,7 @@ export class ImageEditService {
       sessionId,
       questId,
       userId,
+      adminRoleWithheld,
       prompt,
       model: requestedModel,
       safety_tolerance,
@@ -505,6 +524,7 @@ export class ImageEditService {
         organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
       ]);
       if (!user) throw new NotFoundError('User not found');
+      await this.assertModelAdmission(user, model, adminRoleWithheld);
 
       // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
       // and this host may outlive the admin's write to either.
@@ -772,7 +792,12 @@ export class ImageEditService {
       const userAbility = this.abilityGetter(user);
 
       await this.logEvent(
-        { userId, type: LLMEvents.QUEUE_HANDLER_IMAGE_GENERATE, metadata: { questId: quest.id, modelId: model } },
+        // as unknown: payload lacks the event type's required metadata and sends modelId, not model; typing it would change analytics
+        {
+          userId,
+          type: LLMEvents.QUEUE_HANDLER_IMAGE_GENERATE,
+          metadata: { questId: quest.id, modelId: model },
+        } as unknown as LLMEventPayload,
         { ability: userAbility }
       );
 

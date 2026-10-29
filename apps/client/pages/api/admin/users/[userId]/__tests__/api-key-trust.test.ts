@@ -22,11 +22,17 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.findById, update: h.update },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+// parseAdminActionReason stays real so the 400s are the route's own.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 await import('../api-key-trust');
+
+const REASON = 'Verified the integration owner';
 
 const makeReq = (body: unknown, isAdmin = true) => ({
   query: { userId: 'user-1' },
@@ -52,13 +58,14 @@ describe('POST /api/admin/users/[userId]/api-key-trust', () => {
     h.findById.mockResolvedValue({ id: 'user-1', username: 'u', email: 'a@b.test', apiKeyTrustApproved: false });
     const json = vi.fn();
 
-    await h.handler!(makeReq({ approved: true }), { json });
+    await h.handler!(makeReq({ approved: true, reason: REASON }), { json });
 
     expect(h.update).toHaveBeenCalledWith({ id: 'user-1', apiKeyTrustApproved: true });
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         action: 'user.api_key_trust.approved',
+        reason: REASON,
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
         changes: [{ field: 'apiKeyTrustApproved', before: false, after: true }],
       })
@@ -70,13 +77,14 @@ describe('POST /api/admin/users/[userId]/api-key-trust', () => {
     h.findById.mockResolvedValue({ id: 'user-1', username: 'u', apiKeyTrustApproved: true });
     const json = vi.fn();
 
-    await h.handler!(makeReq({ approved: false }), { json });
+    await h.handler!(makeReq({ approved: false, reason: REASON }), { json });
 
     expect(h.update).toHaveBeenCalledWith({ id: 'user-1', apiKeyTrustApproved: false });
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         action: 'user.api_key_trust.revoked',
+        reason: REASON,
         changes: [{ field: 'apiKeyTrustApproved', before: true, after: false }],
       })
     );
@@ -87,7 +95,7 @@ describe('POST /api/admin/users/[userId]/api-key-trust', () => {
     h.findById.mockResolvedValue({ id: 'user-1', username: 'u' });
     const json = vi.fn();
 
-    await h.handler!(makeReq({ approved: false }), { json });
+    await h.handler!(makeReq({ approved: false, reason: REASON }), { json });
 
     expect(h.update).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
@@ -98,5 +106,17 @@ describe('POST /api/admin/users/[userId]/api-key-trust', () => {
     await expect(h.handler!(makeReq(body), { json: vi.fn() })).rejects.toThrow(/invalid request body/i);
 
     expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ approved: true }, /outdated version/],
+    [{ approved: true, reason: 'no' }, /at least/i],
+  ])('rejects a missing or too-short reason %j with no write and no audit', async (body, message) => {
+    h.findById.mockResolvedValue({ id: 'user-1', username: 'u', apiKeyTrustApproved: false });
+
+    await expect(h.handler!(makeReq(body), { json: vi.fn() })).rejects.toThrow(message);
+
+    expect(h.update).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });
