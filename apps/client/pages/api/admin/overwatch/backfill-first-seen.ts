@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { User, OverwatchUserFirstSeen } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -14,11 +13,10 @@ const bodySchema = z.object({
   skip: z.number().int().nonnegative().default(0),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   // Salt must be configured; pseudonymizing with the 'not-configured' placeholder produces a
   // different key than the live emitter, silently writing orphaned first-seen records that never
   // match any real user. Fail safe instead. (Resource.X.value returns the placeholder, not a throw.)
