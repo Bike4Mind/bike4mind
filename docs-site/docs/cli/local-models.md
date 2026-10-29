@@ -24,7 +24,7 @@ b4m --ollama-host <url>
 
 On startup you'll see:
 
-```
+```text
 Self-hosted Ollama: 2 model(s) added to picker
 ```
 
