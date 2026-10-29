@@ -78,7 +78,8 @@ export function findUnsetSignupProtections(
   values: Partial<Record<SignupGrantProtectionKey, unknown>>
 ): SignupGrantProtectionKey[] {
   const policy = parsePolicyValue(values.signupGrantRiskPolicy);
-  const policyOn = typeof policy === 'object' && policy !== null && isOn((policy as { enabled?: unknown }).enabled);
+  // Boolean literal only: signupRiskPolicySchema rejects the string 'true', so that shape offers no protection.
+  const policyOn = typeof policy === 'object' && policy !== null && (policy as { enabled?: unknown }).enabled === true;
   const checks: Record<SignupGrantProtectionKey, boolean> = {
     signupGrantRiskPolicy: policyOn,
     maxSignupsPerIpPerDay: nonnegativeGrantCredits(values.maxSignupsPerIpPerDay) > 0,
