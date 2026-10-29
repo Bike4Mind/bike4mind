@@ -13,6 +13,7 @@ import {
   userFileCspInjection as userFileCspInjectionFor,
 } from './routerFunctionCode';
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
+import { AUTH_NETWORK_HEADERS, authNetworkCacheBehaviors } from './authNetworkForwarding';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -135,8 +136,7 @@ export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
 const originVerifyInjection = $interpolate`
-  // Drops a viewer-forged copy. AWS docs show computed cloudfront-viewer-* headers already present here,
-  // so this may also drop the real JA4: remove it before adding JA4 to the origin request policy.
+  // Strip viewer-forged JA4. CloudFront adds the computed value after viewer-request processing.
   delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
@@ -174,6 +174,18 @@ $transform(aws.cloudfront.Function, (args, _opts, name) => {
 // today's per-stage function; the shared one is never created or deleted by a stage.
 const sharedResponseFunctionArn =
   isPreviewStage && !$dev ? process.env.PREVIEW_SHARED_RESPONSE_FUNCTION_ARN || undefined : undefined;
+
+const authNetworkOriginRequestPolicy = shouldUseSharedRouter
+  ? undefined
+  : new aws.cloudfront.OriginRequestPolicy('AuthNetworkOriginRequestPolicy', {
+      comment: 'Forward trusted connection metadata on authentication requests',
+      headersConfig: {
+        headerBehavior: 'allViewerAndWhitelistCloudFront',
+        headers: { items: AUTH_NETWORK_HEADERS },
+      },
+      cookiesConfig: { cookieBehavior: 'all' },
+      queryStringsConfig: { queryStringBehavior: 'all' },
+    });
 
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
@@ -262,6 +274,21 @@ const routerInstance = shouldUseSharedRouter
                 { eventType: 'viewer-response', functionArn: sharedResponseFunctionArn },
               ]),
             };
+          }
+
+          // SST's lazy router sets domainName with updateRequestOrigin, which also sets the origin
+          // Host. Keep x-forwarded-host, cookies, Authorization and the existing cache/edge settings.
+          // Scope this policy to auth so S3 keeps the managed policy's response-* query filtering.
+          if (authNetworkOriginRequestPolicy && args.defaultCacheBehavior) {
+            const existing = args.orderedCacheBehaviors as
+              aws.types.input.cloudfront.DistributionOrderedCacheBehavior[] | undefined;
+            args.orderedCacheBehaviors = [
+              ...(existing ?? []),
+              ...authNetworkCacheBehaviors(
+                args.defaultCacheBehavior as aws.types.input.cloudfront.DistributionDefaultCacheBehavior,
+                authNetworkOriginRequestPolicy.id
+              ),
+            ];
           }
 
           // Attach the WAF if enabled (ENABLE_WAF=true): the stage-owned ACL, or the
