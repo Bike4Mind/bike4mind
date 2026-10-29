@@ -1,6 +1,7 @@
 import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue, TooManyRequestsError } from '@bike4mind/utils';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
+import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { ipBucket } from '@bike4mind/server-utils/utils/ipBucket';
 import type { RequestHandler } from 'express';
@@ -13,8 +14,9 @@ import type { RequestHandler } from 'express';
 export const oauthIpRateLimit =
   (bucket: 'oauth-init' | 'oauth-callback'): RequestHandler =>
   async (req, res, next) => {
-    // isE2EEnabled is hard-false on production; CI draws every sign-in from one shared IP.
-    if (isE2EEnabled()) return next();
+    // CI draws every sign-in from one shared IP. Gated on the secret header, not just the stage, so
+    // previews (E2E-enabled for everyone) still enforce the limit on real traffic.
+    if (isE2EEnabled() && isValidE2eTestSecret(req.headers['x-e2e-cleanup-secret'])) return next();
 
     let windowMs: number;
     let result: { success: boolean; expiresAt: Date };
