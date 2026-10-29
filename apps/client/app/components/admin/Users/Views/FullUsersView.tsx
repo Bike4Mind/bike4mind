@@ -150,7 +150,10 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
     deleteUser.mutate({ id: userId, reason });
   };
 
-  const closeRoleConfirm = () => setRoleConfirmOpen(false);
+  const closeRoleConfirm = () => {
+    setRoleConfirmOpen(false);
+    setStatusReason(undefined);
+  };
 
   const closeLoginAsModal = () => setLoginAsMfaModalOpen(false);
 

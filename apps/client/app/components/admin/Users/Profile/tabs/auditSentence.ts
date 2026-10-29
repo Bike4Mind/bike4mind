@@ -160,17 +160,19 @@ export const auditUndo = (
   const supersededBy = newerEntries.some(newer => newer.changes?.some(change => touched.has(change.field)));
   if (supersededBy) return null;
   if (!changes.every(change => sameValue(currentValue(user, change.field), change.after))) return null;
-  // An entry from before reasons were stored has none; its own sentence stands in.
-  const reason = entry.reason || describeAuditEntry(entry);
+  // A status entry from before reasons were stored has none, and inventing one would put words no
+  // admin wrote into a strict audit record; the profile's reason dialogs still reverse it.
   const touchesStatus = changes.some(change => STATUS_FIELDS.has(change.field));
+  const reason = entry.reason?.trim();
+  if (touchesStatus && !reason) return null;
   return {
     patch: {
       ...Object.fromEntries(changes.map(change => [change.field, change.before ?? defaultFor(change.field)])),
-      ...(touchesStatus && { statusChangeReason: undoAdminReason(reason) }),
+      ...(touchesStatus && reason && { statusChangeReason: undoAdminReason(reason) }),
     },
     redo: {
       ...Object.fromEntries(changes.map(change => [change.field, change.after])),
-      ...(touchesStatus && { statusChangeReason: reason }),
+      ...(touchesStatus && reason && { statusChangeReason: reason }),
     },
   };
 };

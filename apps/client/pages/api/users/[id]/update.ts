@@ -326,24 +326,27 @@ const handler = baseApi().put(
           );
 
           // These entries are strict: a failed audit write aborts this transaction, so no role,
-          // balance, suspension or restriction change can commit without its record.
-          if (changesRole && snapshot?.isAdmin !== updated?.isAdmin) {
+          // balance, suspension or restriction change can commit without its record. Role and status
+          // entries follow what this write flipped, not the pre-read: a concurrent edit can make the
+          // pre-read stale, and a flip it missed still needs its reason, or the 400 rolls it back. No
+          // written user (the row vanished) means nothing flipped.
+          if (updated && !!snapshot?.isAdmin !== !!updated.isAdmin) {
             await recordAdminActionFromRequest(req, {
               action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
               target: auditTarget,
               summary: updated?.isAdmin ? 'granted the admin role' : 'revoked the admin role',
-              reason: roleChangeReason,
+              reason: roleChangeReason ?? parseAdminActionReason(body.roleChangeReason),
               changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
             });
           }
-          for (const { field, on, off } of statusChanges) {
+          for (const { field, on, off } of updated ? STATUS_FLAGS : []) {
             const before = !!snapshot?.[field];
             const after = !!updated?.[field];
             if (before === after) continue;
             await recordAdminActionFromRequest(req, {
               ...(after ? on : off),
               target: auditTarget,
-              reason: statusChangeReason,
+              reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
               changes: [{ field, before, after }],
             });
           }

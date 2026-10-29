@@ -1179,6 +1179,41 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
+    // A concurrent reinstate lands between the pre-read and the transaction, so the pre-read sees no
+    // change while this write still flips the flag.
+    const staleSuspend = () => {
+      mockUserFindById.mockReturnValueOnce(target({ isBanned: true })).mockReturnValue(target({ isBanned: false }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ isBanned: true }), creditAdjustment: undefined });
+    };
+
+    it('rejects a flip the stale pre-read missed when no reason was sent, so it rolls back', async () => {
+      staleSuspend();
+      const { promise } = run({ user: ADMIN, userId: 'other-user', body: { isBanned: true } });
+
+      await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('audits a flip the stale pre-read missed when a reason was sent', async () => {
+      staleSuspend();
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { isBanned: true, statusChangeReason: STATUS_REASON },
+      });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.suspended',
+          reason: STATUS_REASON,
+          changes: [{ field: 'isBanned', before: false, after: true }],
+        })
+      );
+    });
+
     it('needs no reason and writes no status entry when a flag is sent with its stored value', async () => {
       mockUserFindById.mockReturnValue(target({ isBanned: true, isModerated: false }));
       mockAdminUpdateUser.mockResolvedValue({

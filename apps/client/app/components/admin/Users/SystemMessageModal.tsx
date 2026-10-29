@@ -45,6 +45,12 @@ const SystemMessageModal: React.FC<SystemMessageModalProps> = ({ open, onClose, 
     },
   });
 
+  // A reason is about one send; it must not carry over when the modal is dismissed and reopened.
+  const handleClose = () => {
+    setReason(EMPTY_ADMIN_REASON);
+    onClose();
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ready) return;
@@ -58,7 +64,7 @@ const SystemMessageModal: React.FC<SystemMessageModalProps> = ({ open, onClose, 
   };
 
   return (
-    <Modal sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }} open={open} onClose={onClose}>
+    <Modal sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }} open={open} onClose={handleClose}>
       <Sheet
         variant="outlined"
         sx={{

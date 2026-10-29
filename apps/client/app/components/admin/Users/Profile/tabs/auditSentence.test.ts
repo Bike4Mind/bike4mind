@@ -49,12 +49,12 @@ describe('formatAuditValue', () => {
 });
 
 describe('auditUndo', () => {
-  const suspend = profileUpdate([{ field: 'isBanned', before: false, after: true }]);
+  const suspend = { ...profileUpdate([{ field: 'isBanned', before: false, after: true }]), reason: 'Chargeback' };
 
   it('reverses a field change that still stands', () => {
     expect(auditUndo(suspend, [], buildProfile({ isBanned: true }))).toEqual({
-      patch: { isBanned: false, statusChangeReason: 'Undo: Suspended account' },
-      redo: { isBanned: true, statusChangeReason: 'Suspended account' },
+      patch: { isBanned: false, statusChangeReason: 'Undo: Chargeback' },
+      redo: { isBanned: true, statusChangeReason: 'Chargeback' },
     });
   });
 
@@ -83,16 +83,14 @@ describe('auditUndo', () => {
     });
   });
 
-  it('falls back to the sentence when the entry has no reason', () => {
-    const entry = makeAuditEntry({
-      action: 'user.suspended',
-      reason: undefined,
-      changes: [{ field: 'isBanned', before: false, after: true }],
-    });
-    expect(auditUndo(entry, [], buildProfile({ isBanned: true }))).toMatchObject({
-      patch: { statusChangeReason: `Undo: ${describeAuditEntry(entry)}` },
-      redo: { statusChangeReason: describeAuditEntry(entry) },
-    });
+  it.each([
+    ['a legacy user.profile.updated', profileUpdate([{ field: 'isBanned', before: false, after: true }])],
+    [
+      'a user.suspended',
+      makeAuditEntry({ action: 'user.suspended', changes: [{ field: 'isBanned', before: false, after: true }] }),
+    ],
+  ])('offers no undo for %s status entry without a stored reason', (_label, entry) => {
+    expect(auditUndo(entry, [], buildProfile({ isBanned: true }))).toBeNull();
   });
 
   it('sends no statusChangeReason for a tags-only undo', () => {
