@@ -63,7 +63,7 @@ export function impersonationDecision(
 }
 
 export function impersonationGate(req: Request, _res: Response, next: NextFunction) {
-  const user = req.user as Request['user'] & { impersonationWriteEnabled?: boolean };
+  const user = req.user as Request['user'] & { impersonatedBy?: string; impersonationWriteEnabled?: boolean };
   if (!user?.impersonatedBy) return next();
   const decision = impersonationDecision(req.method, req.url, !!user.impersonationWriteEnabled);
   if (decision !== 'allow')
