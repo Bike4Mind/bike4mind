@@ -134,7 +134,7 @@ const sentCount = () => fetchMock.mock.calls.filter(([url]) => String(url).endsW
 describe('phone unlock start + verify', () => {
   it('sends a code, then grants under the per-reason ledger id and stores only a hash of the number', async () => {
     const id = await seedUser();
-    expect(await startPhoneUnlock(id, '+44 7700 900123', req())).toEqual({ sent: true });
+    expect(await startPhoneUnlock(id, '+44 7700 900123', req())).toEqual({ sent: true, sentTo: NUMBER });
     expect(await runNoCardUnlock('phone_verified', id, { phoneCode: '123456' })).toEqual({
       creditsGranted: PHONE_CREDITS,
       currentCredits: PHONE_CREDITS,
@@ -155,17 +155,19 @@ describe('phone unlock start + verify', () => {
     expect(sentCount()).toBe(0);
   });
 
-  it('unlocks a reused number only once across accounts and does not pay to re-send to it', async () => {
+  it('unlocks a reused number only once, answering start as sent without paying or revealing the claim', async () => {
     const [a, b] = [await seedUser(), await seedUser()];
     await startPhoneUnlock(a, NUMBER, req());
     expect(await runNoCardUnlock('phone_verified', a, { phoneCode: '123456' })).toMatchObject({
       creditsGranted: PHONE_CREDITS,
     });
-    expect(await startPhoneUnlock(b, NUMBER, req('81.2.70.9'))).toEqual({
-      sent: false,
-      refusal: 'phone_already_claimed',
-    });
+    expect(await startPhoneUnlock(b, NUMBER, req('81.2.70.9'))).toEqual({ sent: true, sentTo: NUMBER });
     expect(sentCount()).toBe(1);
+    vi.stubGlobal('fetch', (fetchMock = twilioFetch({ checkStatus: 404 })));
+    expect(await runNoCardUnlock('phone_verified', b, { phoneCode: '123456' })).toMatchObject({
+      creditsGranted: 0,
+      refusal: 'phone_code_invalid',
+    });
   });
 
   it('refuses the claim when two accounts race the same number through verify', async () => {
@@ -216,7 +218,10 @@ describe('phone unlock start + verify', () => {
   it('caps sends per account and per source IP', async () => {
     const id = await seedUser();
     for (let i = 0; i < 3; i++) {
-      expect(await startPhoneUnlock(id, `+4477009001${i}0`, req(`81.2.69.${i + 10}`))).toEqual({ sent: true });
+      expect(await startPhoneUnlock(id, `+4477009001${i}0`, req(`81.2.69.${i + 10}`))).toEqual({
+        sent: true,
+        sentTo: expect.any(String),
+      });
     }
     expect(await startPhoneUnlock(id, '+447700900199', req('81.2.69.99'))).toEqual({
       sent: false,
@@ -225,7 +230,10 @@ describe('phone unlock start + verify', () => {
 
     const shared = req('81.2.69.50');
     for (let i = 0; i < 5; i++) {
-      expect(await startPhoneUnlock(await seedUser(), `+4477009002${i}0`, shared)).toEqual({ sent: true });
+      expect(await startPhoneUnlock(await seedUser(), `+4477009002${i}0`, shared)).toEqual({
+        sent: true,
+        sentTo: expect.any(String),
+      });
     }
     expect(await startPhoneUnlock(await seedUser(), '+447700900299', shared)).toEqual({
       sent: false,
@@ -246,17 +254,17 @@ describe('phone unlock start + verify', () => {
     await runNoCardUnlock('phone_verified', a, { phoneCode: '123456' });
 
     vi.stubGlobal('fetch', (fetchMock = twilioFetch({ canonical: NUMBER })));
-    expect(await startPhoneUnlock(b, '+4407700900123', req('81.2.70.9'))).toEqual({
-      sent: false,
+    expect(await startPhoneUnlock(b, '+4407700900123', req('81.2.70.9'))).toEqual({ sent: true, sentTo: NUMBER });
+    expect(sentCount()).toBe(0);
+    expect(await runNoCardUnlock('phone_verified', b, { phoneCode: '123456' })).toMatchObject({
       refusal: 'phone_already_claimed',
     });
-    expect(sentCount()).toBe(0);
   });
 
   it('sends to and binds the canonical number, so verify claims it', async () => {
     vi.stubGlobal('fetch', (fetchMock = twilioFetch({ canonical: NUMBER })));
     const id = await seedUser();
-    expect(await startPhoneUnlock(id, '+4407700900123', req())).toEqual({ sent: true });
+    expect(await startPhoneUnlock(id, '+4407700900123', req())).toEqual({ sent: true, sentTo: NUMBER });
     const send = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/Verifications'));
     expect(String((send?.[1] as RequestInit).body)).toContain(encodeURIComponent(NUMBER));
     await runNoCardUnlock('phone_verified', id, { phoneCode: '123456' });
@@ -279,7 +287,10 @@ describe('phone unlock start + verify', () => {
 
   it('caps sends per number country from the admin setting', async () => {
     await AdminSettings.create({ settingName: 'noCardUnlockPhoneCountryDailyCap', settingValue: 1 });
-    expect(await startPhoneUnlock(await seedUser(), NUMBER, req('81.2.70.1'))).toEqual({ sent: true });
+    expect(await startPhoneUnlock(await seedUser(), NUMBER, req('81.2.70.1'))).toEqual({
+      sent: true,
+      sentTo: expect.any(String),
+    });
     expect(await startPhoneUnlock(await seedUser(), '+447700900124', req('81.2.70.2'))).toEqual({
       sent: false,
       refusal: 'phone_rate_limited',
@@ -307,6 +318,26 @@ describe('phone unlock start + verify', () => {
     expect(await runNoCardUnlock('phone_verified', id, { phoneCode: '123456' })).toMatchObject({
       creditsGranted: 0,
       refusal: 'phone_code_invalid',
+    });
+  });
+
+  it.each([
+    ['a Twilio 5xx', () => new Response('{}', { status: 503 })],
+    [
+      'a request timeout',
+      () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      },
+    ],
+  ])('maps %s on send to a retryable refusal', async (_label, failSend) => {
+    const ok = twilioFetch();
+    vi.stubGlobal(
+      'fetch',
+      (fetchMock = vi.fn(async (url: string) => (url.endsWith('/Verifications') ? failSend() : ok(url))))
+    );
+    expect(await startPhoneUnlock(await seedUser(), NUMBER, req())).toEqual({
+      sent: false,
+      refusal: 'phone_unavailable',
     });
   });
 

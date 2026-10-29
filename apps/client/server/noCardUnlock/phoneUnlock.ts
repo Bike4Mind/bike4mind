@@ -12,7 +12,14 @@ import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/
 import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
 import { otcIpBucket } from '@server/utils/otcLimits';
-import { TwilioApiError, checkVerificationCode, lookupPhone, sendVerificationCode, twilioCredentials } from './twilio';
+import {
+  TwilioApiError,
+  checkVerificationCode,
+  isTwilioUnavailable,
+  lookupPhone,
+  sendVerificationCode,
+  twilioCredentials,
+} from './twilio';
 
 const { noCardUnlockEligibility, phoneValidator } = userService;
 type NoCardUnlockValidator = userService.NoCardUnlockValidator;
@@ -56,19 +63,24 @@ async function getPendingPhone(userId: string): Promise<string | null> {
   return typeof phone === 'string' ? phone : null;
 }
 
-async function unusableNumber(
-  phone: string,
-  userId: string,
-  settings: NoCardUnlockSettings
-): Promise<NoCardUnlockRefusal | null> {
-  if (isBlockedPhone(phone, settings.phoneBlockedPrefixes)) return 'phone_blocked';
+async function claimedByOther(phone: string, userId: string): Promise<boolean> {
   const owner = await phoneUnlockClaimRepository.ownerOf(hashPhone(phone));
-  return owner && owner !== userId ? 'phone_already_claimed' : null;
+  return owner !== null && owner !== userId;
 }
 
-export type PhoneUnlockStartResponse = { sent: true } | { sent: false; refusal: NoCardUnlockRefusal };
+/** `sentTo` is the number the code went to, which can differ from the typed one (see the canonical re-check). */
+export type PhoneUnlockStartResponse = { sent: true; sentTo: string } | { sent: false; refusal: NoCardUnlockRefusal };
 
 const refuse = (refusal: NoCardUnlockRefusal): PhoneUnlockStartResponse => ({ sent: false, refusal });
+
+async function bindPending(userId: string, phone: string): Promise<PhoneUnlockStartResponse> {
+  await cacheRepository.createOrUpdate({
+    key: pendingKey(userId),
+    result: { phone },
+    expiresAt: new Date(Date.now() + PENDING_TTL_MS),
+  });
+  return { sent: true, sentTo: phone };
+}
 
 /**
  * Order: free checks, then the send caps (so the blocklist and the claimed-number answers cannot be
@@ -108,8 +120,10 @@ export async function startPhoneUnlock(
   ];
   if ((await Promise.all(limits)).includes(false)) return refuse('phone_rate_limited');
 
-  const unusable = await unusableNumber(phone, userId, settings);
-  if (unusable) return refuse(unusable);
+  if (isBlockedPhone(phone, settings.phoneBlockedPrefixes)) return refuse('phone_blocked');
+  // A number another account claimed answers as sent but sends nothing, so start cannot be used to learn
+  // whether a number is registered; verify then fails as a wrong code. Possession is proven before any reveal.
+  if (await claimedByOther(phone, userId)) return bindPending(userId, phone);
 
   let canonical: string;
   try {
@@ -118,8 +132,10 @@ export async function startPhoneUnlock(
     if (!lookup.lineType || !ACCEPTED_LINE_TYPES.has(lookup.lineType)) return refuse('phone_line_type');
     // The typed string is not the identity: a kept trunk 0 or similar variant reaches the same line.
     canonical = normalizeE164(lookup.phoneNumber) ?? phone;
-    const canonicalUnusable = canonical === phone ? null : await unusableNumber(canonical, userId, settings);
-    if (canonicalUnusable) return refuse(canonicalUnusable);
+    if (canonical !== phone) {
+      if (isBlockedPhone(canonical, settings.phoneBlockedPrefixes)) return refuse('phone_blocked');
+      if (await claimedByOther(canonical, userId)) return bindPending(userId, canonical);
+    }
 
     const countryCap = { limit: settings.phoneCountryDailyCap, windowMs: DAY_MS };
     if (!(await withinLimit(`phone-unlock:send:country:${lookup.countryCode ?? 'unknown'}`, countryCap))) {
@@ -130,15 +146,11 @@ export async function startPhoneUnlock(
     if (error instanceof TwilioApiError && error.rateLimited) return refuse('phone_rate_limited');
     if (error instanceof TwilioApiError && error.invalidNumber) return refuse('phone_invalid');
     if (error instanceof TwilioApiError && error.blockedNumber) return refuse('phone_blocked');
+    if (isTwilioUnavailable(error)) return refuse('phone_unavailable');
     throw error;
   }
 
-  await cacheRepository.createOrUpdate({
-    key: pendingKey(userId),
-    result: { phone: canonical },
-    expiresAt: new Date(Date.now() + PENDING_TTL_MS),
-  });
-  return { sent: true };
+  return bindPending(userId, canonical);
 }
 
 /** Builds the grant validator for one verify request; `code` is what the user typed. */

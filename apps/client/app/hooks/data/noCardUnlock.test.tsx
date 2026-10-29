@@ -25,11 +25,11 @@ beforeEach(() => {
 
 describe('no-card unlock hooks', () => {
   it('posts the number to the phone start route and refreshes nothing', async () => {
-    post.mockResolvedValue({ data: { sent: true } });
+    post.mockResolvedValue({ data: { sent: true, sentTo: '+14155552671' } });
     const { wrapper, invalidate } = setup();
     const { result } = renderHook(() => usePhoneUnlockStart(), { wrapper });
     await act(async () => {
-      expect(await result.current.mutateAsync('+14155552671')).toEqual({ sent: true });
+      expect(await result.current.mutateAsync('+14155552671')).toEqual({ sent: true, sentTo: '+14155552671' });
     });
     expect(post).toHaveBeenCalledWith('/api/credits/no-card-unlock/phone/start', { phoneNumber: '+14155552671' });
     expect(invalidate).not.toHaveBeenCalled();

@@ -9,7 +9,7 @@ export interface NoCardUnlockResult {
   refusal?: NoCardUnlockRefusal;
 }
 
-export type PhoneUnlockStartResult = { sent: true } | { sent: false; refusal: NoCardUnlockRefusal };
+export type PhoneUnlockStartResult = { sent: true; sentTo: string } | { sent: false; refusal: NoCardUnlockRefusal };
 
 /** The one-click reasons; the phone unlock is a two-step flow with its own hooks below. */
 export type OneClickUnlockReason = Exclude<NoCardUnlockReason, 'phone_verified'>;

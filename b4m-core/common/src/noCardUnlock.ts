@@ -21,6 +21,7 @@ export type NoCardUnlockRefusal =
   | 'phone_blocked'
   | 'phone_already_claimed'
   | 'phone_rate_limited'
+  | 'phone_unavailable'
   | 'phone_not_started'
   | 'phone_code_invalid'
   | 'signup_held'

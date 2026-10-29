@@ -33,6 +33,12 @@ export class TwilioApiError extends Error {
   }
 }
 
+/** A Twilio 5xx or our request timeout: the same request may succeed later. */
+export function isTwilioUnavailable(error: unknown): boolean {
+  if (error instanceof TwilioApiError) return error.status >= 500;
+  return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'TimeoutError';
+}
+
 type TwilioCredentials = { accountSid: string; authToken: string; verifyServiceSid: string };
 
 const isSet = (value: string | undefined): value is string => Boolean(value) && value !== UNSET_SECRET;

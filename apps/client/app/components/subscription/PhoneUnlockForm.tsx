@@ -59,7 +59,7 @@ export function PhoneUnlockForm({ disabled, onBusyChange, onOutcome, onError }: 
     start.mutate(number, {
       onSuccess: result => {
         if (!result.sent) return onOutcome({ granted: 0, refusal: result.refusal });
-        setSentTo(number);
+        setSentTo(result.sentTo);
         setCode('');
         setStep('code');
       },

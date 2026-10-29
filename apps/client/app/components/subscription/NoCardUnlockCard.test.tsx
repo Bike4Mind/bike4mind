@@ -133,7 +133,7 @@ describe('NoCardUnlockCard', () => {
 
     it('sends a code, then verifies it and shows success', async () => {
       state.phoneEnabled = true;
-      settleWith(state.startPhone, { sent: true });
+      settleWith(state.startPhone, { sent: true, sentTo: '+14155552671' });
       settleWith(state.verifyPhone, { creditsGranted: 3, currentCredits: 3 });
       renderCard();
       fireEvent.click(screen.getByTestId('no-card-unlock-phone-btn'));
@@ -165,7 +165,7 @@ describe('NoCardUnlockCard', () => {
 
     const reachCodeStep = async () => {
       state.phoneEnabled = true;
-      settleWith(state.startPhone, { sent: true });
+      settleWith(state.startPhone, { sent: true, sentTo: '+14155552671' });
       renderCard();
       fireEvent.click(screen.getByTestId('no-card-unlock-phone-btn'));
       fireEvent.change(screen.getByTestId('no-card-unlock-phone-input'), { target: { value: '+14155552671' } });

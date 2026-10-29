@@ -27,6 +27,7 @@ const REFUSAL_TEXT: Record<NoCardUnlockRefusal, string> = {
   phone_blocked: 'This phone number cannot be used for an unlock.',
   phone_already_claimed: 'This phone number has already been used for an unlock.',
   phone_rate_limited: 'Too many verification attempts. Try again later.',
+  phone_unavailable: 'Phone verification is unavailable right now. Try again in a few minutes.',
   phone_not_started: 'Your code expired. Send a new code and try again.',
   phone_code_invalid: 'That code is not valid. Check the SMS and try again, or send a new code.',
   signup_held: 'Unlocks for your email domain are on hold while we review recent signups.',
