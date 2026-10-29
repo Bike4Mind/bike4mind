@@ -27,6 +27,8 @@
 
 ## Unreleased
 
+- Download and remove models on saved Ollama servers set to Chat and manage from the Models screen, with resumable downloads after a connection interruption.
+
 - Add a checked Hugging Face token in Models > Explore for private and gated repos, with secure
   OS storage or a session-only fallback. Keep token changes consistent across windows and report
   storage failures. Remember the Show abliterated models switch across restarts.

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ISignupRiskScore, SignupRiskReviewState } from '@bike4mind/common';
+import mongoose from 'mongoose';
 import { User, userRepository } from './UserModel';
 import { setupMongoTest } from '../../__test__/utils';
 
@@ -87,5 +88,49 @@ describe('UserRepository.findRiskScoringCandidateIds', () => {
 
     expect(first).toEqual(ids.slice(0, 2));
     expect(second).toEqual(ids.slice(2));
+  });
+});
+
+describe('UserRepository.findPendingRiskReviews', () => {
+  const scored = async (score: number, reviewState: SignupRiskReviewState, extra: Record<string, unknown> = {}) => {
+    const id = await createUser();
+    await User.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { riskScore: { score, signals: [], computedAt: new Date(), reviewState }, ...extra } }
+    );
+    return id;
+  };
+
+  it('returns unbanned pending accounts, highest score first, up to the limit', async () => {
+    const mid = await scored(60, 'pending');
+    const high = await scored(90, 'pending');
+    const low = await scored(55, 'pending');
+    await scored(95, 'approved');
+    await scored(99, 'pending', { isBanned: true });
+    await scored(10, 'none');
+
+    const rows = await userRepository.findPendingRiskReviews(10);
+    expect(rows.map(row => row.id)).toEqual([high, mid, low]);
+    expect(await userRepository.findPendingRiskReviews(2).then(r => r.map(row => row.id))).toEqual([high, mid]);
+  });
+});
+
+describe('UserRepository.setRiskReviewState', () => {
+  it('moves a review only from the expected state', async () => {
+    const id = await createUser(undefined, 'pending');
+
+    await expect(userRepository.setRiskReviewState(id, 'pending', 'approved')).resolves.toBe(true);
+    await expect(userRepository.setRiskReviewState(id, 'pending', 'approved')).resolves.toBe(false);
+    expect((await User.findById(id).lean())?.riskScore?.reviewState).toBe('approved');
+
+    await expect(userRepository.setRiskReviewState(id, 'approved', 'pending')).resolves.toBe(true);
+    expect((await User.findById(id).lean())?.riskScore?.reviewState).toBe('pending');
+  });
+
+  it('does nothing for a user with no score', async () => {
+    const id = await createUser();
+
+    await expect(userRepository.setRiskReviewState(id, 'pending', 'approved')).resolves.toBe(false);
+    expect((await User.findById(id).lean())?.riskScore).toBeUndefined();
   });
 });

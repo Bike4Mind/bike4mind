@@ -1,9 +1,9 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest, User, TelemetryAuditLogModel } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { TELEMETRY_EXPORT_PROJECTION } from '@server/utils/telemetryProjection';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { regenerateUserTelemetryHashes } from '@server/utils/telemetryHashLookup';
@@ -22,15 +22,14 @@ const querySchema = z.object({
  *
  * Admin-only. Audit-logged with action 'export'.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(
   asyncHandler(async (req, res) => {
     const startTime = Date.now();
     const sourceIp = truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0]));
     const userAgent = (req.headers['user-agent'] as string) || 'unknown';
-
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
 
     const { userId } = querySchema.parse(req.query);
 

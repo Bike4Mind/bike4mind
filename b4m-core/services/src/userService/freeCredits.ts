@@ -10,7 +10,7 @@ import {
   type SignupProtection,
 } from '@bike4mind/common';
 import { addCredits } from '../creditService';
-import type { SignupRiskSignals } from './signupRisk';
+import type { SignupRiskBand, SignupRiskSignals } from './signupRisk';
 import { releaseSignupTranche } from './stagedSignupGrant';
 import { protectSignupCredits } from './signupProtection';
 
@@ -31,6 +31,8 @@ export type FreeCreditAdapters = {
   reason: string;
   /** Network signals for a staged grant's first assessment; without it only signupMeta is read. */
   collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
+  /** Called only after the first staged assessment commits, including a zero-credit hold. */
+  emitRiskBand?: (band: SignupRiskBand) => Promise<void>;
 };
 
 type FreeCreditLogger = { error: (message: string, ...args: unknown[]) => void };
@@ -75,10 +77,10 @@ const legacyOtcRegisterTransactionId = (userId: string) => `otc-register-grant:$
  */
 export const grantFreeCredits = async (
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
-  { db, reason, collectRiskSignals }: FreeCreditAdapters
+  { db, reason, collectRiskSignals, emitRiskBand }: FreeCreditAdapters
 ): Promise<GrantFreeCreditsResult> => {
   const persisted = await db.users.findById(user.id);
-  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason, collectRiskSignals });
+  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason, collectRiskSignals, emitRiskBand });
   if (await protectSignupCredits(user.id, db)) {
     const alreadyGranted = await db.creditTransactions.findOne({
       transactionId: { $in: [`verify-grant:${user.id}`, legacyOtcRegisterTransactionId(user.id)] },

@@ -76,8 +76,6 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
           );
         }
 
-        await (await createModelAdmission(req.user!, models)).assert(imageModelInfo.id);
-
         imageModelId = userImageModel;
         imageLogger.info(`[Blog Image] Using user-selected image model: ${imageModelId}`);
       } else {
@@ -93,6 +91,8 @@ const handler = baseApi().post<Request<unknown, GenerateFeaturedImageResponse, G
         }
         imageLogger.info(`[Blog Image] Using operations image model: ${imageModelId}`);
       }
+
+      if (imageModelInfo) await (await createModelAdmission(req.user!, [imageModelInfo])).assert(imageModelInfo.id);
 
       // Re-asserted here (both branches above already guarantee this): narrows the type for
       // every use below, which the if/else diamond above does not do on its own.

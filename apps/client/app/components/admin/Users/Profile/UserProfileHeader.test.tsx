@@ -14,9 +14,13 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 
 const renderHeader = (user: AdminUserProfile = buildProfile()) => {
   const onAction = vi.fn();
+  const onEditProfile = vi.fn();
   const onCompliance = vi.fn();
-  render(<UserProfileHeader user={user} onAction={onAction} onCompliance={onCompliance} />, { wrapper: TestWrapper });
-  return { onAction, onCompliance };
+  render(
+    <UserProfileHeader user={user} onAction={onAction} onEditProfile={onEditProfile} onCompliance={onCompliance} />,
+    { wrapper: TestWrapper }
+  );
+  return { onAction, onEditProfile, onCompliance };
 };
 
 describe('UserProfileHeader', () => {
@@ -38,6 +42,7 @@ describe('UserProfileHeader', () => {
       <UserProfileHeader
         user={buildProfile({ isBanned: true, isModerated: true })}
         onAction={vi.fn()}
+        onEditProfile={vi.fn()}
         onCompliance={vi.fn()}
       />,
       { wrapper: TestWrapper }
@@ -112,6 +117,17 @@ describe('UserProfileHeader', () => {
 
     expect(onCompliance).toHaveBeenCalledTimes(1);
     expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it('the More menu opens the profile editor through onEditProfile, not onAction', async () => {
+    const { onAction, onEditProfile, onCompliance } = renderHeader();
+
+    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+    fireEvent.click(await screen.findByTestId('user-profile-menu-editProfile-item'));
+
+    expect(onEditProfile).toHaveBeenCalledTimes(1);
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onCompliance).not.toHaveBeenCalled();
   });
 
   it('turns the restrict item into Lift restriction for a restricted account', async () => {

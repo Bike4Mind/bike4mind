@@ -4,6 +4,7 @@ import OAuth2Strategy from 'passport-oauth2';
 import { createStateToken, verifyStateToken } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { readStateNonceHash } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { STATE_REASON_TO_CODE } from '@server/utils/auth/oauthFailureReason';
+import { recordTurnstileVerification, wasTurnstileVerified } from './signupChallenge';
 
 /**
  * The flow-start handler (pages/api/auth/[strategy]/index.ts) sets the nonce
@@ -57,7 +58,11 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
       const nonceHash = (req as unknown as Record<string, unknown>)[OAUTH_NONCE_HASH_REQ_KEY];
       const token = createStateToken(
         { audience: this.audience },
-        redirectTo ? { redirectTo, ...(clientId ? { clientId } : {}) } : undefined,
+        {
+          challengeVerified: wasTurnstileVerified(req),
+          ...(redirectTo ? { redirectTo } : {}),
+          ...(clientId ? { clientId } : {}),
+        },
         typeof nonceHash === 'string' ? nonceHash : undefined
       );
       cb(null, token);
@@ -70,11 +75,20 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
   verify(req: Request, state: string, meta: Metadata, callback: VerifyCallback): void;
   verify(req: Request, state: string, metaOrCallback: Metadata | VerifyCallback, callback?: VerifyCallback): void {
     const cb = (typeof metaOrCallback === 'function' ? metaOrCallback : callback) as VerifyCallback;
+    recordTurnstileVerification(req, false);
     try {
       // Enforce browser-binding: the token's nonce hash must match this browser's
       // cookie (readStateNonceHash returns null when absent -> fails closed).
       const result = verifyStateToken(state, { audience: this.audience }, readStateNonceHash(req));
       if (result.valid) {
+        const payload = result.payload;
+        recordTurnstileVerification(
+          req,
+          typeof payload === 'object' &&
+            payload !== null &&
+            'challengeVerified' in payload &&
+            payload.challengeVerified === true
+        );
         cb(null, true, result.payload);
       } else {
         cb(null, false, { code: STATE_REASON_TO_CODE[result.reason], message: result.message });

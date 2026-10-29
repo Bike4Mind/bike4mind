@@ -20,6 +20,7 @@ import {
   probeHardware,
   type HardwareProfile,
   type HubGated,
+  type HubGgufBuild,
 } from '@bike4mind/local-models';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import {
@@ -53,8 +54,19 @@ import {
   type HubClient,
   type LicenseInfo,
   type ModelSourceDeps,
+  type PullPlan,
   type RuntimeTarget,
 } from '../models/localModels.js';
+import {
+  FIT_LABELS,
+  fitForHubBuild,
+  fitForPlan,
+  machineLabel,
+  machineReader,
+  type MachineReader,
+  type ModelFit,
+} from '../models/fit.js';
+import { withDefaultOllamaPort } from '../utils/ollamaHost.js';
 import { readOllamaManifest } from './ollamaRegistry.js';
 
 interface ModelsCommandArgs {
@@ -65,6 +77,7 @@ interface ModelsCommandArgs {
   query?: string | string[];
   'include-abliterated'?: boolean;
   yes?: boolean;
+  force?: boolean;
   'accept-license'?: boolean;
   'ollama-host'?: string;
   'output-format'?: string;
@@ -84,6 +97,9 @@ export interface ModelsDeps extends ModelSourceDeps {
   log: (line: string) => void;
   /** Rewrites one terminal line; only used when `isTTY`. */
   progress: { update: (line: string) => void; end: () => void };
+  machine: MachineReader;
+  /** The Ollama host a command would use before it is resolved; null when it would detect one on this machine. */
+  runtimeHost: () => string | null;
   /** The curated list Desktop uses, bundled with the CLI. */
   curated: () => HubManifest;
   /** This computer's memory, which picks its tier of the Curated list. */
@@ -93,6 +109,8 @@ export interface ModelsDeps extends ModelSourceDeps {
 export interface ModelsOptions {
   json: boolean;
   yes: boolean;
+  /** Pull a build the fit check rates too large. */
+  force: boolean;
   acceptLicense: boolean;
   includeAbliterated: boolean;
 }
@@ -209,13 +227,12 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   if (!isHubRepoId(repo)) throw new Error(`Not a Hugging Face repo: ${repo} (expected owner/name)`);
   const hub = deps.hub();
   const detail = await hub.getModel(repo, { signal: deps.signal });
+  const reading = await abortable(deps.machine(deps.runtimeHost()), deps.signal);
+  const fitOf = (build: HubGgufBuild): ModelFit => fitForHubBuild(build, detail, reading);
   if (opts.json) {
+    const rated = { ...detail, builds: detail.builds.map(build => ({ ...build, fit: fitOf(build) })) };
     deps.log(
-      JSON.stringify(
-        isAbliteratedModel(detail) ? { ...detail, notRecommended: NOT_RECOMMENDED_LABEL } : detail,
-        null,
-        2
-      )
+      JSON.stringify(isAbliteratedModel(detail) ? { ...rated, notRecommended: NOT_RECOMMENDED_LABEL } : rated, null, 2)
     );
     return 0;
   }
@@ -249,14 +266,20 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   }
   deps.log('Builds (smallest first):');
   const lines = table([
-    ['BUILD', 'SIZE', 'OLLAMA REF'],
+    ['BUILD', 'SIZE', 'FIT', 'OLLAMA REF'],
     ...detail.builds.map(build => [
       clean(build.label),
       formatBytes(build.sizeBytes),
+      FIT_LABELS[fitOf(build).verdict],
       build.ollamaRef ? clean(build.ollamaRef) : `none: ${REF_ISSUES[build.ollamaRefIssue ?? 'unsupported-name']}`,
     ]),
   ]);
   for (const line of lines) deps.log(`  ${line}`);
+  deps.log(
+    'unknown' in reading
+      ? `  Fit is unknown. ${reading.unknown}.`
+      : `  Fit is a rough estimate from each file's size for this machine (${machineLabel(reading)}); pull explains it.`
+  );
   if (detail.projectors.length > 0) {
     deps.log('');
     deps.log("Vision projectors (Ollama's Hugging Face registry adds one to each pull):");
@@ -480,10 +503,19 @@ async function confirmDownload(question: string, deps: ModelsDeps, opts: ModelsO
 async function pullWithProgress(target: RuntimeTarget, ref: string, deps: ModelsDeps): Promise<PullResult> {
   let lastStatus = '';
   let lastDraw = 0;
+  let sawBytes = false;
   try {
     await target.runtime.pull(ref, {
       signal: deps.signal,
       onProgress: ({ status, completedBytes, totalBytes }) => {
+        // A cached layer can precede the first partial one; wait until there is work left.
+        if (!sawBytes && totalBytes && completedBytes < totalBytes) {
+          sawBytes = true;
+          if (completedBytes > 0) {
+            if (deps.isTTY) deps.progress.end();
+            deps.log(`Already downloaded: ${formatBytes(completedBytes)}; pulling the rest.`);
+          }
+        }
         const text = clean(status);
         if (!deps.isTTY) {
           if (text !== lastStatus) deps.log(text);
@@ -535,6 +567,23 @@ async function acceptLicense(license: LicenseInfo, deps: ModelsDeps, opts: Model
   return deps.confirm(declared ? `Do you accept the ${named} ${noun}? [y/N] ` : 'Download it anyway? [y/N] ');
 }
 
+/** Prints the fit verdict; a too-large one stops the pull unless `--force`. Unknown never does. */
+async function requireFit(plan: PullPlan, deps: ModelsDeps, opts: ModelsOptions): Promise<void> {
+  const fit = await abortable(fitForPlan(plan, deps.machine), deps.signal);
+  deps.log(`Fit:      ${FIT_LABELS[fit.verdict]}. ${fit.detail}`);
+  if (fit.verdict !== 'too-large' || opts.force) return;
+  if (fit.gpuUnread) {
+    throw new Error(
+      'Nothing was downloaded: this build is rated too large from system RAM alone, since the GPU could not be read. If this machine has a GPU that can hold it, re-run with --force to download it anyway.'
+    );
+  }
+  const smaller =
+    plan.kind === 'ollama' ? 'Pick a smaller tag' : `Pick a smaller quant from: b4m models show ${plan.id}`;
+  throw new Error(
+    `Nothing was downloaded: this build is rated too large for this machine. ${smaller}, or re-run with --force to download it anyway.`
+  );
+}
+
 export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOptions): Promise<PullResult> {
   const plan = await planPull(input, deps);
   if (plan.kind === 'ollama') {
@@ -544,6 +593,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
     deps.log(`Size:     ${formatBytes(manifest.sizeBytes)}`);
     deps.log(`License:  ${license.label}${license.base ? ` (base: ${license.base})` : ''}`);
     deps.log(`Runtime:  ${runtimeLabel(target)}`);
+    await requireFit(plan, deps, opts);
     if (!(await acceptLicense(license, deps, opts))) return 'declined';
     if (!(await confirmDownload(`Download ${formatBytes(manifest.sizeBytes)}? [y/N] `, deps, opts))) return 'declined';
     await requireUnchangedManifest(name, manifest, deps);
@@ -558,6 +608,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
   );
   deps.log(`License:  ${license.label}${license.base ? ` (base: ${license.base})` : ''}`);
   deps.log(`Runtime:  ${runtimeLabel(target)}`);
+  await requireFit(plan, deps, opts);
   if (detail.ollamaNeedsSshKey) {
     deps.log('');
     deps.log(
@@ -641,6 +692,7 @@ export async function runModelsCommand(
   const opts: ModelsOptions = {
     json: argv['output-format'] === 'json',
     yes: Boolean(argv.yes),
+    force: Boolean(argv.force),
     acceptLicense: Boolean(argv['accept-license']),
     includeAbliterated: Boolean(argv['include-abliterated']),
   };
@@ -761,6 +813,11 @@ export async function handleModelsCommand(subcommand: string | undefined, argv: 
       progress: {
         update: line => process.stdout.write(`\r\x1b[2K${line}`),
         end: () => process.stdout.write('\n'),
+      },
+      machine: machineReader(),
+      runtimeHost: () => {
+        const host = flagHost || process.env.B4M_OLLAMA_HOST || models.ollamaHost;
+        return host ? withDefaultOllamaPort(host) : null;
       },
       curated: () => loadCuratedManifest(message => console.error(message)),
       hardware: () => probeHardware(),

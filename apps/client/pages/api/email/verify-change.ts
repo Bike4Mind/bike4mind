@@ -7,7 +7,8 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { logEvent } from '@server/utils/analyticsLog';
 import { AuthEvents, ConflictError } from '@bike4mind/common';
-import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
+import { calculateTokenAge } from '@server/utils/auditLog';
+import { logAuthAudit } from '@server/utils/authAudit';
 import { entitlementsForEmail } from '@client/lib/entitlements/registry';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
@@ -16,6 +17,13 @@ import { z } from 'zod';
 const VerifyEmailChangeRequestSchema = z.object({
   token: z.string(),
 });
+
+/** Classifies a failed confirmation by the service's error message, so token misuse stands out in the audit trail. */
+const emailChangeFailureReason = (errorMessage: string): 'token_reused' | 'token_expired' | 'error' => {
+  if (errorMessage.includes('already been used')) return 'token_reused';
+  if (errorMessage.includes('expired')) return 'token_expired';
+  return 'error';
+};
 
 // No auth required - public endpoint for token verification
 const handler = baseApi({ auth: false })
@@ -73,19 +81,15 @@ const handler = baseApi({ auth: false })
           await releaseVerifiedPendingFreeCredits(user, 'email change (email verified)', req.logger);
         }
 
-        // Log successful email change
-        await logAuditEvent(
-          {
-            userId: user.id,
-            action: EmailAuditEvents.EMAIL_CHANGE_SUCCESS,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
+        await logAuthAudit(req, {
+          userId: user.id,
+          event: 'email_change_confirmed',
+          metadata: {
             oldEmail: oldEmail || undefined,
             newEmail: newEmail || undefined,
             tokenAge: user.pendingEmailSentAt ? calculateTokenAge(user.pendingEmailSentAt) : undefined,
           },
-          req.logger
-        );
+        });
 
         // Log to existing analytics system
         try {
@@ -116,30 +120,18 @@ const handler = baseApi({ auth: false })
 
         return res.json({ message: 'Email changed successfully. Please log in with your new email address.' });
       } catch (error) {
-        // Log failed email change attempt with specific event types
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        let auditEvent = EmailAuditEvents.EMAIL_CHANGE_FAILED;
-
-        // Detect specific error types for better audit trail
-        if (errorMessage.includes('already been used')) {
-          auditEvent = EmailAuditEvents.EMAIL_CHANGE_TOKEN_REUSED;
-        } else if (errorMessage.includes('expired')) {
-          auditEvent = EmailAuditEvents.EMAIL_CHANGE_TOKEN_EXPIRED;
-        }
-
-        await logAuditEvent(
-          {
-            userId: user.id,
-            action: auditEvent,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
+        await logAuthAudit(req, {
+          userId: user.id,
+          event: 'email_change_failed',
+          metadata: {
+            reason: emailChangeFailureReason(errorMessage),
             oldEmail: oldEmail || undefined,
             newEmail: newEmail || undefined,
             tokenAge: user.pendingEmailSentAt ? calculateTokenAge(user.pendingEmailSentAt) : undefined,
             error: errorMessage,
           },
-          req.logger
-        );
+        });
         throw error;
       }
     })
