@@ -48,6 +48,17 @@ describe('BlockedIPRepository', () => {
     expect(manual.expiresAt.getTime()).toBe(auto.expiresAt.getTime());
   });
 
+  it('unblock deactivates every active row of the IP', async () => {
+    const expiresAt = new Date(Date.now() + 3_600_000);
+    await BlockedIP.create([
+      { ip: '4.4.4.4', active: true, expiresAt, blockedAt: new Date(Date.now() - 2000) },
+      { ip: '4.4.4.4', active: true, expiresAt, blockedAt: new Date(Date.now() - 1000), reason: 'newest' },
+    ]);
+    expect((await blockedIPRepository.unblock('4.4.4.4'))?.reason).toBe('newest');
+    expect(await blockedIPRepository.isBlocked('4.4.4.4')).toBeNull();
+    expect(await BlockedIP.countDocuments({ ip: '4.4.4.4', active: true })).toBe(0);
+  });
+
   it('returns the latest block of an IP regardless of state', async () => {
     const now = Date.now();
     await BlockedIP.create([

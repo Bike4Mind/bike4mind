@@ -88,7 +88,11 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
   }
 
   async unblock(ip: string): Promise<IBlockedIPDocument | null> {
-    return this.model.findOneAndUpdate({ ip, active: true }, { active: false, unblockedAt: new Date() }, { new: true });
+    const update = { active: false, unblockedAt: new Date() };
+    const doc = await this.model.findOneAndUpdate({ ip, active: true }, update, { new: true, sort: { blockedAt: -1 } });
+    // Concurrent block() calls can leave more than one active row, and isBlocked() matches any of them.
+    if (doc) await this.model.updateMany({ ip, active: true }, update);
+    return doc;
   }
 
   async list(limit = 10): Promise<IBlockedIPDocument[]> {
