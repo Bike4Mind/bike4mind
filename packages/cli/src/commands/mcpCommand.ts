@@ -122,7 +122,7 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
       console.error('  b4m mcp remove <name>             - Remove an MCP server');
       console.error('  b4m mcp enable <name>             - Enable an MCP server');
       console.error('  b4m mcp disable <name>            - Disable an MCP server');
-      console.error('  b4m mcp serve [--http] [--port]   - Run Bike4Mind as an MCP server');
+      console.error('  b4m mcp serve [--http|--local]    - Run Bike4Mind as an MCP server');
       process.exit(1);
   }
 }

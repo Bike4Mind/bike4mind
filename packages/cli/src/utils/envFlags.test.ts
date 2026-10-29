@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import yargs from 'yargs';
-import { splitEnvFlags } from '../../bin/envFlags.mjs';
+import { ARRAY_OPTIONS, splitEnvFlags, VALUE_OPTIONS } from '../../bin/envFlags.mjs';
 
 // Mirrors the `mcp serve` declaration in bin/bike4mind-cli.mjs; nothing declares `local` at the top level.
 function parse(args: string[]) {
@@ -74,5 +75,33 @@ describe('splitEnvFlags', () => {
       envFlags: ['--prod', '-dev'],
       serveLocal: true,
     });
+  });
+
+  it.each([
+    [['--ollama-host', 'http://gpu:11434', 'mcp', 'serve', '--local']],
+    [['-p', 'hi', 'mcp', 'serve', '--local']],
+    [['--resume', 'abc', '--dev', 'mcp', 'serve', '--local']],
+  ])('finds mcp serve after a global option value in %j', args => {
+    expect(splitEnvFlags(args)).toMatchObject({ mcpServe: true, serveLocal: true });
+  });
+
+  it('treats tokens after an array option as its values, as yargs does', () => {
+    expect(splitEnvFlags(['--add-dir', 'a', '--dev', 'mcp', 'serve', '--local'])).toMatchObject({
+      mcpServe: false,
+      serveLocal: false,
+      envTarget: 'dev',
+    });
+  });
+
+  it('knows every top-level option that takes a value', () => {
+    const source = readFileSync(new URL('../../bin/bike4mind-cli.mjs', import.meta.url), 'utf8');
+    const topLevel = source.slice(source.indexOf('yargs(hideBin'), source.indexOf(".command('mcp'"));
+    const declared = [...topLevel.matchAll(/\.option\('([^']+)',\s*\{([^}]*)\}/g)];
+    expect(declared.length).toBeGreaterThan(10);
+    for (const [, name, body] of declared) {
+      const type = /type: '(\w+)'/.exec(body)?.[1];
+      if (type === 'string') expect(VALUE_OPTIONS, name).toContain(`--${name}`);
+      if (type === 'array') expect(ARRAY_OPTIONS, name).toContain(`--${name}`);
+    }
   });
 });
