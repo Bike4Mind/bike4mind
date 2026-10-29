@@ -46,6 +46,8 @@ type ReportWindows = {
   monthEnd: Date | null;
   lastMonthStart: Date | null;
   lastMonthEnd: Date | null;
+  /** Elapsed ms of a partial current week; the 4-week baselines are then clipped to the same offset. */
+  weekSpanMs: number | null;
 };
 
 /** Daily: the rolling 24 hours for today, else the UTC day; compared with the same span 7 days earlier. */
@@ -65,6 +67,7 @@ function dailyReportWindows(date: string): ReportWindows {
     monthEnd: null,
     lastMonthStart: null,
     lastMonthEnd: null,
+    weekSpanMs: null,
   };
 }
 
@@ -72,13 +75,17 @@ function dailyReportWindows(date: string): ReportWindows {
  * Weekly: [startDate 00:00, endDate 23:59:59.999] UTC, the same span 7 days earlier, and as the
  * 4-week baseline the 28 days before this week (`month*`) and the 28 days before those
  * (`lastMonth*`), so `fourWeekAverage` is a true average of the four preceding weeks.
+ * A week still in progress is clipped to now, and the comparison windows to the same elapsed span.
  */
 function weeklyReportWindows(startDate: string, endDate: string): ReportWindows {
   const weekStart = dayjs.utc(startDate).startOf('day');
-  const weekEnd = dayjs.utc(endDate).endOf('day');
+  let weekEnd = dayjs.utc(endDate).endOf('day');
   if (!weekStart.isValid() || !weekEnd.isValid() || weekEnd.isBefore(weekStart)) {
     throw new Error(`Invalid weekly report range: ${startDate} to ${endDate}`);
   }
+  const now = dayjs().utc();
+  const isPartial = !weekStart.isAfter(now) && now.isBefore(weekEnd);
+  if (isPartial) weekEnd = now;
   const monthStart = weekStart.subtract(28, 'days');
   const lastMonthStart = monthStart.subtract(28, 'days');
 
@@ -91,7 +98,13 @@ function weeklyReportWindows(startDate: string, endDate: string): ReportWindows 
     monthEnd: weekStart.subtract(1, 'millisecond').toDate(),
     lastMonthStart: lastMonthStart.toDate(),
     lastMonthEnd: monthStart.subtract(1, 'millisecond').toDate(),
+    weekSpanMs: isPartial ? now.diff(weekStart) : null,
   };
+}
+
+/** Keeps events whose offset within their own 7-day block (blocks aligned to `anchor`) is below `spanMs`. */
+function sameElapsedSpanExpression(anchor: Date | null, spanMs: number) {
+  return { $lt: [{ $mod: [{ $subtract: ['$datetime', anchor] }, 7 * 24 * 60 * 60 * 1000] }, spanMs] };
 }
 
 export type YoungAccountSpender = {
@@ -306,6 +319,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
       monthEnd,
       lastMonthStart,
       lastMonthEnd,
+      weekSpanMs,
     } = startDate ? weeklyReportWindows(startDate, date) : dailyReportWindows(date);
 
     // Internal = admin/system/synthetic flag, or an email on the shared
@@ -1062,6 +1076,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
               $gte: monthStart,
               $lte: monthEnd,
             },
+            ...(weekSpanMs !== null && { $expr: sameElapsedSpanExpression(monthStart, weekSpanMs) }),
           },
         },
         {
@@ -1079,6 +1094,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
               $gte: lastMonthStart,
               $lte: lastMonthEnd,
             },
+            ...(weekSpanMs !== null && { $expr: sameElapsedSpanExpression(lastMonthStart, weekSpanMs) }),
           },
         },
         {
