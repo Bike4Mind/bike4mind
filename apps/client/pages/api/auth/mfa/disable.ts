@@ -57,7 +57,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         // factor to skip, so leaving them would silently pre-authorize those devices if
         // MFA is ever re-enabled. Drop them all and clear this browser's cookie.
         const revokedDevices = await trustedDeviceRepository.revokeAllForUser(freshUser.id);
-        clearTrustedDeviceCookie(res);
+        clearTrustedDeviceCookie(res, freshUser.id);
 
         await logAuthAudit(req, { userId: freshUser.id, event: 'mfa_disabled' });
         if (removedPasskeys > 0) {
