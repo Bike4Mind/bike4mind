@@ -17,8 +17,9 @@ import React, {
   createContext,
   ComponentProps,
 } from 'react';
-import ReactMarkdown, { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
+import { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
+import { StreamingMarkdown } from './markdown/StreamingMarkdown';
 import {
   CITATION_MARKER_TAG,
   CitationMarker,
@@ -167,6 +168,7 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
 };
 
 const NO_CITABLES: readonly CitableSource[] = [];
+const REPLY_REHYPE_PLUGINS: ReactMarkdownOptions['rehypePlugins'] = [rehypeKatex];
 
 // The web_search places of the reply being rendered, keyed by place id - the only source of map
 // pins. Context for the same identity-stability reason as ReplyCompleteContext above.
@@ -633,6 +635,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
       <ReplyContainer
         completed={messageData.status === 'done'}
         settled={messageData.status === 'done' || messageData.status === 'stopped'}
+        streaming={messageData.status === 'running'}
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
@@ -1253,6 +1256,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   isExpandable = false,
   completed = false,
   settled = completed,
+  streaming = false,
   errorCode,
   questMasterPlanId,
   onSendMessage,
@@ -1385,6 +1389,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     ],
     [linksCitationMarkers]
   );
+  const replyComponents = useMemo(
+    () => ({
+      ...markdownComponents,
+      code: codeComponent,
+      img: markdownImage,
+      a: link,
+      [CITATION_MARKER_TAG]: CitationMarker,
+    }),
+    [markdownComponents, codeComponent, markdownImage]
+  );
+  const replyRemarkRehypeOptions = useMemo(() => ({ clobberPrefix: `fn-${messageId ?? 'reply'}-` }), [messageId]);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1888,20 +1903,14 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
                                 <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
-                                  <ReactMarkdown
-                                    components={{
-                                      ...markdownComponents,
-                                      code: codeComponent,
-                                      img: markdownImage,
-                                      a: link,
-                                      [CITATION_MARKER_TAG]: CitationMarker,
-                                    }}
+                                  <StreamingMarkdown
+                                    text={mathReadyContent}
+                                    streaming={streaming}
+                                    components={replyComponents}
                                     remarkPlugins={replyRemarkPlugins}
-                                    rehypePlugins={[rehypeKatex]}
-                                    remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                                  >
-                                    {mathReadyContent}
-                                  </ReactMarkdown>
+                                    rehypePlugins={REPLY_REHYPE_PLUGINS}
+                                    remarkRehypeOptions={replyRemarkRehypeOptions}
+                                  />
                                 </ReplyCitablesContext.Provider>
                               </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
