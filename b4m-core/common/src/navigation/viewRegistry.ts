@@ -672,12 +672,29 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.signup_risk_review',
+    section: 'admin',
+    label: 'Risk review',
+    description: 'Review new accounts whose signup risk score reached the review threshold; approve or suspend them',
+    navigationType: 'tab',
+    target: '69', // AdminTab.SignupRiskReview
+    keywords: [
+      'risk review',
+      'risk score',
+      'flagged signups',
+      'suspicious accounts',
+      'signup abuse',
+      'approve account',
+    ],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.held_signup_grants',
     section: 'admin',
     label: 'Held signup grants',
     description: 'Release free signup credits held by the daily budget, in bulk, with revoke',
     navigationType: 'tab',
-    target: '69', // AdminTab.HeldSignupGrants
+    target: '70', // AdminTab.HeldSignupGrants
     keywords: ['held grants', 'signup budget', 'free credits', 'release credits', 'bulk release'],
     requiresAdmin: true,
   },

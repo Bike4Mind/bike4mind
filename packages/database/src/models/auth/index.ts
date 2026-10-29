@@ -14,6 +14,7 @@ export * from './DisposableDomainModel';
 export * from './IdentityProviderModel';
 export * from './networkMetaFields';
 export * from './signupFingerprintClusters';
+export * from './SignupTraceModel';
 export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
 export * from './oauthClientAdmin';
