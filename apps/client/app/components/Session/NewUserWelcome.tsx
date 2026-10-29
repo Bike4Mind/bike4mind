@@ -41,6 +41,7 @@ const NewUserWelcome = () => {
   const { data: sessions, isSuccess, isFetching } = useGetOwnSessions('');
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const defaultFreeCredits = useSignupGrantCredits();
+  const dailyDripCredits = Number(useGetSettingsValue('signupGrantActivityDailyCredits')) || 0;
   const balance = useEffectiveCredits();
   const liveBalance = useEffectiveCredits({ live: true });
   const answerCost = useSelectedModelAnswerCost();
@@ -107,6 +108,7 @@ const NewUserWelcome = () => {
     awaitingVerification,
     pendingGrant: currentUser?.signupGrant?.signupCredits ?? currentUser?.pendingCreditGrant ?? defaultFreeCredits,
     pendingGrantIsMaximum: !!currentUser?.signupGrant,
+    dailyDripCredits,
   });
   // Same credits the line above quotes: the pending grant before verification, else the displayed balance.
   const estimateCredits = awaitingVerification

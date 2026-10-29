@@ -46,15 +46,30 @@ describe('welcomeCreditsLine', () => {
     );
   });
 
-  it('describes a risk-assessed staged tranche as a maximum rather than a guaranteed grant', () => {
+  it('names every unlock path and the daily drip amount for a staged tranche', () => {
     expect(
       welcomeCreditsLine({
         ...base,
         awaitingVerification: true,
-        pendingGrant: 10000,
+        pendingGrant: 1000,
         pendingGrantIsMaximum: true,
+        dailyDripCredits: 1000,
       })
-    ).toBe('Verify your email to unlock up to 10,000 credits, subject to eligibility checks.');
+    ).toBe(
+      'Verify your email to unlock up to 1,000 credits now. The rest unlocks up to 1,000 credits for each day you use chat, all at once when you subscribe, or all at once when you verify a card.'
+    );
+  });
+
+  it('omits the daily drip clause when the drip is off', () => {
+    const line = welcomeCreditsLine({
+      ...base,
+      awaitingVerification: true,
+      pendingGrant: 1000,
+      pendingGrantIsMaximum: true,
+    });
+    expect(line).toContain('when you subscribe');
+    expect(line).not.toContain('each day');
+    expect(line).not.toContain('eligibility');
   });
 });
 

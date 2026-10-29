@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { SignupGrant } from '@bike4mind/common';
@@ -7,17 +7,14 @@ import type { SignupGrant } from '@bike4mind/common';
 const h = vi.hoisted(() => ({
   grant: undefined as SignupGrant | undefined,
   held: undefined as 'budget_exhausted' | undefined,
-  enabled: true as boolean | string | undefined,
-  organizationInvites: false as boolean | string | undefined,
-  post: vi.fn(),
-  refresh: vi.fn(),
+  activity: true as boolean | string | undefined,
+  daily: 1000 as number | string | undefined,
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { signupGrant: h.grant, signupGrantHeldReason: h.held }, refreshUser: h.refresh }),
+  useUser: () => ({ currentUser: { signupGrant: h.grant, signupGrantHeldReason: h.held } }),
 }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: h.post } }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'signupGrantOrgInviteEnabled' ? h.organizationInvites : h.enabled),
+  useGetSettingsValue: (key: string) => (key === 'signupGrantActivityDailyCredits' ? h.daily : h.activity),
 }));
 import SignupGrantStatus from './SignupGrantStatus';
 const theme = extendTheme({ ...getThemeConfig() });
@@ -30,108 +27,58 @@ const show = () =>
 
 describe('signup grant status', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    h.enabled = true;
+    h.activity = true;
+    h.daily = 1000;
     h.held = undefined;
-    h.organizationInvites = false;
     h.grant = {
       stage: 'signup',
-      signupCredits: 12,
-      unlockCredits: 28,
-      creditsReleased: 12,
+      signupCredits: 1000,
+      unlockCredits: 9000,
+      creditsReleased: 1000,
       nextCondition: 'verification',
     };
-    h.post.mockResolvedValue({ data: { creditsGranted: 28 } });
-    h.refresh.mockResolvedValue(undefined);
   });
-  it('does not enroll or advertise a grant to existing accounts', () => {
+  it('does not advertise a grant to existing accounts', () => {
     h.grant = undefined;
     show();
     expect(screen.queryByTestId('signup-grant-status')).toBeNull();
   });
-  it('shows account-specific remaining credits and refreshes after a successful check', async () => {
+  it('shows the locked amount and names every unlock path with its amount', () => {
     show();
-    expect(screen.getByTestId('signup-grant-status')).toHaveTextContent('28 more credits');
-    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
-    await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('28 credits unlocked'));
-    expect(h.post).toHaveBeenCalledWith('/api/users/signup-grant-eligibility');
-    expect(h.refresh).toHaveBeenCalled();
+    expect(screen.getByTestId('signup-grant-released')).toHaveTextContent('9,000 more credits are still locked');
+    const paths = screen.getByTestId('signup-grant-unlock-paths');
+    expect(paths).toHaveTextContent('up to 1,000 credits for each day you use chat');
+    expect(paths).toHaveTextContent('when you subscribe');
+    expect(paths).toHaveTextContent('when you verify a card');
+    expect(screen.getByTestId('signup-grant-status')).not.toHaveTextContent('eligibility');
   });
-  it('still reports a committed unlock when the follow-up refresh fails', async () => {
-    h.refresh.mockRejectedValue(new Error('network'));
+  it('has no eligibility-check button', () => {
     show();
-    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
-    await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('28 credits unlocked'));
-  });
-  it('keeps accepted organization invites retryable when activity is disabled', () => {
-    h.enabled = false;
-    h.organizationInvites = true;
-    show();
-    expect(screen.getByTestId('signup-grant-check-btn')).toHaveTextContent('Check grant eligibility');
-  });
-  it.each([false, 'false'])('does not advertise disabled activity with %s', async enabled => {
-    h.enabled = enabled;
-    h.organizationInvites = true;
-    h.post.mockResolvedValue({ data: { creditsGranted: 0 } });
-    show();
-    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
-    await waitFor(() =>
-      expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('accepted organization invite')
-    );
-    expect(screen.getByTestId('signup-grant-result')).not.toHaveTextContent('chat on different days');
-  });
-  it('accepts persisted string booleans', () => {
-    h.enabled = 'true';
-    const view = show();
-    expect(screen.getByTestId('signup-grant-check-btn')).toBeInTheDocument();
-    view.unmount();
-    h.enabled = 'false';
-    show();
-    expect(screen.queryByTestId('signup-grant-check-btn')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
   });
   it.each([
-    [undefined, undefined],
-    [false, false],
-    ['false', 'false'],
-    ['', 'TRUE'],
-  ])('hides eligibility checks when neither source is enabled (%j, %j)', (activity, organizationInvites) => {
-    h.enabled = activity;
-    h.organizationInvites = organizationInvites;
+    [false, 1000],
+    ['false', 1000],
+    [true, 0],
+    [true, undefined],
+  ])('omits the daily drip when activity=%j and daily=%j', (activity, daily) => {
+    h.activity = activity;
+    h.daily = daily;
     show();
-    expect(screen.queryByTestId('signup-grant-check-btn')).toBeNull();
+    const paths = screen.getByTestId('signup-grant-unlock-paths');
+    expect(paths).not.toHaveTextContent('each day');
+    expect(paths).toHaveTextContent('when you subscribe');
   });
-  it.each([true, 'true'])('does not advertise disabled organization unlocks when activity is %j', async activity => {
-    h.enabled = activity;
-    h.organizationInvites = 'false';
-    h.post.mockResolvedValue({ data: { creditsGranted: 0 } });
+  it('drops the unlock paths once the grant is fully released', () => {
+    h.grant = { ...h.grant!, creditsReleased: 10000, stage: 'unlocked', nextCondition: null };
     show();
-    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
-    await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('chat on different days'));
-    expect(screen.getByTestId('signup-grant-result')).not.toHaveTextContent('organization invite');
+    expect(screen.getByTestId('signup-grant-released')).toHaveTextContent('fully released');
+    expect(screen.queryByTestId('signup-grant-unlock-paths')).toBeNull();
   });
-  it.each([true, 'true'])('shows both enabled sources when organization unlocks are %j', async organizationInvites => {
-    h.organizationInvites = organizationInvites;
-    h.post.mockResolvedValue({ data: { creditsGranted: 0 } });
+  it('asks a pending account to verify its email', () => {
+    h.grant = { ...h.grant!, stage: 'pending_email', creditsReleased: 0, nextCondition: 'email_verification' };
     show();
-    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
-    await waitFor(() =>
-      expect(screen.getByTestId('signup-grant-result')).toHaveTextContent(
-        'Accept an organization invite or keep using chat'
-      )
-    );
-  });
-  it('explains ineligibility without claiming credits were granted', async () => {
-    h.post.mockResolvedValue({ data: { creditsGranted: 0 } });
-    show();
-    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
-    await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('Not eligible yet'));
-  });
-  it('leaves failures retryable', async () => {
-    h.post.mockRejectedValue(new Error('unavailable'));
-    show();
-    fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
-    await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('try again later'));
-    expect(screen.getByTestId('signup-grant-check-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('signup-grant-released')).toHaveTextContent('Verify your email');
   });
 
   it('says free credits are being prepared while the daily budget holds the tranche', () => {
