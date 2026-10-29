@@ -102,7 +102,7 @@ const UserSelector: React.FC<UserSelectorProps> = ({
             <ListItemContent>
               <Typography level="body-md">{option.name}</Typography>
               <Typography level="body-sm" color="neutral">
-                @{option.username} • {option.email}
+                @{option.username} {'\u2022'} {option.email}
               </Typography>
             </ListItemContent>
           </AutocompleteOption>

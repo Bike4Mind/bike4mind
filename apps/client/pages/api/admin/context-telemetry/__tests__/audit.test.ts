@@ -3,9 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
+type Middleware = (req: unknown, res: unknown, next: () => void) => void;
 
 const h = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, Handler>>,
+  middlewares: {} as Record<string, Middleware[]>,
   current: '',
   audit: vi.fn(),
   findById: vi.fn(),
@@ -20,7 +22,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const bucket: Record<string, Handler> = {};
     h.handlers[h.current] = bucket;
-    const chain: Record<string, unknown> = {};
+    const middlewares: Middleware[] = [];
+    h.middlewares[h.current] = middlewares;
+    const chain: Record<string, unknown> = {
+      use: (fn: Middleware) => (middlewares.push(fn), chain),
+    };
     for (const method of ['get', 'post', 'delete']) {
       chain[method] = (fn: Handler) => {
         bucket[method] = fn;
@@ -94,16 +100,21 @@ const quest = { _id: QUEST_ID, timestamp: new Date(), promptMeta: { contextTelem
 const query = (value: unknown) =>
   Object.assign(Promise.resolve(value), { select: () => ({ lean: () => Promise.resolve(value) }) });
 
-const run = async (bucket: string, method: string, opts: { query?: Record<string, string>; body?: object } = {}) => {
+const run = async (
+  bucket: string,
+  method: string,
+  opts: { query?: Record<string, string>; body?: object; isAdmin?: boolean } = {}
+) => {
   const { req, res } = createMocks({
     method: method.toUpperCase() as 'POST',
     query: opts.query ?? { id: QUEST_ID },
     body: opts.body ?? {},
   });
   const mutable = req as unknown as Record<string, unknown>;
-  mutable.user = { id: 'admin-1', isAdmin: true };
+  mutable.user = { id: 'admin-1', isAdmin: opts.isAdmin ?? true };
   mutable.headers = { 'user-agent': 'test' };
   vi.spyOn(res, 'json');
+  for (const middleware of h.middlewares[bucket]) middleware(req, res, () => undefined);
   await h.handlers[bucket][method](req, res);
   return { req, res };
 };
@@ -117,6 +128,17 @@ beforeEach(() => {
 });
 
 describe('context telemetry admin audit', () => {
+  it.each([
+    ['delete', 'delete'],
+    ['analyze', 'post'],
+    ['createIssue', 'post'],
+    ['testConfig', 'post'],
+  ])('rejects a non-admin on %s before any work', async (bucket, method) => {
+    await expect(run(bucket, method, { isAdmin: false })).rejects.toThrow(/missing permission/i);
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it('records a telemetry deletion after the unset succeeds', async () => {
     h.findById.mockReturnValueOnce(query(quest)).mockReturnValueOnce(query({ promptMeta: {} }));
 
