@@ -280,7 +280,7 @@ describe('ImageEditService.process model dispatch', () => {
       } as never,
       logger: silentLogger,
     });
-    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined);
+    expect(assertAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), ImageModels.GPT_IMAGE_1_5, undefined);
     expect(creditHolds.hold).not.toHaveBeenCalled();
     expect(editSpy).not.toHaveBeenCalled();
   });
@@ -333,7 +333,7 @@ describe('ImageEditService.process model dispatch', () => {
     };
     await service.invoke({ body, userId: 'user1', adminRoleWithheld: true });
     expect(assertAdmission).toHaveBeenNthCalledWith(1, 'user1', ImageModels.FLUX_PRO_FILL, true);
-    expect(assertAdmission).toHaveBeenNthCalledWith(2, 'user1', ImageModels.FLUX_PRO_FILL, true);
+    expect(assertAdmission).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'user1' }), ImageModels.FLUX_PRO_FILL, true);
 
     expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
   });

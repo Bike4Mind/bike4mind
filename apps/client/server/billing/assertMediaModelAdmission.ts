@@ -6,13 +6,13 @@ import { createModelAdmission } from './meterPlatformCompletion';
 
 /** Shared by media services so API, tool and queue callers enforce the same admission rule. */
 export async function assertMediaModelAdmission(
-  userId: string,
+  user: string | IUserDocument,
   modelId: string,
   adminRoleWithheld?: boolean
 ): Promise<void> {
-  const user = await userRepository.findById(userId);
-  if (!user) throw new NotFoundError('User not found');
-  await (await createModelAdmission(adminRoleWithheld ? withholdAdminRole(user) : user)).assert(modelId);
+  const loaded = typeof user === 'string' ? await userRepository.findById(user) : user;
+  if (!loaded) throw new NotFoundError('User not found');
+  await (await createModelAdmission(adminRoleWithheld ? withholdAdminRole(loaded) : loaded)).assert(modelId);
 }
 
 export async function filterAdmittedMediaModels<Model extends { id: string }>(

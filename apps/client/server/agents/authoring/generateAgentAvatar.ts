@@ -189,7 +189,7 @@ export async function generateAgentAvatar(
     imageBackend: imageModelInfo.backend,
   });
 
-  await assertMediaModelAdmission(userId, imageModelId, !user.isAdmin);
+  await assertMediaModelAdmission(user, imageModelId, !user.isAdmin);
 
   const userPrompt = buildAgentVisualPrompt(agent);
   let generatedPrompt = '';

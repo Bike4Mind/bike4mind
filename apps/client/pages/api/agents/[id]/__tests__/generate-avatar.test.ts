@@ -153,7 +153,7 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
     await expect(
       run({ id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 }, res)
     ).rejects.toBe(refusal);
-    expect(assertMediaModelAdmission).toHaveBeenCalledWith('u1', 'test-image-model', true);
+    expect(assertMediaModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'test-image-model', true);
     const operations = await h.getOperationsModel.mock.results[0].value;
     expect(operations.llm.complete).not.toHaveBeenCalled();
     expect(h.storageUpload).not.toHaveBeenCalled();

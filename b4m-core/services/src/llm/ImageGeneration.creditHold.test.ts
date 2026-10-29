@@ -147,7 +147,7 @@ describe('ImageGenerationService credit hold', () => {
     });
     const { run } = makeService(wallet, assertAdmission);
     await run('paid-only', true);
-    expect(assertAdmission).toHaveBeenCalledWith('user1', MODEL, true);
+    expect(assertAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), MODEL, true);
     expect(wallet.state.balance).toBe(10_000);
     expect(wallet.users.incrementCredits).not.toHaveBeenCalled();
     expect(mockGeminiGenerate).not.toHaveBeenCalled();

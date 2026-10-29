@@ -42,6 +42,14 @@ describe('media model admission', () => {
     }
   );
 
+  it('uses a loaded user document without re-fetching it', async () => {
+    const user = { id: 'user-1', currentCredits: 10_000 } as Parameters<typeof filterAdmittedMediaModels>[0];
+    await expect(assertMediaModelAdmission(user, 'image-model')).rejects.toMatchObject({
+      additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+    });
+    expect(mocks.user).not.toHaveBeenCalled();
+  });
+
   it('filters video/music picker choices with the same admission rule', async () => {
     const models = [{ id: 'music_v1' }, { id: 'video-model' }];
     const user = { id: 'user-1' } as Parameters<typeof filterAdmittedMediaModels>[0];

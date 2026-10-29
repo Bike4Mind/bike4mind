@@ -182,7 +182,7 @@ interface IImageGenerationServiceOptions {
   startImageGenerationProcess: (body: ImageGenerationBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
   creditHolds: ImageCreditHolds;
-  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  assertModelAdmission(user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
   logEvent: (
@@ -914,7 +914,7 @@ export class ImageGenerationService {
         organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
       ]);
       if (!user) throw new NotFoundError('User not found');
-      await this.assertModelAdmission(userId, model, adminRoleWithheld);
+      await this.assertModelAdmission(user, model, adminRoleWithheld);
 
       // Owner-wide lake access for scoping the input-image lookup: a lake-only image the workbench
       // admitted must still resolve here. Absent resolver (or a resolution outage) degrades to
