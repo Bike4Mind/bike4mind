@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import { CSV_BOM, toCsv } from '@client/app/hooks/useExportToCSV';
+import { downloadData } from '@client/app/utils/download';
 import { ModelMetric } from '../types';
 
 export const exportToCSV = (data: ModelMetric[], filename: string) => {
@@ -39,13 +40,5 @@ export const exportToCSV = (data: ModelMetric[], filename: string) => {
 
   const csvContent = toCsv(rows, headers, 'YYYY-MM-DD HH:mm:ss');
 
-  const blob = new Blob([CSV_BOM, csvContent], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  const url = URL.createObjectURL(blob);
-  link.setAttribute('href', url);
-  link.setAttribute('download', filename);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  downloadData(CSV_BOM + csvContent, filename, 'text/csv;charset=utf-8;');
 };
