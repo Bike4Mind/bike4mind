@@ -1,5 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { systemPromptRepository } from '@bike4mind/database';
 
 const handler = adminApi({
@@ -72,6 +73,13 @@ const handler = adminApi({
     if (typeof enabled === 'boolean') {
       await systemPromptRepository.toggleEnabled(promptId, enabled);
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.system_prompt.version_created',
+      target: { kind: 'settings', id: promptId, displayName: name || prompt.name },
+      summary: `created version ${result.version} of system prompt ${promptId}`,
+      details: { version: result.version, setAsActive, ...(typeof enabled === 'boolean' && { enabled }) },
+    });
 
     return res.status(200).json({
       success: true,

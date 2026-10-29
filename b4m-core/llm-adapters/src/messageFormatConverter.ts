@@ -169,3 +169,93 @@ export function convertMessagesToOpenAIFormat(
 ): OpenAIFormattedMessage[] {
   return messages.flatMap(msg => convertMessageToOpenAIFormat(msg, options));
 }
+
+function isToolRoleMessage(msg: IMessage): boolean {
+  return (msg.role as string) === 'tool';
+}
+
+/**
+ * The tool_result blocks a `role: 'tool'` message carries: one built from an OpenAI-shape
+ * `tool_call_id` message, or the blocks Gemini pushes under that role as-is.
+ */
+function toolResultsOf(msg: IMessage): MessageContentToolResult[] {
+  const toolCallId = (msg as { tool_call_id?: unknown }).tool_call_id;
+  if (typeof toolCallId === 'string') {
+    return [
+      {
+        type: 'tool_result',
+        tool_use_id: toolCallId,
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+      },
+    ];
+  }
+  return Array.isArray(msg.content) ? (msg.content as MessageContentObject[]).filter(isToolResultBlock) : [];
+}
+
+function parseToolArguments(raw: string): MessageContentToolUse['input'] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as MessageContentToolUse['input'])
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function toolCallsToCanonical(msg: IMessage & { tool_calls: OpenAIToolCall[] }): IMessage {
+  // reasoning_content is DeepSeek-private, and the Bedrock adapter forwards message objects
+  // into its request body nearly as-is, so it must not survive the trip to another provider.
+  const {
+    tool_calls: toolCalls,
+    content,
+    reasoning_content: _reasoningContent,
+    ...rest
+  } = msg as typeof msg & { reasoning_content?: unknown };
+  const text = typeof content === 'string' && content.trim() ? [{ type: 'text' as const, text: content }] : [];
+  const toolUses: MessageContentToolUse[] = toolCalls.map(call => ({
+    type: 'tool_use',
+    id: call.id,
+    name: call.function.name,
+    input: parseToolArguments(call.function.arguments),
+  }));
+  return { ...rest, content: [...text, ...toolUses] } as IMessage;
+}
+
+/**
+ * The inverse of convertMessagesToOpenAIFormat for tool history: rewrites OpenAI-shape
+ * assistant `tool_calls` and every `role: 'tool'` message (OpenAI's, and Gemini's, which
+ * already holds tool_result blocks) into canonical tool_use / tool_result blocks, folding each
+ * run of consecutive tool messages into one user message.
+ *
+ * Backends push their tool rounds onto the caller's array in their own shape, and
+ * ChatCompletionProcess hands that same array to the fallback hop. Canonical is B4M's own
+ * shape: the Anthropic adapters read it directly and the OpenAI family converts it back on
+ * the way out, so normalizing before a hop to another backend lets a turn cross providers
+ * mid tool loop.
+ *
+ * Returns the input array itself when it holds no foreign tool history, and keeps
+ * every untouched message by reference so per-message cache anchors survive.
+ */
+export function convertOpenAIToolHistoryToCanonical(messages: IMessage[]): IMessage[] {
+  if (!messages.some(msg => hasToolCalls(msg) || isToolRoleMessage(msg))) return messages;
+
+  const result: IMessage[] = [];
+  let pendingResults: MessageContentToolResult[] = [];
+  const flushResults = () => {
+    if (pendingResults.length === 0) return;
+    result.push({ role: 'user', content: pendingResults } as IMessage);
+    pendingResults = [];
+  };
+
+  for (const msg of messages) {
+    if (isToolRoleMessage(msg)) {
+      pendingResults.push(...toolResultsOf(msg));
+      continue;
+    }
+    flushResults();
+    result.push(hasToolCalls(msg) ? toolCallsToCanonical(msg) : msg);
+  }
+  flushResults();
+  return result;
+}

@@ -11,6 +11,7 @@ import MinimizeIcon from '@mui/icons-material/Minimize';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls from './ChatPanelControls';
+import FloatingChatPill from './FloatingChatPill';
 import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 
 // react-draggable v4.7 types DraggableProps to cover nodeRef/handle/position/
@@ -338,40 +339,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({
 
   // Minimized state - render compact indicator
   if (isMinimized) {
-    return (
-      <Box
-        sx={theme => ({
-          position: 'fixed',
-          bottom: 20,
-          right: 20,
-          zIndex: 1300,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
-          padding: '8px 16px',
-          borderRadius: '24px',
-          backgroundColor: theme.palette.primary.solidBg,
-          color: theme.palette.primary.solidColor,
-          '--Icon-color': theme.palette.primary.solidColor,
-          boxShadow: theme.shadow.lg,
-          cursor: 'pointer',
-          transition: 'transform 0.2s ease, background-color 0.2s ease',
-          '&:hover': {
-            backgroundColor: theme.palette.primary.solidHoverBg,
-            transform: 'translateY(-2px)',
-          },
-        })}
-        onClick={handleMinimize}
-        data-testid="floating-chat-minimized"
-        // App-wide chrome: the admin skin stops here (adminSkin.ts).
-        {...adminSurfaceExcludeProps}
-      >
-        <SmartToyIcon sx={{ fontSize: 16 }} />
-        <Typography level="body-sm" fontWeight="md" sx={{ color: 'inherit' }}>
-          AI Chat
-        </Typography>
-      </Box>
-    );
+    return <FloatingChatPill onExpand={handleMinimize} />;
   }
 
   return (

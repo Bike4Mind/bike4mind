@@ -1,5 +1,14 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { describe, it, expect, vi } from 'vitest';
-import type { HubGgufBuild, HubModelDetail, InstalledModel, LocalRuntime } from '@bike4mind/local-models';
+import {
+  curatedSource,
+  loadCuratedManifest,
+  type HubGgufBuild,
+  type HubModelDetail,
+  type InstalledModel,
+  type LocalRuntime,
+} from '@bike4mind/local-models';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -17,6 +26,7 @@ function build(quant: string, sizeBytes: number): HubGgufBuild {
   return {
     id: path.replace(/\.gguf$/, ''),
     quant,
+    label: quant,
     files: [{ path, sizeBytes, sha256: 'a'.repeat(64), url: `${ENDPOINT}/${REPO}/resolve/main/${path}` }],
     sizeBytes,
     split: false,
@@ -114,6 +124,7 @@ async function setup(
     source?: RuntimeTarget['source'];
     registry?: ModelToolsDeps['ollamaRegistry'];
     defaultModel?: string;
+    curated?: ModelToolsDeps['curated'];
   } = {}
 ) {
   const runtime = fakeRuntime();
@@ -123,6 +134,7 @@ async function setup(
     ollamaRegistry: options.registry ?? (async () => manifest()),
     resolveRuntime: async () => ({ runtime, source: options.source ?? 'env' }),
     defaultModel: async () => options.defaultModel ?? 'qwen2.5:0.5b',
+    curated: options.curated,
   };
   const server = new McpServer({ name: 'test', version: '0.0.0' });
   registerModelTools(server, deps);
@@ -232,7 +244,7 @@ describe('model tools', () => {
           status: 'confirm-in-terminal',
           downloaded: false,
           model: REPO,
-          quant: 'Q4_K_M',
+          label: 'Q4_K_M',
           sizeBytes: 491_400_032,
           size: '491 MB',
           revision: 'b'.repeat(40),
@@ -277,6 +289,24 @@ describe('model tools', () => {
           licenses: ['Gemma Terms of Use'],
           acknowledgementRequired: true,
           command: 'b4m models pull gemma3:270m',
+        })
+      );
+    });
+
+    it('asks to acknowledge a curated ref whose base model license is restricted', async () => {
+      const apache = readFileSync(join(__dirname, '..', 'commands', '__fixtures__', 'apache-2.0.txt'), 'utf-8');
+      const curated = structuredClone(loadCuratedManifest(() => {}));
+      const [entry] = curated.entries;
+      const ref = curatedSource(entry.builds[0]).ollamaRef;
+      entry.license.base.class = 'restricted-commercial';
+      entry.license.base.id = 'llama3.1';
+      const { call } = await setup({ registry: async () => manifest([apache]), curated: () => curated });
+      const { data } = await call('models_pull', { ref });
+      expect(data).toEqual(
+        expect.objectContaining({
+          licenses: ['Apache-2.0', 'llama3.1'],
+          license: expect.objectContaining({ label: 'Apache-2.0 and base model llama3.1', permissive: false }),
+          acknowledgementRequired: true,
         })
       );
     });
@@ -462,7 +492,9 @@ describe('model tools', () => {
       expect((await call('models_remove', { name: 'smollm2:135m' })).data.removed).toBe(false);
       expect(prompts[0].params.message).toContain('Remove smollm2:135m');
       expect(runtime.remove).not.toHaveBeenCalled();
+      const listsBeforeRemoval = vi.mocked(runtime.list).mock.calls.length;
       const removed = await call('models_remove', { name: 'smollm2:135m' });
+      expect(runtime.list).toHaveBeenCalledTimes(listsBeforeRemoval + 1);
       expect(removed.data).toEqual(expect.objectContaining({ status: 'removed', removed: true, wasDefault: false }));
       expect(runtime.remove).toHaveBeenCalledWith('smollm2:135m');
     });

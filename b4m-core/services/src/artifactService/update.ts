@@ -1,4 +1,7 @@
 import {
+  IArtifactDocument,
+  IArtifactContentDocument,
+  IArtifactVersionDocument,
   IArtifactRepository,
   IArtifactContentRepository,
   IArtifactVersionRepository,
@@ -267,7 +270,11 @@ export const update = async (
     throw new UnauthorizedError('Write access denied');
   }
 
-  const result: any = {
+  const result: {
+    artifact: IArtifactDocument;
+    content?: IArtifactContentDocument;
+    version?: IArtifactVersionDocument;
+  } = {
     artifact: updatedArtifact,
   };
 

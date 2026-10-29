@@ -6,11 +6,17 @@ export interface HardwareProfile {
   /** The hardware's architecture: `arm64` for an x64 process translated by Rosetta. */
   arch: string;
   memoryKind: 'unified' | 'discrete' | 'cpu';
+  /** RAM the OS sees; a firmware VRAM carve-out is not part of it. */
   totalMemoryBytes: number;
-  /** Summed across one vendor's GPUs; null on unified memory, where the GPU shares `totalMemoryBytes`, or unknown. */
+  /**
+   * Summed across one vendor's GPUs. On AMD unified memory, what ROCm can allocate; null on Apple and NVIDIA unified
+   * memory, where the GPU shares `totalMemoryBytes`, or when unknown.
+   */
   gpuMemoryBytes: number | null;
   gpuName: string | null;
   gpuCount: number;
+  /** Vendor of the GPUs behind `gpuMemoryBytes`; null without a usable GPU, absent when not probed. */
+  gpuVendor?: 'nvidia' | 'amd' | 'intel' | 'apple' | null;
   chip: string | null;
   diskFreeBytes: number | null;
   /** 'low' when a usable GPU's memory is unknown or the GPUs could not be listed; `cpu` with 'high' has no usable GPU. */
@@ -161,9 +167,14 @@ export function ollamaUbatch(context: number, slots = 1): number {
   return total > 4096 ? 1024 : 512;
 }
 
+/** Ollama's library is CUDA; a profile without a vendor counts every discrete GPU, as before vendors were probed. */
+const onCuda = (hw: HardwareProfile) =>
+  hw.gpuVendor === undefined ? hw.memoryKind === 'discrete' : hw.gpuVendor === 'nvidia';
+
 /**
  * Ollama's GPU batch step-down and CUDA flash-attention-off rule (server/sched.go). The budget stands in for live free
- * memory; a mismatch shifts one batch step only where Ollama's prediction leaves at least 20% free.
+ * memory, held to the RAM the OS sees on unified memory as Ollama holds an integrated GPU to free RAM; a mismatch
+ * shifts one batch step only where Ollama's prediction leaves at least 20% free.
  */
 function ollamaGpuUbatch(
   model: FitModel,
@@ -174,16 +185,18 @@ function ollamaGpuUbatch(
   faOff: boolean
 ): number {
   const total = context * slots;
-  if (faOff && hw.memoryKind === 'discrete') return total > 4096 && budget <= 8 * GIB ? 256 : 512;
+  if (faOff && onCuda(hw)) return total > 4096 && budget <= 8 * GIB ? 256 : 512;
   const { arch } = model;
   const kvHeads = arch.recurrent ? 1 : Math.min(arch.full.kvHeads, arch.swa?.kvHeads ?? Infinity);
   const headDim = arch.embeddingLength && arch.headCount ? arch.embeddingLength / arch.headCount : arch.full.keyLength;
   const predicted = model.weightsBytes + 2 * arch.blockCount * kvHeads * headDim * total * 2;
-  const threshold = budget * 0.8;
+  const available =
+    hw.memoryKind === 'unified' && hw.totalMemoryBytes > 0 ? Math.min(budget, hw.totalMemoryBytes) : budget;
+  const threshold = available * 0.8;
   const fits = (batch: number) => {
     const extra = batch >= 2048 ? 2 * GIB : batch >= 1024 ? 768 * MIB : 0;
     const headroom = batch >= 2048 ? 0.6 : batch >= 1024 ? 0.75 : 1;
-    return predicted <= threshold && predicted <= budget * headroom && extra <= threshold - predicted;
+    return predicted <= threshold && predicted <= available * headroom && extra <= threshold - predicted;
   };
   let batch = ollamaUbatch(context, slots);
   while (batch > 512 && !fits(batch)) batch = batch > 1024 ? 1024 : 512;
@@ -341,14 +354,18 @@ export function contextFloor(arch: ModelArch, mode: FitMode, contextCap?: number
   return mode === 'embeddings' ? target : Math.min(MODE_CONTEXT_FLOORS[mode], target);
 }
 
-interface Budgets {
+export interface MemoryBudgets {
+  /** Bytes a model may use on the GPU, or in RAM on a CPU-only machine. */
   gpu: number;
+  /** System RAM layer or expert offload may spill into on a discrete GPU; 0 elsewhere. */
   ramPool: number;
   cpuOnly: boolean;
 }
 
-function memoryBudgets(hw: HardwareProfile): Budgets {
+export function memoryBudgets(hw: HardwareProfile): MemoryBudgets {
   if (hw.memoryKind === 'unified') {
+    // AMD reports what ROCm can allocate, which a firmware carve-out keeps outside totalMemoryBytes.
+    if (hw.gpuMemoryBytes) return { gpu: hw.gpuMemoryBytes, ramPool: 0, cpuOnly: false };
     const fraction =
       hw.totalMemoryBytes >= FIT_CONSTANTS.unifiedLargeMinBytes
         ? FIT_CONSTANTS.unifiedLargeFraction
@@ -379,7 +396,7 @@ function kvCandidates(runtime: FitRuntime, arch: ModelArch): KvPair[] {
 }
 
 class Planner {
-  private readonly budgets: Budgets;
+  private readonly budgets: MemoryBudgets;
   private readonly kvs: KvPair[];
   private readonly slots: number;
   private readonly moeLayers: number;
