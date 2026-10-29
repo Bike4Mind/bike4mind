@@ -68,10 +68,15 @@ describe('FabFile status enum gate on update', () => {
     expect((await readGated(file._id))?.moderationStatus).toBe('pending');
   });
 
-  it('accepts null for chunkStallReason, the cleared state', async () => {
+  // Mongoose's own enum validator passes null (`null == v || ...`), so create/save and
+  // `runValidators` all accept it. The gate matches that rather than being stricter on update.
+  it.each(GATED)('accepts null for $path, matching create/save and runValidators', async ({ path }) => {
     const file = await makeFabFile();
-    await FabFile.updateOne({ _id: file._id }, { $set: { chunkStallReason: null } });
-    expect((await readGated(file._id))?.chunkStallReason).toBeNull();
+    await FabFile.updateOne({ _id: file._id }, { $set: { [path]: null } });
+    expect((await readGated(file._id))?.[path]).toBeNull();
+    await expect(
+      FabFile.updateOne({ _id: file._id }, { $set: { [path]: null } }, { runValidators: true })
+    ).resolves.toBeDefined();
   });
 
   it('does not touch updates that leave the gated paths alone', async () => {
