@@ -51,16 +51,20 @@ vi.mock('@bike4mind/database', async orig => {
 });
 
 const JWT_USER = { id: 'jwt-user', _id: 'jwt-user', isBanned: false, disputePending: false };
+const LIVE_JWT = 'live-jwt';
 vi.mock('@server/auth/auth', async orig => {
-  const actual = await orig<Record<string, unknown>>();
+  const actual = await orig<{ auth: { handle: (...a: unknown[]) => unknown } }>();
   return {
     ...actual,
+    // Only a signed-in session is stubbed (a real token would need the secret store); every other
+    // request goes through the real passport verifier, so the 401s below are the real ones.
     // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
     auth: (req: any, res: any, next: any) => {
-      // Mirror the real verifier: no bearer means no session, so the route 401s.
-      if (!req.headers?.authorization) return res.status(401).json({ error: 'Unauthorized' });
-      if (!req.user) req.user = JWT_USER;
-      next();
+      if (req.headers?.authorization === `Bearer ${LIVE_JWT}`) {
+        req.user = JWT_USER;
+        return next();
+      }
+      return actual.auth.handle(req, res, next);
     },
   };
 });
@@ -96,11 +100,12 @@ describe('GET /api/ollama/models auth', () => {
   });
 
   it('lists models for a signed-in user', async () => {
-    const { req, res } = fire({ bearer: 'live-jwt' });
+    const { req, res } = fire({ bearer: LIVE_JWT });
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ models: MODELS });
+    expect(req.user.id).toBe(JWT_USER.id);
   });
 
   it('rejects an anonymous caller before reading admin settings', async () => {
@@ -108,6 +113,7 @@ describe('GET /api/ollama/models auth', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData().error).toBe('Authentication required');
     expect(mockFindSettings).not.toHaveBeenCalled();
     expect(mockListModels).not.toHaveBeenCalled();
   });
@@ -123,9 +129,11 @@ describe('GET /api/ollama/models auth', () => {
     const { req, res } = fire({ apiKey: 'b4m_live_0123456789abcdef0123456789abcdef' });
     await handler(req, res);
 
-    expect(res._getStatusCode()).toBe(401);
-    // jwtOnly does not install apiKeyAuth at all, so the key is never even validated.
+    // Asserted first: with the api-key chain mounted (`auth: true`) the key is validated, and that
+    // is the regression; what status the half-stubbed chain then returns is incidental.
     expect(mockValidate).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData().error).toBe('Authentication required');
     expect(mockFindSettings).not.toHaveBeenCalled();
   });
 });
