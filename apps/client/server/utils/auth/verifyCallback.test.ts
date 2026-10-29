@@ -1014,7 +1014,7 @@ describe('verifyCallback - OAuth create: blocked email domains', () => {
 
       expect(err).toBeNull();
       expect(user).toBeUndefined();
-      expect(info).toEqual({ code: 'signup_email_blocked', email: 'Someone@Burner.example ' });
+      expect(info).toEqual({ code: 'signup_email_blocked', email: 'someone@burner.example' });
       expect(mockShouldBlockDisposableEmail).toHaveBeenCalledWith('someone@burner.example', expect.anything());
       expect(mockCreate).not.toHaveBeenCalled();
     }

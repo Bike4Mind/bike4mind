@@ -234,13 +234,14 @@ const authenticateUser = async (
           done(null, undefined, { code: 'signup_email_unverified' });
           return;
         }
+        const normalizedEmail = email.toLowerCase().trim();
         if (
-          await userService.shouldBlockDisposableEmail(email.toLowerCase().trim(), {
+          await userService.shouldBlockDisposableEmail(normalizedEmail, {
             adminSettings: adminSettingsRepository,
             signupProtection,
           })
         ) {
-          done(null, undefined, { code: 'signup_email_blocked', email });
+          done(null, undefined, { code: 'signup_email_blocked', email: normalizedEmail });
           return;
         }
       }
