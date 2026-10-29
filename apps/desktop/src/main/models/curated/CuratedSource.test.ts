@@ -477,7 +477,7 @@ describe('CuratedSource', () => {
     expect(restarted.view()).toMatchObject({ sequence: 6, check: 'failed' });
   });
 
-  it('is not held to recovery-signed lists by a damaged revoked-keys.json when nothing was ever revoked', async () => {
+  it('treats one damaged revoked-keys copy with the other missing as lost, never as an empty set', async () => {
     const three = listText(3);
     server.publish(3, three, sigText(three, [signing], 3));
     await source().checkNow();
@@ -485,12 +485,13 @@ describe('CuratedSource', () => {
 
     const restarted = source();
     await restarted.loaded();
-    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3 });
-    await expect(readFile(join(dir, 'revoked-keys.json'))).rejects.toThrow();
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, checkedAt: null });
+    expect(await readFile(join(dir, 'revoked-keys.json'), 'utf8')).toBe('{"not":"a list"}');
     const four = listText(4);
     server.publish(4, four, sigText(four, [signing], 4));
     await restarted.checkNow();
-    expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 4, check: 'updated' });
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', check: 'failed' });
+    logged(/only a recovery-signed list can rebuild the damaged revoked-keys.json/);
   });
 
   it('fails only the check while the revoked set cannot be read, and reads it again on the next one', async () => {

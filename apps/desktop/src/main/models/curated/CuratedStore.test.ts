@@ -139,9 +139,16 @@ describe('CuratedStore', () => {
 
     await rm(backup);
     await writeFile(primary, '{"not":"a list"}');
-    expect(await store.readRevoked()).toEqual({ status: 'ok', ids: new Set(), repair: true });
+    expect(await store.readRevoked()).toEqual({ status: 'lost', ids: new Set() });
     await store.addRevoked([]);
-    await expect(readFile(primary)).rejects.toThrow();
+    expect(await readFile(primary, 'utf8')).toBe('{"not":"a list"}');
+
+    await writeFile(primary, '[');
+    expect(await store.readRevoked()).toEqual({ status: 'lost', ids: new Set() });
+    await writeFile(primary, JSON.stringify([KEY_B, 'bad']));
+    expect(await store.readRevoked()).toEqual({ status: 'lost', ids: new Set([KEY_B]) });
+    await rm(primary);
+    expect(await store.readRevoked()).toEqual({ status: 'ok', ids: new Set(), repair: false });
 
     await mkdir(primary);
     expect(await store.readRevoked()).toEqual({ status: 'unavailable', detail: 'EISDIR' });

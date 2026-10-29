@@ -18,7 +18,7 @@ export interface CuratedCopy {
 }
 
 /**
- * The revoked set from both of its copies. `lost`: both copies are damaged, so ids may be missing. `unavailable`: a
+ * The revoked set from both of its copies. `lost`: a copy is damaged and none is valid, so ids may be missing. `unavailable`: a
  * read failed for a reason other than a missing file (EBUSY, EACCES) and may work on a later try.
  */
 export type CuratedRevoked =
@@ -221,7 +221,8 @@ export class CuratedStore {
     const failed = copies.find((copy): copy is Extract<RevokedCopy, { kind: 'error' }> => copy.kind === 'error');
     if (failed) return { status: 'unavailable', detail: failed.detail };
     const ids = new Set(copies.flatMap(copy => ('ids' in copy ? copy.ids : [])).slice(0, MAX_REVOKED));
-    if (copies.every(copy => copy.kind === 'damaged')) return { status: 'lost', ids };
+    if (copies.some(copy => copy.kind === 'damaged') && !copies.some(copy => copy.kind === 'valid'))
+      return { status: 'lost', ids };
     const whole = copies.every(copy => copy.kind === 'valid' && copy.ids.length === ids.size);
     return { status: 'ok', ids, repair: ids.size > 0 ? !whole : copies.some(copy => copy.kind === 'damaged') };
   }
@@ -237,6 +238,7 @@ export class CuratedStore {
     for (const id of ids) if (revoked.size < MAX_REVOKED && KEY_ID.test(id)) revoked.add(id);
     if (revoked.size === current.ids.size && current.status === 'ok' && !current.repair) return revoked;
     if (revoked.size === 0) {
+      if (current.status === 'lost') return revoked;
       for (const name of REVOKED_COPIES) await rm(join(this.root, name), { force: true });
       return revoked;
     }
