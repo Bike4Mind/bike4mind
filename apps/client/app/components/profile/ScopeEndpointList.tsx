@@ -49,6 +49,7 @@ export function ScopeEndpointList({ scope, endpoints }: { scope: string; endpoin
               component="button"
               level="body-xs"
               onClick={() => setExpanded(open => !open)}
+              aria-expanded={expanded}
               data-testid={`api-keys-scope-endpoints-${scope}-toggle-btn`}
             >
               {expanded ? 'Hide routes' : `Show all ${endpoints.length}`}

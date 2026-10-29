@@ -24,7 +24,7 @@ const GENERATED_FILE = path.join(__dirname, 'apiKeyScopeEndpoints.generated.ts')
 const MEMBER_BY_SCOPE = new Map(Object.entries(ApiKeyScope).map(([member, value]) => [value, member]));
 
 /** The generated module's source for `derived`, in enum order, scopes that open nothing left out. */
-export function renderGeneratedModule(derived: ReadonlyMap<ApiKeyScope, readonly string[]>): string {
+function renderGeneratedModule(derived: ReadonlyMap<ApiKeyScope, readonly string[]>): string {
   const entries = Object.values(ApiKeyScope)
     .filter(scope => (derived.get(scope)?.length ?? 0) > 0)
     .map(scope => `  [ApiKeyScope.${MEMBER_BY_SCOPE.get(scope)}]: ${JSON.stringify(derived.get(scope))},`);
