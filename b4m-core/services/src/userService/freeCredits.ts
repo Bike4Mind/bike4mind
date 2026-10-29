@@ -36,7 +36,7 @@ export type FreeCreditAdapters = {
 
 type FreeCreditLogger = {
   error: (message: string, ...args: unknown[]) => void;
-  warn?: (message: string, ...args: unknown[]) => void;
+  warn: (message: string, ...args: unknown[]) => void;
 };
 
 export type GrantFreeCreditsResult = {
