@@ -29,6 +29,7 @@ const defaultCreditsPerCycle = async (doc: DetailDoc): Promise<number | null> =>
   return doc.quantity * (await getTeamPlanSettings()).creditsPerSeat;
 };
 
+// Ledger rows carry no subscription id, so these are the owner's latest subscription grants across all its plans.
 const recentGrantsOf = async (doc: DetailDoc): Promise<AdminSubscriptionCreditGrant[]> => {
   const holderType = doc.ownerType === 'User' ? CreditHolderType.User : CreditHolderType.Organization;
   const transactions = await creditTransactionRepository.findByOwnerWithFilters(doc.ownerId, holderType, {
