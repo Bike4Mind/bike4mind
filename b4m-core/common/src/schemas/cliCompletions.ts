@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModelIdSchema } from './modelId';
 import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 // Specific file, not the `../types` barrel - this module is imported by
 // completions.contract.ts, which must stay off the barrel (see the note there).
@@ -204,7 +205,7 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  * canonical `options.<field>` location before downstream consumption.
  */
 export const CompletionRequestSchema = z.object({
-  model: z.string().max(256),
+  model: ModelIdSchema,
   messages: z.array(CompletionMessageSchema).min(1),
   response_format: ResponseFormatSchema.optional(),
   stream: z.boolean().optional(),
