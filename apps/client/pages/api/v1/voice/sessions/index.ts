@@ -1,3 +1,5 @@
+import { CONVERSATIONAL_VOICE_MODEL_ID } from '@bike4mind/common';
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 /**
  * POST /api/v1/voice/sessions - provision a real-time ElevenLabs voice call on the default voice
  * agent and reserve its credits up front (reconciled by ./[id]/end.ts). Also served at the legacy
@@ -120,6 +122,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   const elevenLabsAgentId = voiceAgent.elevenLabsAgentId;
 
   const reasoningModelId = remapVoiceModel((bodyModelId ?? DEFAULT_MODEL) as ChatModelName);
+  const admission = await createModelAdmission(req.user!);
+  await admission.assert(CONVERSATIONAL_VOICE_MODEL_ID);
+  await admission.assert(reasoningModelId);
 
   // Always resolve to a real session row so transcripts can be persisted to it.
   // Either attach to an existing notebook or create a new one with a voice-flavored

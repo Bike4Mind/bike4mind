@@ -1,3 +1,10 @@
+vi.mock('../../../modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../../modelAdmission')>()),
+  loadModelConfigurations: vi.fn(async () => []),
+  loadFreeTierAllowedModels: vi.fn(async (): Promise<ReadonlySet<string> | undefined> => undefined),
+}));
+import { loadFreeTierAllowedModels } from '../../../modelAdmission';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ToolContext } from '../../base/types';
 import type { AudioGenerationToolCall } from '@bike4mind/common';
@@ -69,6 +76,7 @@ function run(context: ToolContext, args: Record<string, unknown>, config?: Audio
 
 describe('audio_generation tool', () => {
   beforeEach(() => {
+    vi.mocked(loadFreeTierAllowedModels).mockResolvedValue(undefined);
     mockSynthesize.mockReset();
     mockGenerate.mockReset();
     mockGetEffectiveApiKey.mockReset();
@@ -87,6 +95,17 @@ describe('audio_generation tool', () => {
     });
     mockGenerate.mockResolvedValue({ audio: Buffer.from('fake-sfx'), contentType: 'audio/mpeg' });
     mockGetEffectiveApiKey.mockResolvedValue('provider-key');
+  });
+
+  it.each(['speech', 'sound_effect'])('refuses free-tier %s before holding credits or generating', async kind => {
+    vi.mocked(loadFreeTierAllowedModels).mockResolvedValue(new Set(['cheap-text']));
+    const context = createFakeContext();
+    await expect(run(context, { kind, text: 'A sound' })).rejects.toMatchObject({
+      additionalInfo: { errorCode: 'model_requires_subscription' },
+    });
+    expect(context.onStart).not.toHaveBeenCalled();
+    expect(mockSynthesize).not.toHaveBeenCalled();
+    expect(mockGenerate).not.toHaveBeenCalled();
   });
 
   it('generates speech, stores it inline, and settles on the resolved model + characters', async () => {

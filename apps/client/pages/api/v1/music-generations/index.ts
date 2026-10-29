@@ -1,3 +1,4 @@
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 /**
  * POST /api/v1/music-generations - start a music generation job (202).
  * GET  /api/v1/music-generations - list the caller's jobs.
@@ -66,7 +67,7 @@ const createRouter = nextRouteForContract(createMusicGenerationContract, {
   const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
   const result = await createMusicJob(
     {
-      user: { id: req.user.id, organizationId },
+      user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),

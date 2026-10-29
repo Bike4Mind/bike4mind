@@ -158,7 +158,8 @@ describe('ImageEditService.process model dispatch', () => {
     dbExtra: Record<string, unknown> = {},
     // In production this enqueues; pass one that calls process() to drive invoke() end to end.
     startImageEditProcess: (body: ImageEditBody) => Promise<void> = vi.fn(),
-    settledCredits?: number
+    settledCredits?: number,
+    assertModelAdmission: (userId: string, modelId: string) => Promise<void> = async () => {}
   ) => {
     const quest = {
       id: 'quest1',
@@ -172,6 +173,7 @@ describe('ImageEditService.process model dispatch', () => {
     const creditHolds = makeCreditHolds();
     if (settledCredits !== undefined) creditHolds.settle.mockResolvedValueOnce(settledCredits);
     const service = new ImageEditService({
+      assertModelAdmission,
       creditHolds,
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
@@ -261,10 +263,63 @@ describe('ImageEditService.process model dispatch', () => {
     expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.FLUX_PRO_FILL });
   });
 
+  it('refuses a queued paid-only edit before holding credits or calling the provider', async () => {
+    const assertAdmission = vi.fn(async () => {
+      throw new Error('paid plan required');
+    });
+    const { service, creditHolds } = makeService({}, undefined, undefined, assertAdmission);
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'edit',
+        model: ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/image.png',
+        fabFileIds: ['mask1'],
+      } as never,
+      logger: silentLogger,
+    });
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined);
+    expect(creditHolds.hold).not.toHaveBeenCalled();
+    expect(editSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a paid-only edit before enqueueing and gates the remapped model', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async () => {
+      throw refusal;
+    });
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue, undefined, assertAdmission);
+    await expect(
+      service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'edit',
+          model: ImageModels.GPT_IMAGE_2,
+          background: 'transparent',
+          image: 'https://example.invalid/image.png',
+          fabFileIds: ['mask1'],
+        },
+      })
+    ).rejects.toBe(refusal);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('carries a client-sent seed through invoke() to the BFL edit call', async () => {
     // Goes through invoke() because its EditImageRequestBodySchema parse is what used to strip seed.
     const serviceRef: { current?: ImageEditService } = {};
-    const { service } = makeService({}, body => serviceRef.current!.process({ body, logger: silentLogger }));
+    const assertAdmission = vi.fn(async () => {});
+    const { service } = makeService(
+      {},
+      body => serviceRef.current!.process({ body, logger: silentLogger }),
+      undefined,
+      assertAdmission
+    );
     serviceRef.current = service;
 
     const body: z.infer<typeof EditImageRequestBodySchema> = {
@@ -276,7 +331,9 @@ describe('ImageEditService.process model dispatch', () => {
       fabFileIds: ['mask1'],
       seed: 12345,
     };
-    await service.invoke({ body, userId: 'user1' });
+    await service.invoke({ body, userId: 'user1', adminRoleWithheld: true });
+    expect(assertAdmission).toHaveBeenNthCalledWith(1, 'user1', ImageModels.FLUX_PRO_FILL, true);
+    expect(assertAdmission).toHaveBeenNthCalledWith(2, 'user1', ImageModels.FLUX_PRO_FILL, true);
 
     expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
   });
@@ -607,6 +664,7 @@ describe('ImageEditService.process reference images (#2744)', () => {
       images: [],
     };
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
@@ -756,6 +814,7 @@ describe('ImageEditService.process mask access (#3069)', () => {
       images: [],
     };
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
@@ -1129,6 +1188,7 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
     const update = vi.fn(async () => undefined);
     const startImageEditProcess = vi.fn(async () => undefined);
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: {
@@ -1210,6 +1270,7 @@ describe('ImageEditService quest partial writes', () => {
     const startImageEditProcess = vi.fn(async () => undefined);
     const creditHolds = makeCreditHolds();
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
       creditHolds,
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
@@ -1520,6 +1581,7 @@ describe('ImageEditService.process (settled quest and early failure)', () => {
     const quest = { id: 'quest1', sessionId: 'session1', status: questStatus } as Record<string, unknown>;
     const update = vi.fn(async () => undefined);
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
       db: {
         quests: { findById: vi.fn(async () => quest), update },
         users: { findById: usersFindById },

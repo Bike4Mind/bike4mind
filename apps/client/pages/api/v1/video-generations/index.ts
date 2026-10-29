@@ -1,3 +1,4 @@
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 /**
  * POST /api/v1/video-generations - start a video generation job (202).
  * GET  /api/v1/video-generations - list the caller's jobs.
@@ -88,7 +89,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
-      user: { id: req.user.id, organizationId },
+      user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per

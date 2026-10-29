@@ -1,3 +1,4 @@
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 /**
  * POST /api/v1/image-generations - queue an image generation; the caller polls the returned quest.
  * Also served at the legacy `/api/ai/generate-image` (pages/api/ai/generate-image.ts re-exports this).
@@ -141,6 +142,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     const startTime = performance.now();
 
     const quest = await getImageGeneration().invoke({
+      adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       userId: req.user.id,
       body: enhancedBody,
     });

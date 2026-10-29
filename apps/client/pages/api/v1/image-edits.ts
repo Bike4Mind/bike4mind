@@ -1,3 +1,4 @@
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 /**
  * POST /api/v1/image-edits - queue an image edit; the caller polls the returned quest.
  * Also served at the legacy `/api/ai/edit-image` (pages/api/ai/edit-image.ts re-exports this).
@@ -38,6 +39,7 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
   const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
 
   const quest = await getImageEdit().invoke({
+    adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
     userId: req.user.id,
     body: {
       ...body,

@@ -12,6 +12,7 @@ import { BadRequestError, ForbiddenError, getLlmWithFallback } from '@bike4mind/
 import { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission,
+  isFreeTierModel,
   isUnpricedTextModel,
   loadFreeTierAllowedModels,
   loadModelConfigurations,
@@ -167,13 +168,13 @@ describe('free-tier model gate', () => {
     await expect(freeUser().admits('premium')).resolves.toBe(false);
   });
 
-  it('admits a free account an allowlisted model and a non-text model', async () => {
+  it('admits a free account an allowlisted model', async () => {
     const admission = freeUser();
     await expect(admission.admits('priced')).resolves.toBe(true);
-    await expect(admission.admits('img')).resolves.toBe(true);
+    await expect(admission.admits('img')).resolves.toBe(false);
   });
 
-  it('gates an id missing from the catalog as a text model', async () => {
+  it('gates an id missing from the catalog', async () => {
     await expect(freeUser().admits('not-in-catalog')).resolves.toBe(false);
   });
 
@@ -257,6 +258,47 @@ describe('free-tier model gate', () => {
     const admission = createModelAdmission({ user: { tags: [] }, configs: [], models: catalog });
     await expect(admission.admits('premium')).resolves.toBe(true);
   });
+});
+
+describe('free-tier media admission', () => {
+  it.each(['image', 'video', 'speech-to-text'] as const)(
+    'requires a paid plan for an unlisted %s model before any credits can be spent',
+    async type => {
+      const model = { ...image, id: `premium-${type}`, type } as ModelInfo;
+      const allowedModels = new Set(['priced']);
+      expect(isFreeTierModel(model.id, model, allowedModels)).toBe(false);
+      expect(isFreeTierModel(model.id, undefined, allowedModels)).toBe(false);
+      const admission = createModelAdmission({
+        user: {},
+        configs: [],
+        models: [model],
+        freeTierAllowedModels: allowedModels,
+        getEntitlements: async () => ['base'],
+      });
+      await expect(admission.admits(model.id)).resolves.toBe(false);
+      await expect(admission.assert(model.id)).rejects.toMatchObject({
+        additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+      });
+      expect(isFreeTierModel(model.id, model, new Set([model.id]))).toBe(true);
+      await expect(
+        createModelAdmission({
+          user: {},
+          configs: [],
+          models: [model],
+          freeTierAllowedModels: new Set([model.id]),
+        }).assert(model.id)
+      ).resolves.toBeUndefined();
+      await expect(
+        createModelAdmission({
+          user: {},
+          configs: [],
+          models: [model],
+          freeTierAllowedModels: allowedModels,
+          getEntitlements: async () => [PAID_PLAN_ENTITLEMENT_KEY],
+        }).assert(model.id)
+      ).resolves.toBeUndefined();
+    }
+  );
 });
 
 describe('loadFreeTierAllowedModels', () => {

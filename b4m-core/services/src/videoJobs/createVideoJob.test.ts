@@ -41,6 +41,7 @@ const unusedCredits = {} as CreditHoldAdapters;
 const makeDeps = (overrides: Partial<VideoJobDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();
   const deps: CreateVideoJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createVideoProviderRegistry([new TestVideoProvider()]),
     getSettings: async () => ({ enforceCredits: true, videoGeneration: undefined }),
@@ -74,6 +75,18 @@ describe('createVideoJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+  });
+
+  it('refuses a paid-only model before holding credits or enqueuing work', async () => {
+    const { deps } = makeDeps();
+    const refusal = new Error('paid plan required');
+    vi.mocked(deps.assertModelAdmission).mockRejectedValue(refusal);
+    await expect(
+      createVideoJob({ user: { ...user, adminRoleWithheld: true }, request: validRequest, source: 'api' }, deps)
+    ).rejects.toBe(refusal);
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-video', true);
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
   });
 
   it('holds credits, creates a pending job and enqueues it immediately', async () => {

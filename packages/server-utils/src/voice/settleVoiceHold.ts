@@ -1,3 +1,4 @@
+import { CONVERSATIONAL_VOICE_MODEL_ID } from '@bike4mind/common';
 import { CreditHolderType } from '@bike4mind/common';
 import { creditTransactionRepository, sessionRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -140,7 +141,7 @@ export async function settleVoiceHold(
         await recordVoiceUsage({
           userId: payerId,
           sessionId: hold.id,
-          model: billedCredits !== null ? 'openai-realtime' : 'elevenlabs',
+          model: billedCredits !== null ? 'openai-realtime' : CONVERSATIONAL_VOICE_MODEL_ID,
           credits: unrecorded,
           transactionId: voiceHoldSettleTransactionId(hold.id, hold.voiceSessionStartedAt),
         });

@@ -23,7 +23,7 @@ export type ModelAdmissionInput = {
   enforceCredits?: boolean;
   /**
    * The free-tier allowlist from loadFreeTierAllowedModels; undefined when the gate is off. While set,
-   * a text model outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
+   * a model of any modality outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
    */
   freeTierAllowedModels?: ReadonlySet<string>;
 };
@@ -53,7 +53,7 @@ export async function loadModelConfigurations(
 }
 
 /**
- * The text models a free account may call, or undefined when the free-tier gate is off. The Default API
+ * The models a free account may call, or undefined when the free-tier gate is off. The Default API
  * Model is always included so a free account is never left with no model to chat on. A read failure
  * propagates: this gate fails closed.
  */
@@ -83,15 +83,15 @@ export function isFreeTierExempt(user: Pick<ModelAdmissionInput['user'], 'isAdmi
 }
 
 /**
- * Whether a free account may call the model. Only text models are gated; an id missing from the catalog
- * (`model` undefined) is gated as text so the gate never opens on an unknown model.
+ * Whether a free account may call the model, regardless of modality or catalog presence.
+ * The catalog argument is retained for callers of this exported helper.
  */
 export function isFreeTierModel(
   modelId: string,
-  model: Pick<ModelInfo, 'type'> | undefined,
+  _model: Pick<ModelInfo, 'type'> | undefined,
   allowedModels: ReadonlySet<string>
 ): boolean {
-  return (model !== undefined && model.type !== 'text') || allowedModels.has(modelId);
+  return allowedModels.has(modelId);
 }
 
 /** A text model with no usable per-token price settles at $0, so it cannot run while credits are enforced. */

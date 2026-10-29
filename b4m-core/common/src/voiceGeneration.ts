@@ -1,3 +1,6 @@
+// Conversational voice is configured remotely; this is its billing and admission identifier.
+export const CONVERSATIONAL_VOICE_MODEL_ID = 'elevenlabs';
+
 import z from 'zod';
 import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
