@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { MessageContentObject } from '../types/entities/MessageTypes';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
 import { REPLY_CHOICES_INVALID_REASONS } from '../utils/replyChoices';
@@ -151,7 +152,7 @@ const PromptMetaContextSchema = z.object({
     .array(
       z.object({
         role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
-        content: z.union([z.string(), z.array(z.any())]),
+        content: z.union([z.string(), z.array(z.custom<MessageContentObject>())]),
         fabFileIds: z.array(z.string()).optional(),
       })
     )
@@ -237,7 +238,7 @@ export type ChatToolMode = z.infer<typeof ChatToolModeSchema>;
 
 const PromptMetaFunctionCallSchema = z.object({
   name: z.string().optional(),
-  parameters: z.record(z.string(), z.any()).optional(), // z.any() supports arrays, objects, and all JSON types
+  parameters: z.record(z.string(), z.any()).optional(), // any: PromptMetaInspector renders values as JSX children; unknown is not a ReactNode
   returnValue: z.string().optional(),
   executionTime: z.number().optional(),
   success: z.boolean().optional(),

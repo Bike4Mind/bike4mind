@@ -104,7 +104,6 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         projects: projectRepository,
         invites: inviteRepository,
       },
-      ability: req.ability,
     });
 
     // Same reason as the sibling document list: the token is a redeemable secret with no consumer

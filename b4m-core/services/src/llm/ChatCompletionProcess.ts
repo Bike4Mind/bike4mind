@@ -5,6 +5,7 @@ import {
   IMessage,
   IUserDocument,
   LLMEvents,
+  ISessionDocument,
   IOrganizationDocument,
   Permission,
   SettingKey,
@@ -143,6 +144,7 @@ import {
   isStreamEndedWithoutFinishError,
   type OutputBudgetExhaustedError,
   type ICompletionOptionTools,
+  convertOpenAIToolHistoryToCanonical,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -1971,8 +1973,7 @@ export class ChatCompletionProcess {
     /** Pre-fetched quest from invoke; avoids redundant DB read for wait=true path */
     prefetchedQuest?: IChatHistoryItemDocument;
     /** Pre-fetched session from invoke; avoids redundant DB read for wait=true path */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    prefetchedSession?: any;
+    prefetchedSession?: ISessionDocument | null;
     /** Pre-fetched organization from invoke; avoids redundant DB read for wait=true path */
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
@@ -5779,6 +5780,11 @@ export class ChatCompletionProcess {
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              // The failed attempt left its tool rounds in outboundMessages in its own provider's
+              // shape, which another backend may not read (OpenAI-shape tool_calls reach Anthropic as null).
+              if (currentModel.backend !== failedModel.backend) {
+                outboundMessages = convertOpenAIToolHistoryToCanonical(outboundMessages);
+              }
               servingModel.current = currentModel;
               if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
               primaryFailureReason ??= sanitizeTelemetryError(lastError);

@@ -496,8 +496,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     async (text: string) => {
       const attached = draft.attachments;
       // Cleared before the await so the row does not sit under the composer while the turn is
-      // accepted; a rejected turn restores nothing, but its files are still on disk and named
-      // in the error.
+      // accepted; a rejected turn restores its text (see useConversation.send) but not its
+      // attachments.
       draft.clear();
       const accepted = await conversation.send(text, attached);
       // Main knows something this window did not: reread so the banner and Send gate catch up.
