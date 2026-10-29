@@ -3370,7 +3370,8 @@ export const settingsMap = {
     defaultValue: 40,
     min: 1,
     int: true,
-    description: 'Max OAuth initiation requests, and separately callback requests, per IP per window.',
+    description:
+      'Max OAuth initiation requests, and separately callback requests, per IP per window. Successful sign-ins count too, so raise this for a busy shared NAT (office or campus SSO onboarding); turning off OAuth Abuse Auto-Block does not affect this limit.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.AUTH_ABUSE.id,
     order: 6,
