@@ -8,6 +8,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { insufficientCreditsError } from '@bike4mind/common';
 
+const { quotaAdmission, quotaRelease } = vi.hoisted(() => {
+  const release = vi.fn().mockResolvedValue(undefined);
+  return { quotaAdmission: vi.fn().mockResolvedValue({ release }), quotaRelease: release };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quotaAdmission }));
+
 const m = vi.hoisted(() => ({
   enforce: true,
   hold: vi.fn(),
@@ -156,4 +162,42 @@ describe('POST /api/fabfiles/{id}/auto-rename metering', () => {
     expect(m.hold).not.toHaveBeenCalled();
     expect(m.settleHold).not.toHaveBeenCalled();
   });
+});
+
+it('enforces the API completion quota before invoking the model', async () => {
+  const refusal = new Error('completion quota exhausted');
+  quotaAdmission.mockRejectedValueOnce(refusal);
+  await expect(call()).rejects.toBe(refusal);
+  expect(quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: expect.any(Object) }), {
+    holdSlot: true,
+  });
+  expect(m.complete).not.toHaveBeenCalled();
+});
+
+it.each(['success', 'failure'] as const)('keeps a timed-out provider slot through late %s', async outcome => {
+  vi.useFakeTimers();
+  let settle: () => void = () => {};
+  m.complete.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        settle = () => {
+          if (outcome === 'failure') reject(new Error('late provider failure'));
+          else resolve();
+        };
+      })
+  );
+  try {
+    const pending = call();
+    const rejected = expect(pending).rejects.toMatchObject({ statusCode: 400 });
+    await vi.advanceTimersByTimeAsync(30_001);
+    await rejected;
+    expect(m.complete).toHaveBeenCalledTimes(1);
+    expect(quotaRelease).not.toHaveBeenCalled();
+    settle();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(quotaRelease).toHaveBeenCalledTimes(1);
+  } finally {
+    settle();
+    vi.useRealTimers();
+  }
 });

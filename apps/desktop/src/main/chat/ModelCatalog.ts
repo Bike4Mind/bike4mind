@@ -78,7 +78,7 @@ export class ModelCatalog {
 
   constructor(
     private readonly deps: ModelCatalogDeps,
-    private readonly local = new OllamaLocal()
+    private readonly local: Pick<OllamaLocal, 'models'> = new OllamaLocal()
   ) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */

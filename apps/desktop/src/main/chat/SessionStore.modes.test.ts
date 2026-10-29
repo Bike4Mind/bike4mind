@@ -168,6 +168,13 @@ describe('SessionStore code sessions', () => {
     expect((await store.get(created.id))?.project?.contextDirectories).toEqual(['/repos/another']);
   });
 
+  it('reports no removal for an absent path even when the session has a project', async () => {
+    const created = await store.create(MODEL, { project: PROJECT });
+    expect(await store.removeContextDirectory(created.id, '/not-granted')).toBeNull();
+    expect((await store.get(created.id))?.project?.contextDirectories).toEqual(PROJECT.contextDirectories);
+    expect(await store.removeContextDirectory('missing-session', '/repos/reference')).toBeNull();
+  });
+
   it('refuses a context directory on a Chat session, which has no project to put it in', async () => {
     const created = await store.create();
     expect(await store.addContextDirectory(created.id, '/repos/another')).toBeNull();

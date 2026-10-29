@@ -22,7 +22,6 @@ import {
   Stack,
   Option,
   Table,
-  Textarea,
   Typography,
 } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -74,7 +73,7 @@ interface AdjustSeatsModalProps {
   seatsValue: number;
   setSeatsValue: (value: number) => void;
   onClose: () => void;
-  onSubmit: () => void;
+  onSubmit: (reason: string) => void;
   isPending: boolean;
 }
 
@@ -87,6 +86,7 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
   isPending,
 }) => {
   const { data: pendingUsers } = useGetPendingOrganizationUsers(org.id);
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const { maxSeats } = useTeamSeatLimits();
   const pendingCount = pendingUsers?.length ?? 0;
   const acceptedTeamSize = (org.users?.length ?? 0) + 1; // +1 for owner
@@ -117,11 +117,24 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
             data-testid="seats-input"
           />
         </FormControl>
+        <Box sx={{ mt: 2 }}>
+          <ReasonPicker
+            presets={ADMIN_REASON_PRESETS.seatChange}
+            value={reason}
+            onChange={setReason}
+            data-testid="seats-reason-input"
+          />
+        </Box>
         <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
           <Button variant="outlined" color="neutral" onClick={onClose}>
             Cancel
           </Button>
-          <Button loading={isPending} onClick={onSubmit} data-testid="seats-submit">
+          <Button
+            loading={isPending}
+            disabled={!isAdminReasonComplete(reason)}
+            onClick={() => onSubmit(composeAdminReason(reason))}
+            data-testid="seats-submit"
+          >
             Update seats
           </Button>
         </Stack>
@@ -152,7 +165,8 @@ const OrganizationsTab: React.FC = () => {
   const [seatsValue, setSeatsValue] = useState<number>(4);
 
   const [revokeOrg, setRevokeOrg] = useState<WithId<IOrganizationDocument> | null>(null);
-  const [revokeReason, setRevokeReason] = useState('');
+  const [reconcileOrg, setReconcileOrg] = useState<WithId<IOrganizationDocument> | null>(null);
+  const [convertOrg, setConvertOrg] = useState<WithId<IOrganizationDocument> | null>(null);
 
   useOrganizationsTabUrlSync();
   const [params, setParams] = useOrganizationsParams();
@@ -256,10 +270,10 @@ const OrganizationsTab: React.FC = () => {
     }
   };
 
-  const handleAdjustSeats = async () => {
+  const handleAdjustSeats = async (reason: string) => {
     if (!seatsOrg) return;
     try {
-      await seatsMutation.mutateAsync({ organizationId: seatsOrg.id, seats: seatsValue });
+      await seatsMutation.mutateAsync({ organizationId: seatsOrg.id, seats: seatsValue, reason });
       setSeatsOrg(null);
       refetch();
     } catch {
@@ -267,21 +281,26 @@ const OrganizationsTab: React.FC = () => {
     }
   };
 
-  const handleReconcileSeats = async (org: WithId<IOrganizationDocument>) => {
+  const handleReconcileSeats = async (reason: string) => {
+    if (!reconcileOrg) return;
     try {
-      await reconcileMutation.mutateAsync({ organizationId: org.id });
+      await reconcileMutation.mutateAsync({ organizationId: reconcileOrg.id, reason });
+      setReconcileOrg(null);
       refetch();
     } catch {
       // toast handled
     }
   };
 
-  const handleConvertToPaid = async (org: WithId<IOrganizationDocument>) => {
+  const handleConvertToPaid = async (reason: string) => {
+    if (!convertOrg) return;
     try {
       const { checkoutUrl } = await convertMutation.mutateAsync({
-        organizationId: org.id,
+        organizationId: convertOrg.id,
         callbackUrl: window.location.href,
+        reason,
       });
+      setConvertOrg(null);
       if (checkoutUrl) {
         await navigator.clipboard?.writeText(checkoutUrl).catch(() => undefined);
         toast.success('Checkout URL copied to clipboard');
@@ -292,15 +311,11 @@ const OrganizationsTab: React.FC = () => {
     }
   };
 
-  const handleRevoke = async () => {
+  const handleRevoke = async (reason: string) => {
     if (!revokeOrg) return;
     try {
-      await revokeMutation.mutateAsync({
-        organizationId: revokeOrg.id,
-        reason: revokeReason.trim() || undefined,
-      });
+      await revokeMutation.mutateAsync({ organizationId: revokeOrg.id, reason });
       setRevokeOrg(null);
-      setRevokeReason('');
       refetch();
     } catch {
       // toast handled
@@ -506,18 +521,12 @@ const OrganizationsTab: React.FC = () => {
                             </MenuItem>
                           )}
                           {!isGranted && !org.personal && (
-                            <MenuItem
-                              data-testid={`reconcile-seats-${org.id}`}
-                              onClick={() => handleReconcileSeats(org)}
-                            >
+                            <MenuItem data-testid={`reconcile-seats-${org.id}`} onClick={() => setReconcileOrg(org)}>
                               Reconcile seats from Stripe
                             </MenuItem>
                           )}
                           {isGranted && (
-                            <MenuItem
-                              data-testid={`convert-to-paid-${org.id}`}
-                              onClick={() => handleConvertToPaid(org)}
-                            >
+                            <MenuItem data-testid={`convert-to-paid-${org.id}`} onClick={() => setConvertOrg(org)}>
                               Convert to paid
                             </MenuItem>
                           )}
@@ -527,7 +536,6 @@ const OrganizationsTab: React.FC = () => {
                               color="danger"
                               onClick={() => {
                                 setRevokeOrg(org);
-                                setRevokeReason('');
                               }}
                             >
                               Revoke grant
@@ -635,16 +643,13 @@ const OrganizationsTab: React.FC = () => {
                               {!isGranted && !org.personal && (
                                 <MenuItem
                                   data-testid={`reconcile-seats-${org.id}`}
-                                  onClick={() => handleReconcileSeats(org)}
+                                  onClick={() => setReconcileOrg(org)}
                                 >
                                   Reconcile seats from Stripe
                                 </MenuItem>
                               )}
                               {isGranted && (
-                                <MenuItem
-                                  data-testid={`convert-to-paid-${org.id}`}
-                                  onClick={() => handleConvertToPaid(org)}
-                                >
+                                <MenuItem data-testid={`convert-to-paid-${org.id}`} onClick={() => setConvertOrg(org)}>
                                   Convert to paid
                                 </MenuItem>
                               )}
@@ -654,7 +659,6 @@ const OrganizationsTab: React.FC = () => {
                                   color="danger"
                                   onClick={() => {
                                     setRevokeOrg(org);
-                                    setRevokeReason('');
                                   }}
                                 >
                                   Revoke grant
@@ -834,41 +838,43 @@ const OrganizationsTab: React.FC = () => {
         />
       )}
 
-      {/* Revoke Modal */}
-      {revokeOrg && (
-        <Modal open onClose={() => setRevokeOrg(null)}>
-          <ModalDialog>
-            <ModalClose />
-            <Typography level="h4">Revoke grant — {revokeOrg.name}</Typography>
-            <Divider sx={{ my: 2 }} />
-            <Typography level="body-sm" sx={{ mb: 1 }}>
-              This will mark the org&apos;s active grant as canceled. Members keep access until you remove them.
-            </Typography>
-            <FormControl>
-              <FormLabel>Reason (optional)</FormLabel>
-              <Textarea
-                minRows={2}
-                value={revokeReason}
-                onChange={e => setRevokeReason(e.target.value)}
-                data-testid="revoke-reason-input"
-              />
-            </FormControl>
-            <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
-              <Button variant="outlined" color="neutral" onClick={() => setRevokeOrg(null)}>
-                Cancel
-              </Button>
-              <Button
-                color="danger"
-                loading={revokeMutation.isPending}
-                onClick={handleRevoke}
-                data-testid="revoke-submit"
-              >
-                Revoke
-              </Button>
-            </Stack>
-          </ModalDialog>
-        </Modal>
-      )}
+      <ActionDialog
+        open={!!revokeOrg}
+        onClose={() => setRevokeOrg(null)}
+        title={`Revoke grant for ${revokeOrg?.name ?? 'organization'}`}
+        description="This will mark the org's active grant as canceled. Members keep access until you remove them."
+        reasonPresets={ADMIN_REASON_PRESETS.compChange}
+        confirmLabel="Revoke"
+        tone="danger"
+        pending={revokeMutation.isPending}
+        onConfirm={handleRevoke}
+        data-testid="org-revoke-dialog"
+        testIds={{ reason: 'revoke-reason-input', confirm: 'revoke-submit' }}
+      />
+
+      <ActionDialog
+        open={!!reconcileOrg}
+        onClose={() => setReconcileOrg(null)}
+        title={`Reconcile seats for ${reconcileOrg?.name ?? 'organization'}`}
+        description="Sets the seat count to the quantity Stripe bills for. Stripe is not changed."
+        reasonPresets={ADMIN_REASON_PRESETS.seatChange}
+        confirmLabel="Reconcile seats"
+        pending={reconcileMutation.isPending}
+        onConfirm={handleReconcileSeats}
+        data-testid="org-reconcile-seats-dialog"
+      />
+
+      <ActionDialog
+        open={!!convertOrg}
+        onClose={() => setConvertOrg(null)}
+        title={`Convert ${convertOrg?.name ?? 'organization'} to paid`}
+        description={`Creates a Stripe checkout link for ${convertOrg?.seats ?? 0} seats and copies it to your clipboard. Nothing is charged until the customer pays.`}
+        reasonPresets={ADMIN_REASON_PRESETS.paidConversion}
+        confirmLabel="Create checkout link"
+        pending={convertMutation.isPending}
+        onConfirm={handleConvertToPaid}
+        data-testid="org-convert-to-paid-dialog"
+      />
     </Sheet>
   );
 };

@@ -1,6 +1,7 @@
 import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import {
   type ISubscription,
   SubscriptionMetadata,
@@ -92,6 +93,7 @@ export const handler = withEventContext(async (event, logger) => {
       canceledAt: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
       priceId: item.price.id,
       quantity: item.quantity ?? 1,
+      ...stripeMirrorFields(subscription),
     });
     owned = before !== null;
 

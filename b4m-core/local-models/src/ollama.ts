@@ -4,6 +4,7 @@ import { LocalRuntimeError, ModelNotFoundError, RuntimeHttpError, RuntimeProtoco
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   HEALTH_TIMEOUT_MS,
+  chooseRuntimeId,
   connectionError,
   describeError,
   runtimeEndpointId,
@@ -36,6 +37,11 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 
 export interface OllamaRuntimeOptions {
   baseUrl?: string;
+  /**
+   * Replaces the address-derived id, so a saved server keeps its identity when its address changes and two
+   * servers reached at the same address (one over SSH) stay apart.
+   */
+  id?: string;
   fetch?: FetchLike;
   /** Sent as `Authorization: Bearer <apiKey>`, for a daemon behind an authenticating proxy. */
   apiKey?: string;
@@ -179,7 +185,11 @@ export class OllamaRuntime implements LocalRuntime {
 
   constructor(options: OllamaRuntimeOptions = {}) {
     this.baseUrl = requireBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_URL, 'ollama');
-    this.id = this.baseUrl === DEFAULT_OLLAMA_URL ? 'ollama' : `ollama:${runtimeEndpointId(this.baseUrl)}`;
+    this.id = chooseRuntimeId(
+      options.id,
+      this.baseUrl === DEFAULT_OLLAMA_URL ? 'ollama' : `ollama:${runtimeEndpointId(this.baseUrl)}`,
+      'ollama'
+    );
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.healthTimeoutMs = options.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
     this.client = {

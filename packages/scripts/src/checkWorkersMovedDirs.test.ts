@@ -106,7 +106,7 @@ const MOVED_MODULES = [
   {
     from: 'apps/client/server/security',
     to: 'apps/workers/src/security',
-    stems: ['alertProcessor'],
+    stems: ['alertProcessor', 'cloudScan'],
   },
   {
     from: 'apps/client/server/security/attackSimulation',
@@ -125,6 +125,7 @@ const MOVED_MODULES = [
     stems: ['manageDatabase', 'seedDatabase', 'dropPreviewDatabase'],
   },
   { from: 'apps/client/server/utils', to: 'apps/workers/src/media', stems: ['imageProcessor'] },
+  { from: 'apps/client/server/utils', to: 'apps/workers/src/mcp', stems: ['mcpCall'] },
   // `tools.` also covers tools.handler and tools.wiring, but not toolsHandler.shared, which stays.
   { from: 'apps/client/server/cli', to: 'apps/workers/src/cli', stems: ['tools'] },
   { from: 'apps/client/server/queueHandlers', to: 'apps/workers/src/queueHandlers', stems: ['slackQuestProcessor'] },
@@ -234,6 +235,9 @@ describe('directories and modules moved out of apps/client/server stay moved', (
         'apps/workers/src/security/alertProcessor.handler',
         // infra/cron.ts
         'apps/workers/src/security/attackSimulation/runner.handler',
+        'apps/workers/src/security/cloudScan.handler',
+        // infra/mcp.ts, which no other moved handler lives in.
+        'apps/workers/src/mcp/mcpCall.handler',
         // infra/agentExecutor.ts; the Lambda and the continuation subscriber share this export.
         'apps/workers/src/queueHandlers/agentExecutor.handler',
         // infra/buckets.ts

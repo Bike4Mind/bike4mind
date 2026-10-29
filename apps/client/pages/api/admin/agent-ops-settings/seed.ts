@@ -1,6 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@client/server/middlewares/adminApi';
 import { agentOpsSettingsRepository } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const DEFAULT_META_PROMPT = `You are the **PromptCrafter**, an expert at creating rich, personality-driven system prompts for AI agents that have REAL AGENCY, PURPOSE, and MISSIONS. These are not simple chatbots - they are beings with their own burning goals, active projects, and authentic motivations.
 
@@ -59,11 +60,18 @@ const handler = adminApi({
 
     const updatedSettings = await agentOpsSettingsRepository.addMetaPromptVersion(
       DEFAULT_META_PROMPT,
-      'Initial PromptCrafter meta-prompt for agent system prompt generation',
-      req.user!.id
+      req.user!.id,
+      'Initial PromptCrafter meta-prompt for agent system prompt generation'
     );
 
     await agentOpsSettingsRepository.activateMetaPromptVersion(1);
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.agent_ops.seeded',
+      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+      summary: 'seeded Agent Ops settings with the initial meta-prompt',
+      details: { version: 1 },
+    });
 
     res.json({
       success: true,

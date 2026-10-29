@@ -29,8 +29,8 @@ const STATUS_COLORS = {
 
 /** Categorical slots in SIGNUP_SIGNALS order, so a signal keeps its color whatever the range. */
 const SIGNAL_COLORS = {
-  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6'],
-  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9'],
+  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#0f8c9e', '#9a6a3a', '#b03fc4'],
+  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#2aa9ba', '#b8875a', '#c869d6'],
 } as const;
 
 type SignupChartProps = {

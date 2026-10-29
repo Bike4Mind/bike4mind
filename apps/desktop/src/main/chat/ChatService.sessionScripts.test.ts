@@ -22,8 +22,8 @@ function toolTurn(id: string, name: string, input: Record<string, unknown>): str
 
 type Round = [string, Record<string, unknown>];
 
-// npm and npx stubs first on PATH. What is checked here is whether a command is asked about, and a
-// real npm boot plus the vitest or prettier it runs can outlast the 5 s settle wait on a loaded runner.
+// Tool stubs first on PATH. These tests check approval decisions; spawning real git or package
+// runners can outlast the 5 s settle wait on a loaded CI machine.
 const stub = vi.hoisted(() => ({ bin: '' }));
 vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => `${stub.bin}:${process.env.PATH ?? ''}` }));
 
@@ -50,7 +50,7 @@ describe('ChatService running a script written in the same session', () => {
 
   beforeAll(async () => {
     stub.bin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-scripts-bin-')));
-    for (const tool of ['npm', 'npx']) {
+    for (const tool of ['git', 'npm', 'npx']) {
       await writeFile(join(stub.bin, tool), '#!/bin/sh\nexit 0\n', 'utf8');
       await chmod(join(stub.bin, tool), 0o755);
     }

@@ -1,8 +1,44 @@
-import { Button, Input, Option, Select, Stack } from '@mui/joy';
+import { Input, Stack } from '@mui/joy';
+import SearchIcon from '@mui/icons-material/Search';
 import type { AdminListState } from './useAdminListUrlState';
+import { FilterChip } from './FilterChip';
 import { adminFocus, adminFocusScope } from './adminStyles';
 
 export type AdminFilter = { id: string; label: string; options: readonly { value: string; label: string }[] };
+
+/** The 34 px list search box; the Users list and FilterBar share it. */
+export function AdminSearchInput({
+  value,
+  onChange,
+  label,
+  'data-testid': testId = 'admin-filter-search-input',
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+  'data-testid'?: string;
+}) {
+  return (
+    <Input
+      value={value}
+      placeholder={`${label} (/)`}
+      size="sm"
+      startDecorator={<SearchIcon sx={{ fontSize: 16, color: 'admin.inkMuted' }} />}
+      slotProps={{
+        input: {
+          'aria-label': label,
+          'data-admin-search': true,
+          'aria-keyshortcuts': '/',
+          'data-testid': testId,
+          maxLength: 500,
+        },
+      }}
+      sx={{ ...adminFocus, flex: '1 1 16rem', minWidth: '12rem', maxWidth: '26rem', minHeight: 34, fontSize: 13 }}
+      onChange={event => onChange(event.target.value)}
+    />
+  );
+}
+
 export function FilterBar({
   state,
   filters = [],
@@ -17,51 +53,26 @@ export function FilterBar({
   search?: boolean;
 }) {
   return (
-    <Stack sx={adminFocusScope} direction="row" flexWrap="wrap" gap={1} data-testid="admin-filter-bar">
+    <Stack
+      sx={adminFocusScope}
+      direction="row"
+      flexWrap="wrap"
+      alignItems="center"
+      gap={1}
+      data-testid="admin-filter-bar"
+    >
       {search && (
-        <Input
-          value={state.query}
-          placeholder={`${searchLabel} (/)`}
-          slotProps={{
-            input: {
-              'aria-label': searchLabel,
-              'data-admin-search': true,
-              'aria-keyshortcuts': '/',
-              'data-testid': 'admin-filter-search-input',
-              maxLength: 500,
-            },
-          }}
-          sx={{ ...adminFocus, flex: '1 1 12rem' }}
-          onChange={event => onChange({ query: event.target.value, view: '' })}
-        />
+        <AdminSearchInput value={state.query} label={searchLabel} onChange={query => onChange({ query, view: '' })} />
       )}
       {filters.map(filter => (
-        <Stack key={filter.id} direction="row" gap={1}>
-          <Select
-            aria-label={filter.label}
-            placeholder={filter.label}
-            value={state.filters[filter.id] || null}
-            data-testid={`admin-filter-${filter.id}`}
-            sx={{ borderStyle: state.filters[filter.id] ? 'solid' : 'dashed' }}
-            onChange={(_, value) => onChange({ filters: { ...state.filters, [filter.id]: value ?? '' }, view: '' })}
-          >
-            {filter.options.map(option => (
-              <Option key={option.value} value={option.value} data-testid={`admin-filter-${filter.id}-${option.value}`}>
-                {option.label}
-              </Option>
-            ))}
-          </Select>
-          {state.filters[filter.id] && (
-            <Button
-              variant="plain"
-              aria-label={`Clear ${filter.label}`}
-              data-testid={`admin-filter-clear-${filter.id}-btn`}
-              onClick={() => onChange({ filters: { ...state.filters, [filter.id]: '' }, view: '' })}
-            >
-              Clear
-            </Button>
-          )}
-        </Stack>
+        <FilterChip
+          key={filter.id}
+          id={filter.id}
+          label={filter.label}
+          value={state.filters[filter.id] || undefined}
+          options={filter.options}
+          onChange={value => onChange({ filters: { ...state.filters, [filter.id]: value ?? '' }, view: '' })}
+        />
       ))}
     </Stack>
   );

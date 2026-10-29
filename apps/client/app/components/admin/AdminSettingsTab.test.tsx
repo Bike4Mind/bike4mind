@@ -12,6 +12,11 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('./EmbeddingProviderLimits', () => ({ EmbeddingProviderLimits: () => null }));
 vi.mock('./AdminOperationsModelSetting', () => ({ AdminOperationsModelSetting: () => null }));
+vi.mock('./AdminTurnstileStatusNotice', () => ({
+  AdminTurnstileStatusNotice: ({ enabled }: { enabled: boolean }) => (
+    <div data-testid="admin-turnstile-notice" data-enabled={String(enabled)} />
+  ),
+}));
 vi.mock('./ScopedOverridesByScope', () => ({ ScopedOverridesByScope: () => null }));
 vi.mock('./AdminLogoUpload', () => ({ default: () => null }));
 vi.mock('./AdminGenerationModelsSetting', () => ({
@@ -74,6 +79,7 @@ const findTab = (category: string) =>
 
 const aiTab = findTab(settingsMap.videoGeneration.category);
 const securityTab = findTab(settingsMap.ImageModerationReviewerEmails.category);
+const usersTab = findTab(settingsMap.turnstileEnabled.category);
 
 // The section comes from the URL, so seed it rather than click a tab: the mocked navigate does not
 // write the search back.
@@ -228,6 +234,19 @@ describe('AdminSettingsTab recommended models setting', () => {
 
     expect(screen.getByTestId('admin-recommended-models-card')).toBeTruthy();
     expect(screen.queryByTestId('generic-setting-recommendedModelIds')).toBeNull();
+  });
+});
+
+describe('AdminSettingsTab Turnstile notice', () => {
+  it.each([
+    ['true', 'true'],
+    ['false', 'false'],
+    [true, 'true'],
+    [false, 'false'],
+  ])('passes enabled for a saved turnstileEnabled of %j', (saved, expected) => {
+    serverSettings = [{ settingName: 'turnstileEnabled', settingValue: saved }];
+    renderTab(usersTab);
+    expect(screen.getByTestId('admin-turnstile-notice').getAttribute('data-enabled')).toBe(expected);
   });
 });
 

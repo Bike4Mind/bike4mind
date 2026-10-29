@@ -63,11 +63,13 @@ interface Deferred {
   options: PullOptions | undefined;
 }
 
+type Health = { ok: boolean; version: string | null; error: string | null };
+
 function harness(options: { detail?: HubModelDetail; verified?: string | null; healthy?: boolean } = {}) {
   const pulls: Deferred[] = [];
   const runtime = {
     baseUrl: 'http://127.0.0.1:11434',
-    health: vi.fn(async () =>
+    health: vi.fn(async (): Promise<Health> =>
       options.healthy === false
         ? { ok: false, version: null, error: 'connection refused' }
         : { ok: true, version: '0.40.11', error: null }
@@ -148,6 +150,21 @@ describe('ModelHubService pulls', () => {
     await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
     expect(service.pulls()).toEqual([]);
     expect(installedChanged).not.toHaveBeenCalled();
+  });
+
+  it('reports a cancel during the Ollama check as a cancel, not as Ollama being down', async () => {
+    const { service, runtime, pulls } = harness();
+    let release: (health: Health) => void = () => undefined;
+    runtime.health.mockImplementationOnce(() => new Promise<Health>(resolve => (release = resolve)));
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(runtime.health).toHaveBeenCalledTimes(1));
+
+    service.cancel(pullKey(request.repo, request.buildId));
+    release({ ok: false, version: null, error: 'timed out' });
+
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+    expect(service.pulls()).toEqual([]);
+    expect(pulls).toHaveLength(0);
   });
 
   it('refuses a second pull of the same build while one runs', async () => {
@@ -277,10 +294,34 @@ describe('ModelHubService pulls', () => {
   });
 
   it('checks the current revision at pull time, so a license change after review is refused', async () => {
-    const { service, hub, runtime } = harness();
+    let current = detail();
+    const fetch = vi.fn(async (input: string) => {
+      const path = new URL(input).pathname;
+      if (path === `/api/models/${REPO}/revision/main`)
+        return Response.json({ ...current, sha: current.revision, cardData: { license: current.licenses } });
+      if (path === `/api/models/${REPO}/tree/${current.revision}`)
+        return Response.json(
+          current.builds.flatMap(build =>
+            build.files.map(file => ({
+              type: 'file',
+              path: file.path,
+              size: file.sizeBytes,
+              lfs: { oid: file.sha256, size: file.sizeBytes },
+            }))
+          )
+        );
+      return new Response('', { status: 404 });
+    });
+    const { runtime } = harness();
+    const service = new ModelHubService({
+      runtime,
+      hub: new HuggingFaceHub({ endpoint: 'https://license-refresh.test', fetch }),
+      onPullsChanged: () => {},
+      onInstalledChanged: () => {},
+    });
     const shown = await service.detail(REPO);
     if (!shown.ok) throw new Error(shown.error.message);
-    hub.getModel.mockResolvedValue(detail({ licenses: ['cc-by-nc-4.0'], revision: 'c'.repeat(40) }));
+    current = detail({ licenses: ['cc-by-nc-4.0'], revision: 'c'.repeat(40) });
 
     const result = await service.pull({ ...request, revision: shown.model.revision });
     expect(result).toMatchObject({ ok: false, error: { kind: 'changed' }, listed: false });

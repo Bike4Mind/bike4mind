@@ -158,7 +158,6 @@ export function SignupActivityPanel({
               label="Signups by period"
               onRetry={() => query.refetch()}
               testId="users-signup-table"
-              pagination
               empty={<Typography level="body-sm">No signups in this range.</Typography>}
               columns={[
                 {

@@ -6,6 +6,7 @@ import Warning from '@mui/icons-material/Warning';
 import { useGetAllRecentSecurityEvents } from '@client/app/hooks/data/admin';
 import type { UserSecurityEvent, SuspiciousPatternSummary } from '@client/app/hooks/data/admin';
 import type { IAuthFailLogDocument } from '@bike4mind/database';
+import { SupportAccessActivity } from './SupportAccessActivity';
 
 const RecentActivityTab: React.FC = () => {
   const theme = useTheme();
@@ -15,6 +16,7 @@ const RecentActivityTab: React.FC = () => {
 
   return (
     <Box data-testid="recent-activity-tab" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <SupportAccessActivity />
       {/* Header */}
       <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2 }}>
         <Stack direction="row" alignItems="center" gap={1.5}>

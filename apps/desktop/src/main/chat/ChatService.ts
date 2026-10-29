@@ -55,11 +55,13 @@ import {
   NO_LOCAL_MODEL,
   parseLocalModelId,
   pickLocalModel,
+  SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import type { AppWorktree } from '@shared/worktreeRemoval';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
 import {
   REQUEST_DIRECTORY_TOOL_NAME,
@@ -75,6 +77,8 @@ import {
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import type { CapabilityLedger } from './capabilities/CapabilityLedger';
+import { capabilityFor, capabilityScope } from './capabilities/approvalCapabilities';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName, suggestBranchName } from './project/branchName';
@@ -82,6 +86,7 @@ import {
   branchCheckouts,
   branchExists,
   checkoutBranch,
+  containerDirectory,
   currentBranch,
   defaultBaseBranch,
   isGitDirectory,
@@ -99,7 +104,10 @@ import { ProjectContextCache } from './project/projectContext';
 import {
   hasAppWorkspaceBranch,
   inspectWorktreeRemoval,
+  listAppWorktrees,
+  removeOrphanWorktree,
   removeSessionWorktree,
+  sweepSafeOrphans,
   prefetchBase,
   resolveWorkspace,
   type SpareWorktrees,
@@ -126,6 +134,8 @@ import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
 import { OllamaLocal } from './OllamaLocal';
+import type { LocalChat } from './localChat';
+import { ServerCredentialsError } from '../modelServers/errors';
 import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
 import type { LocalHistory } from './LocalHistory';
 import type { LocalHistoryResult } from '@shared/history';
@@ -375,16 +385,16 @@ const SUMMARY_SHRINK_RETRIES = 2;
  * MAX_CONCURRENT_SPAWNED draws: a person spending their own attention on each turn is not the
  * runaway this guards against.
  */
-const MAX_MESSAGE_HOPS = 3;
+const MAX_MESSAGE_HOPS = 5;
 
 /**
  * How many messages one turn may send, which bounds the FAN where the hop count bounds the
- * chain. Neither is sufficient alone: without this, each turn in a 3-hop chain could message
+ * chain. Neither is sufficient alone: without this, each turn in a 5-hop chain could message
  * every session in the project and the total would still be "finite".
  *
- * Together they cap one user turn at 2 + 4 + 8 = 14 relayed turns in the worst case. That
- * bound is structural and is the only one: session_send is not held at the approval gate in
- * every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
+ * Together they cap one user turn at 2 + 4 + 8 + 16 + 32 = 62 relayed turns in the worst case.
+ * That bound is structural and is the only one: session_send is not held at the approval gate
+ * in every mode, so these two numbers are what keeps a chain finite. See riskAssessment.
  */
 const MAX_SENDS_PER_TURN = 2;
 
@@ -416,6 +426,7 @@ export interface ChatServiceDeps {
    */
   permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
     Partial<Pick<PermissionService, 'dispose'>>;
+  capabilities?: Pick<CapabilityLedger, 'grant' | 'revokeMatching'>;
   /** Where each approval decision is appended, across sessions. Absent in tests that do not read it. */
   approvalLog?: Pick<ApprovalLog, 'append'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
@@ -447,7 +458,8 @@ export interface ChatServiceDeps {
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
   prepareImage?: ImageContext['prepare'];
   history?: LocalHistory;
-  local?: OllamaLocal;
+  /** This computer's Ollama and the saved model servers; see modelServers/LocalModels. */
+  local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
   /**
@@ -1248,7 +1260,9 @@ export class ChatService {
         },
       });
       const workspace = { workspaceBranch: resolved.branch, workingDirectory: resolved.workingDirectory };
-      const summary = await this.deps.store.updateProjectWorkspace(session.id, workspace);
+      const summary = await this.withWorkspaceBindings(() =>
+        this.deps.store.updateProjectWorkspace(session.id, workspace)
+      );
       if (!summary) return { error: 'That conversation no longer exists.' };
       // The sidebar row says "Preparing worktree..." off this project until it hears otherwise.
       this.deps.summaryChanged?.(summary);
@@ -1315,6 +1329,13 @@ export class ChatService {
     const project = session.project;
     if (!project || !(await isGitDirectory(project.workingDirectory))) return project;
 
+    return this.withWorkspaceBindings(() => this.repairBareWorkingDirectoryWithWorkspaceLease(session, project));
+  }
+
+  private async repairBareWorkingDirectoryWithWorkspaceLease(
+    session: ChatSession,
+    project: ChatProject
+  ): Promise<ChatProject | undefined> {
     let workingDirectory = project.directory;
     if (project.workspace && project.branch) {
       try {
@@ -1407,10 +1428,34 @@ export class ChatService {
   }
 
   /** Also any time: the running turn drops the folder before its next tool call. */
-  async removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null> {
-    const updated = await this.deps.store.removeContextDirectory(sessionId, directory);
-    if (updated) this.bumpScope(sessionId);
+  async removeContextDirectory(
+    sessionId: string,
+    directory: string,
+    auditCapability = true,
+    expectedScope = this.deps.store.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    const scopeKey = this.deps.store.scopeKey() ?? 'local';
+    const normalizedDirectory = resolve(directory);
+    const updated = await this.deps.store.removeContextDirectory(sessionId, normalizedDirectory, expectedScope);
+    if (updated) {
+      this.bumpScope(sessionId);
+      if (auditCapability)
+        await this.deps.capabilities
+          ?.revokeMatching(
+            grant =>
+              grant.subject.kind === 'session' &&
+              grant.subject.sessionId === sessionId &&
+              grant.subject.scopeKey === scopeKey &&
+              grant.scope.kind === 'path' &&
+              grant.scope.value === normalizedDirectory
+          )
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder revocation: ${String(error)}`));
+    }
     return updated;
+  }
+
+  refreshAccessScopes(): void {
+    for (const sessionId of this.active.keys()) this.bumpScope(sessionId);
   }
 
   private scopeVersion(sessionId: string): number {
@@ -1447,6 +1492,27 @@ export class ChatService {
     const root = session?.project?.workingDirectory;
     if (!root) return this.listSkills(sessionId);
     await this.deps.skills.setTrusted(root, trusted);
+    if (this.deps.capabilities) {
+      if (trusted) {
+        await this.deps.capabilities
+          .grant({
+            subject: { kind: 'project', directory: resolve(root) },
+            capability: 'project-trust',
+            scope: { kind: 'project', value: root },
+            source: 'project-trust',
+          })
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project trust: ${String(error)}`));
+      } else {
+        await this.deps.capabilities
+          .revokeMatching(
+            grant =>
+              grant.capability === 'project-trust' &&
+              grant.scope.kind === 'project' &&
+              grant.scope.value === resolve(root)
+          )
+          .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project revocation: ${String(error)}`));
+      }
+    }
     // Trust also decides whether the project's Claude Code files may allow anything.
     this.deps.permissions?.invalidate();
     return this.deps.skills.state(root);
@@ -1529,12 +1595,86 @@ export class ChatService {
     const session = await this.deps.store.get(sessionId);
     // The scan parses every stored conversation; most deletes have no app worktree to inspect.
     if (!hasAppWorkspaceBranch(session?.project)) return null;
-    const others = await this.deps.store.workspaceProjectsExcept(sessionId);
-    const inspection = await inspectWorktreeRemoval(session.project, others);
+    const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+    const inspection = await inspectWorktreeRemoval(
+      session.project,
+      owners.map(owner => owner.project),
+      { owners }
+    );
     if (inspection && this.hasTurnInFlight(sessionId)) {
       return { ...inspection, safe: false, reason: 'Conversation is still running' };
     }
     return inspection;
+  }
+
+  /**
+   * Preparation stays active until its binding is persisted under the same lease as cleanup.
+   */
+  private orphanOptions(titles?: ReadonlyMap<ChatProject, string>) {
+    return {
+      ...(titles ? { titles } : {}),
+      hold: () => (this.preparing.size > 0 ? 'A workspace is being prepared' : null),
+    };
+  }
+
+  private async orphanContext() {
+    const owners = await this.deps.store.workspaceOwnersExcept('');
+    return {
+      projects: owners.map(owner => owner.project),
+      owners,
+      titles: new Map(owners.flatMap(owner => (owner.project ? [[owner.project, owner.title] as const] : []))),
+    };
+  }
+
+  /** A repository the user has already opened here, by project or recent folder; never an arbitrary path. */
+  async isKnownRepository(directory: string, recentFolders: readonly string[]): Promise<boolean> {
+    const containerOf = async (path: string) => {
+      try {
+        return await realpath(await containerDirectory(path));
+      } catch {
+        return null;
+      }
+    };
+    const wanted = await containerOf(directory);
+    if (!wanted) return false;
+    const matches = async (candidates: Iterable<string>) => {
+      for (const known of new Set(candidates)) {
+        if ((await containerOf(known)) === wanted) return true;
+      }
+      return false;
+    };
+    // Recent folders first: the Settings view lists exactly those, so the store is rarely read.
+    if (await matches(recentFolders)) return true;
+    const owners = await this.deps.store.workspaceOwnersExcept('');
+    return matches(owners.flatMap(owner => (owner.project ? [owner.project.directory] : [])));
+  }
+
+  async listWorktrees(directory: string): Promise<AppWorktree[]> {
+    const listed = await this.withWorkspaceBindings(async () => {
+      const { projects, titles, owners } = await this.orphanContext();
+      return listAppWorktrees(directory, projects, { ...this.orphanOptions(titles), owners });
+    });
+    // preservedRef is internal to the removal path.
+    return listed.map(({ preservedRef: _preservedRef, ...item }) => item);
+  }
+
+  /** Named paths, or every safe orphan when none are given; each is re-inspected as it is removed. */
+  removeWorktrees(directory: string, paths?: readonly string[]) {
+    return this.withWorkspaceBindings(async () => {
+      const { projects, titles, owners } = await this.orphanContext();
+      const options = { ...this.orphanOptions(titles), owners };
+      if (!paths) return sweepSafeOrphans(directory, projects, options);
+      const results = [];
+      for (const path of paths) results.push(await removeOrphanWorktree(directory, path, projects, options));
+      return results;
+    });
+  }
+
+  /** Only a path currently listed for this repository, so always under the app root, is handed to the file manager. */
+  async revealWorktree(directory: string, path: string, reveal: (path: string) => void): Promise<boolean> {
+    if (!(await this.listWorktrees(directory)).some(item => item.path === path)) return false;
+    reveal(path);
+    return true;
   }
 
   async deleteSession(sessionId: string, removeWorktree = false): Promise<void> {
@@ -1559,8 +1699,12 @@ export class ChatService {
       releaseTerminals = await this.deps.releaseSessionTerminals?.(sessionId);
       this.deps.sessionClosed?.(sessionId);
       await this.deps.browser?.closeSession(sessionId);
-      const others = await this.deps.store.workspaceProjectsExcept(sessionId);
-      await removeSessionWorktree(session.project, others);
+      const owners = await this.deps.store.workspaceOwnersExcept(sessionId);
+      await removeSessionWorktree(
+        session.project,
+        owners.map(owner => owner.project),
+        { owners }
+      );
       await this.cleanupDeletedSession(sessionId, true);
     } finally {
       releaseTerminals?.();
@@ -1574,9 +1718,18 @@ export class ChatService {
     historyScope = this.deps.history?.scopeKey() ?? null
   ): Promise<void> {
     // Before the stop, so an open card is recorded as closed by the delete rather than by a stop.
+    const scopeKey = this.deps.store.scopeKey() ?? 'local';
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     this.stop(sessionId);
+    await this.deps.capabilities
+      ?.revokeMatching(
+        grant =>
+          grant.subject.kind === 'session' &&
+          grant.subject.sessionId === sessionId &&
+          grant.subject.scopeKey === scopeKey
+      )
+      .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit session deletion: ${String(error)}`));
     this.doomLoop.forget(sessionId);
     this.webSearches.forget(sessionId);
     this.scopeVersions.delete(sessionId);
@@ -3031,7 +3184,11 @@ export class ChatService {
       const expired = err instanceof SessionRevokedError || err instanceof NotAuthenticatedError;
       const message = expired ? SESSION_PAUSED_MESSAGE : err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(expired ? 'CHAT: reply paused: the session expired' : `CHAT: reply failed: ${message}`);
-      const stop = expired ? { stopReason: SESSION_EXPIRED_STOP } : {};
+      const stop = expired
+        ? { stopReason: SESSION_EXPIRED_STOP }
+        : err instanceof ServerCredentialsError
+          ? { stopReason: SERVER_CREDENTIALS_STOP }
+          : {};
 
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
@@ -4813,6 +4970,30 @@ export class ChatService {
       await gate.settleCovered(sessionId);
     }
 
+    if (answer.decision === 'always' && this.deps.capabilities) {
+      await this.deps.capabilities
+        .grant({
+          subject: { kind: 'session', sessionId, scopeKey: this.deps.store.scopeKey() ?? 'local' },
+          capability: capabilityFor(call.name, prompt.key),
+          scope: capabilityScope(call.name, prompt.key),
+          approvalKey: prompt.key,
+          source: 'approval',
+        })
+        .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit grant: ${String(error)}`));
+      if (savedEverywhere) {
+        for (const rule of everywhere) {
+          await this.deps.capabilities
+            .grant({
+              subject: { kind: 'desktop-user' },
+              capability: 'tool',
+              scope: { kind: 'permission-rule', value: rule },
+              source: 'permission-rule',
+            })
+            .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit permission grant: ${String(error)}`));
+        }
+      }
+    }
+
     const picked = findOption(prompt, answer.optionId);
     const card = shownCard(answer, requestedAt, askedBecause);
     const decidedBy = cardDecider(answer.settledBy, { ...answer, everywhere: savedEverywhere }, picked, coveredBy);
@@ -5079,6 +5260,19 @@ export class ChatService {
     sessionId: string,
     directory: string
   ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
+    const expectedScope = this.deps.store.scopeKey();
+    return this.withWorkspaceBindings(() =>
+      this.grantSessionDirectoryWithWorkspaceLease(sessionId, directory, expectedScope)
+    );
+  }
+
+  private async grantSessionDirectoryWithWorkspaceLease(
+    sessionId: string,
+    directory: string,
+    expectedScope: string | null
+  ): Promise<{ ok: true; session: ChatSessionSummary } | { ok: false }> {
+    if (this.deps.store.scopeKey() !== expectedScope) return { ok: false };
+    const scopeKey = expectedScope ?? 'local';
     const real = await realpath(directory).catch(() => null);
     const kind = real ? await stat(real).catch(() => null) : null;
     if (real !== directory || !kind?.isDirectory()) return { ok: false };
@@ -5086,10 +5280,18 @@ export class ChatService {
     if (!session) return { ok: false };
     const updated =
       session.mode === 'code' && session.project
-        ? await this.deps.store.addContextDirectory(sessionId, directory)
-        : await this.deps.store.addGrantedDirectory(sessionId, directory);
+        ? await this.deps.store.addContextDirectory(sessionId, directory, expectedScope)
+        : await this.deps.store.addGrantedDirectory(sessionId, directory, expectedScope);
     if (!updated) return { ok: false };
     this.bumpScope(sessionId);
+    await this.deps.capabilities
+      ?.grant({
+        subject: { kind: 'session', sessionId, scopeKey },
+        capability: 'files',
+        scope: { kind: 'path', value: directory },
+        source: 'approval',
+      })
+      .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder grant: ${String(error)}`));
     return { ok: true, session: updated };
   }
 
@@ -5877,7 +6079,7 @@ async function streamRound(...args: Parameters<typeof streamCompletion>): Promis
 }
 
 async function streamLocalRound(
-  local: OllamaLocal,
+  local: LocalChat,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
   signal?: AbortSignal,

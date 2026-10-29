@@ -50,7 +50,7 @@ describe('wafAlarmToSlack handler', () => {
   it('posts a resolved message for OK', async () => {
     await handler(makeEvent(alarm('OK')));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body.text).toBe('✅ Resolved: The WAF auto-blocker has stopped running');
+    expect(body.text).toBe(':white_check_mark: Resolved: The WAF auto-blocker has stopped running');
   });
 
   it('skips INSUFFICIENT_DATA, non-JSON and non-alarm payloads', async () => {

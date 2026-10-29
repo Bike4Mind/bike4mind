@@ -6,6 +6,8 @@ import { appWindows } from '../windows';
 import { ModelHubService } from './ModelHubService';
 
 const MAX_TEXT = 512;
+// Room for a daemon busy finishing a pull on a loaded machine, which the library's short default reads as stopped.
+const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
 
 function text(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_TEXT ? value : null;
@@ -23,7 +25,7 @@ export function registerModels(): ModelHubService {
   };
   const service = new ModelHubService({
     // The same daemon OllamaLocal chats with, so a pulled model shows up in the picker.
-    runtime: new OllamaRuntime(),
+    runtime: new OllamaRuntime({ healthTimeoutMs: RUNTIME_HEALTH_TIMEOUT_MS }),
     hub: new HuggingFaceHub(),
     onPullsChanged: pulls => send(IPC_CHANNELS.modelsPullsChanged, pulls),
     onInstalledChanged: () => send(IPC_CHANNELS.modelsInstalledChanged),

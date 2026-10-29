@@ -61,6 +61,7 @@ describe('refreshCoordinator', () => {
     api.defaults.adapter = realAdapter;
     Reflect.deleteProperty(navigator, 'locks');
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('collapses a burst of concurrent callers into a single exchange', async () => {
@@ -138,6 +139,47 @@ describe('refreshCoordinator', () => {
   });
 
   describe('sibling-tab adoption', () => {
+    it('restores the parked admin when the server reports impersonation expiry', async () => {
+      const replace = vi.fn();
+      const originalLocation = window.location;
+      Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, replace } });
+      const restore = vi
+        .fn()
+        .mockResolvedValue({
+          ok: true,
+          json: async () => ({ accessToken: token('admin', 'restored'), impersonating: false }),
+        });
+      vi.stubGlobal('fetch', restore);
+      api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+        const error = make401(config);
+        error.response!.data = { code: 'impersonation_return_required' };
+        throw error;
+      }) as AxiosAdapter;
+      try {
+        await expect(refreshSession()).resolves.toMatchObject({ impersonating: false });
+        expect(restore).toHaveBeenCalledWith(
+          '/api/auth/returnToAdmin',
+          expect.objectContaining({ method: 'POST', credentials: 'same-origin' })
+        );
+        expect(replace).toHaveBeenCalledWith('/new');
+        expect(useAccessToken.getState().impersonating).toBe(false);
+      } finally {
+        Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+      }
+    });
+
+    it('preserves the original auth error when admin recovery is unavailable', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+      api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+        const error = make401(config);
+        error.response!.data = { code: 'impersonation_return_required' };
+        throw error;
+      }) as AxiosAdapter;
+      await expect(refreshSession()).rejects.toMatchObject({
+        response: { status: 401, data: { code: 'impersonation_return_required' } },
+      });
+    });
+
     const openChannels: BroadcastChannel[] = [];
 
     afterEach(() => {

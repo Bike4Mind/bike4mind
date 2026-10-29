@@ -48,7 +48,7 @@ export interface ModelRuntimePort {
 export interface ModelHubPort {
   readonly endpoint: string;
   search(options: HubSearchOptions): Promise<HubSearchPage>;
-  getModel(repo: string, options?: { signal?: AbortSignal }): Promise<HubModelDetail>;
+  getModel(repo: string, options?: { signal?: AbortSignal; refresh?: boolean }): Promise<HubModelDetail>;
   verifyOllamaRef(
     detail: Pick<HubModelDetail, 'id' | 'builds'>,
     build: HubGgufBuild,
@@ -284,7 +284,7 @@ export class ModelHubService {
     let ref: string | null;
     try {
       // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
-      const detail = await this.#deps.hub.getModel(request.repo);
+      const detail = await this.#deps.hub.getModel(request.repo, { refresh: true });
       const build = detail.builds.find((candidate: HubGgufBuild) => candidate.id === request.buildId);
       if (!build) return refuse(hubError('not-found', 'That build is no longer in this repo.'));
       if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)
@@ -298,6 +298,7 @@ export class ModelHubService {
       entry.view = { ...entry.view, quant: build.quant, expectedBytes: build.sizeBytes };
 
       const health = await this.#deps.runtime.health();
+      if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       if (!health.ok)
         return this.#fail(key, entry, hubError('runtime-unavailable', 'Ollama is not running. Start it, then retry.'));
       // The registry serves the first file whose name ends with the tag; only its manifest proves which one.

@@ -24,7 +24,13 @@ import { SettingsSection } from './shared/SettingsSection';
 // Shared by both settings: per-model overrides of the catalog's defaultEnabled.
 type GenerationModelSettings = { enabledModels: Record<string, boolean> };
 
-type CatalogEntry = { displayName: string; provider: string; defaultEnabled: boolean; preview?: boolean };
+type CatalogEntry = {
+  displayName: string;
+  provider: string;
+  defaultEnabled: boolean;
+  preview?: boolean;
+  retired?: { date: string };
+};
 
 // Ties each modality to its own model ids, setting key and schema so a section cannot mix them.
 type ModalityTypes = {
@@ -112,7 +118,7 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
       </Box>
       <Stack spacing={1.5}>
         {ids.map(id => {
-          const { displayName, provider, defaultEnabled, preview } = catalog[id];
+          const { displayName, provider, defaultEnabled, preview, retired } = catalog[id];
           const hasOverride = settings.enabledModels[id] !== undefined;
           return (
             <Box key={id} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
@@ -124,11 +130,16 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
                       Preview
                     </Chip>
                   )}
+                  {retired && (
+                    <Chip size="sm" variant="soft" color="neutral" data-testid={`${testId}-${id}-retired-chip`}>
+                      Retired {retired.date}
+                    </Chip>
+                  )}
                 </Box>
                 <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
                   {provider}
                 </Typography>
-                {defaultEnabled && !hasOverride && (
+                {defaultEnabled && !hasOverride && !retired && (
                   <Typography level="body-xs" data-testid={`${testId}-${id}-default-note`}>
                     Enabled by default
                   </Typography>
@@ -137,7 +148,7 @@ function GenerationModelsSection<M extends Modality>({ section }: { section: Gen
               <Switch
                 checked={isEnabled(id, settings)}
                 // Until the stored value loads, a toggle would save over every other override with defaults.
-                disabled={!authedSettingsLoaded || updateSettings.isPending || draft.pending}
+                disabled={!authedSettingsLoaded || updateSettings.isPending || draft.pending || Boolean(retired)}
                 onChange={event => handleToggle(id, event.target.checked)}
                 slotProps={{ input: { 'aria-label': `Enable ${displayName}` } }}
                 data-testid={`${testId}-${id}-switch`}

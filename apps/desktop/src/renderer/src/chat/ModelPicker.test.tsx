@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatModelOption } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ModelPicker } from './ModelPicker';
+import { groupByServer, ModelPicker } from './ModelPicker';
 import type { ModelCatalogController } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -130,5 +130,38 @@ describe('ModelPicker filter box', () => {
     act(() => row.focus());
 
     expect(document.activeElement).toBe(row);
+  });
+});
+
+describe('ModelPicker server groups', () => {
+  const gpu = { id: 'abc123', name: 'gpu box' };
+  const lab = { id: 'def456', name: 'lab' };
+  const grouped: ChatModelOption[] = [
+    { id: 'local:ollama:qwen3:8b', name: 'qwen3:8b' },
+    { id: 'local:srv-abc123:qwen3:8b', name: 'qwen3:8b', server: gpu },
+    { id: 'local:srv-def456:llama3', name: 'llama3', server: lab, unavailable: 'lab is unreachable' },
+    { id: 'claude-sonnet', name: 'Claude Sonnet' },
+  ];
+
+  it('orders hosted, this computer, then each server, and stays flat without servers', () => {
+    expect(groupByServer(grouped).map(group => [group.label, group.models.map(model => model.id)])).toEqual([
+      ['Hosted', ['claude-sonnet']],
+      ['This computer', ['local:ollama:qwen3:8b']],
+      ['gpu box', ['local:srv-abc123:qwen3:8b']],
+      ['lab', ['local:srv-def456:llama3']],
+    ]);
+    expect(groupByServer(grouped.filter(model => !model.server)).map(group => group.label)).toEqual([null]);
+  });
+
+  it("lists an unreachable server's models disabled, saying why", () => {
+    const { onSelect } = mount(grouped);
+    expect(
+      Array.from(document.querySelectorAll('[data-testid="model-picker-group-label"]')).map(node => node.textContent)
+    ).toEqual(['Hosted', 'This computer', 'gpu box', 'lab']);
+    const down = options().find(option => option.dataset.unavailable === 'true')!;
+    expect(down.textContent).toContain('lab is unreachable');
+    expect(down.getAttribute('aria-disabled')).toBe('true');
+    act(() => down.click());
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

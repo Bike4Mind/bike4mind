@@ -65,6 +65,15 @@ export function requireBaseUrl(hostOrUrl: string, runtimeKind: string): string {
   return baseUrl;
 }
 
+const RUNTIME_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/** The caller's `id` option, or the address-derived default; throws `LocalRuntimeError` for an unusable id. */
+export function chooseRuntimeId(id: string | undefined, fallback: string, runtimeKind: string): string {
+  if (id === undefined) return fallback;
+  if (!RUNTIME_ID.test(id)) throw new LocalRuntimeError(`Invalid ${runtimeKind} runtime id`, runtimeKind);
+  return id;
+}
+
 export function hostPort(baseUrl: string): string {
   const url = new URL(baseUrl);
   const port = url.port || (url.protocol === 'https:' ? '443' : '80');

@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
@@ -43,74 +44,76 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   // POST: manually re-run AI tag inference for an already-analyzed (or failed) batch. Shares
   // its claim/sample/infer/store/notify orchestration with the automatic post-upload queue
   // handler via analyzeBatchTaxonomy - see that function for the guarded-claim details.
-  .post(async (req, res) => {
-    const { batchId } = req.query as { batchId: string };
-    const { context } = ReanalyzeTaxonomyRequestInput.parse(req.body);
-    const userId = req.user.id;
+  .post(
+    withRequestCompletionQuota(async (req, res) => {
+      const { batchId } = req.query as { batchId: string };
+      const { context } = ReanalyzeTaxonomyRequestInput.parse(req.body);
+      const userId = req.user.id;
 
-    // Refuse before claiming the batch: a 422 here leaves it in its prior ready/failed state.
-    await assertRequestCanAfford(req);
-    const ctx = await toAccessContext(req);
-    // The gate and the claim serialize against a concurrent revoke; the inference call runs after
-    // commit (see `serializeLakeClaim`), so a transaction retry never repeats it.
-    const { batch } = await serializeLakeClaim(async () => {
-      const batch = await dataLakeBatchRepository.findById(batchId);
-      if (!batch) throw new NotFoundError('Batch not found');
+      // Refuse before claiming the batch: a 422 here leaves it in its prior ready/failed state.
+      await assertRequestCanAfford(req);
+      const ctx = await toAccessContext(req);
+      // The gate and the claim serialize against a concurrent revoke; the inference call runs after
+      // commit (see `serializeLakeClaim`), so a transaction retry never repeats it.
+      const { batch } = await serializeLakeClaim(async () => {
+        const batch = await dataLakeBatchRepository.findById(batchId);
+        if (!batch) throw new NotFoundError('Batch not found');
 
-      const lake = await dataLakeRepository.findById(batch.dataLakeId);
-      if (!lake) throw new NotFoundError('Data lake not found');
-      const grants = await dataLakeService.loadActiveLakeGrants(lake, {
-        db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
-      });
-      if (!dataLakeService.canManageLake(lake, ctx, grants)) {
-        throw new BadRequestError('You do not have permission to re-analyze this batch');
-      }
-      // Only re-runs from a state that already finished a prior attempt (successfully or
-      // not) - never while a first analysis is still queued/analyzing/applying. A lost claim throws
-      // so the transaction rolls back rather than committing a touch for nothing, matching apply.
-      if (!(await claimBatchForAnalysis(batchId, ['ready', 'failed']))) {
-        throw new BadRequestError('This batch is not in a state that can be re-analyzed right now');
-      }
-      return { batch, lake };
-    });
-
-    let result;
-    try {
-      result = await analyzeBatchTaxonomy(batchId, batch.dataLakeId, userId, req.logger, {
-        claimHeldByCaller: true,
-        context,
-        req,
-      });
-    } catch (error) {
-      // Unlike the queue handler, there's no SQS retry available on this synchronous
-      // request/response path - fail the batch immediately instead of leaving it stuck in
-      // 'analyzing' until the reconciler force-fails it ~10 minutes later. The stored
-      // taxonomyError is a curated message, matching every other writer of that field
-      // (analyzeBatchTaxonomy's fail(), the daily-cap revert, the reconciler).
-      const curatedMessage = 'Re-analysis failed unexpectedly - try again';
-      req.logger.error(
-        `Re-analyze taxonomy failed for batch ${batchId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-      await dataLakeBatchRepository
-        .setTaxonomyStatusIfActive(batchId, ['analyzing'], 'failed', { taxonomyError: curatedMessage })
-        .catch(revertError => {
-          req.logger.error(`Failed to revert batch ${batchId} to failed after re-analyze error: ${revertError}`);
+        const lake = await dataLakeRepository.findById(batch.dataLakeId);
+        if (!lake) throw new NotFoundError('Data lake not found');
+        const grants = await dataLakeService.loadActiveLakeGrants(lake, {
+          db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
         });
-      // Throw a curated HTTPError rather than rethrowing the raw exception: errorHandler.ts
-      // puts a plain Error's .message directly into the JSON response body, so rethrowing
-      // would leak the same raw internal detail (DB/network error text) to this endpoint's
-      // caller (this route accepts API-key auth) that the DB write above just kept out of
-      // the persisted taxonomyError. The raw message is already captured by the logger.error
-      // call above.
-      throw new InternalServerError(curatedMessage);
-    }
+        if (!dataLakeService.canManageLake(lake, ctx, grants)) {
+          throw new BadRequestError('You do not have permission to re-analyze this batch');
+        }
+        // Only re-runs from a state that already finished a prior attempt (successfully or
+        // not) - never while a first analysis is still queued/analyzing/applying. A lost claim throws
+        // so the transaction rolls back rather than committing a touch for nothing, matching apply.
+        if (!(await claimBatchForAnalysis(batchId, ['ready', 'failed']))) {
+          throw new BadRequestError('This batch is not in a state that can be re-analyzed right now');
+        }
+        return { batch, lake };
+      });
 
-    if (result.outcome === 'failed') {
-      return res.status(400).json({ error: result.error });
-    }
+      let result;
+      try {
+        result = await analyzeBatchTaxonomy(batchId, batch.dataLakeId, userId, req.logger, {
+          claimHeldByCaller: true,
+          context,
+          req,
+        });
+      } catch (error) {
+        // Unlike the queue handler, there's no SQS retry available on this synchronous
+        // request/response path - fail the batch immediately instead of leaving it stuck in
+        // 'analyzing' until the reconciler force-fails it ~10 minutes later. The stored
+        // taxonomyError is a curated message, matching every other writer of that field
+        // (analyzeBatchTaxonomy's fail(), the daily-cap revert, the reconciler).
+        const curatedMessage = 'Re-analysis failed unexpectedly - try again';
+        req.logger.error(
+          `Re-analyze taxonomy failed for batch ${batchId}: ${error instanceof Error ? error.message : String(error)}`
+        );
+        await dataLakeBatchRepository
+          .setTaxonomyStatusIfActive(batchId, ['analyzing'], 'failed', { taxonomyError: curatedMessage })
+          .catch(revertError => {
+            req.logger.error(`Failed to revert batch ${batchId} to failed after re-analyze error: ${revertError}`);
+          });
+        // Throw a curated HTTPError rather than rethrowing the raw exception: errorHandler.ts
+        // puts a plain Error's .message directly into the JSON response body, so rethrowing
+        // would leak the same raw internal detail (DB/network error text) to this endpoint's
+        // caller (this route accepts API-key auth) that the DB write above just kept out of
+        // the persisted taxonomyError. The raw message is already captured by the logger.error
+        // call above.
+        throw new InternalServerError(curatedMessage);
+      }
 
-    return res.json(result.batch);
-  });
+      if (result.outcome === 'failed') {
+        return res.status(400).json({ error: result.error });
+      }
+
+      return res.json(result.batch);
+    })
+  );
 
 export const config = {
   api: {

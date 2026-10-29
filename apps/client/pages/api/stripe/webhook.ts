@@ -30,6 +30,7 @@ import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { emitBillingEvent, emitPurchaseEvents } from '@server/analytics/signupEvents';
 import {
   creditBuyerForEvents,
@@ -246,6 +247,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       const updated = await subscriptionRepository.updateByStripeSubscriptionId(subscription.id, {
         status: 'canceled',
         canceledAt: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
+        ...stripeMirrorFields(subscription),
       });
 
       // Ownership guard, and the only thing standing between a misrouted event and an

@@ -58,6 +58,8 @@ const NOT_A_REWRITE = new Set([
   'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts',
   'apps/client/server/slack/dataLakeIngestDeps.ts',
   'apps/client/server/dataLakes/proposalAdmissionDeps.ts',
+  // Uploads a freshly generated avatar under a new filename and creates a new FabFile row; a first write.
+  'apps/client/server/agents/authoring/generateAgentAvatar.ts',
   'apps/client/server/files/createPresignedUpload.ts',
   // Its upload writes the FabFile it has just created through createFabFile (a first write). It is ALSO
   // listed in ADAPTER_WIRING_SITES on purpose: line ~248 reaches a real rewrite through updateFabFile.

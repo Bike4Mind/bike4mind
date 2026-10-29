@@ -81,7 +81,7 @@ export const CreditAdjustmentsLog: React.FC = () => {
         loading={isLoading || isFetching}
         error={error ? (error instanceof Error ? error.message : 'Could not load credit adjustments.') : undefined}
         onRetry={() => void refetch()}
-        serverPagination={{
+        pagination={{
           page,
           pageSize: limit,
           total: data?.total ?? 0,

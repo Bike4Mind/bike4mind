@@ -7,7 +7,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { CreditHolderType, insufficientCreditsError } from '@bike4mind/common';
 
-const m = vi.hoisted(() => ({ assertRequestCanAfford: vi.fn(), publish: vi.fn() }));
+const m = vi.hoisted(() => ({ assertRequestCanAfford: vi.fn(), publish: vi.fn(), admit: vi.fn() }));
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.admit }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (h: unknown) => h }),
@@ -42,6 +44,17 @@ beforeEach(() => {
 });
 
 describe('POST /api/notebooks/curate metering', () => {
+  it('refuses an over-quota executive summary before publishing', async () => {
+    const error = new Error('token quota exceeded');
+    m.admit.mockRejectedValueOnce(error);
+
+    await expect(call('executive_summary', { keyId: 'personal-key' })).rejects.toBe(error);
+    expect(m.admit).toHaveBeenCalledWith(expect.objectContaining({ apiKeyInfo: { keyId: 'personal-key' } }), {
+      holdSlot: false,
+    });
+    expect(m.assertRequestCanAfford).not.toHaveBeenCalled();
+    expect(m.publish).not.toHaveBeenCalled();
+  });
   it('refuses an executive summary for a caller who cannot pay, before publishing any job', async () => {
     m.assertRequestCanAfford.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));
 
@@ -84,5 +97,6 @@ describe('POST /api/notebooks/curate metering', () => {
     const res = await call('transcript');
     expect(res._getStatusCode()).toBe(202);
     expect(m.assertRequestCanAfford).not.toHaveBeenCalled();
+    expect(m.admit).not.toHaveBeenCalled();
   });
 });

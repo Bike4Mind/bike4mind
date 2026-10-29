@@ -440,6 +440,9 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'apiKeyUntrustedRequestsPerDay',
+  'apiKeyUntrustedTokensPerMin',
+  'apiKeyUntrustedMaxConcurrent',
   'usagePatternSignalsEnabled',
   'usagePatternSignalsConfig',
   'thinkingVisibilityFree',
@@ -647,6 +650,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitFreePerMin',
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
+  'apiRateLimitCreditsPerMin',
   'apiKeyAccess',
 
   // FREE-TIER MODEL ALLOWLIST
@@ -2268,7 +2272,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitFreePerMin', order: 1 },
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
-      { key: 'apiKeyAccess', order: 4 },
+      { key: 'apiRateLimitCreditsPerMin', order: 4 },
+      { key: 'apiKeyAccess', order: 5 },
     ],
   },
   API_KEY_TRUST: {
@@ -2281,6 +2286,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
       { key: 'maxActiveKeysUntrusted', order: 3 },
       { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+      { key: 'apiKeyUntrustedRequestsPerDay', order: 5 },
+      { key: 'apiKeyUntrustedTokensPerMin', order: 6 },
+      { key: 'apiKeyUntrustedMaxConcurrent', order: 7 },
     ],
   },
   FREE_TIER_MODELS: {
@@ -3220,6 +3228,19 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,
   }),
+  apiRateLimitCreditsPerMin: makeNumberSetting({
+    key: 'apiRateLimitCreditsPerMin',
+    name: 'API Rate Limit - Credit Balance Reads (requests/min per key)',
+    defaultValue: 0,
+    min: 0,
+    max: 100000,
+    int: true,
+    description:
+      "Dedicated per-minute ceiling for GET /api/v1/credits, counted per API key. JWT sessions are exempt. Applies on top of the key's own limits. 0 disables it.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 4,
+  }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
   apiKeyAccess: makeStringSetting({
@@ -3233,7 +3254,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 4,
+    order: 5,
   }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',
@@ -3743,6 +3764,48 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
     order: 4,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  apiKeyUntrustedRequestsPerDay: makeNumberSetting({
+    key: 'apiKeyUntrustedRequestsPerDay',
+    name: 'API Key Trust: Untrusted Daily Limit (requests/day)',
+    defaultValue: 0,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      "Per-day request ceiling for each personal API key whose owner is untrusted, applied at request time and counted per key. A key's own lower limit still wins. 0 disables it.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 5,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  apiKeyUntrustedTokensPerMin: makeNumberSetting({
+    key: 'apiKeyUntrustedTokensPerMin',
+    name: 'API Key Trust: Untrusted Token Rate (tokens/min)',
+    defaultValue: 0,
+    min: 0,
+    max: 100000000,
+    int: true,
+    description:
+      'Tokens per rolling minute for an untrusted account using its personal API keys. Counts every settled model call the account billed to itself in the last minute, from any surface (input, output and prompt-cache tokens, each counted once); usage billed to an organization is left out. A completion is admitted while the account is under the limit, and its tokens count against the requests that follow. 0 disables it.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 6,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  apiKeyUntrustedMaxConcurrent: makeNumberSetting({
+    key: 'apiKeyUntrustedMaxConcurrent',
+    name: 'API Key Trust: Untrusted Concurrent Completions',
+    defaultValue: 0,
+    min: 0,
+    max: 1000,
+    int: true,
+    description:
+      "Completions an untrusted account's personal API keys may have in flight at once, on the streaming completion routes and blocking chat turns. 0 disables it.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 7,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
   usagePatternSignalsEnabled: makeBooleanSetting({

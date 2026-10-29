@@ -36,6 +36,7 @@ import React, { useCallback, useMemo, useState, type ComponentProps } from 'reac
 import AdminSettingInputField from './AdminSettingInputField';
 import AdminStringListSettingField from './AdminStringListSettingField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
+import { AdminTurnstileStatusNotice } from './AdminTurnstileStatusNotice';
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
@@ -524,6 +525,10 @@ const AdminSettingsTab: React.FC = () => {
         {category === 'AI' && <AdminRecommendedModelsSetting />}
 
         {category === 'AI' && <AdminGenerationModelsSetting />}
+
+        {category === 'Users' && (
+          <AdminTurnstileStatusNotice enabled={String(settingValueByName.get('turnstileEnabled')) === 'true'} />
+        )}
 
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
             seven of the nine scope-capable settings are AI, and the panel lists all nine wherever
