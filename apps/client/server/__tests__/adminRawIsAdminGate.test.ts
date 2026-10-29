@@ -70,6 +70,7 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'sessions/[id]/quests.ts',
   'signup-anomaly.ts',
   'signup-domain-holds.ts',
+  'signup-risk-reviews.ts',
   'signup-timeseries.ts',
   'spend-reconciliation.ts',
   'spend.ts',
