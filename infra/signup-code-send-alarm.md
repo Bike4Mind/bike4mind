@@ -67,8 +67,34 @@ Sums AI credit spend by accounts created in the 7 days before that end time and 
 exceeds `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS` or the number of distinct spending
 accounts exceeds `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`. The message lists the top
 10 user ids by spend, the counts, and the window. It does not include emails.
-Both EventBridge delivery failures and exhausted Lambda retries reach a monitored
-14-day DLQ; recovery re-emits the original scheduled event.
+Each run logs `young-account-spend` with `windowStart`, `windowEnd` and the totals.
+
+Both EventBridge delivery failures and exhausted Lambda retries (2, the default)
+reach a monitored 14-day DLQ. Each message is one failed hour, and its body is the
+original scheduled event. Messages queued before the target cleared SST's `{}`
+input have a `{}` body; they cannot be replayed, so purge them.
+
+### Replaying a failed hour
+
+There is no source queue to redrive into. To replay, read the DLQ message body and
+check it has a `time`. Invoke the production `youngAccountSpendAlert` function
+synchronously (`aws lambda invoke --invocation-type RequestResponse
+--cli-binary-format raw-in-base64-out --payload "<body>" out.json`), and delete the
+message only once `out.json` shows `ok` or `alerted`. A synchronous invoke is not
+retried and does not dead-letter, so a failed replay leaves the original message in
+place.
+
+The worker keeps no delivery receipt. A dead-lettered hour has not posted (the
+Slack post is its last step), so a replay posts at most once. Replaying an hour
+that already succeeded, or one whose post Slack accepted before the response
+failed, posts again.
+
+To backfill a gap, invoke with `{"time":"<window end>"}` for each missing hour.
+Each run covers `[time - 1 hour, time)` and measures account age from `time`, so a
+later run reproduces the hour apart from deleted users. The schedule is
+`rate(1 hour)`, so take the minute and second from a scheduled run's `windowEnd`
+to make backfilled windows tile against the scheduled ones. Every breaching hour
+posts to LiveOps with its window, so tell the channel before a large backfill.
 
 ## LLM spend (`infra/llmSpend.ts`)
 
