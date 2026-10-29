@@ -174,4 +174,20 @@ describe('RemoveFromOrganizationDialog', () => {
       'Ada Lovelace owns Acme. Transfer ownership before removing them.'
     );
   });
+
+  it('blocks removing someone who already left', () => {
+    render(
+      <RemoveFromOrganizationDialog
+        user={user}
+        org={org({ users: [], adminUserIds: [] })}
+        isActive={false}
+        onClose={vi.fn()}
+      />,
+      { wrapper: ProfileTestWrapper }
+    );
+    pickReason('org-remove-dialog');
+
+    expect(confirmButton('org-remove-dialog')).toBeDisabled();
+    expect(screen.getByTestId('org-remove-dialog-hint')).toHaveTextContent('Ada Lovelace is no longer in Acme.');
+  });
 });

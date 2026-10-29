@@ -39,7 +39,8 @@ const OrgLink: React.FC<{ id: string; name: string }> = ({ id, name }) => (
 export const OrganizationsCard: React.FC<{ user: AdminUserProfile; onAudit?: () => void }> = ({ user, onAudit }) => {
   const { currentUser } = useUser();
   const canManage = isFullAdmin(currentUser);
-  const orgs = useGetUserOrganizations(canManage ? user.id : null);
+  // Another admin, or the user leaving, can change membership while this card is unmounted.
+  const orgs = useGetUserOrganizations(canManage ? user.id : null, { refetchOnMount: 'always' });
   const [dialog, setDialog] = useState<OpenDialog>(null);
   const activeId = activeOrganizationId(user);
   const list = orgs.data ?? [];

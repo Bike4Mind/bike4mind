@@ -131,6 +131,19 @@ describe('OrganizationsCard', () => {
     expect(screen.getByTestId(`user-profile-org-${ACME}-row`)).toBeInTheDocument();
   });
 
+  it('refetches the list when the card mounts again, even with fresh cached data', async () => {
+    const Toggle = ({ show }: { show: boolean }) => (show ? <OrganizationsCard user={buildProfile()} /> : null);
+    const { rerender } = render(<Toggle show />, { wrapper: ProfileTestWrapper });
+    expect(await screen.findByTestId(`user-profile-org-${ACME}-row`)).toBeInTheDocument();
+
+    rerender(<Toggle show={false} />);
+    mocks.get.mockResolvedValue({ data: { data: [orgs[0]], hasMore: false, total: 1 } });
+    rerender(<Toggle show />);
+
+    await waitFor(() => expect(screen.queryByTestId(`user-profile-org-${BETA}-row`)).not.toBeInTheDocument());
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
+
   it('shows a delegated admin only the active org, since the list would be their own', async () => {
     mocks.currentUser = { id: 'admin-1' };
     renderCard(buildProfile({ organizationId: { id: BETA, name: 'Beta' } as AdminUserProfile['organizationId'] }));

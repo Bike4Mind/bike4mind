@@ -204,7 +204,13 @@ export const RemoveFromOrganizationDialog: React.FC<DialogProps & { org: Members
       reasonPresets={ADMIN_REASON_PRESETS.orgMembership}
       confirmLabel={`Remove from ${org.name}`}
       tone="danger"
-      blockedReason={role === 'owner' ? `${name} owns ${org.name}. Transfer ownership before removing them.` : null}
+      blockedReason={
+        role === 'owner'
+          ? `${name} owns ${org.name}. Transfer ownership before removing them.`
+          : !role
+            ? `${name} is no longer in ${org.name}.`
+            : null
+      }
       onConfirm={handleConfirm}
       data-testid="org-remove-dialog"
     />
