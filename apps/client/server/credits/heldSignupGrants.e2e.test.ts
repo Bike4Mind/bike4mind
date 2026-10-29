@@ -271,23 +271,16 @@ describe('held signup grant release', () => {
     expect(await creditsOf(user.id)).toBe(12);
   });
 
-  it('never drives the balance negative when credits are spent between the revoke check and the debit', async () => {
+  it('leaves a balance spent below the released credits untouched', async () => {
     const users = await holdUsers(2);
     const out = await userService.bulkReleaseHeldGrants(
       { actorId: 'admin-1', userIds: [users[1].id] },
       { ...heldAdapters, batches: signupGrantReleaseRepository }
     );
     await User.updateOne({ _id: users[1].id }, { currentCredits: 5 });
-    const stale = {
-      findById: async () => ({ currentCredits: 100 }) as never,
-      incrementCredits: (...args: Parameters<typeof userRepository.incrementCredits>) =>
-        userRepository.incrementCredits(...args),
-      decrementCreditsFloored: (...args: Parameters<typeof userRepository.decrementCreditsFloored>) =>
-        userRepository.decrementCreditsFloored(...args),
-    };
     const revoked = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
-      { batches: signupGrantReleaseRepository, users: stale, creditTransactions: txRepo }
+      { batches: signupGrantReleaseRepository, users: userRepository, creditTransactions: txRepo }
     );
     expect(revoked?.results[0].outcome).toBe('insufficient_balance');
     expect(await creditsOf(users[1].id)).toBe(5);

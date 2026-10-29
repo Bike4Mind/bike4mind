@@ -719,6 +719,15 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return Math.min(credits, Math.max(before.currentCredits ?? 0, 0));
   }
 
+  /** Debits `credits` in one atomic update only when the balance covers all of it; false leaves it untouched. */
+  async decrementCreditsIfCovered(userId: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, currentCredits: { $gte: credits } },
+      { $inc: { currentCredits: -credits } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   async incrementCurrentStorage(userId: string, count: number): Promise<void> {
     await this.model.findByIdAndUpdate(
       userId,

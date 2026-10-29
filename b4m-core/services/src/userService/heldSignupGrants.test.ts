@@ -27,14 +27,13 @@ const buildRevokeAdapters = (balance: number) => {
       }),
     },
     users: {
-      findById: vi.fn(async () => ({ id: 'user-1', currentCredits: state.balance })),
       incrementCredits: vi.fn(async (_userId: string, credits: number) => {
         state.balance += credits;
       }),
-      decrementCreditsFloored: vi.fn(async (_userId: string, credits: number) => {
-        const taken = Math.min(credits, state.balance);
-        state.balance -= taken;
-        return taken;
+      decrementCreditsIfCovered: vi.fn(async (_userId: string, credits: number) => {
+        if (state.balance < credits) return false;
+        state.balance -= credits;
+        return true;
       }),
     },
     creditTransactions: { createTransaction: vi.fn().mockResolvedValue({}) },
@@ -81,6 +80,17 @@ describe('revokeHeldGrantRelease', () => {
     expect(adapters.batches.unclaimReversal).toHaveBeenCalledWith(BATCH_ID, 'user-1');
   });
 
+  it('leaves a short balance untouched and unclaims the entry', async () => {
+    const { state, adapters } = buildRevokeAdapters(30);
+
+    const result = await revoke(adapters);
+
+    expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'insufficient_balance', credits: 40 }]);
+    expect(state).toEqual({ balance: 30, claimed: false });
+    expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.creditTransactions.createTransaction).not.toHaveBeenCalled();
+  });
+
   it('leaves the entry claimed when neither the ledger write nor the refund lands', async () => {
     const { state, adapters } = buildRevokeAdapters(100);
     adapters.creditTransactions.createTransaction.mockRejectedValueOnce(new Error('ledger down'));
@@ -94,7 +104,7 @@ describe('revokeHeldGrantRelease', () => {
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('manual repair'), expect.any(Error));
 
     expect((await revoke(adapters))?.results).toEqual([{ userId: 'user-1', outcome: 'already_reversed', credits: 40 }]);
-    expect(adapters.users.decrementCreditsFloored).toHaveBeenCalledOnce();
+    expect(adapters.users.decrementCreditsIfCovered).toHaveBeenCalledOnce();
   });
 });
 

@@ -88,9 +88,9 @@ export async function revokeHeldGrantRelease(
   input: { batchId: string; actorId: string },
   adapters: {
     batches: HeldReleaseBatchRepository;
-    users: Pick<IUserRepository, 'findById' | 'incrementCredits'> & {
-      /** Atomic debit floored at zero; resolves the credits actually taken. */
-      decrementCreditsFloored: (userId: string, credits: number) => Promise<number>;
+    users: Pick<IUserRepository, 'incrementCredits'> & {
+      /** Atomic debit applied only when the balance covers all of `credits`. */
+      decrementCreditsIfCovered: (userId: string, credits: number) => Promise<boolean>;
     };
     creditTransactions: ICreditTransactionRepository;
   }
@@ -108,21 +108,12 @@ export async function revokeHeldGrantRelease(
     // Credits taken from the balance and not yet restored or covered by a ledger row.
     let outstanding = 0;
     try {
-      const user = await adapters.users.findById(entry.userId);
-      if (!user || user.currentCredits < entry.credits) {
+      if (!(await adapters.users.decrementCreditsIfCovered(entry.userId, entry.credits))) {
         await adapters.batches.unclaimReversal(batch.id, entry.userId);
         row('insufficient_balance');
         continue;
       }
-      // One atomic floored debit: a balance spent since the check above is never driven negative.
-      outstanding = await adapters.users.decrementCreditsFloored(entry.userId, entry.credits);
-      if (outstanding < entry.credits) {
-        if (outstanding > 0) await adapters.users.incrementCredits(entry.userId, outstanding);
-        outstanding = 0;
-        await adapters.batches.unclaimReversal(batch.id, entry.userId);
-        row('insufficient_balance');
-        continue;
-      }
+      outstanding = entry.credits;
       try {
         await adapters.creditTransactions.createTransaction('generic_deduct', {
           ownerId: entry.userId,
