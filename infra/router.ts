@@ -12,8 +12,7 @@ import {
   userFileCdnPrefixes as bareUserFileCdnPrefixes,
   userFileCspInjection as userFileCspInjectionFor,
 } from './routerFunctionCode';
-import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
-import { AUTH_NETWORK_HEADERS, authNetworkCacheBehaviors } from './authNetworkForwarding';
+import { AUTH_NETWORK_HEADERS, authNetworkCacheBehaviors, authNetworkJa4Injection } from './authNetworkForwarding';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -136,8 +135,7 @@ export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
 export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
 const originVerifyInjection = $interpolate`
-  // Strip viewer-forged JA4. CloudFront adds the computed value after viewer-request processing.
-  delete event.request.headers["${CLOUDFRONT_VIEWER_JA4_HEADER}"];
+  ${authNetworkJa4Injection}
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 

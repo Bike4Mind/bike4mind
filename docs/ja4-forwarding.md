@@ -20,14 +20,16 @@ default caused Lambda URL access-denied responses on the preview when viewer
 Host forwarding was enabled. The transform fails deployment if SST's URL-origin
 helper changes shape, so an upgrade requires reviewing this compatibility step.
 This avoids a new Lambda@Edge function.
-The viewer-request function removes supplied JA4 before CloudFront adds its own.
+On the authentication behaviors, CloudFront overwrites a supplied JA4 with its
+computed value before invoking the CloudFront Function. The function preserves
+that value. It removes JA4 on other paths and ambiguous paths that could differ
+after CloudFront path normalization.
 Origin verification continues to reject requests that bypass the distribution.
 
 References:
 
 - [CloudFront connection headers](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/adding-cloudfront-headers.html)
 - [Dynamic origin hostname behavior](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/helper-functions-origin-modification.html)
-- [Generated headers and viewer-request processing](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-at-edge-function-restrictions.html)
 
 ## Preview verification before production
 
