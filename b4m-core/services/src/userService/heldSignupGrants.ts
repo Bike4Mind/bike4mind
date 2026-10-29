@@ -52,11 +52,16 @@ async function releaseHeldGrant(
     );
     if (result.failed) return none('failed');
     if (!result.released) return none('withheld', !!result.budgetExhausted);
-    // Blocked accounts were kept held above; a zero payout here is final (already paid, or the inbox's
-    // grant went to another account), so the hold is dropped rather than left to clog the cron queue.
-    if (result.creditsGranted <= 0) await users.update({ id: userId, signupGrantHeldReason: null });
-    // The credits landed under an idempotent transactionId, so a failed tag clear is retried by re-releasing.
-    await adapters.clearPending(userId);
+    // The payout has committed, so the entry must stay 'released' with its credits for revoke to see it.
+    try {
+      // Blocked accounts were kept held above; a zero payout here is final (already paid, or the inbox's
+      // grant went to another account), so the hold is dropped rather than left to clog the cron queue.
+      if (result.creditsGranted <= 0) await users.update({ id: userId, signupGrantHeldReason: null });
+      // The credits landed under an idempotent transactionId, so a failed tag clear is retried by re-releasing.
+      await adapters.clearPending(userId);
+    } catch (error) {
+      adapters.grant.logger.error(`Held signup grant for user ${userId} paid but its hold was not cleared`, error);
+    }
     return { entry: { userId, outcome: 'released', credits: result.creditsGranted }, budgetExhausted: false };
   } catch (error) {
     adapters.grant.logger.error(`Held signup grant release failed for user ${userId}`, error);

@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { revokeHeldGrantRelease } from './heldSignupGrants';
+import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { releasePendingFreeCredits } from './freeCredits';
+import { bulkReleaseHeldGrants, releaseHeldGrantsAgainstBudget, revokeHeldGrantRelease } from './heldSignupGrants';
+
+vi.mock('./freeCredits', () => ({ releasePendingFreeCredits: vi.fn() }));
 
 const BATCH_ID = 'batch-1';
 
@@ -91,5 +95,73 @@ describe('revokeHeldGrantRelease', () => {
 
     expect((await revoke(adapters))?.results).toEqual([{ userId: 'user-1', outcome: 'already_reversed', credits: 40 }]);
     expect(adapters.users.decrementCreditsFloored).toHaveBeenCalledOnce();
+  });
+});
+
+const buildReleaseAdapters = () => {
+  const adapters = {
+    grant: {
+      db: {
+        users: {
+          findById: vi.fn(async (id: string) => ({
+            id,
+            tags: [PENDING_FREE_CREDITS_TAG],
+            signupGrantHeldReason: 'budget_exhausted',
+            emailVerified: true,
+          })),
+          update: vi.fn(),
+        },
+      },
+      reason: 'test',
+      logger: { error: vi.fn() },
+    },
+    clearPending: vi.fn().mockResolvedValue(undefined),
+    batches: { createBatch: vi.fn().mockResolvedValue({ id: BATCH_ID }) },
+  };
+  // Test doubles: release only calls the repository methods stubbed above.
+  return adapters as unknown as Parameters<typeof bulkReleaseHeldGrants>[1] & typeof adapters;
+};
+
+describe('held grant release', () => {
+  beforeEach(() => {
+    vi.mocked(releasePendingFreeCredits).mockReset();
+  });
+
+  it('records a grant whose payout threw as failed and counts it as failed in the cron', async () => {
+    vi.mocked(releasePendingFreeCredits).mockResolvedValue({
+      released: false,
+      failed: true,
+      creditsGranted: 0,
+      currentCredits: null,
+      patch: {},
+    });
+    const adapters = buildReleaseAdapters();
+
+    const bulk = await bulkReleaseHeldGrants({ actorId: 'admin-1', userIds: ['user-1'] }, adapters);
+    expect(bulk.results).toEqual([{ userId: 'user-1', outcome: 'failed', credits: 0 }]);
+
+    const cron = await releaseHeldGrantsAgainstBudget(
+      { ...adapters, listHeldIds: vi.fn().mockResolvedValueOnce(['user-1']).mockResolvedValue([]) },
+      { maxUsers: 10 }
+    );
+    expect(cron).toMatchObject({ scanned: 1, failed: 1, withheld: 0 });
+  });
+
+  it('keeps a committed payout as released when clearing the hold fails', async () => {
+    vi.mocked(releasePendingFreeCredits).mockResolvedValue({
+      released: true,
+      creditsGranted: 40,
+      currentCredits: 40,
+      patch: {},
+    });
+    const adapters = buildReleaseAdapters();
+    const clearFailure = new Error('users down');
+    adapters.clearPending.mockRejectedValueOnce(clearFailure);
+
+    const bulk = await bulkReleaseHeldGrants({ actorId: 'admin-1', userIds: ['user-1'] }, adapters);
+
+    expect(bulk.results).toEqual([{ userId: 'user-1', outcome: 'released', credits: 40 }]);
+    expect(adapters.batches.createBatch).toHaveBeenCalledWith({ actorId: 'admin-1', entries: bulk.results });
+    expect(adapters.grant.logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), clearFailure);
   });
 });
