@@ -49,6 +49,7 @@ vi.mock('./tabs/ActivityTab', () => ({
 }));
 vi.mock('./tabs/SignInsTab', () => ({ SignInsTab: () => <div data-testid="stub-signins" /> }));
 vi.mock('./tabs/AdminLogTab', () => ({ AdminLogTab: () => <div data-testid="stub-admin-log" /> }));
+vi.mock('./UserRiskBadges', () => ({ UserRiskBadges: () => <div data-testid="stub-risk-badges" /> }));
 vi.mock('./UserProfileStats', () => ({ UserProfileStats: () => <div data-testid="stub-stats" /> }));
 vi.mock('./tabs/OverviewTab', () => ({
   OverviewTab: ({ onAction, onViewActivity }: { onAction: (action: 'tags') => void; onViewActivity: () => void }) => (

@@ -25,6 +25,7 @@ import type { ProfileAction, ProfileDialogProps } from './actions/profileActions
 import { UserProfileHeader } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
+import { UserRiskBadges } from './UserRiskBadges';
 import { OverviewTab } from './tabs/OverviewTab';
 import { CreditsTab } from './tabs/credits/CreditsTab';
 import { ApiKeysTab } from './tabs/keys/ApiKeysTab';
@@ -227,6 +228,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
       <StatusBanner user={user} onReinstate={() => void reinstate()} onLiftRestriction={() => setAction('restrict')} />
       <UserProfileHeader user={user} onAction={setAction} onCompliance={() => setComplianceUserId(user.id)} />
       <UserProfileStats user={user} />
+      <UserRiskBadges userId={user.id} onOpenCompliance={() => setComplianceUserId(user.id)} />
       <Box>
         <UserProfileTabs value={tab} onChange={onTabChange} />
         <Box
