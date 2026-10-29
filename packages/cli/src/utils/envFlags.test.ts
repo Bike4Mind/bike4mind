@@ -104,4 +104,14 @@ describe('splitEnvFlags', () => {
       if (type === 'array') expect(ARRAY_OPTIONS, name).toContain(`--${name}`);
     }
   });
+
+  it.each([
+    ['--local=true', true],
+    ['-local=true', true],
+    ['--local=false', false],
+  ])('reads mcp serve %s as the serve flag', (flag, local) => {
+    const split = splitEnvFlags(['--dev', 'mcp', 'serve', flag]);
+    expect(split).toMatchObject({ envTarget: 'dev', serveLocal: local });
+    expect(parse(split.cleaned).local).toBe(local);
+  });
 });

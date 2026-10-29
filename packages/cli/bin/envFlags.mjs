@@ -4,8 +4,14 @@
 // split into clustered short flags by yargs (`-prod` -> `-p -r -o -d`, colliding
 // with -p/--prompt), so they are removed here and recorded as the target.
 export const ENV_FLAG_MAP = {
-  '--dev': 'dev', '-dev': 'dev', '--local': 'dev', '-local': 'dev',
-  '--prod': 'prod', '-prod': 'prod', '--production': 'prod', '-production': 'prod',
+  '--dev': 'dev',
+  '-dev': 'dev',
+  '--local': 'dev',
+  '-local': 'dev',
+  '--prod': 'prod',
+  '-prod': 'prod',
+  '--production': 'prod',
+  '-production': 'prod',
 };
 
 const LOCAL_TOKENS = new Set(['--local', '-local']);
@@ -15,8 +21,17 @@ const LOCAL_TOKENS = new Set(['--local', '-local']);
 // as yargs parses them. Must stay in sync with the global options in bike4mind-cli.mjs;
 // envFlags.test.ts checks it.
 export const VALUE_OPTIONS = new Set([
-  '--prompt', '-p', '--output-format', '--permission-policy', '--ollama-host', '--mcp-config',
-  '--append-system-prompt', '--settings', '--session-id', '--resume', '--api-url',
+  '--prompt',
+  '-p',
+  '--output-format',
+  '--permission-policy',
+  '--ollama-host',
+  '--mcp-config',
+  '--append-system-prompt',
+  '--settings',
+  '--session-id',
+  '--resume',
+  '--api-url',
 ]);
 export const ARRAY_OPTIONS = new Set(['--add-dir', '--allowedTools', '--allowed-tools']);
 
@@ -59,6 +74,10 @@ export function splitEnvFlags(args) {
     if (index > serveIndex && LOCAL_TOKENS.has(token)) {
       cleaned.push('--local');
       serveLocal = true;
+    } else if (index > serveIndex && /^--?local=/.test(token)) {
+      const value = token.slice(token.indexOf('=') + 1);
+      cleaned.push(`--local=${value}`);
+      serveLocal = value !== 'false';
     } else if (Object.prototype.hasOwnProperty.call(ENV_FLAG_MAP, token)) {
       envTarget = ENV_FLAG_MAP[token]; // last one wins
       envFlags.push(token);
