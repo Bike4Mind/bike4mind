@@ -505,32 +505,38 @@ describe('nextRouteForContract', () => {
       expect(res._getJSONData()).toEqual({ error: 'slow down', errorCode: 'token_rate_limit_exceeded' });
     });
 
-    it('sends the body unchanged and warns when it does not match the schema', async () => {
-      vi.stubEnv('NODE_ENV', 'production');
-      validKey([ApiKeyScope.AI_CHAT]);
-      let warn: ReturnType<typeof vi.spyOn> | undefined;
-      const route = nextRouteForContract(makeContract()).post((req, res) => {
-        warn = vi.spyOn(req.logger, 'warn');
-        res.json({ ok: 'yes', extra: 1 });
-      });
-      const { req, res } = fire({ apiKey: 'b4m_live_x' });
-      await route(req, res);
-      expect(res._getStatusCode()).toBe(200);
-      expect(res._getJSONData()).toEqual({ ok: 'yes', extra: 1 });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('fixtureOp response 200 violates schema'));
-    });
+    it.each(['test', 'production'])(
+      'sends the body unchanged and warns when it does not match the schema (NODE_ENV=%s)',
+      async env => {
+        vi.stubEnv('NODE_ENV', env);
+        validKey([ApiKeyScope.AI_CHAT]);
+        let warn: ReturnType<typeof vi.spyOn> | undefined;
+        const route = nextRouteForContract(makeContract()).post((req, res) => {
+          warn = vi.spyOn(req.logger, 'warn');
+          res.json({ ok: 'yes', extra: 1 });
+        });
+        const { req, res } = fire({ apiKey: 'b4m_live_x' });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        expect(res._getJSONData()).toEqual({ ok: 'yes', extra: 1 });
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('fixtureOp response 200 violates schema'));
+      }
+    );
 
-    it('leaves a status with no declared schema (raw body) untouched', async () => {
-      vi.stubEnv('NODE_ENV', 'production');
-      validKey([ApiKeyScope.AI_CHAT]);
-      const route = nextRouteForContract(
-        makeContract({ responses: { 200: { description: 'ok', schema: OkSchema }, 202: { description: 'raw' } } })
-      ).post((_req, res) => res.status(202).json({ anything: 'goes' }));
-      const { req, res } = fire({ apiKey: 'b4m_live_x' });
-      await route(req, res);
-      expect(res._getStatusCode()).toBe(202);
-      expect(res._getJSONData()).toEqual({ anything: 'goes' });
-    });
+    it.each(['test', 'production'])(
+      'leaves a status with no declared schema (raw body) untouched (NODE_ENV=%s)',
+      async env => {
+        vi.stubEnv('NODE_ENV', env);
+        validKey([ApiKeyScope.AI_CHAT]);
+        const route = nextRouteForContract(
+          makeContract({ responses: { 200: { description: 'ok', schema: OkSchema }, 202: { description: 'raw' } } })
+        ).post((_req, res) => res.status(202).json({ anything: 'goes' }));
+        const { req, res } = fire({ apiKey: 'b4m_live_x' });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(202);
+        expect(res._getJSONData()).toEqual({ anything: 'goes' });
+      }
+    );
   });
 
   describe('verb binding (P3-1)', () => {
