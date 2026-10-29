@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import {
-  ACTIVITY_REPORT_VERSION,
+  DAILY_ACTIVITY_REPORT_VERSION,
+  WEEKLY_ACTIVITY_REPORT_VERSION,
   IDailyReportDocument,
   IWeeklyReportDocument,
   IDailyReportRepository,
@@ -21,7 +22,7 @@ class DailyReportRepository extends BaseRepository<IDailyReportDocument> impleme
   async upsertReport(date: string, report: string, aiInsights?: string | null) {
     return this.model.findOneAndUpdate(
       { date },
-      { date, report, aiInsights, reportVersion: ACTIVITY_REPORT_VERSION, updatedAt: new Date() },
+      { date, report, aiInsights, reportVersion: DAILY_ACTIVITY_REPORT_VERSION, updatedAt: new Date() },
       { upsert: true, new: true }
     );
   }
@@ -53,7 +54,7 @@ class WeeklyReportRepository extends BaseRepository<IWeeklyReportDocument> imple
   async upsertReport(startDate: string, endDate: string, report: string, aiInsights?: string | null) {
     return this.model.findOneAndUpdate(
       { startDate, endDate },
-      { startDate, endDate, report, aiInsights, reportVersion: ACTIVITY_REPORT_VERSION, updatedAt: new Date() },
+      { startDate, endDate, report, aiInsights, reportVersion: WEEKLY_ACTIVITY_REPORT_VERSION, updatedAt: new Date() },
       { upsert: true, new: true }
     );
   }

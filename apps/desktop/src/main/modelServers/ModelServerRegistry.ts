@@ -1,9 +1,13 @@
 import dns from 'node:dns';
 import { isIP } from 'node:net';
 import {
+  OllamaRuntime,
+  OpenAICompatibleRuntime,
+  PullIdleTimeoutError,
   RuntimeConnectionError,
   RuntimeHttpError,
   type FetchLike,
+  type LocalRuntime,
   type OpenAICompatibleProduct,
 } from '@bike4mind/local-models';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
@@ -11,6 +15,7 @@ import {
   LOCAL_SERVER_ID,
   LOCAL_SERVER_NAME,
   serverIdOfRuntime,
+  serverManagement,
   serverRuntimeId,
   type ModelServerAddInput,
   type ModelServerHealth,
@@ -22,6 +27,7 @@ import {
 } from '@shared/modelServers';
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal } from '../chat/OllamaLocal';
+import type { ModelHubServer } from '../models/ModelHubService';
 import {
   leastTrusted,
   parseServerAddress,
@@ -48,6 +54,10 @@ const LOCAL_TIMEOUT_MS = 1_500;
 /** Background recheck while the app runs. */
 export const HEALTH_INTERVAL_MS = 60_000;
 const RECHECK_AFTER_MS = 10_000;
+/** `dns.lookup` has no timeout of its own and can hang on a slow resolver. */
+const RESOLVE_TIMEOUT_MS = 5_000;
+/** How long a picker load waits on a down server's check before listing its last models. */
+export const PICKER_CHECK_WAIT_MS = 2_000;
 
 interface ServerClient extends LocalChat {
   listModels(): Promise<ChatModelOption[]>;
@@ -59,6 +69,8 @@ interface Entry {
   scope: AddressScope | null;
   fetch: FetchLike;
   client: ServerClient;
+  /** What the Models screen lists, pulls and removes through, over the same fetch as chat. */
+  runtime: LocalRuntime;
   health: ModelServerHealth;
   product: OpenAICompatibleProduct | null;
 }
@@ -107,8 +119,16 @@ export class ModelServerRegistry {
   private localHealth: ModelServerHealth = { ...UNKNOWN_HEALTH };
   private timer: ReturnType<typeof setInterval> | undefined;
   private loaded: Promise<void> | null = null;
+  private readonly savedListeners = new Set<(id: string) => void>();
+  private readonly checking = new WeakMap<Entry, Promise<void>>();
 
   constructor(private readonly deps: ModelServerRegistryDeps) {}
+
+  /** Calls `listener` with a server's id after its saved settings change or it is removed. */
+  onServerSaved(listener: (id: string) => void): () => void {
+    this.savedListeners.add(listener);
+    return () => this.savedListeners.delete(listener);
+  }
 
   /** Loads the saved servers and starts the background recheck. */
   start(): Promise<void> {
@@ -254,6 +274,7 @@ export class ModelServerRegistry {
     }
     const record = await this.deps.store.update(id, input);
     this.entries.set(id, this.build(record, entry));
+    this.saved(id);
     if (input.credential || input.kind) await this.check(id);
     else this.emit();
     return this.views();
@@ -263,6 +284,7 @@ export class ModelServerRegistry {
     await this.load();
     await this.deps.store.remove(id);
     this.entries.delete(id);
+    this.saved(id);
     this.emit();
     return this.views();
   }
@@ -292,10 +314,13 @@ export class ModelServerRegistry {
           this.setHealth(entry, missing);
           this.emit();
         }
-        // A picker refresh retries a server that was down, without hammering one that keeps failing.
-        if (entry.health.state !== 'online' && entry.health.state !== 'unknown' && this.stale(entry)) {
-          await this.checkEntry(entry);
-          this.emit();
+        // A server shown as down may be back: a check already running (say, after a pull) decides, or a
+        // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
+        const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
+        const running = this.checking.get(entry);
+        if (down && (running || this.stale(entry))) {
+          const check = (running ?? this.checkEntry(entry).then(() => this.emit())).catch(() => undefined);
+          await within(check, PICKER_CHECK_WAIT_MS, undefined);
         }
         if (entry.health.state === 'online' || entry.health.state === 'unknown') {
           try {
@@ -344,6 +369,34 @@ export class ModelServerRegistry {
     };
   }
 
+  /**
+   * The Models screen's handle on a saved server, null when none is saved under `id`. Health is this
+   * registry's check, and failures update the server's health and name it, as chat's do.
+   */
+  hubServer(id: string): ModelHubServer | null {
+    const entry = this.entries.get(id);
+    if (!entry) return null;
+    const { record } = entry;
+    return {
+      name: record.name,
+      management: serverManagement({ local: false, kind: record.kind, access: record.access }),
+      runtime: {
+        baseUrl: record.transport.baseUrl,
+        health: async () => {
+          const health = (await this.check(id)).find(server => server.id === id)?.health;
+          return health?.state === 'online'
+            ? { ok: true, version: health.version, error: null }
+            : { ok: false, version: null, error: health?.error ?? `${record.name} did not answer.` };
+        },
+        list: () => this.run(id, undefined, current => current.runtime.list()),
+        loaded: () => this.run(id, undefined, current => current.runtime.loaded()),
+        inspect: (model, options) => this.run(id, options?.signal, current => current.runtime.inspect(model, options)),
+        pull: (ref, options) => this.run(id, options?.signal, current => current.runtime.pull(ref, options)),
+        remove: model => this.run(id, undefined, current => current.runtime.remove(model)),
+      },
+    };
+  }
+
   private async run<T>(id: string, signal: AbortSignal | undefined, task: (entry: Entry) => Promise<T>): Promise<T> {
     await this.load();
     const entry = this.entries.get(id);
@@ -358,6 +411,9 @@ export class ModelServerRegistry {
     } catch (raw) {
       if (signal?.aborted) throw raw;
       const err = this.unwrapFailure(raw, entry);
+      // A stalled pull says nothing about chat, so the server's health is left as it was.
+      if (err instanceof PullIdleTimeoutError)
+        throw new ServerUnreachableError(entry.record.name, describeFailure(err), { cause: err });
       const health = failureHealth(err, entry.record.name);
       if (!health) throw raw;
       entry.health = health;
@@ -410,7 +466,16 @@ export class ModelServerRegistry {
     }
   }
 
-  private async checkEntry(entry: Entry): Promise<void> {
+  /** One check per server at a time; callers during a check share its result. */
+  private checkEntry(entry: Entry): Promise<void> {
+    const running = this.checking.get(entry);
+    if (running) return running;
+    const done = this.probeEntry(entry).finally(() => this.checking.delete(entry));
+    this.checking.set(entry, done);
+    return done;
+  }
+
+  private async probeEntry(entry: Entry): Promise<void> {
     entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
     if (this.deps.store.credentialMissing(entry.record)) {
       this.setHealth(entry, this.missingCredentialHealth());
@@ -447,7 +512,9 @@ export class ModelServerRegistry {
     if (outcome.product && outcome.product !== entry.product) {
       entry.product = outcome.product;
       // The chat client reads the product once, so rebuild it to start using what the probe learned.
-      entry.client = this.build(entry.record, entry).client;
+      const rebuilt = this.build(entry.record, entry);
+      entry.client = rebuilt.client;
+      entry.runtime = rebuilt.runtime;
     }
     this.setHealth(entry, {
       state: 'online',
@@ -518,12 +585,17 @@ export class ModelServerRegistry {
             hasCredentials,
             redact: redactServerResponse,
           });
+    const runtime: LocalRuntime =
+      record.kind === 'ollama'
+        ? new OllamaRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch })
+        : new OpenAICompatibleRuntime({ baseUrl: parsed.baseUrl, id: runtimeId, fetch, product });
     return {
       record,
       parsed,
       scope: previous?.scope ?? (isIP(parsed.host) ? scopeOfIp(parsed.host) : null),
       fetch,
       client,
+      runtime,
       health: previous && previous.record.kind === record.kind ? previous.health : { ...UNKNOWN_HEALTH },
       product,
     };
@@ -557,6 +629,10 @@ export class ModelServerRegistry {
     return this.loaded;
   }
 
+  private saved(id: string): void {
+    for (const listener of this.savedListeners) listener(id);
+  }
+
   private emit(): void {
     if (!this.deps.changed) return;
     void this.views().then(servers => this.deps.changed?.(servers));
@@ -572,8 +648,8 @@ export class ModelServerRegistry {
     const literal = scopeOfIp(host);
     if (literal) return literal;
     try {
-      const addresses = await (this.deps.resolve ?? resolveAll)(host);
-      if (addresses.length === 0) return null;
+      const addresses = await within((this.deps.resolve ?? resolveAll)(host), RESOLVE_TIMEOUT_MS, null);
+      if (!addresses || addresses.length === 0) return null;
       return leastTrusted(addresses.map(address => scopeOfIp(address) ?? 'public'));
     } catch {
       return null;
@@ -595,6 +671,13 @@ function isLocalOllama(parsed: ParsedAddress): boolean {
 async function resolveAll(host: string): Promise<string[]> {
   const addresses = await dns.promises.lookup(host, { all: true });
   return addresses.map(entry => entry.address);
+}
+
+/** `work`'s result, or `late` once `ms` pass without one. */
+function within<T, L>(work: Promise<T>, ms: number, late: L): Promise<T | L> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<L>(resolve => (timer = setTimeout(() => resolve(late), ms)));
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }
 
 function unavailableReason(entry: Entry): string {
@@ -620,6 +703,7 @@ export function describeFailure(err: unknown): string {
   if (err instanceof ServerTransportError || err instanceof ServerRedirectError) return err.message;
   if (err instanceof DOMException && err.name === 'TimeoutError') return 'it did not answer in time';
   if (err instanceof Error && err.name === 'TimeoutError') return 'it did not answer in time';
+  if (err instanceof PullIdleTimeoutError) return 'it stopped sending data';
   const code = errorCode(err);
   if (code === 'ECONNREFUSED') return 'connection refused';
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'host not found';

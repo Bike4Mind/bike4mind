@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ModelServerProbeResult, ModelServerView } from '@shared/modelServers';
+import type { ModelServerAccess, ModelServerKind, ModelServerProbeResult, ModelServerView } from '@shared/modelServers';
 import { desktopTheme } from '../theme';
 import { ModelServersSettings } from './ModelServersSettings';
 
@@ -194,5 +194,28 @@ describe('ModelServersSettings credentials form', () => {
     await mount([server({})]);
     await click('model-servers-credentials-btn');
     expect(saveButton().disabled).toBe(true);
+  });
+});
+
+describe('ModelServersSettings access note', () => {
+  const note = () => document.querySelector<HTMLElement>('[data-testid="model-servers-access-note"]');
+  const saved = (kind: ModelServerKind, access: ModelServerAccess) =>
+    server({ kind, access, address: 'http://192.168.1.20:11434', unencrypted: true, models: ['qwen2.5:0.5b'] });
+
+  it('points an Ollama server set to Chat and manage at the Models screen', async () => {
+    await mount([saved('ollama', 'manage')]);
+    expect(note()?.textContent).toMatch(/Download and remove models on this server from the Models screen/);
+    expect(document.body.textContent).not.toMatch(/not available yet/);
+  });
+
+  it('says only Ollama servers can be managed for an OpenAI-compatible server set to Chat and manage', async () => {
+    await mount([saved('openai-compatible', 'manage')]);
+    expect(note()?.textContent).toMatch(/works only on Ollama servers/);
+    expect(document.body.textContent).not.toMatch(/not available yet/);
+  });
+
+  it('shows no note for a server set to Chat only', async () => {
+    await mount([saved('ollama', 'chat')]);
+    expect(note()).toBeNull();
   });
 });

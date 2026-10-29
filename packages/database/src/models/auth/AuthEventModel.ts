@@ -130,6 +130,14 @@ class AuthEventRepository extends BaseRepository<IAuthEventDocument> {
     return { ipSignups, asnSignups, prefixSignups };
   }
 
+  /** The account's signup rows since `since`, for the deletion-time SignupTrace. */
+  async findSignupsSince(userId: string, since: Date): Promise<Pick<IAuthEventDocument, 'ip' | 'asn' | 'createdAt'>[]> {
+    return this.model
+      .find({ userId, type: 'signup', createdAt: { $gte: since } })
+      .select({ ip: 1, asn: 1, createdAt: 1, _id: 0 })
+      .lean();
+  }
+
   async deleteAllForUser(userId: string): Promise<number> {
     const result = await this.model.deleteMany({ userId });
     return result.deletedCount;

@@ -12,6 +12,7 @@ import { formatBytes, type HubBuildView, type HubModelView } from '@shared/model
 import { ExternalLink } from '../chat/ExternalLink';
 import { AccessSteps } from './AccessSteps';
 import { FitBadge } from './FitBadge';
+import type { ModelTarget } from './modelTarget';
 
 export interface PullConsent {
   acceptLicense: boolean;
@@ -29,14 +30,17 @@ function joinNames(names: readonly string[]): string {
 export function PullDialog({
   model,
   build,
+  target,
   onConfirm,
   onClose,
 }: {
   model: HubModelView;
   build: HubBuildView;
+  target: ModelTarget;
   onConfirm: (consent: PullConsent) => void;
   onClose: () => void;
 }) {
+  const server = target.local ? null : target.name;
   const [acceptLicense, setAcceptLicense] = useState(false);
   const [confirmAccess, setConfirmAccess] = useState(false);
   const [overrideFit, setOverrideFit] = useState(false);
@@ -63,8 +67,15 @@ export function PullDialog({
             <Typography level="body-sm" data-testid="models-pull-dialog-size">
               {formatBytes(build.sizeBytes)} download
               {model.projectorBytes ? `, plus a vision projector of up to ${formatBytes(model.projectorBytes)}` : ''}.
-              Ollama stores it with your other local models; you can remove it from Installed at any time.
+              {server
+                ? ` ${server} downloads it straight from Hugging Face and keeps it with its other models; you can remove it from Installed at any time.`
+                : ' Ollama stores it with your other local models; you can remove it from Installed at any time.'}
             </Typography>
+            {server && (
+              <Typography level="body-sm" data-testid="models-pull-dialog-server">
+                Desktop cannot see how much free space {server} has. Keep Bike4Mind open until the download finishes.
+              </Typography>
+            )}
             {build.fit && (
               <Stack direction="row" spacing={1} alignItems="flex-start" data-testid="models-pull-dialog-fit">
                 <FitBadge fit={build.fit} bare />
@@ -99,12 +110,16 @@ export function PullDialog({
             )}
             {model.needsAccess && (
               <>
-                <AccessSteps model={model} />
+                <AccessSteps model={model} server={server} />
                 <Checkbox
                   size="sm"
                   checked={confirmAccess}
                   onChange={event => setConfirmAccess(event.target.checked)}
-                  label="I added Ollama's public key to the Hugging Face account that has access."
+                  label={
+                    server
+                      ? `I added the Ollama key of ${server} to the Hugging Face account that has access.`
+                      : "I added Ollama's public key to the Hugging Face account that has access."
+                  }
                   slotProps={{ input: { 'data-testid': 'models-pull-dialog-access-checkbox' } }}
                 />
               </>

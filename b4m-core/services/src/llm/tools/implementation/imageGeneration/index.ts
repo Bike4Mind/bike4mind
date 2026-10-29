@@ -1,3 +1,4 @@
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
@@ -235,6 +236,8 @@ export const imageGenerationTool: ToolDefinition = {
       const wantsTransparent = background === 'transparent';
       const model =
         wantsTransparent && rejectsTransparentBackground(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
+      await (await createToolModelAdmission(context)).assert(model);
+
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const width = imageConfig?.width;
       const height = imageConfig?.height;
