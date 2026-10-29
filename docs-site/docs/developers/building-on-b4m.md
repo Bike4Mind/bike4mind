@@ -375,7 +375,7 @@ The response is `{ "is_admin": boolean }`. Nothing is minted; a subject that res
 
 This is gated on the opt-in `federated:admin-status` scope, which is **not** one of the scopes section 5 exchanges for. Two things must be true: an operator has added the scope to your client's `allowedScopes`, and the user's grant covers it, which means requesting it in the authorization request (section 3). The grant is enforced with no grace period, so users who consented before the scope existed must re-authorize before this endpoint answers for them. The scope is available only to relying-party clients; a first-party client is refused outright.
 
-Errors follow section 5: 401 `invalid_client`, 401 `invalid_grant` for a bad or expired ID token, 403 `access_denied` when the client has no trust config, 403 `invalid_scope` when the client is not registered for the scope or is not a relying party, and 429 with `Retry-After` at 300 requests per minute per client. Cache the answer per user for a few minutes rather than asking on every request.
+Errors follow section 5: 400 `invalid_request` for a malformed body, 401 `invalid_client`, 401 `invalid_grant` for a bad or expired ID token, 403 `access_denied` when the client has no trust config or the user's grant does not cover `federated:admin-status` (re-authorize with the scope), 403 `invalid_scope` when the client is not registered for the scope or is not a relying party, 429 with `Retry-After` at 300 requests per minute per client, and 503 `temporarily_unavailable` when the grant cannot be read (retry; do not re-authorize). Cache the answer per user for a few minutes rather than asking on every request.
 
 ## 8. What not to do
 
