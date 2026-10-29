@@ -2,6 +2,7 @@ import {
   ResearchModeParamsSchema,
   ModelInfo,
   createReasoningWithholder,
+  estimateStreamedOutputTokens,
   reasoningChannelOf,
   withholdsReasoning,
   type ThinkingVisibility,
@@ -271,13 +272,18 @@ export class ResearchModeService {
       if (timedOut) {
         // A handled outcome, so warn rather than page the error alert path.
         this.logger.warn(`\u{1F52C} [Research Mode] Configuration ${config.id} timed out: ${message}`);
+        const usage = reportedUsage(completionInfo);
         return {
           configurationId: config.id,
           model: config.model,
           success: false,
           streamedChars,
           error: message,
-          completionInfo: reportedUsage(completionInfo),
+          // Saved as billed: the last report can predate output streamed after it (researchModeUsages).
+          completionInfo: usage && {
+            ...usage,
+            outputTokens: Math.max(usage.outputTokens, estimateStreamedOutputTokens(streamedChars, config.model)),
+          },
         };
       }
       this.logger.error(`🔬 [Research Mode] Configuration ${config.id} failed:`, error);

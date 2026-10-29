@@ -298,7 +298,8 @@ describe('ResearchModeService timeout', () => {
         success: false,
         streamedChars: 4003,
         error: 'Timeout after 220 seconds',
-        completionInfo: { inputTokens: 10, outputTokens: 1 },
+        // Saved as billed, not as the stale report.
+        completionInfo: { inputTokens: 10, outputTokens: estimateStreamedOutputTokens(4003, 'model-a') },
       }),
     ]);
     const [usage] = researchModeUsages(results, timedModels, 999);
