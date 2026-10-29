@@ -41,7 +41,8 @@ import '@pages/api/websocket/ticket';
 
 describe('POST /api/websocket/ticket - auth mode', () => {
   it('is minted jwtOnly so an API key cannot mint a connect ticket', () => {
-    expect(mockRefs.baseApiOptions).toEqual({ auth: 'jwtOnly' });
+    // Also out of the default write limit: reconnect retries must not spend the user's write budget.
+    expect(mockRefs.baseApiOptions).toEqual({ auth: 'jwtOnly', defaultWriteRateLimit: false });
     // auth: true would install apiKeyAuth(undefined), letting any valid API key mint.
     expect((mockRefs.baseApiOptions as { auth?: unknown }).auth).not.toBe(true);
   });

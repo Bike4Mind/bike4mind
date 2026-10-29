@@ -33,7 +33,12 @@ const TICKET_TTL_MS = 30 * 1000;
  * Connection row, so revoking that session ends the socket and the socket must reauth (see
  * websocket/reauthConnection.ts) before the token would have expired.
  */
-const handler = baseApi({ auth: 'jwtOnly' }).post(
+const handler = baseApi({
+  auth: 'jwtOnly',
+  // Sent on every realtime connect and reconnect, so an outage's retries would spend the write budget
+  // and a user near it would lose realtime until the window resets.
+  defaultWriteRateLimit: false,
+}).post(
   asyncHandler(async (req, res) => {
     req.logger.updateMetadata({ endpoint: 'websocket/ticket' });
 
