@@ -292,11 +292,12 @@ export async function dripSignupGrant(
   if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || user.signupGrant.lastDripDay === day) return noGrant();
-  if (
-    await adapters.db.users.count({ signupGrantHeldReason: 'budget_exhausted', 'signupGrant.stage': 'pending_email' })
-  ) {
-    return { ...noGrant(), withheld: true };
-  }
+  // Existence only: a count would scan every held account on the chat hot path.
+  const heldTranche = await adapters.db.users.findOne({
+    signupGrantHeldReason: 'budget_exhausted',
+    'signupGrant.stage': 'pending_email',
+  });
+  if (heldTranche) return { ...noGrant(), withheld: true };
   return releaseStage(
     userId,
     'signup',
