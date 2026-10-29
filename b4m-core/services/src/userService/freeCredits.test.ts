@@ -247,6 +247,16 @@ describe('free credits service', () => {
       expect(protectedAdapters.logger.warn).not.toHaveBeenCalled();
     });
 
+    it('ignores a large staged total while staging is disabled', async () => {
+      const adapters = buildAdapters('50');
+      adapters.db.adminSettings.findBySettingNames.mockResolvedValue([
+        { settingName: 'defaultFreeCredits', settingValue: 50 },
+        { settingName: 'signupGrantCredits', settingValue: 500 },
+      ]);
+      await releasePendingFreeCredits({ id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] }, adapters);
+      expect(adapters.logger.warn).not.toHaveBeenCalled();
+    });
+
     it('still releases the grant when the protection check cannot read settings', async () => {
       const adapters = buildAdapters('100');
       adapters.db.adminSettings.findBySettingNames.mockRejectedValue(new Error('settings unavailable'));

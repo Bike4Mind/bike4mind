@@ -61,6 +61,17 @@ export const SIGNUP_GRANT_KEYS = ['defaultFreeCredits', 'signupGrantCredits', 'v
 
 export type SignupGrantKey = (typeof SIGNUP_GRANT_KEYS)[number];
 
+/** Every setting the large-grant check reads: the grants, the protections, and whether the staged path is live. */
+export const SIGNUP_GRANT_GUARDED_KEYS = [
+  ...SIGNUP_GRANT_KEYS,
+  ...SIGNUP_GRANT_PROTECTION_KEYS,
+  'stagedSignupGrantEnabled',
+] as const;
+
+export type SignupGrantGuardedKey = (typeof SIGNUP_GRANT_GUARDED_KEYS)[number];
+
+type SignupGrantValues = Partial<Record<SignupGrantGuardedKey, unknown>>;
+
 const isOn = (value: unknown) => value === true || value === 'true';
 
 /** The policy is stored as a JSON string by the seed migration and as an object elsewhere; the runtime reads both. */
@@ -97,18 +108,22 @@ function configuredGrantAmount(value: unknown): number {
   return Number.isFinite(amount) && amount > 0 ? amount : 0;
 }
 
-/** What one grant path pays: the flat grant, or the staged signup plus unlock total. */
+/**
+ * What one grant path pays: the flat grant, or the staged signup plus unlock total. A missing signup row
+ * falls back to the flat grant, as resolveSignupGrantSettings does.
+ */
 export function signupGrantPathTotal(key: SignupGrantKey, values: Partial<Record<SignupGrantKey, unknown>>): number {
   if (key === 'defaultFreeCredits') return configuredGrantAmount(values.defaultFreeCredits);
-  return configuredGrantAmount(values.signupGrantCredits) + configuredGrantAmount(values.verifiedUnlockCredits);
+  const signup = values.signupGrantCredits === undefined ? values.defaultFreeCredits : values.signupGrantCredits;
+  return configuredGrantAmount(signup) + configuredGrantAmount(values.verifiedUnlockCredits);
 }
 
-/** Largest grant a new account could receive across both grant paths. */
-export function largestSignupGrant(values: Partial<Record<SignupGrantKey, unknown>>): number {
-  return Math.max(
-    signupGrantPathTotal('defaultFreeCredits', values),
-    signupGrantPathTotal('signupGrantCredits', values)
-  );
+/** Largest grant a new account could receive; the staged path counts only while staging is enabled. */
+export function largestSignupGrant(values: SignupGrantValues): number {
+  const flat = signupGrantPathTotal('defaultFreeCredits', values);
+  return isOn(values.stagedSignupGrantEnabled)
+    ? Math.max(flat, signupGrantPathTotal('signupGrantCredits', values))
+    : flat;
 }
 
 /** Matched verbatim by the log metric filter in infra/signupAlarms.ts; change both together. */
@@ -116,7 +131,7 @@ export const SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE = 'signup-grant-protections-of
 
 /** The exposed state: a grant above the limit is live while a protection is still off, else null. */
 export function signupGrantProtectionGap(
-  values: Partial<Record<SignupGrantKey | SignupGrantProtectionKey, unknown>>
+  values: SignupGrantValues
 ): { largestGrant: number; unset: SignupGrantProtectionKey[] } | null {
   const largestGrant = largestSignupGrant(values);
   if (largestGrant <= LARGE_SIGNUP_GRANT_CREDITS) return null;
@@ -130,6 +145,29 @@ export function signupGrantProtectionGap(
  */
 export function raisesGrantAboveLimit(before: number, after: number): boolean {
   return after > LARGE_SIGNUP_GRANT_CREDITS && after > before;
+}
+
+/**
+ * Protections still off when a save would leave a grant above the limit less protected than before, else
+ * null. Refuses raising either path total (a dormant staged total included, so enabling staging later is
+ * never the first time it is checked), enabling staging over a larger staged total, and turning a
+ * protection off while a large grant is live.
+ */
+export function signupGrantWriteGap(
+  before: SignupGrantValues,
+  after: SignupGrantValues
+): SignupGrantProtectionKey[] | null {
+  const unset = findUnsetSignupProtections(after);
+  if (unset.length === 0) return null;
+  const raisedPath = (['defaultFreeCredits', 'signupGrantCredits'] as const).some(path =>
+    raisesGrantAboveLimit(signupGrantPathTotal(path, before), signupGrantPathTotal(path, after))
+  );
+  const largest = largestSignupGrant(after);
+  const unsetBefore = findUnsetSignupProtections(before);
+  const exposed =
+    largest > LARGE_SIGNUP_GRANT_CREDITS &&
+    (largest > largestSignupGrant(before) || unset.some(key => !unsetBefore.includes(key)));
+  return raisedPath || exposed ? unset : null;
 }
 
 /** Missing new settings preserve the installed grant; migration never enables staging. */

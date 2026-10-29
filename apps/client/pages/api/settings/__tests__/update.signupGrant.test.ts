@@ -124,6 +124,24 @@ describe('settings/update large signup grant guard', () => {
     await expectRefusal(runHandler('defaultFreeCredits', LARGE), /maxSignupsPerIpPerDay/);
   });
 
+  it('refuses turning a protection off while a large grant is live', async () => {
+    rows = [...PROTECTIONS, { settingName: 'defaultFreeCredits', settingValue: 500 }];
+    await expectRefusal(runHandler('signupBurstAutoHold', false), /Refusing to turn off signupBurstAutoHold/);
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows turning a protection off while the grant is at or under the limit', async () => {
+    rows = [...PROTECTIONS, { settingName: 'defaultFreeCredits', settingValue: LARGE_SIGNUP_GRANT_CREDITS }];
+    await runHandler('signupBurstAutoHold', false);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses enabling staging over a staged total above the limit', async () => {
+    rows = [{ settingName: 'signupGrantCredits', settingValue: 500 }];
+    await expectRefusal(runHandler('stagedSignupGrantEnabled', true), /Refusing to raise/);
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
   it('lets an operator lower an over-limit grant while protections are off', async () => {
     rows = [{ settingName: 'defaultFreeCredits', settingValue: 500 }];
     await runHandler('defaultFreeCredits', LARGE);

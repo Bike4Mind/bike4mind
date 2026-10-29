@@ -1,6 +1,5 @@
 import {
-  SIGNUP_GRANT_KEYS,
-  SIGNUP_GRANT_PROTECTION_KEYS,
+  SIGNUP_GRANT_GUARDED_KEYS,
   SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE,
   signupGrantProtectionGap,
   type IAdminSettingsRepository,
@@ -20,7 +19,7 @@ export async function logUnprotectedSignupGrant(
   logger: AlarmLogger
 ): Promise<void> {
   try {
-    const rows = await adminSettings.findBySettingNames([...SIGNUP_GRANT_KEYS, ...SIGNUP_GRANT_PROTECTION_KEYS]);
+    const rows = await adminSettings.findBySettingNames([...SIGNUP_GRANT_GUARDED_KEYS]);
     const gap = signupGrantProtectionGap(Object.fromEntries(rows.map(row => [row.settingName, row.settingValue])));
     if (gap) logger.warn(SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE, gap);
   } catch (error) {

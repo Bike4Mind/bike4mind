@@ -7,6 +7,7 @@ import {
   newSignupGrant,
   raisesGrantAboveLimit,
   signupGrantPathTotal,
+  signupGrantWriteGap,
   resolveSignupGrantSettings,
 } from './signupGrant';
 
@@ -99,9 +100,14 @@ describe('signup grant protections', () => {
 
   it('takes the larger of the flat grant and the staged total', () => {
     expect(largestSignupGrant({ defaultFreeCredits: 80 })).toBe(80);
-    expect(largestSignupGrant({ defaultFreeCredits: 10, signupGrantCredits: '60', verifiedUnlockCredits: '70' })).toBe(
-      130
-    );
+    expect(
+      largestSignupGrant({
+        stagedSignupGrantEnabled: 'true',
+        defaultFreeCredits: 10,
+        signupGrantCredits: '60',
+        verifiedUnlockCredits: '70',
+      })
+    ).toBe(130);
     expect(largestSignupGrant({ defaultFreeCredits: 'junk', signupGrantCredits: -5 })).toBe(0);
   });
 
@@ -119,6 +125,18 @@ describe('signup grant protections', () => {
     expect(signupGrantPathTotal('verifiedUnlockCredits', values)).toBe(510);
   });
 
+  it('ignores the staged total while staging is disabled', () => {
+    const values = { defaultFreeCredits: 50, signupGrantCredits: 500 };
+    expect(largestSignupGrant(values)).toBe(50);
+    expect(largestSignupGrant({ ...values, stagedSignupGrantEnabled: false })).toBe(50);
+    expect(largestSignupGrant({ ...values, stagedSignupGrantEnabled: true })).toBe(500);
+  });
+
+  it('falls back to the flat grant when the staged signup row is missing', () => {
+    expect(signupGrantPathTotal('signupGrantCredits', { defaultFreeCredits: 90, verifiedUnlockCredits: 20 })).toBe(110);
+    expect(signupGrantPathTotal('signupGrantCredits', { defaultFreeCredits: 90, signupGrantCredits: 0 })).toBe(0);
+  });
+
   it('keeps the log message the infra alarm filter matches', () => {
     expect(SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE).toBe('signup-grant-protections-off');
   });
@@ -129,5 +147,47 @@ describe('signup grant protections', () => {
     expect(raisesGrantAboveLimit(500, 500)).toBe(false);
     expect(raisesGrantAboveLimit(500, 200)).toBe(false);
     expect(raisesGrantAboveLimit(500, 501)).toBe(true);
+  });
+});
+
+describe('signupGrantWriteGap', () => {
+  const allOn = {
+    signupGrantRiskPolicy: { enabled: true },
+    maxSignupsPerIpPerDay: 5,
+    maxSignupsPerAsnPerHour: 20,
+    signupBurstAutoHold: true,
+  };
+  const LARGE = LARGE_SIGNUP_GRANT_CREDITS + 1;
+
+  it('refuses raising a grant path above the limit, the dormant staged path included', () => {
+    expect(signupGrantWriteGap({}, { defaultFreeCredits: LARGE })).toContain('signupGrantRiskPolicy');
+    expect(signupGrantWriteGap({}, { signupGrantCredits: LARGE })).toContain('signupGrantRiskPolicy');
+    expect(signupGrantWriteGap({}, { defaultFreeCredits: LARGE_SIGNUP_GRANT_CREDITS })).toBeNull();
+  });
+
+  it('allows any change once every protection is on', () => {
+    expect(signupGrantWriteGap(allOn, { ...allOn, defaultFreeCredits: 5000 })).toBeNull();
+  });
+
+  it('refuses turning a protection off while a large grant is live', () => {
+    const before = { ...allOn, defaultFreeCredits: 500 };
+    expect(signupGrantWriteGap(before, { ...before, maxSignupsPerIpPerDay: 0 })).toEqual(['maxSignupsPerIpPerDay']);
+    expect(signupGrantWriteGap(before, { ...before, signupBurstAutoHold: false })).toEqual(['signupBurstAutoHold']);
+  });
+
+  it('allows turning a protection off while every live grant is at or under the limit', () => {
+    const before = { ...allOn, defaultFreeCredits: 50, signupGrantCredits: 500 };
+    expect(signupGrantWriteGap(before, { ...before, maxSignupsPerIpPerDay: 0 })).toBeNull();
+  });
+
+  it('refuses enabling staging over a staged total above the limit', () => {
+    const before = { defaultFreeCredits: 50, signupGrantCredits: 500, stagedSignupGrantEnabled: false };
+    expect(signupGrantWriteGap(before, { ...before, stagedSignupGrantEnabled: true })).not.toBeNull();
+    const small = { ...before, signupGrantCredits: 50 };
+    expect(signupGrantWriteGap(small, { ...small, stagedSignupGrantEnabled: true })).toBeNull();
+  });
+
+  it('allows lowering an over-limit grant while protections are off', () => {
+    expect(signupGrantWriteGap({ defaultFreeCredits: 500 }, { defaultFreeCredits: LARGE })).toBeNull();
   });
 });
