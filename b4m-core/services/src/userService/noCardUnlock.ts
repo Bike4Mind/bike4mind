@@ -192,7 +192,8 @@ export interface PhoneValidatorDeps {
   code: string;
   /** The E.164 number the start step sent a code to for this user, or null when none is pending. */
   getPendingPhone: (userId: string) => Promise<string | null>;
-  checkCode: (phone: string, code: string) => Promise<boolean>;
+  /** `unavailable` means the provider could not answer, so the user may retry; it is not a wrong code. */
+  checkCode: (phone: string, code: string) => Promise<'approved' | 'rejected' | 'unavailable'>;
   claimPhone: (phone: string, userId: string) => Promise<{ claimed: boolean }>;
   releasePhone: (phone: string, userId: string) => Promise<void>;
 }
@@ -203,7 +204,9 @@ export function phoneValidator(deps: PhoneValidatorDeps): NoCardUnlockValidator 
     if (!phone) return deny('phone_not_started');
     // Re-checked here because a range can be blocked between sending the code and entering it.
     if (isBlockedPhone(phone, deps.settings.phoneBlockedPrefixes)) return deny('phone_blocked');
-    if (!(await deps.checkCode(phone, deps.code))) return deny('phone_code_invalid');
+    const check = await deps.checkCode(phone, deps.code);
+    if (check === 'unavailable') return deny('phone_unavailable');
+    if (check === 'rejected') return deny('phone_code_invalid');
 
     return {
       ok: true,

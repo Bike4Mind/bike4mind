@@ -360,6 +360,17 @@ describe('phone unlock start + verify', () => {
     });
   });
 
+  it('answers retryable, not a server error, when Twilio is down at verify, and keeps the number free', async () => {
+    vi.stubGlobal('fetch', (fetchMock = twilioFetch({ checkStatus: 503 })));
+    const id = await seedUser();
+    await startPhoneUnlock(id, NUMBER, req());
+    expect(await runNoCardUnlock('phone_verified', id, { phoneCode: '123456' })).toMatchObject({
+      creditsGranted: 0,
+      refusal: 'phone_unavailable',
+    });
+    expect(await PhoneUnlockClaim.countDocuments({ phoneHash: hashPhone(NUMBER) })).toBe(0);
+  });
+
   it.each([
     ['a Twilio 5xx', () => new Response('{}', { status: 503 })],
     [

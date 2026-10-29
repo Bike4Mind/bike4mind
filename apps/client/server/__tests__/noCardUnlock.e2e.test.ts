@@ -130,7 +130,7 @@ const build = async (githubId = 1, ageDays = 400, phone = '+14155550100') => {
         settings,
         code: '123456',
         getPendingPhone: async () => phone,
-        checkCode: async () => true,
+        checkCode: async () => 'approved' as const,
         claimPhone: (number, userId) => phoneUnlockClaimRepository.claim(number, userId),
         releasePhone: (number, userId) => phoneUnlockClaimRepository.release(number, userId),
       }),

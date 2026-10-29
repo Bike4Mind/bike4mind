@@ -36,6 +36,7 @@ export class TwilioApiError extends Error {
 /** A Twilio 5xx or our request timeout: the same request may succeed later. */
 export function isTwilioUnavailable(error: unknown): boolean {
   if (error instanceof TwilioApiError) return error.status >= 500;
+  if (error instanceof TypeError) return error.message === 'fetch failed'; // undici's network failure
   return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'TimeoutError';
 }
 
@@ -112,16 +113,17 @@ export async function checkVerificationCode(
   credentials: TwilioCredentials,
   phone: string,
   code: string
-): Promise<boolean> {
+): Promise<'approved' | 'rejected' | 'unavailable'> {
   try {
     const body = await twilioRequest(
       credentials,
       `https://verify.twilio.com/v2/Services/${credentials.verifyServiceSid}/VerificationCheck`,
       { To: phone, Code: code }
     );
-    return body.status === 'approved';
+    return body.status === 'approved' ? 'approved' : 'rejected';
   } catch (error) {
-    if (error instanceof TwilioApiError && (error.status === 404 || error.rateLimited)) return false;
+    if (error instanceof TwilioApiError && (error.status === 404 || error.rateLimited)) return 'rejected';
+    if (isTwilioUnavailable(error)) return 'unavailable';
     throw error;
   }
 }

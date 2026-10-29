@@ -171,7 +171,7 @@ export function phoneUnlockValidator(settings: NoCardUnlockSettings, code: strin
     getPendingPhone,
     checkCode: async (phone, typed) => {
       const credentials = twilioCredentials();
-      return credentials ? checkVerificationCode(credentials, phone, typed) : false;
+      return credentials ? checkVerificationCode(credentials, phone, typed) : 'rejected';
     },
     claimPhone: (phone, userId) => phoneUnlockClaimRepository.claim(hashPhone(phone), userId),
     releasePhone: (phone, userId) => phoneUnlockClaimRepository.release(hashPhone(phone), userId),

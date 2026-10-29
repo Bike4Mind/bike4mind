@@ -54,6 +54,8 @@ describe('isTwilioUnavailable', () => {
     expect(isTwilioUnavailable(new DOMException('timed out', 'TimeoutError'))).toBe(true);
     expect(isTwilioUnavailable(new TwilioApiError(400, 60200))).toBe(false);
     expect(isTwilioUnavailable(new Error('boom'))).toBe(false);
+    expect(isTwilioUnavailable(new TypeError('fetch failed'))).toBe(true);
+    expect(isTwilioUnavailable(new TypeError('x is not a function'))).toBe(false);
   });
 });
 
@@ -106,18 +108,19 @@ describe('Twilio requests', () => {
     });
   });
 
-  it('approves only an approved check, and reads an expired or exhausted check as false', async () => {
+  it('approves only an approved check, rejects an expired or exhausted one, and flags an outage', async () => {
+    const check = () => checkVerificationCode(credentials, '+447700900123', '123456');
     respond(200, { status: 'approved' });
-    expect(await checkVerificationCode(credentials, '+447700900123', '123456')).toBe(true);
+    expect(await check()).toBe('approved');
     respond(200, { status: 'pending' });
-    expect(await checkVerificationCode(credentials, '+447700900123', '123456')).toBe(false);
+    expect(await check()).toBe('rejected');
     respond(404, { code: 20404 });
-    expect(await checkVerificationCode(credentials, '+447700900123', '123456')).toBe(false);
+    expect(await check()).toBe('rejected');
     respond(429, { code: 60202 });
-    expect(await checkVerificationCode(credentials, '+447700900123', '123456')).toBe(false);
+    expect(await check()).toBe('rejected');
     respond(500, {});
-    expect(await rejection(checkVerificationCode(credentials, '+447700900123', '123456'))).toBeInstanceOf(
-      TwilioApiError
-    );
+    expect(await check()).toBe('unavailable');
+    respond(400, { code: 60200 });
+    expect(await rejection(check())).toBeInstanceOf(TwilioApiError);
   });
 });

@@ -237,7 +237,7 @@ describe('phoneValidator', () => {
     settings: settings({ noCardUnlockPhoneEnabled: true, noCardUnlockPhoneCredits: 5 }),
     code: '123456',
     getPendingPhone: vi.fn(async () => PHONE),
-    checkCode: vi.fn(async () => true),
+    checkCode: vi.fn(async () => 'approved' as const),
     claimPhone: vi.fn(async () => ({ claimed: true })),
     releasePhone: vi.fn(async () => undefined),
     ...over,
@@ -272,8 +272,13 @@ describe('phoneValidator', () => {
   });
 
   it('refuses a wrong code', async () => {
-    const deps = phoneDeps({ checkCode: vi.fn(async () => false) });
+    const deps = phoneDeps({ checkCode: vi.fn(async () => 'rejected' as const) });
     expect(await phoneValidator(deps)(user)).toEqual({ ok: false, refusal: 'phone_code_invalid' });
+  });
+
+  it('refuses as retryable, not as a wrong code, when the provider cannot answer', async () => {
+    const deps = phoneDeps({ checkCode: vi.fn(async () => 'unavailable' as const) });
+    expect(await phoneValidator(deps)(user)).toEqual({ ok: false, refusal: 'phone_unavailable' });
   });
 
   it('refuses a number another account already unlocked with', async () => {
