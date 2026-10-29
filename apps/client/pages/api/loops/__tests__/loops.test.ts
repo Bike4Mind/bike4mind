@@ -37,9 +37,15 @@ const repo = vi.hoisted(() => ({
   deleteForUser: vi.fn(),
   create: vi.fn(),
 }));
+const tickets = vi.hoisted(() => ({
+  softDeleteByLoop: vi.fn(),
+  listForLoop: vi.fn(),
+  findManyByIdsForUser: vi.fn(),
+}));
 const settings = vi.hoisted(() => ({ EnableLoops: true as unknown }));
 vi.mock('@bike4mind/database', () => ({
   loopRepository: repo,
+  workItemRepository: tickets,
   adminSettingsRepository: {
     getSettingsValue: async (key: string) => settings[key as 'EnableLoops'],
     findAll: async () => [],
@@ -61,6 +67,8 @@ currentModule.name = 'item';
 await import('@pages/api/loops/[id]/index');
 currentModule.name = 'run';
 await import('@pages/api/loops/[id]/run');
+currentModule.name = 'tickets';
+await import('@pages/api/loops/[id]/tickets');
 
 const OID = '507f1f77bcf86cd799439011';
 
@@ -307,6 +315,60 @@ describe('DELETE /api/loops/:id', () => {
     const { res, result } = call('item', 'delete', { query: { id: OID } });
     await result;
     expect(repo.deleteForUser).toHaveBeenCalledWith(OID, 'u1');
+    expect(tickets.softDeleteByLoop).toHaveBeenCalledWith('u1', OID);
     expect(res._getStatusCode()).toBe(204);
+  });
+});
+
+describe('GET /api/loops/:id/tickets', () => {
+  const ticket = (overrides: Record<string, unknown>) => ({
+    id: 't',
+    title: 'T',
+    status: 'open',
+    dependencies: [],
+    updatedAt: new Date(),
+    ...overrides,
+  });
+
+  it('is session-only', () => {
+    expect(baseApiOptions.tickets).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it("groups tickets by the loop's stage order and marks readiness", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'doing', 'done'] }));
+    tickets.listForLoop.mockResolvedValue([
+      ticket({ id: 'a', stage: 'doing' }),
+      ticket({ id: 'b', stage: 'todo', dependencies: ['a'] }),
+      ticket({ id: 'c', stage: 'done', status: 'closed' }),
+      ticket({ id: 'd', stage: 'removed-stage' }),
+    ]);
+    tickets.findManyByIdsForUser.mockResolvedValue([ticket({ id: 'a', status: 'open' })]);
+
+    const { res, result } = call('tickets', 'get', { query: { id: OID } });
+    await result;
+
+    const { stages } = res._getJSONData();
+    expect(stages.map((group: { stage: string }) => group.stage)).toEqual(['todo', 'doing', 'done']);
+    expect(stages[0].tickets.map((t: { id: string; ready: boolean }) => [t.id, t.ready])).toEqual([
+      ['b', false],
+      ['d', true],
+    ]);
+    expect(stages[1].tickets[0]).toMatchObject({ id: 'a', ready: true });
+    expect(stages[2].tickets[0]).toMatchObject({ id: 'c', ready: false });
+    expect(tickets.listForLoop).toHaveBeenCalledWith('u1', OID, 50);
+  });
+
+  it("is a 404 for another user's loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValue(null);
+    await expect(call('tickets', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('is a 404 when EnableLoops is off', async () => {
+    settings.EnableLoops = false;
+    try {
+      await expect(call('tickets', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
+    } finally {
+      settings.EnableLoops = true;
+    }
   });
 });

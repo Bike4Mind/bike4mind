@@ -27,6 +27,9 @@ const ModelName = 'WorkItem';
  */
 export const MAX_GRAPH_ITEMS = 2000;
 
+/** ponytail: candidate window for `findNextReadyForLoop`; a loop with more open tickets than this can starve the tail. */
+const LOOP_READY_CANDIDATES = 200;
+
 export interface IWorkItemModel extends Model<IWorkItem> {}
 
 export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWorkItemRepository {
@@ -75,8 +78,11 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     const { items, truncated } = await this.loadAllForUser(userId);
     const statusById = new Map(items.map(item => [item.id, item.status]));
 
+    // Readiness is computed over every item so a dependency on a loop ticket is honoured, but loop
+    // tickets themselves are worked by their loop, not offered here.
     const data = items.filter(
       item =>
+        !item.loopId &&
         item.status === 'open' &&
         item.dependencies.every(depId => {
           const depStatus = statusById.get(depId);
@@ -108,17 +114,80 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     };
   }
 
+  async findNextReadyForLoop(userId: string, loopId: string, lastStage: string): Promise<IWorkItem | null> {
+    const candidates = (
+      await this.workItemModel
+        .find({ userId, loopId, deletedAt: null, status: 'open', stage: { $ne: lastStage } })
+        .sort({ createdAt: 1 })
+        .limit(LOOP_READY_CANDIDATES)
+    ).map(doc => doc.toJSON());
+    const depIds = [...new Set(candidates.flatMap(item => item.dependencies))];
+    const deps = await this.findManyByIdsForUser(depIds, userId);
+    const open = new Set(deps.filter(dep => dep.status !== 'closed').map(dep => dep.id));
+    return candidates.find(item => item.dependencies.every(depId => !open.has(depId))) ?? null;
+  }
+
+  async claimForRun(id: string): Promise<IWorkItem | null> {
+    const result = await this.workItemModel.findOneAndUpdate(
+      { _id: id, deletedAt: null, status: 'open' },
+      { $set: { status: 'in_progress' } },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setExecution(id: string, executionId: string): Promise<void> {
+    await this.workItemModel.updateOne({ _id: id }, { $set: { executionId } });
+  }
+
+  async releaseClaim(id: string): Promise<void> {
+    await this.workItemModel.updateOne(
+      { _id: id, status: 'in_progress' },
+      { $set: { status: 'open' }, $unset: { executionId: '' } }
+    );
+  }
+
+  async findByExecutionId(executionId: string): Promise<IWorkItem | null> {
+    const result = await this.workItemModel.findOne({ executionId, deletedAt: null });
+    return result?.toJSON() ?? null;
+  }
+
+  async foldTicketRun(id: string, executionId: string, patch: WorkItemPatch): Promise<boolean> {
+    const { set, unset } = splitPatch(patch);
+    const result = await this.workItemModel.updateOne(
+      { _id: id, executionId, status: 'in_progress', deletedAt: null },
+      {
+        ...(Object.keys(set).length > 0 && { $set: set }),
+        ...(Object.keys(unset).length > 0 && { $unset: unset }),
+      }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async listForLoop(userId: string, loopId: string, closedLimit: number): Promise<IWorkItem[]> {
+    const scope = { userId, loopId, deletedAt: null };
+    const [active, closed] = await Promise.all([
+      this.workItemModel.find({ ...scope, status: { $ne: 'closed' } }).sort({ createdAt: 1 }),
+      this.workItemModel
+        .find({ ...scope, status: 'closed' })
+        .sort({ closedAt: -1 })
+        .limit(closedLimit),
+    ]);
+    return [...active, ...closed].map(doc => doc.toJSON());
+  }
+
+  async softDeleteByLoop(userId: string, loopId: string): Promise<number> {
+    const result = await this.workItemModel.updateMany(
+      { userId, loopId, deletedAt: null },
+      { $set: { deletedAt: new Date() } }
+    );
+    return result.modifiedCount;
+  }
+
   async updateForUser(id: string, userId: string, patch: WorkItemPatch): Promise<IWorkItem | null> {
     if (!mongoose.isValidObjectId(id)) return null;
 
-    // A `null` in the patch means "clear this field", which only $unset can do.
-    const set: Record<string, unknown> = {};
-    const unset: Record<string, ''> = {};
-    for (const [key, value] of Object.entries(patch)) {
-      if (value === null) unset[key] = '';
-      else if (value !== undefined) set[key] = value;
-    }
-
+    const { set, unset } = splitPatch(patch);
     const result = await this.workItemModel.findOneAndUpdate(
       { _id: id, userId, deletedAt: null },
       {
@@ -161,6 +230,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     if (filters.organizationId) {
       conditions.organizationId = filters.organizationId;
     }
+    // `null` also matches a missing field, so plain items list as before and loop tickets stay out.
+    conditions.loopId = filters.loopId ?? null;
     if (filters.search) {
       // Escape metacharacters: `search` comes straight off the query string, and
       // a pattern like `(a+)+$` would hang the Lambda on backtracking.
@@ -181,6 +252,17 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
       .limit(MAX_GRAPH_ITEMS);
     return { items: results.map(doc => doc.toJSON()), truncated: results.length === MAX_GRAPH_ITEMS };
   }
+}
+
+/** A `null` in a patch means "clear this field", which only $unset can do. */
+function splitPatch(patch: WorkItemPatch): { set: Record<string, unknown>; unset: Record<string, ''> } {
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, ''> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) unset[key] = '';
+    else if (value !== undefined) set[key] = value;
+  }
+  return { set, unset };
 }
 
 /** Stand-in node id for a dependency set proposed by a create that has no id yet. */
@@ -246,6 +328,10 @@ export const WorkItemSchema = new Schema<IWorkItem, IWorkItemModel>(
     status: { type: String, enum: WORK_ITEM_STATUSES, required: true, default: 'open' },
     dependencies: { type: [String], default: [] },
     closedAt: { type: Date },
+    loopId: { type: String },
+    stage: { type: String },
+    executionId: { type: String },
+    statusReason: { type: String },
   },
   {
     timestamps: { createdAt: true, updatedAt: true },
@@ -260,6 +346,8 @@ WorkItemSchema.plugin(softDeletePlugin);
 // the bottom, never as `index: true` on field definitions.
 WorkItemSchema.index({ userId: 1, deletedAt: 1, status: 1 });
 WorkItemSchema.index({ userId: 1, deletedAt: 1, updatedAt: -1 });
+WorkItemSchema.index({ loopId: 1, deletedAt: 1, status: 1, stage: 1 });
+WorkItemSchema.index({ executionId: 1 }, { partialFilterExpression: { executionId: { $exists: true } } });
 
 export const WorkItem: IWorkItemModel =
   (mongoose.models[ModelName] as unknown as IWorkItemModel) ??

@@ -331,6 +331,11 @@ export interface IAgentExecution {
    */
   enableLattice?: boolean;
   /**
+   * The loop that dispatched this run. Its presence gives the run the `loop_ticket_*` tools
+   * (re-read on every invocation, like `enableLattice`).
+   */
+  loopId?: string;
+  /**
    * The caller's per-request artifact intent, mirroring the chat surface's `enableArtifacts` body
    * field. Combined with the admin `EnableArtifacts` setting by `resolveArtifactsEnabled`, so only
    * an explicit `false` opts out and `undefined` leaves the admin setting as the only gate.
@@ -777,6 +782,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // Feature-parity flags
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
+    loopId: { type: String },
     enableArtifacts: { type: Boolean },
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").

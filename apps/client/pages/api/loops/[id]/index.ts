@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { loopRepository } from '@bike4mind/database';
+import { loopRepository, workItemRepository } from '@bike4mind/database';
 import { ILoop } from '@bike4mind/common';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -73,6 +73,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const id = String(req.query.id);
     // The notebook stays: it holds the loop's run history.
     if (!(await loopRepository.deleteForUser(id, req.user!.id))) throw notFound(id);
+    await workItemRepository.softDeleteByLoop(req.user!.id, id);
     res.status(204).end();
   });
 

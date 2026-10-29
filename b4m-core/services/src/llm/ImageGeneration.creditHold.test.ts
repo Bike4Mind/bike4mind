@@ -80,9 +80,13 @@ const makeWallet = (balance: number) => {
   return { state, users, creditHolds };
 };
 
-const makeService = (wallet: ReturnType<typeof makeWallet>) => {
+const makeService = (
+  wallet: ReturnType<typeof makeWallet>,
+  assertModelAdmission: ConstructorParameters<typeof ImageGenerationService>[0]['assertModelAdmission'] = async () => {}
+) => {
   const quests = new Map<string, { id: string; sessionId: string; status?: string; errorCode?: string }>();
   const service = new ImageGenerationService({
+    assertModelAdmission,
     db: {
       quests: {
         findById: vi.fn(async (id: string) => {
@@ -110,12 +114,19 @@ const makeService = (wallet: ReturnType<typeof makeWallet>) => {
     wsHttpsUrl: 'https://ws.example.com',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a partial db fake for the billing path only
   } as any);
-  const run = (questId: string) =>
+  const run = (questId: string, adminRoleWithheld?: boolean) =>
     service.process({
-      body: { sessionId: 'session1', questId, userId: 'user1', prompt: 'a red bicycle', model: MODEL },
+      body: {
+        sessionId: 'session1',
+        questId,
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model: MODEL,
+        adminRoleWithheld,
+      },
       logger: silentLogger,
     });
-  return { run, quests };
+  return { service, run, quests };
 };
 
 describe('ImageGenerationService credit hold', () => {
@@ -129,11 +140,46 @@ describe('ImageGenerationService credit hold', () => {
     );
   });
 
+  it('refuses a queued paid-only image before the credit hold or provider call', async () => {
+    const wallet = makeWallet(10_000);
+    const assertAdmission = vi.fn(async () => {
+      throw new Error('paid plan required');
+    });
+    const { run } = makeService(wallet, assertAdmission);
+    await run('paid-only', true);
+    expect(assertAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), MODEL, true);
+    expect(wallet.state.balance).toBe(10_000);
+    expect(wallet.users.incrementCredits).not.toHaveBeenCalled();
+    expect(mockGeminiGenerate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a paid-only image before enqueueing and gates the remapped model', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async () => {
+      throw refusal;
+    });
+    const { service } = makeService(makeWallet(10_000), assertAdmission);
+    await expect(
+      service.invoke({
+        userId: 'user1',
+        adminRoleWithheld: true,
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'image',
+          model: ImageModels.GPT_IMAGE_2,
+          background: 'transparent',
+        },
+      })
+    ).rejects.toBe(refusal);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, true);
+  });
+
   it('lets only as many concurrent generations through as the balance covers', async () => {
     const wallet = makeWallet(ONE_IMAGE_CREDITS);
     const { run, quests } = makeService(wallet);
 
-    await Promise.all(['q1', 'q2', 'q3', 'q4'].map(run));
+    await Promise.all(['q1', 'q2', 'q3', 'q4'].map(questId => run(questId)));
 
     const outcomes = [...quests.values()];
     expect(outcomes.filter(q => q.status === 'done' && !q.errorCode)).toHaveLength(1);

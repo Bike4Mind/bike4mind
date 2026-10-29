@@ -11,6 +11,12 @@ export const LOOP_STATUSES = ['draft', 'live', 'paused', 'needs_you', 'error'] a
 
 export type LoopStatus = (typeof LOOP_STATUSES)[number];
 
+/**
+ * Server agent tools offered only on loop runs (`apps/workers/src/queueHandlers/agentExecutor.loopTicketTools.ts`).
+ * Pre-approved on headless loop runs in `startAgentExecution`.
+ */
+export const LOOP_TICKET_TOOL_NAMES = ['loop_ticket_list', 'loop_ticket_create', 'loop_ticket_update'] as const;
+
 export const DEFAULT_LOOP_STAGES: readonly string[] = ['todo', 'doing', 'done'];
 
 /** State carried from one run to the next. */
@@ -92,6 +98,8 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
     executionId: string,
     update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
   ): Promise<boolean>;
+  /** Pulls a `live` loop's `nextRunAt` forward to `now`; used when one of its tickets becomes ready. */
+  makeDueNow(id: string, now: Date): Promise<void>;
   /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
   markErroredIfFailing(id: string, maxFailures: number): Promise<void>;
 }
