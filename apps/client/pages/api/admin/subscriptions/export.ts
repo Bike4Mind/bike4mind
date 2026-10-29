@@ -5,6 +5,7 @@ import {
   ADMIN_SUBSCRIPTIONS_EXPORT_MAX_ROWS,
   ADMIN_SUBSCRIPTIONS_LIST_MAX,
   AdminSubscriptionsFilterSchema,
+  planIntervalLabel,
   type AdminSubscriptionMrr,
   type AdminSubscriptionRow,
 } from '@client/app/utils/adminSubscriptionsFilter';
@@ -67,7 +68,7 @@ const toCsvLine = (row: AdminSubscriptionRow): string => {
     escapeCsvCell(row.ownerId),
     escapeCsvCell(owner?.stripeCustomerId ?? ''),
     escapeCsvCell(row.plan.name ?? 'Unknown plan'),
-    escapeCsvCell(row.plan.interval ?? ''),
+    escapeCsvCell(planIntervalLabel(row) ?? ''),
     escapeCsvCell(row.plan.priceId ?? ''),
     escapeCsvCell(row.status),
     escapeCsvCell(row.source),

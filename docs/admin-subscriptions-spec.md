@@ -423,7 +423,7 @@ MRR on the list and summary routes (5.3 definition):
 
 The summary aggregates both in the same facet query as the counts, grouping by currency, interval and whether an amount is mirrored with only `$match`, `$group`, `$sum`, `$multiply`, `$ifNull` and `$ne`, so it runs unchanged under DocumentDB's split-facet path (`executeFacetCompatible`). The normalization to a month happens on the grouped sums in code.
 
-The CSV export carries the list's MRR column as two columns after Source: `MRR` (major units at the currency's precision, "19.00", blank where the row has none) and `MRR currency` ("USD").
+The CSV export carries the list's MRR column as two columns after Source: `MRR` (major units at the currency's precision, "19.00", blank where the row has none) and `MRR currency` ("USD"). Its Interval column writes the Plan column's label ("Yearly", "Every 3 months": the billed interval, else the catalog plan's), so the export and the list agree.
 
 The old `GET /api/subscriptions` and `/stats` admin routes are deleted once nothing reads them.
 

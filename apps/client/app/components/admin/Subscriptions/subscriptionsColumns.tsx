@@ -3,10 +3,9 @@ import { Building2 } from 'lucide-react';
 import {
   MRR_CURRENCY,
   countsTowardMrr,
-  type AdminSubscriptionPlan,
+  planIntervalLabel,
   type AdminSubscriptionRow,
   type AdminSubscriptionsSortField,
-  type BilledInterval,
 } from '@client/app/utils/adminSubscriptionsFilter';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import type { DataColumn } from '../shared/DataTable';
@@ -18,28 +17,6 @@ import { isNewSince } from './subscriptionsLastSeen';
 import { COMPED_DISPLAY, isCompedRow, subscriptionStatusDisplay } from './subscriptionStatusTone';
 
 const DAY_MS = 86_400_000;
-
-const CATALOG_INTERVAL_LABELS: Record<NonNullable<AdminSubscriptionPlan['interval']>, string> = {
-  monthly: 'Monthly',
-  yearly: 'Yearly',
-};
-
-const BILLED_INTERVAL_LABELS: Record<BilledInterval, { single: string; plural: string }> = {
-  day: { single: 'Daily', plural: 'days' },
-  week: { single: 'Weekly', plural: 'weeks' },
-  month: { single: 'Monthly', plural: 'months' },
-  year: { single: 'Yearly', plural: 'years' },
-};
-
-/** "Yearly", "Every 3 months": what Stripe bills, else the catalog plan's interval for a row with none mirrored. */
-export function planIntervalLabel(row: Pick<AdminSubscriptionRow, 'billedInterval' | 'plan'>): string | null {
-  const billed = row.billedInterval;
-  if (billed) {
-    const labels = BILLED_INTERVAL_LABELS[billed.interval];
-    return billed.intervalCount === 1 ? labels.single : `Every ${billed.intervalCount} ${labels.plural}`;
-  }
-  return row.plan.interval ? CATALOG_INTERVAL_LABELS[row.plan.interval] : null;
-}
 
 /** Columns sortable on the server map to these fields. */
 export const SUBSCRIPTIONS_SORT_COLUMNS: Record<string, AdminSubscriptionsSortField> = {
