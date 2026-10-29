@@ -2030,6 +2030,25 @@ describe('Context Management Tests', () => {
         ]);
         for (const toolTurn of meta.toolTurns ?? []) expect(messages).toContain(toolTurn.prompt);
       });
+
+      it("leaves out a session's first prompt, kept in history as the current turn", async () => {
+        const items = [makeItem(1, { promptMeta: { offeredTools: [] } })];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [messages, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(messages.some(m => m.role === 'user')).toBe(true);
+        expect(meta.toolTurns).toEqual([]);
+      });
+
+      it('keeps the only prior turn once the current prompt is popped', async () => {
+        const items = [makeItem(2), makeItem(1, { promptMeta: { offeredTools: ['web_fetch'] } })];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.toolTurns?.map(t => t.offeredTools)).toEqual([['web_fetch']]);
+      });
     });
 
     // Priority 2 rebuilds tool_use/tool_result pairs from promptMeta.functionCalls when

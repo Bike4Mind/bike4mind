@@ -728,6 +728,7 @@ export async function fetchAndProcessPreviousMessages(
 
   // Keep the current prompt if it is the only item, so a session's first prompt stays in history -
   // unless the caller needs history to hold no part of the current turn (see excludeCurrentPrompt).
+  const keptCurrentPrompt = chatHistoryItems.length === 1 && !excludeCurrentPrompt ? chatHistoryItems[0] : undefined;
   if (chatHistoryItems.length > 1 || excludeCurrentPrompt) {
     chatHistoryItems.pop();
   }
@@ -829,13 +830,17 @@ export async function fetchAndProcessPreviousMessages(
     if (cur.prompt) {
       const prompt: IMessage = { role: 'user', content: cur.prompt };
       acc.push(prompt);
-      toolTurns.push({
-        prompt,
-        offeredTools: cur.promptMeta?.offeredTools,
-        calledTools: (cur.promptMeta?.functionCalls ?? [])
-          .map(fc => fc.name)
-          .filter((name): name is string => Boolean(name)),
-      });
+      // The kept current prompt is this turn, not a replayed one: its offeredTools is still the
+      // schema's empty default, which would read as a first turn that offered no tools.
+      if (cur !== keptCurrentPrompt) {
+        toolTurns.push({
+          prompt,
+          offeredTools: cur.promptMeta?.offeredTools,
+          calledTools: (cur.promptMeta?.functionCalls ?? [])
+            .map(fc => fc.name)
+            .filter((name): name is string => Boolean(name)),
+        });
+      }
     }
 
     const toolCalls = replayableToolCalls(cur.promptMeta?.functionCalls);

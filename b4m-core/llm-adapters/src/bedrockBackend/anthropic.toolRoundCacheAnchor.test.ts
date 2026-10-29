@@ -34,9 +34,9 @@ const messages: IMessage[] = [
   { role: 'user', content: TURN_END },
 ];
 
-const wireMessages = (toolCallCount: number): WireMessage[] => {
+const wireMessages = (toolCallCount: number, input: IMessage[] = messages): WireMessage[] => {
   const backend = new AnthropicBedrockBackend();
-  const payload = backend.getPayload(MODEL, messages, {
+  const payload = backend.getPayload(MODEL, backend.formatMessages(input), {
     cacheStrategy: strategy,
     maxTokens: 1024,
     _internal: { toolCallCount },
@@ -64,5 +64,30 @@ describe('AnthropicBedrockBackend history anchor on a tool round', () => {
     expect(JSON.stringify(sent.at(-1)?.content)).toContain(TURN_END);
     expect(marked(sent, TURN_END)).toBe(true);
     expect(marked(sent, HISTORY_ANCHOR)).toBe(true);
+  });
+
+  describe('with a lookback breakpoint flagged ahead of the history anchor', () => {
+    const LOOKBACK = 'older answer';
+    const withLookback: IMessage[] = [
+      { role: 'system', content: 'stable head' },
+      { role: 'user', content: 'older question' },
+      { role: 'assistant', content: LOOKBACK, cache: true },
+      ...messages.slice(1),
+    ];
+
+    it('keeps both flags on the first call', () => {
+      const sent = wireMessages(0, withLookback);
+
+      expect(marked(sent, LOOKBACK)).toBe(true);
+      expect(marked(sent, HISTORY_ANCHOR)).toBe(true);
+    });
+
+    it('drops the spent lookback flag on a later round, keeping the newest flag and the end anchor', () => {
+      const sent = wireMessages(1, withLookback);
+
+      expect(marked(sent, LOOKBACK)).toBe(false);
+      expect(marked(sent, HISTORY_ANCHOR)).toBe(true);
+      expect(marked(sent, TURN_END)).toBe(true);
+    });
   });
 });
