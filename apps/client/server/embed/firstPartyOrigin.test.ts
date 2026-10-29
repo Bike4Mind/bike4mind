@@ -65,6 +65,12 @@ describe('resolveEmbedOriginDecision', () => {
     expect(resolveEmbedOriginDecision(undefined, undefined, 'app.example.com')).toBe(true);
   });
 
+  it('allows only the first-party origin when the key lists no origins', () => {
+    expect(resolveEmbedOriginDecision('https://app.example.com', [], 'app.example.com')).toBe(true);
+    expect(resolveEmbedOriginDecision('http://localhost:3000', undefined, 'localhost:3000')).toBe(true);
+    expect(resolveEmbedOriginDecision('https://other.example.com', [], 'app.example.com')).toBe(false);
+  });
+
   it('applies the allow-list and first-party rules to any other origin', () => {
     expect(resolveEmbedOriginDecision('https://host.example.com', allowed, 'app.example.com')).toBe(true);
     expect(resolveEmbedOriginDecision('https://other.example.com', allowed, 'app.example.com')).toBe(false);

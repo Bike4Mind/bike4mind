@@ -360,6 +360,9 @@ describe('POST /api/embed/chat', () => {
     mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
     const res = await post(CHAT, { origin: 'null' });
     expect(res.status).toBe(403);
+    expect(((await res.json()) as Record<string, unknown>).error_description).toBe(
+      'Origin not allowed for this embed key'
+    );
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
@@ -532,6 +535,26 @@ describe('POST /api/embed/chat', () => {
       body: JSON.stringify(CHAT),
     });
     expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('denies an opaque origin on the session-token path when the live key lists no origins', async () => {
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+    });
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const res = await fetch(`${baseUrl}/api/embed/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer session.jwt.token', origin: 'null' },
+      body: JSON.stringify(CHAT),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as Record<string, unknown>).error_description).toBe(
+      'Origin not allowed for this embed key'
+    );
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
