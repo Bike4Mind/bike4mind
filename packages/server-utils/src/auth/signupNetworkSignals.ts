@@ -142,4 +142,3 @@ export function createSignupRiskCollector(network?: SignupNetwork | null) {
     return { datacenter: source.isDatacenter, ...counts };
   };
 }
-
