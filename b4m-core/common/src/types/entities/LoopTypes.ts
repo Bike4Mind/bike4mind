@@ -43,7 +43,7 @@ export interface ILoop {
   /** Notebook every run is grouped under; created with the loop. */
   sessionId: string;
   intervalMinutes: number;
-  /** Tool allowlist, passed as the run's `enabledTools`. Built-in names or `mcp__server__tool`. */
+  /** Tool allowlist, passed as the run's `enabledTools`. Built-in names or `<lowercased server>__<tool>` for MCP tools. */
   tools: string[];
   stages: string[];
   /** Stored only; not enforced yet. */
@@ -65,6 +65,9 @@ export interface ILoop {
   createdAt: Date;
   updatedAt: Date;
 }
+
+/** A loop as the loops API returns it: `creditsUsed` sums its top-level runs still within the execution TTL. */
+export type ILoopWithUsage = ILoop & { creditsUsed: number };
 
 export interface ILoopRepository extends IBaseRepository<ILoop> {
   listForUser(userId: string): Promise<ILoop[]>;

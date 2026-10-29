@@ -10,7 +10,7 @@
  * - `useAgentExecutionSubscriptions()` - registers WS listeners exactly
  *   once at app root. Pipes server events into the Zustand store.
  * - `useAgentExecutionDispatch()` - imperative API for client->server
- *   commands (start / abort / permission_response / reconnect). Typed at
+ *   commands (start / abort / permission_response / reconnect / subscribe). Typed at
  *   the call site since the to-server schema is validated by the
  *   server's own Zod parsers.
  *
@@ -160,12 +160,35 @@ interface AgentExecuteReconnect {
   sessionId?: string;
 }
 
+/** Watch a run this tab does not own; answered with `reconnect_result`. */
+interface AgentExecuteSubscribe {
+  action: 'agent_execute';
+  command: 'subscribe';
+  requestId?: string;
+  executionId: string;
+}
+
+interface AgentExecuteUnsubscribe {
+  action: 'agent_execute';
+  command: 'unsubscribe';
+  executionId: string;
+}
+
 export type AgentExecuteCommand =
   | AgentExecuteStart
   | AgentExecuteAbort
   | AgentExecutePermissionResponse
   | AgentExecuteGateResponse
-  | AgentExecuteReconnect;
+  | AgentExecuteReconnect
+  | AgentExecuteSubscribe
+  | AgentExecuteUnsubscribe;
+
+/** `subscribe` requestId -> executionId, so a bare `found: false` can still mark its viewer "not found". */
+const subscribeRequests = new Map<string, string>();
+/** Viewed runs that already re-subscribed over a skipped iteration; cleared by the next snapshot. */
+const gapResubscribes = new Set<string>();
+
+const isViewed = (executionId: string): boolean => !!useAgentExecutionStore.getState().viewedExecutionIds[executionId];
 
 /** Length cap for the background-completion toast preview. The spec asks for
  * 200 chars; server-side truncation on subagent steps is 2KB, so the final
@@ -306,6 +329,19 @@ export function useAgentExecutionSubscriptions(): void {
     unsubscribers.push(
       subscribeToAction('iteration_step', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'iteration_step') return;
+        // A viewer added after the executor's last viewer read misses frames until the next
+        // read; a step that skips ahead re-hydrates once from the snapshot.
+        const viewed = store().viewedExecutionIds[msg.executionId];
+        const known = store().executions[msg.executionId];
+        if (
+          viewed === 'found' &&
+          known &&
+          msg.iteration > known.lastKnownIteration + 1 &&
+          !gapResubscribes.has(msg.executionId)
+        ) {
+          gapResubscribes.add(msg.executionId);
+          reconnectRef.current(undefined, msg.executionId);
+        }
         store().appendIteration(msg.executionId, {
           iteration: msg.iteration,
           step: msg.step,
@@ -317,7 +353,7 @@ export function useAgentExecutionSubscriptions(): void {
         // dedupeKey is executionId:iteration so a redelivered frame applies once, and
         // is distinct from the completion Quest id used on reload replay (SessionMiddle),
         // so live-apply and replay never collide.
-        if (msg.uiSideEffects?.length) {
+        if (msg.uiSideEffects?.length && !viewed) {
           dispatchUiSideEffects(msg.uiSideEffects, {
             live: true,
             dedupeKey: `${msg.executionId}:${msg.iteration}`,
@@ -346,7 +382,8 @@ export function useAgentExecutionSubscriptions(): void {
           store().setStatus(msg.executionId, msg.status as AgentExecutionStatus);
         }
         // sessionId is set by `execution_started`, which the worker sends before any tool can start a job.
-        const sessionId = store().executions[msg.executionId]?.sessionId;
+        // A viewed run's bubble lives in another tab's chat, not this one's.
+        const sessionId = isViewed(msg.executionId) ? undefined : store().executions[msg.executionId]?.sessionId;
         if (sessionId && msg.questId && msg.generationJobs?.length) {
           addGenerationJobsToRunBubble(queryClient, sessionId, msg.questId, msg.generationJobs);
         }
@@ -372,7 +409,7 @@ export function useAgentExecutionSubscriptions(): void {
         // (which is silently dropped when the client-clock-set updatedAt is
         // ahead of the server's value).
         const sessionId = store().executions[msg.executionId]?.sessionId;
-        if (sessionId && msg.answer) {
+        if (sessionId && msg.answer && !isViewed(msg.executionId)) {
           appendReplyToLatestOptimisticBubble(
             queryClient,
             sessionId,
@@ -402,7 +439,7 @@ export function useAgentExecutionSubscriptions(): void {
         // user sees a chat-history entry for the failed run without waiting
         // on the change-stream subscriber.
         const sessionId = store().executions[msg.executionId]?.sessionId;
-        if (sessionId) {
+        if (sessionId && !isViewed(msg.executionId)) {
           appendReplyToLatestOptimisticBubble(
             queryClient,
             sessionId,
@@ -449,7 +486,7 @@ export function useAgentExecutionSubscriptions(): void {
         // server-side persistRunAsQuest on the abort path writes the real
         // Quest; this just closes the gap before change-stream catches up.
         const sessionId = store().executions[msg.executionId]?.sessionId;
-        if (sessionId) {
+        if (sessionId && !isViewed(msg.executionId)) {
           appendReplyToLatestOptimisticBubble(queryClient, sessionId, 'Stopped by user.', msg.executionId);
         }
       })
@@ -483,6 +520,12 @@ export function useAgentExecutionSubscriptions(): void {
     unsubscribers.push(
       subscribeToAction('reconnect_result', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'reconnect_result') return;
+        const subscribedId = msg.requestId ? subscribeRequests.get(msg.requestId) : undefined;
+        if (msg.requestId) subscribeRequests.delete(msg.requestId);
+        if (subscribedId) {
+          gapResubscribes.delete(subscribedId);
+          if (isViewed(subscribedId)) store().setViewed(subscribedId, msg.found ? 'found' : 'not_found');
+        }
         const reconnectSequence = store().consumeReconnectRequest(
           msg.requestId,
           msg.found ? msg.executionId : undefined,
@@ -804,6 +847,18 @@ export function useAgentExecutionDispatch() {
     const reconnect = (sessionId?: string, executionId?: string, retryAllowed = true) => {
       const requestId = crypto.randomUUID();
       useAgentExecutionStore.getState().registerReconnectRequest(requestId, sessionId, executionId, retryAllowed);
+      // Every re-ask for a viewed run (socket-up sweep, gate-ack timeout, retry) must stay a
+      // `subscribe`: `reconnect` would re-stamp the run's connectionId and take it over.
+      if (executionId && isViewed(executionId)) {
+        subscribeRequests.set(requestId, executionId);
+        sendJsonMessage({
+          action: 'agent_execute',
+          command: 'subscribe',
+          requestId,
+          executionId,
+        } as unknown as Parameters<typeof sendJsonMessage>[0]);
+        return;
+      }
       sendJsonMessage({
         action: 'agent_execute',
         command: 'reconnect',
@@ -811,6 +866,24 @@ export function useAgentExecutionDispatch() {
         sessionId,
         executionId,
       } as unknown as Parameters<typeof sendJsonMessage>[0]);
+    };
+
+    /** Watch a run live (`AgentRunViewer`). A run this tab started in chat already streams here. */
+    const subscribe = (executionId: string) => {
+      const { executions, viewedExecutionIds, setViewed } = useAgentExecutionStore.getState();
+      const viewed = viewedExecutionIds[executionId];
+      if (executions[executionId] && !viewed) return;
+      if (viewed !== 'found') setViewed(executionId, 'pending');
+      reconnect(undefined, executionId);
+    };
+
+    const unsubscribe = (executionId: string) => {
+      if (!isViewed(executionId)) return;
+      sendJsonMessage({ action: 'agent_execute', command: 'unsubscribe', executionId } as unknown as Parameters<
+        typeof sendJsonMessage
+      >[0]);
+      // Dropping the entry also keeps the socket-up sweep from re-asking for it.
+      useAgentExecutionStore.getState().clear(executionId);
     };
 
     return {
@@ -863,6 +936,8 @@ export function useAgentExecutionDispatch() {
         }, GATE_ACK_WINDOW_MS);
       },
       reconnect,
+      subscribe,
+      unsubscribe,
     };
   }, [sendJsonMessage]);
 }

@@ -59,6 +59,40 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('sumCreditsByLoop', () => {
+    it('sums each loop over its top-level runs only', async () => {
+      const [sessionA, sessionB] = ['sa', 'sb'];
+      const parent = await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', totalCreditsUsed: 10 })
+      );
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', totalCreditsUsed: 5 })
+      );
+      // A child's credits already roll up into its parent.
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', parentExecutionId: parent.id, totalCreditsUsed: 99 })
+      );
+      // A hand-started chat in the loop's notebook carries no loopId.
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId: sessionA, totalCreditsUsed: 50 }));
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionB, loopId: 'loopB', totalCreditsUsed: 7 })
+      );
+      // Same loop id outside the requested notebooks.
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: 'other', loopId: 'loopA', totalCreditsUsed: 1000 })
+      );
+
+      expect(await agentExecutionRepository.sumCreditsByLoop(['loopA', 'loopB'], [sessionA, sessionB])).toEqual({
+        loopA: 15,
+        loopB: 7,
+      });
+    });
+
+    it('returns nothing for no loops', async () => {
+      expect(await agentExecutionRepository.sumCreditsByLoop([], [])).toEqual({});
+    });
+  });
+
   describe('countActiveByUserId', () => {
     it('counts top-level executions in any active status', async () => {
       const userId = new mongoose.Types.ObjectId().toString();
@@ -268,6 +302,47 @@ describe('AgentExecutionRepository', () => {
       const updated = await agentExecutionRepository.findById(parent.id);
       expect(updated?.childExecutionIds).toHaveLength(1);
       expect(updated?.childExecutionIds.map(String)).toContain(childId);
+    });
+  });
+
+  describe('viewer connections', () => {
+    it('adds a viewer once and removes it', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+      expect(await agentExecutionRepository.findViewerConnectionIds(execution.id)).toEqual([]);
+
+      await agentExecutionRepository.addViewer(execution.id, 'conn-a');
+      await agentExecutionRepository.addViewer(execution.id, 'conn-a');
+      expect(await agentExecutionRepository.findViewerConnectionIds(execution.id)).toEqual(['conn-a']);
+
+      await agentExecutionRepository.removeViewer(execution.id, 'conn-a');
+      expect(await agentExecutionRepository.findViewerConnectionIds(execution.id)).toEqual([]);
+    });
+
+    it('keeps only the newest 10 viewers', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+      for (let i = 0; i < 11; i++) await agentExecutionRepository.addViewer(execution.id, `conn-${i}`);
+      const ids = await agentExecutionRepository.findViewerConnectionIds(execution.id);
+      expect(ids).toHaveLength(10);
+      expect(ids).not.toContain('conn-0');
+      expect(ids[9]).toBe('conn-10');
+    });
+
+    it('does not change connectionId', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ connectionId: 'owner' }));
+      await agentExecutionRepository.addViewer(execution.id, 'viewer');
+      expect((await agentExecutionRepository.findById(execution.id))?.connectionId).toBe('owner');
+    });
+  });
+
+  describe('findRootExecutionId', () => {
+    it('walks parent and spawnedBy links to the top-level run', async () => {
+      const root = await agentExecutionRepository.create(makeBaseExecution());
+      const child = await agentExecutionRepository.create(makeBaseExecution({ parentExecutionId: root.id }));
+      const grandchild = await agentExecutionRepository.create(
+        makeBaseExecution({ spawnedByExecutionId: child.id, isBackgroundExecution: true })
+      );
+      expect(await agentExecutionRepository.findRootExecutionId(grandchild.id)).toBe(root.id);
+      expect(await agentExecutionRepository.findRootExecutionId(root.id)).toBe(root.id);
     });
   });
 

@@ -542,6 +542,12 @@ export interface IAgentExecution {
   // Connection tracking (for WebSocket streaming)
   connectionId?: string;
 
+  /**
+   * WS connections watching this run via the `subscribe` command. The executor fans frames out to them,
+   * but never uses them for decisions (unlike `connectionId`, which drives `hasApprover`).
+   */
+  viewerConnectionIds?: string[];
+
   // Timing
   startedAt?: Date;
   completedAt?: Date;
@@ -875,6 +881,7 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Connection tracking
     connectionId: { type: String },
+    viewerConnectionIds: { type: [String], default: undefined },
 
     // Timing
     startedAt: { type: Date },
@@ -1087,6 +1094,8 @@ export function parseExecutionListCursor(cursor: string): { createdAt: Date; id:
 
 // --- Repository ---
 
+const MAX_VIEWER_CONNECTIONS = 10;
+
 class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   constructor(private agentExecutionModel: mongoose.Model<IAgentExecution>) {
     super(agentExecutionModel);
@@ -1137,6 +1146,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       .select('status parentExecutionId totalCreditsUsed iterationBilling')
       .sort({ createdAt: 1 });
     return results.map(doc => doc.toObject());
+  }
+
+  /**
+   * Credits per loop over its top-level runs (children already roll up into their parent), keyed by
+   * loop id. `sessionIds` are the loops' notebooks: they narrow the scan to the {sessionId, status}
+   * index, while `loopId` leaves out any chat a user starts by hand in a loop's notebook.
+   */
+  async sumCreditsByLoop(loopIds: string[], sessionIds: string[]): Promise<Record<string, number>> {
+    if (loopIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      { $match: { sessionId: { $in: sessionIds }, loopId: { $in: loopIds }, parentExecutionId: null } },
+      { $group: { _id: '$loopId', credits: { $sum: '$totalCreditsUsed' } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [row._id, row.credits]));
   }
 
   /**
@@ -1499,6 +1522,55 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async updateConnectionId(id: string, connectionId: string): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { connectionId } });
+  }
+
+  /** Adds a viewer connection (deduped), keeping only the newest MAX_VIEWER_CONNECTIONS. */
+  async addViewer(id: string, connectionId: string): Promise<void> {
+    await this.model.updateOne({ _id: id }, [
+      {
+        $set: {
+          viewerConnectionIds: {
+            $slice: [
+              {
+                $concatArrays: [
+                  {
+                    $filter: {
+                      input: { $ifNull: ['$viewerConnectionIds', []] },
+                      cond: { $ne: ['$$this', connectionId] },
+                    },
+                  },
+                  [connectionId],
+                ],
+              },
+              -MAX_VIEWER_CONNECTIONS,
+            ],
+          },
+        },
+      },
+    ]);
+  }
+
+  async removeViewer(id: string, connectionId: string): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $pull: { viewerConnectionIds: connectionId } });
+  }
+
+  async findViewerConnectionIds(id: string): Promise<string[]> {
+    const doc = await this.model.findById(id, { viewerConnectionIds: 1 }).lean<{ viewerConnectionIds?: string[] }>();
+    return doc?.viewerConnectionIds ?? [];
+  }
+
+  /** Walks `parentExecutionId ?? spawnedByExecutionId` up to the top-level run (bounded). */
+  async findRootExecutionId(id: string): Promise<string> {
+    let current = id;
+    for (let hop = 0; hop < 10; hop++) {
+      const doc = await this.model
+        .findById(current, { parentExecutionId: 1, spawnedByExecutionId: 1 })
+        .lean<{ parentExecutionId?: mongoose.Types.ObjectId; spawnedByExecutionId?: mongoose.Types.ObjectId }>();
+      const parent = doc?.parentExecutionId ?? doc?.spawnedByExecutionId;
+      if (!parent) break;
+      current = parent.toString();
+    }
+    return current;
   }
 
   /** Written atomically with profile provenance when the orchestration profile resolves; continuations re-read it

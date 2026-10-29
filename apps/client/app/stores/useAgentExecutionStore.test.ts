@@ -1212,3 +1212,59 @@ describe('useAgentExecutionStore - reconnect request lifetime', () => {
     }
   });
 });
+
+describe('useAgentExecutionStore - duplicate steps (snapshot + live overlap)', () => {
+  beforeEach(resetStore);
+
+  const entry = (content: string, timestamp = 5, toolName?: string) => ({
+    iteration: 1,
+    step: { type: 'observation' as const, content, metadata: { timestamp, toolName } },
+    isComplete: false,
+    receivedAt: timestamp,
+  });
+
+  it('keeps one copy of an exact duplicate, top-level and child', () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('e1', 's1');
+    store.appendIteration('e1', entry('a'));
+    store.appendIteration('e1', entry('a'));
+    store.startChild('e1', { childExecutionId: 'c1', agentName: 'researcher' });
+    store.appendChildIteration('e1', 'c1', entry('a'));
+    store.appendChildIteration('e1', 'c1', entry('a'));
+
+    const exec = useAgentExecutionStore.getState().executions.e1;
+    expect(exec.iterations).toHaveLength(1);
+    expect(exec.childExecutions.c1.iterations).toHaveLength(1);
+  });
+
+  it('keeps parallel observations from the same millisecond', () => {
+    const store = useAgentExecutionStore.getState();
+    store.appendIteration('e1', entry('a', 5, 'web_search'));
+    store.appendIteration('e1', entry('b', 5, 'web_search'));
+    expect(useAgentExecutionStore.getState().executions.e1.iterations).toHaveLength(2);
+  });
+
+  it('always appends steps without metadata', () => {
+    const store = useAgentExecutionStore.getState();
+    const bare = { iteration: 1, step: { type: 'thought' as const, content: 'x' }, isComplete: false, receivedAt: 1 };
+    store.appendIteration('e1', bare);
+    store.appendIteration('e1', bare);
+    expect(useAgentExecutionStore.getState().executions.e1.iterations).toHaveLength(2);
+  });
+});
+
+describe('useAgentExecutionStore - viewed executions', () => {
+  beforeEach(() => useAgentExecutionStore.getState().clearAll());
+
+  it('setViewed tracks the subscribe lifecycle and clear drops it', () => {
+    const store = useAgentExecutionStore.getState();
+    store.setViewed('e1', 'pending');
+    store.setViewed('e1', 'found');
+    expect(useAgentExecutionStore.getState().viewedExecutionIds).toEqual({ e1: 'found' });
+    store.setViewed('e1', undefined);
+    expect(useAgentExecutionStore.getState().viewedExecutionIds).toEqual({});
+    store.setViewed('e2', 'found');
+    store.clear('e2');
+    expect(useAgentExecutionStore.getState().viewedExecutionIds).toEqual({});
+  });
+});

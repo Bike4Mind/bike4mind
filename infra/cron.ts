@@ -1,7 +1,7 @@
 import { execFileSync, execSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { computeHelpCorpusHash } from '@bike4mind/infra';
-import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, runsLoopScheduler, runsScheduledJobs } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
 import {
@@ -569,7 +569,7 @@ const deepAgentWakeCron = runsScheduledJobs
 // Loop scheduler - folds finished loop runs back into their loops, then dispatches due live loops
 // as headless agent executions. Idles (claims nothing) while the EnableLoops admin setting is off.
 const loopSchedulerCron =
-  runsScheduledJobs && loopSchedulerDeadLetter
+  runsLoopScheduler && loopSchedulerDeadLetter
     ? new sst.aws.Cron('loopSchedulerCron', {
         schedule: 'rate(5 minutes)',
         function: {

@@ -8,6 +8,7 @@ const { mocks } = vi.hoisted(() => ({
     getSettingsMap: vi.fn(),
     loadFreeTierAllowedModels: vi.fn(),
     getUserEntitlements: vi.fn(),
+    findAdminSetting: vi.fn(),
   },
 }));
 
@@ -31,7 +32,7 @@ vi.mock('@server/entitlements', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
-  adminSettingsRepository: {},
+  adminSettingsRepository: { findOne: (...a: unknown[]) => mocks.findAdminSetting(...a) },
   cacheRepository: { findOne: vi.fn(async () => null), createOrUpdate: vi.fn(async () => undefined) },
 }));
 // The real getSettingsValue, so the setting is parsed exactly as production parses it.
@@ -41,7 +42,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 
 import { Logger } from '@bike4mind/observability';
-import { getCallerModelList } from './callerModelList';
+import { getCallerModelList, resolveCallerDefaultModel } from './callerModelList';
 
 const textModel = (id: string, overrides: Partial<ModelInfo> = {}): ModelInfo =>
   ({
@@ -74,6 +75,7 @@ beforeEach(() => {
   mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
   mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
   mocks.getUserEntitlements.mockResolvedValue(['base']);
+  mocks.findAdminSetting.mockResolvedValue(null);
 });
 
 describe('getCallerModelList unpriced text models', () => {
@@ -167,5 +169,78 @@ describe('getCallerModelList free-tier gate', () => {
     expect(await listedIds()).toEqual(ungated);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('allowlist read failed'), expect.anything());
     warn.mockRestore();
+  });
+});
+
+describe('resolveCallerDefaultModel', () => {
+  const premium = textModel('premium');
+  const cheap = textModel('cheap');
+  const cheaper = textModel('cheaper');
+  const resolveDefault = (user: IUserDocument = makeUser()) =>
+    resolveCallerDefaultModel('premium', user, { log: vi.fn() });
+
+  beforeEach(() => {
+    mocks.getAvailableModels.mockResolvedValue([premium, cheap, cheaper]);
+    // 'missing' is allowlisted but not listed for this caller, so it is skipped.
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['missing', 'cheaper', 'cheap']));
+  });
+
+  it('starts a free user on the first listed allowlisted model, in admin order', async () => {
+    expect(await resolveDefault()).toBe('cheaper');
+  });
+
+  it('skips a disabled allowlisted model', async () => {
+    mocks.getAvailableModels.mockResolvedValue([premium, cheap, textModel('cheaper', { disabled: true })]);
+
+    expect(await resolveDefault()).toBe('cheap');
+  });
+
+  it('keeps the default when it is allowlisted', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['cheap', 'premium']));
+
+    expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('keeps the default for a user holding plan:paid', async () => {
+    mocks.getUserEntitlements.mockResolvedValue(['base', 'plan:paid']);
+
+    expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('keeps the default for an admin without reading the allowlist', async () => {
+    expect(await resolveDefault(makeUser({ isAdmin: true }))).toBe('premium');
+    expect(mocks.loadFreeTierAllowedModels).not.toHaveBeenCalled();
+  });
+
+  it('keeps the default when the gate is off', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
+
+    expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('keeps the default when no allowlisted model is listed, so admission refuses it', async () => {
+    mocks.getAvailableModels.mockResolvedValue([premium]);
+
+    expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('skips an allowlisted model the admin model config restricts to a tag the user lacks', async () => {
+    mocks.findAdminSetting.mockResolvedValue({
+      settingValue: [{ id: 'cheaper', enabled: true, allowedUserTags: ['beta'], allowedEntitlements: [] }],
+    });
+
+    expect(await resolveDefault()).toBe('cheap');
+  });
+
+  it('propagates an entitlement read failure instead of treating a paid user as free', async () => {
+    mocks.getUserEntitlements.mockRejectedValue(new Error('entitlements down'));
+
+    await expect(resolveDefault()).rejects.toThrow('entitlements down');
+  });
+
+  it('propagates an allowlist read failure instead of opening the gate', async () => {
+    mocks.loadFreeTierAllowedModels.mockRejectedValue(new Error('settings db down'));
+
+    await expect(resolveDefault()).rejects.toThrow('settings db down');
   });
 });

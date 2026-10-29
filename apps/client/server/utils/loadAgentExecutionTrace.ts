@@ -7,7 +7,12 @@
  * this onto its snake_case wire shape; the internal one adds child-execution snapshots.
  */
 
-import { agentExecutionRepository, sessionRepository, type AgentExecutionStatus } from '@bike4mind/database';
+import {
+  agentExecutionRepository,
+  sessionRepository,
+  type AgentExecutionStatus,
+  type IAgentExecution,
+} from '@bike4mind/database';
 import type { IAgentStep } from '@bike4mind/common';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 import { toUserFacingFailureMessage } from '@bike4mind/server-utils/utils/agentFailureMessage';
@@ -51,24 +56,31 @@ export function toCallerSafeError(error: { message?: string; callerSafe?: boolea
 }
 
 /**
+ * Who may read a run's trace. Also gates the WS `subscribe` command (`server/websocket/agentExecute.ts`),
+ * so watching a run live and reading it afterwards cannot disagree.
+ */
+export async function canReadAgentExecution(
+  execution: Pick<IAgentExecution, 'sessionId' | 'userId'>,
+  userId: string
+): Promise<boolean> {
+  // Ownership via the session - mirrors the access check on /api/quests/[id], and lets
+  // a shared session's members read the run.
+  if (execution.sessionId) {
+    const session = await sessionRepository.findById(execution.sessionId);
+    return !!session && isSessionOwnedByUser(session, userId);
+  }
+  // No session linkage (legacy/edge cases): fall back to a direct owner check so we
+  // never leak another user's reasoning trace.
+  return execution.userId === userId;
+}
+
+/**
  * Returns null for "not found OR not yours" - the caller turns that into a 404 either
  * way, so an execution id cannot be probed for existence.
  */
 export async function loadAgentExecutionTrace(id: string, userId: string): Promise<AgentExecutionTrace | null> {
   const execution = await agentExecutionRepository.findById(id);
-  if (!execution) return null;
-
-  // Ownership via the session - mirrors the access check on /api/quests/[id], and lets
-  // a shared session's members read the run.
-  if (execution.sessionId) {
-    const session = await sessionRepository.findById(execution.sessionId);
-    if (!session) return null;
-    if (!isSessionOwnedByUser(session, userId)) return null;
-  } else if (execution.userId !== userId) {
-    // No session linkage (legacy/edge cases): fall back to a direct owner check so we
-    // never leak another user's reasoning trace.
-    return null;
-  }
+  if (!execution || !(await canReadAgentExecution(execution, userId))) return null;
 
   // `result` is stored as Mongoose Mixed; `markComplete` writes
   // `{ answer, steps, totalTokens, totalIterations, reachedMaxIterations }`.

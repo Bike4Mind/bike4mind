@@ -50,7 +50,13 @@ function quantile(sorted: number[], q: number): number {
   return sorted[low] + (sorted[high] - sorted[low]) * (position - low);
 }
 
-async function countByBucket(since: Date, until: Date, unit: 'hour' | 'day', tzOffsetMinutes: number) {
+export async function countByBucket(
+  since: Date,
+  until: Date,
+  unit: 'hour' | 'day',
+  tzOffsetMinutes: number,
+  deadlineMs = QUERY_DEADLINE_MS
+) {
   // Only createdAt is read, so this is a covered scan of the createdAt index.
   const rows = await User.aggregate<{ _id: Date; count: number }>([
     { $match: { createdAt: { $gte: since, $lt: until } } },
@@ -62,18 +68,18 @@ async function countByBucket(since: Date, until: Date, unit: 'hour' | 'day', tzO
     },
   ])
     .hint({ createdAt: 1 })
-    .option({ maxTimeMS: QUERY_DEADLINE_MS });
+    .option({ maxTimeMS: deadlineMs });
   return new Map(rows.map(row => [new Date(row._id).getTime(), row.count]));
 }
 
-async function loadCandidates(since: Date, until: Date) {
+export async function loadCandidates(since: Date, until: Date, deadlineMs = QUERY_DEADLINE_MS) {
   const [users, keys] = await Promise.all([
     User.find({ createdAt: { $gte: since, $lt: until } })
       .select('_id email createdAt lastActiveAt signupMeta.ip signupMeta.isDatacenter signupMeta.wafBotSignal')
       .hint({ createdAt: 1 })
       .sort({ createdAt: -1 })
       .limit(TIMESERIES_SCAN_LIMIT + 1)
-      .maxTimeMS(QUERY_DEADLINE_MS)
+      .maxTimeMS(deadlineMs)
       .lean(),
     // A key made within 24h of a signup in range was itself made in range, so the bounded createdAt
     // scan finds it without an unbounded `userId: { $in }` list.
@@ -81,7 +87,7 @@ async function loadCandidates(since: Date, until: Date) {
       .select('userId createdAt lastUsedAt')
       .hint({ createdAt: 1 })
       .limit(TIMESERIES_KEY_SCAN_LIMIT + 1)
-      .maxTimeMS(QUERY_DEADLINE_MS)
+      .maxTimeMS(deadlineMs)
       .lean(),
   ]);
   const firstKeyAt = new Map<string, Date>();

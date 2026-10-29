@@ -26,6 +26,7 @@ const {
   entitlements,
   userState,
   logEvent,
+  loopsEnabled,
 } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
   useGearsNavSignalMock: vi.fn(),
@@ -49,6 +50,7 @@ const {
     currentUser: undefined as { id?: string; preferences?: { hiddenSurfaces?: string[] } } | undefined,
   },
   logEvent: vi.fn(),
+  loopsEnabled: { value: false },
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -100,6 +102,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('..', () => ({ useNotebookLayout: () => vi.fn() }));
+vi.mock('@client/app/components/Loops/LoopsGate', () => ({ useLoopsEnabled: () => loopsEnabled.value }));
 
 import SidenavNav from './SidenavNav';
 
@@ -126,6 +129,7 @@ beforeEach(() => {
   userState.isAdmin = false;
   userState.currentUser = undefined;
   localStorage.clear();
+  loopsEnabled.value = false;
 });
 
 describe('SidenavNav Opti row', () => {
@@ -174,6 +178,22 @@ describe('SidenavNav feature rows', () => {
     for (const key of ['files', 'projects', 'published', 'skill-market', 'agents']) {
       expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
     }
+  });
+});
+
+describe('SidenavNav Loops row', () => {
+  it('is absent while EnableLoops is off', () => {
+    renderNav();
+    expect(screen.queryByTestId('sidenav-nav-loops')).not.toBeInTheDocument();
+  });
+
+  it('opens /loops and stays active on a loop detail page', () => {
+    loopsEnabled.value = true;
+    location.pathname = '/loops/abc';
+    renderNav();
+    const row = screen.getByTestId('sidenav-nav-loops');
+    fireEvent.click(row);
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops' });
   });
 });
 

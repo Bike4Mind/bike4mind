@@ -25,6 +25,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
+import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
@@ -49,7 +50,8 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       userId: req.user.id,
       logger: req.logger,
     });
-    model = resolved.model;
+    // A free account must not start on a paid-only admin default.
+    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger);
     // Self-host guard: apiKeys/models are populated only there. Fail fast with
     // actionable guidance rather than a cryptic error deep inside the executor.
     if (resolved.apiKeys && resolved.models) {

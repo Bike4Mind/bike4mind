@@ -1,8 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { adminSettingsRepository, loopRepository } from '@bike4mind/database';
+import { adminSettingsRepository, agentExecutionRepository, loopRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { ILoop } from '@bike4mind/common';
+import { ILoop, ILoopWithUsage } from '@bike4mind/common';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { getOrCreateSession } from '@server/managers/sessionCrud';
@@ -25,7 +25,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-collection' }))
   .get(async (req, res) => {
     await assertLoopsEnabled();
-    res.json(await loopRepository.listForUser(req.user!.id));
+    const loops = await loopRepository.listForUser(req.user!.id);
+    const credits = await agentExecutionRepository.sumCreditsByLoop(
+      loops.map(loop => loop.id),
+      loops.map(loop => loop.sessionId)
+    );
+    res.json(loops.map((loop): ILoopWithUsage => ({ ...loop, creditsUsed: credits[loop.id] ?? 0 })));
   })
   .post(async (req, res) => {
     await assertLoopsEnabled();

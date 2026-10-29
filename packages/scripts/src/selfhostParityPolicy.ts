@@ -55,6 +55,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
     'aa48c95e91e528e37c56987140eb2432dc050caa462b4c8f28e9043bf22d4a77'
   ),
+  hostedOnly(
+    'eventRule:infra/analyticsRollup.ts:AnalyticsRollupSchedule',
+    'ed227e7eb331eab93a361fb1ed64533da7ec06fe7e659b7adf747e794bab7abe',
+    'Hosted nightly product-analytics rollup; the self-host worker runner does not schedule it yet.'
+  ),
+  broker(
+    'queue:infra/analyticsRollup.ts:AnalyticsRollupDlq',
+    'ed51b5ae85080c544b6e72f1d517d7c42a55271b0cc262036b31cc42a2669c39'
+  ),
   broker(
     'queue:infra/businessMetricAlerts.ts:businessMetricAlertsDLQ',
     '673c6f139ed9d3c3cb6695ec42bdf0f2da000f8d79e5ed17a00060cdc353549e'
@@ -262,6 +271,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker(
     'queue:infra/eventBus.ts:telemetryAlertRuleDLQ',
     '65f5b9e522854e4e0dc8eab7245b7e37acfc5ad1be8139a52be0d75d981b46a0'
+  ),
+  broker(
+    'queue:infra/loopSchedulerDeadLetter.ts:loopSchedulerDlq',
+    '5b85259ddd18160448733c9a2bd2ef7c29d0e10e07bf4e7f251839b86ff91994'
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
@@ -818,6 +831,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
+  gap('schedule:infra/cron.ts:loopSchedulerCron', '9af087dbb217b9b00921e57b2e7fd5c5dd61e320e2c62297bcbb58890cbe6743', [
+    'lambda:InvokeFunction',
+  ]),
   wired(
     'schedule:infra/cron.ts:modelDiscoveryCron',
     '7f2b05bafc0342ba49618e79c8141efeb1def7b2ef88a4c2a76fbcc1f7b16fb8',
