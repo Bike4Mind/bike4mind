@@ -46,6 +46,10 @@ const LOGIN_ERROR_MESSAGES = {
   // Google/GitHub first sign-in over the per-network signup cap; must equal the server's
   // SIGNUP_LIMITED_MESSAGE (server/utils/auth/oauthFailureReason.ts) so OTC and OAuth read the same.
   signup_limited: 'Too many new accounts from your network. Please try again later.',
+  // Google/GitHub first sign-in refused: no provider-verified email, or a blocked email domain.
+  verified_email_required:
+    'Signing up needs a verified email address from your sign-in provider. Verify it there and try again, or sign up with your email instead.',
+  signup_not_allowed: "We couldn't create an account with this sign-in. Please try another method.",
   server_configuration_error: 'A server configuration issue is preventing sign-in. Please contact your administrator.',
   // Turnstile challenge on the OAuth start route (apps/client/server/utils/auth/oauthStartTurnstile.ts)
   challenge_failed: 'Verification failed. Please try again.',
