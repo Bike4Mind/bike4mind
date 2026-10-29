@@ -217,4 +217,27 @@ describe('AdjustCreditsDialog', () => {
       expect(mocks.update).toHaveBeenLastCalledWith({ creditDelta: -150, creditReason: 'Undo: Goodwill credit' })
     );
   });
+
+  it('blocks confirm when the balance could not be refreshed', async () => {
+    const fetchCredits = vi
+      .fn<() => Promise<number>>()
+      .mockResolvedValueOnce(500)
+      .mockRejectedValueOnce(new Error('network'));
+    render(
+      <LiveProfile fetchCredits={fetchCredits}>
+        {live => <AdjustCreditsDialog user={live} onClose={vi.fn()} />}
+      </LiveProfile>,
+      { wrapper: ProfileTestWrapper }
+    );
+    await waitFor(() => expect(fetchCredits).toHaveBeenCalledTimes(2));
+    typeAmount('800');
+    pickReason();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('adjust-credits-dialog-hint')).toHaveTextContent(
+        'The current balance could not be loaded.'
+      )
+    );
+    expect(confirmButton()).toBeDisabled();
+  });
 });

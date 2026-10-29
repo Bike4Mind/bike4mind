@@ -109,16 +109,25 @@ describe('SuspendDialog', () => {
     expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
   });
 
-  it('refetches the balance on open, so the wipe and its undo use the fresh figure', async () => {
-    const fetchCredits = vi.fn<() => Promise<number>>().mockResolvedValueOnce(500).mockResolvedValueOnce(320);
+  it('refetches the balance on open and holds confirm until it lands, so the wipe and undo use it', async () => {
+    let resolveRefetch: (credits: number) => void = () => undefined;
+    const fetchCredits = vi
+      .fn<() => Promise<number>>()
+      .mockResolvedValueOnce(500)
+      .mockImplementationOnce(() => new Promise(resolve => (resolveRefetch = resolve)));
     render(
       <LiveProfile fetchCredits={fetchCredits}>{live => <SuspendDialog user={live} onClose={vi.fn()} />}</LiveProfile>,
       { wrapper: ProfileTestWrapper }
     );
+    await waitFor(() => expect(fetchCredits).toHaveBeenCalledTimes(2));
 
-    expect(await screen.findByText('Removes 320 credits.')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('suspend-dialog-zero-credits-checkbox'));
     pickReason();
+    fireEvent.click(confirmButton());
+    expect(mocks.update).not.toHaveBeenCalled();
+
+    resolveRefetch(320);
+    expect(await screen.findByText('Removes 320 credits.')).toBeInTheDocument();
     fireEvent.click(confirmButton());
     fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
 
@@ -129,5 +138,24 @@ describe('SuspendDialog', () => {
         creditReason: 'Undo: Abuse / automated signups',
       })
     );
+  });
+
+  it('blocks only the credit wipe when the balance could not be refreshed', async () => {
+    const fetchCredits = vi
+      .fn<() => Promise<number>>()
+      .mockResolvedValueOnce(500)
+      .mockRejectedValueOnce(new Error('network'));
+    render(
+      <LiveProfile fetchCredits={fetchCredits}>{live => <SuspendDialog user={live} onClose={vi.fn()} />}</LiveProfile>,
+      { wrapper: ProfileTestWrapper }
+    );
+    await waitFor(() => expect(fetchCredits).toHaveBeenCalledTimes(2));
+    pickReason();
+    await waitFor(() => expect(confirmButton()).toBeEnabled());
+
+    fireEvent.click(screen.getByTestId('suspend-dialog-zero-credits-checkbox'));
+
+    expect(screen.getByTestId('suspend-dialog-hint')).toHaveTextContent('The current balance could not be loaded.');
+    expect(confirmButton()).toBeDisabled();
   });
 });

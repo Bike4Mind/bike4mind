@@ -85,9 +85,12 @@ export function useGetUsers(params: IGetUsersParams, options?: Partial<UseQueryO
   });
 }
 
+/** The key `useGetUser` caches a user under; the admin profile dialogs refetch it by this key. */
+export const userQueryKey = (id: string | null | undefined) => ['users', id] as const;
+
 export function useGetUser(id: string | null | undefined) {
   return useQuery({
-    queryKey: ['users', id],
+    queryKey: userQueryKey(id),
     queryFn: async () => {
       if (!id) return;
       const { data } = await api.get<WithOrgRef<IUserDocument>>(`/api/users/${id}`);

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { userQueryKey } from '@client/app/hooks/data/user';
 import { UndoToastProvider } from '../../shared';
 import type { AdminUserProfile } from './userProfileModel';
 
@@ -56,7 +57,7 @@ export const LiveProfile = ({
 }) => {
   const user = buildProfile();
   const query = useQuery({
-    queryKey: ['users', user.id],
+    queryKey: userQueryKey(user.id),
     queryFn: async () => ({ ...user, currentCredits: await fetchCredits() }),
     staleTime: Infinity,
   });
