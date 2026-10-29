@@ -29,6 +29,7 @@ export * from './dataLakeSearchDashboard';
 export * from './dlqAlarms';
 export * from './mailAlarms';
 export * from './signupAlarms';
+export * from './turnstileAlarms';
 export * from './accountCreationAlarms';
 export * from './llmSpend';
 export * from './authAbuseAlarms';

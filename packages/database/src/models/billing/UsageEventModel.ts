@@ -205,6 +205,21 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return row?.credits ?? 0;
   }
 
+  async creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    // Lifetime spend on purpose; the {userId, createdAt} index serves it for a bounded id list.
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      { $match: { userId: { $in: userIds } } },
+      {
+        $group: {
+          _id: '$userId',
+          credits: { $sum: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] } },
+        },
+      },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
+  }
+
   async marginByModelDay(since?: Date): Promise<IModelDayMargin[]> {
     const from = since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     return this.model.aggregate<IModelDayMargin>([

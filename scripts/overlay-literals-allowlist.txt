@@ -13,7 +13,6 @@ apps/client/app/components/admin/content/apiReferenceContent.test.ts
 apps/client/app/components/admin/SystemPromptEditor.tsx
 apps/client/app/components/admin/Users/Details/AdminGenerateApiKeyModal.test.tsx
 apps/client/app/components/admin/Users/ProductAccess.test.tsx
-apps/client/app/components/admin/Users/UserPermissions.test.tsx
 apps/client/app/components/datalake/dataLakeBranding.tsx
 apps/client/app/components/datalake/DataLakeToggle.tsx
 apps/client/app/components/datalake/deckChrome.tsx

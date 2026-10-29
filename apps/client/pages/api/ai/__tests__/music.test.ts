@@ -1,3 +1,12 @@
+import { ForbiddenError } from '@bike4mind/utils';
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: vi.fn(async () => ({
+    assert: vi.fn(async (_modelId: string) => {}),
+    admits: vi.fn(async (_modelId: string) => true),
+  })),
+}));
+
 import { CREDITS_PER_USD_COST, CreditHolderType, isZodError } from '@bike4mind/common';
 import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { createMocks } from 'node-mocks-http';
@@ -229,6 +238,21 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/music', () => {
+  it('refuses an unlisted model before holding credits or calling the provider', async () => {
+    const refusal = new ForbiddenError('paid plan required', { errorCode: 'model_requires_subscription' });
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const { promise, res } = run({ prompt: 'a song', modelId: 'music_v1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }));
+    expect(assertAdmission).toHaveBeenCalledWith('music_v1');
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it('passes skipCache for enforceCredits so an admin flip applies on the next request', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
