@@ -10,6 +10,7 @@ import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminComman
 import { Kbd, useUndoToast } from '../../shared';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
 import { SuspendDialog } from './actions/SuspendDialog';
+import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import {
   ApiKeyTrustDialog,
@@ -48,6 +49,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
   ...props
 }) => {
   switch (action) {
+    case 'editProfile':
+      return <EditProfileDialog {...props} />;
     case 'credits':
       return <AdjustCreditsDialog {...props} />;
     case 'suspend':

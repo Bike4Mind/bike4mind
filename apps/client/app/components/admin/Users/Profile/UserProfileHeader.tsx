@@ -15,6 +15,7 @@ import {
 type MenuEntry = { action: ProfileAction | 'compliance'; label: string; danger?: boolean } | 'divider';
 
 const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
+  { action: 'editProfile', label: 'Edit profile' },
   { action: 'loginAs', label: 'Log in as user' },
   { action: 'message', label: 'Send message' },
   { action: 'subscription', label: 'Grant subscription' },

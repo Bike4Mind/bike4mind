@@ -1,7 +1,7 @@
-import { useAdminProfileModal } from '@client/app/components/admin/AdminProfileModal';
 import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
 import { Button } from '@mui/joy';
 import React from 'react';
+import { useOpenUserProfile } from '@client/app/components/admin/Users/Profile/useOpenUserProfile';
 
 interface AdminProfileProps {
   userId: string;
@@ -9,7 +9,7 @@ interface AdminProfileProps {
 }
 
 const AdminProfile: React.FC<AdminProfileProps> = ({ userId, size = 'md' }) => {
-  const setUserId = useAdminProfileModal(state => state.setUserId);
+  const openUserProfile = useOpenUserProfile();
 
   return (
     <Button
@@ -17,7 +17,7 @@ const AdminProfile: React.FC<AdminProfileProps> = ({ userId, size = 'md' }) => {
       color="warning"
       size={size}
       startDecorator={<ManageAccountsIcon />}
-      onClick={() => setUserId(userId)}
+      onClick={() => void openUserProfile(userId)}
     >
       Profile
     </Button>

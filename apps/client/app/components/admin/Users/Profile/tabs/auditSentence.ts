@@ -89,6 +89,8 @@ const changeSentence = ({ field, before, after }: AuditChange): string => {
       return after ? 'Marked email verified' : 'Marked email unverified';
     case 'tags':
       return tagSentence(before, after);
+    case 'pendingEmail':
+      return `Requested an email change to ${formatAuditValue(after)}`;
     case 'currentCredits': {
       if (typeof before !== 'number' || typeof after !== 'number') return 'Adjusted credits';
       const delta = after - before;
@@ -115,19 +117,14 @@ export const describeAuditEntry = (entry: AuditEntry): string => {
 // previous value can be written back as-is qualify; credits, roles and deletions have their own flows.
 const UNDOABLE_FIELDS: ReadonlySet<string> = new Set(['isBanned', 'isModerated', 'tags']);
 
-const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const sameValue = (current: unknown, written: unknown): boolean =>
+  JSON.stringify(current) === JSON.stringify(written ?? null);
 
+// Only reached for UNDOABLE_FIELDS, so anything that is not a flag is the tags list.
 const currentValue = (user: AdminUserProfile, field: string): unknown => {
-  switch (field) {
-    case 'isBanned':
-      return Boolean(user.isBanned);
-    case 'isModerated':
-      return Boolean(user.isModerated);
-    case 'tags':
-      return user.tags ?? [];
-    default:
-      return undefined;
-  }
+  if (field === 'isBanned') return Boolean(user.isBanned);
+  if (field === 'isModerated') return Boolean(user.isModerated);
+  return user.tags ?? [];
 };
 
 export type AuditUndo = { patch: Record<string, unknown>; redo: Record<string, unknown> };
