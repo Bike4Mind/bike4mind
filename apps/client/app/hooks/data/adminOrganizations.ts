@@ -91,9 +91,9 @@ export function useTopUpOrganization() {
 export function useAdjustOrgSeats() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { organizationId: string; seats: number }) => {
-      const { organizationId, seats } = params;
-      const res = await api.patch(`/api/admin/organizations/${organizationId}/seats`, { seats });
+    mutationFn: async (params: { organizationId: string; seats: number; reason: string }) => {
+      const { organizationId, ...body } = params;
+      const res = await api.patch(`/api/admin/organizations/${organizationId}/seats`, body);
       return res.data;
     },
     onSuccess: () => {
@@ -113,9 +113,11 @@ export function useAdjustOrgSeats() {
 export function useReconcileOrgSeats() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { organizationId: string }) => {
+    mutationFn: async (params: { organizationId: string; reason: string }) => {
+      const { organizationId, ...body } = params;
       const res = await api.post<{ organizationId: string; before: number; after: number }>(
-        `/api/admin/organizations/${params.organizationId}/reconcile-seats`
+        `/api/admin/organizations/${organizationId}/reconcile-seats`,
+        body
       );
       return res.data;
     },
@@ -134,11 +136,11 @@ export function useReconcileOrgSeats() {
 export function useConvertOrgToPaid() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { organizationId: string; callbackUrl: string }) => {
-      const { organizationId, callbackUrl } = params;
+    mutationFn: async (params: { organizationId: string; callbackUrl: string; reason: string }) => {
+      const { organizationId, ...body } = params;
       const res = await api.post<{ checkoutUrl: string }>(
         `/api/admin/organizations/${organizationId}/convert-to-paid`,
-        { callbackUrl }
+        body
       );
       return res.data;
     },
@@ -156,7 +158,7 @@ export function useConvertOrgToPaid() {
 export function useRevokeOrganization() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { organizationId: string; reason?: string }) => {
+    mutationFn: async (params: { organizationId: string; reason: string }) => {
       const { organizationId, ...body } = params;
       const res = await api.post(`/api/admin/organizations/${organizationId}/revoke`, body);
       return res.data;

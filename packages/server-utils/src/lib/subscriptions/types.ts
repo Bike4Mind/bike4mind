@@ -35,6 +35,20 @@ export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Stat
   !TERMINAL_SUBSCRIPTION_STATUSES.has(status);
 
 /**
+ * A row Stripe may still be charging for. Deleting it in Mongo alone stops our credit grants but
+ * not the invoices, so the admin remove route refuses it and the admin UI disables the action.
+ */
+export const isLiveStripeBilledSubscription = (sub: {
+  source?: SubscriptionSource;
+  subscriptionId?: string;
+  status: Stripe.Subscription.Status;
+}): boolean =>
+  resolveSubscriptionSource(sub) === SubscriptionSource.Stripe && isCancellableSubscriptionStatus(sub.status);
+
+export const LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE =
+  'This subscription is still billed through Stripe. Cancel it first; removing the record alone keeps charging the customer.';
+
+/**
  * The minimum a client-side row must expose for the display pickers below.
  * `source` is optional because it only reaches the client as a leaked field of the
  * repository row, and rows written before that field existed read back without it.

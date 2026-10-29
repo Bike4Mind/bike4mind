@@ -4,7 +4,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { reconcileOrgSeatsFromSubscription } from '@server/services/organizationService';
 import { Resource } from 'sst';
 
@@ -28,6 +28,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     const { id } = req.query as RequestQuery;
     if (!id) throw new BadRequestError('Organization id required');
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     const result = await reconcileOrgSeatsFromSubscription(id);
     if (!result) {
@@ -41,6 +42,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         action: 'org.seats.changed',
         target: { kind: 'organization', id: result.organization.id, displayName: result.organization.name },
         summary: `reconciled seats from ${result.before} to ${result.after}`,
+        reason,
         changes: [{ field: 'seats', before: result.before, after: result.after }],
         details: { reconciledFrom: 'subscription', ownerId: result.organization.userId },
       });

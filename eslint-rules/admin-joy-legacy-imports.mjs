@@ -64,7 +64,7 @@ export default {
   'OrganizationProfile.tsx': [[2, '86700e7e9f5ffef4']],
   'OrganizationProfileModal.tsx': [[3, '6ad527f8922d20fa']],
   'OrganizationProfileUpdated.tsx': [[2, '04d7d18f3a6cb3b0']],
-  'OrganizationsTab.tsx': [[2, '588c77ea593cdd17']],
+  'OrganizationsTab.tsx': [[2, 'fdb3e735aeb282e9']],
   'PartnerSignupRulesTab.tsx': [[2, '4d25dd633956e08a']],
   'PrReport/PrReportDialog.tsx': [[2, '42e1900e98b7aac9']],
   'PrReport/PrReportTab.tsx': [[2, '1cfd9ffb38523c51']],

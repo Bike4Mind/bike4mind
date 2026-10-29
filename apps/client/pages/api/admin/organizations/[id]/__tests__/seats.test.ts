@@ -16,10 +16,14 @@ vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { findActiveSubscriptionsByOwner: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@server/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+  return { ...actual, recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) };
+});
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../seats';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
@@ -30,9 +34,14 @@ describe('PATCH /api/admin/organizations/[id]/seats', () => {
     mockSetSeats.mockResolvedValue({ id: 'org-1', userId: 'owner-1', name: 'Acme', seats: 7 });
   });
 
-  it('records org.seats.changed against the organization', async () => {
-    const { req, res } = createMocks({ method: 'PATCH', query: { id: 'org-1' }, body: { seats: 7 } });
+  const makeReq = (body: Record<string, unknown>) => {
+    const { req, res } = createMocks({ method: 'PATCH', query: { id: 'org-1' }, body });
     (req as unknown as Record<string, unknown>).user = { id: 'admin-1', username: 'admin', isAdmin: true };
+    return { req, res };
+  };
+
+  it('records org.seats.changed against the organization', async () => {
+    const { req, res } = makeReq({ seats: 7, reason: 'Billing correction' });
 
     await (handler as HandlerFn)(req, res);
 
@@ -41,7 +50,29 @@ describe('PATCH /api/admin/organizations/[id]/seats', () => {
       expect.objectContaining({
         action: 'org.seats.changed',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1', displayName: 'Acme' }),
+        reason: 'Billing correction',
       })
     );
+  });
+
+  it('returns 400 and changes no seats when no reason is sent', async () => {
+    const { req, res } = makeReq({ seats: 7 });
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      statusCode: 400,
+      message: ADMIN_ACTION_REASON_MISSING_MESSAGE,
+    });
+
+    expect(mockSetSeats).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 and changes no seats for a too-short reason', async () => {
+    const { req, res } = makeReq({ seats: 7, reason: 'abc' });
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({ statusCode: 400 });
+
+    expect(mockSetSeats).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

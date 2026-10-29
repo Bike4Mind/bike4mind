@@ -372,11 +372,19 @@ export const useRemoveSubscription = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ userId, subscriptionId }: { userId: string; subscriptionId: string }) => {
+    mutationFn: async ({
+      userId,
+      subscriptionId,
+      reason,
+    }: {
+      userId: string;
+      subscriptionId: string;
+      reason: string;
+    }) => {
       const { data } = await api.delete<{
         success: boolean;
         message: string;
-      }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/remove`);
+      }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/remove`, { data: { reason } });
       return data;
     },
     onSuccess: (data, variables) => {
@@ -403,10 +411,12 @@ export const useUpdateSubscriptionCredits = () => {
       userId,
       subscriptionId,
       creditsPerCycle,
+      reason,
     }: {
       userId: string;
       subscriptionId: string;
       creditsPerCycle: number;
+      reason: string;
     }) => {
       const { data } = await api.put<{
         success: boolean;
@@ -414,6 +424,7 @@ export const useUpdateSubscriptionCredits = () => {
         creditsPerCycle: number;
       }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/credits`, {
         creditsPerCycle,
+        reason,
       });
       return data;
     },

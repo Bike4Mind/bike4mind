@@ -30,9 +30,11 @@ describe('useReconcileOrgSeats', () => {
     post.mockResolvedValue({ data: { organizationId: 'org1', before: 10, after: 30 } });
     const { result, invalidateSpy } = renderReconcile();
 
-    await result.current.mutateAsync({ organizationId: 'org1' });
+    await result.current.mutateAsync({ organizationId: 'org1', reason: 'Seats out of sync with billing' });
 
-    expect(post).toHaveBeenCalledWith('/api/admin/organizations/org1/reconcile-seats');
+    expect(post).toHaveBeenCalledWith('/api/admin/organizations/org1/reconcile-seats', {
+      reason: 'Seats out of sync with billing',
+    });
     expect(toast.success).toHaveBeenCalledWith('Seats reconciled: 10 -> 30');
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
   });
@@ -41,7 +43,7 @@ describe('useReconcileOrgSeats', () => {
     post.mockResolvedValue({ data: { organizationId: 'org1', before: 30, after: 30 } });
     const { result } = renderReconcile();
 
-    await result.current.mutateAsync({ organizationId: 'org1' });
+    await result.current.mutateAsync({ organizationId: 'org1', reason: 'Seats out of sync with billing' });
 
     expect(toast.success).toHaveBeenCalledWith('Seats already in sync (30)');
   });
@@ -50,7 +52,9 @@ describe('useReconcileOrgSeats', () => {
     post.mockRejectedValue(new Error('Organization has no active subscription to reconcile seats from'));
     const { result } = renderReconcile();
 
-    await expect(result.current.mutateAsync({ organizationId: 'org1' })).rejects.toThrow();
+    await expect(
+      result.current.mutateAsync({ organizationId: 'org1', reason: 'Seats out of sync with billing' })
+    ).rejects.toThrow();
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith('Organization has no active subscription to reconcile seats from')

@@ -30,6 +30,15 @@ export const ADMIN_REASON_PRESETS = {
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
+  compChange: ['Pilot or trial ended', 'Plan change', 'Billing correction', 'Customer request'],
+  subscriptionRemove: [
+    'Duplicate record',
+    'Already canceled at Stripe',
+    'Test or internal record',
+    'Billing correction',
+  ],
+  seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
+  paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

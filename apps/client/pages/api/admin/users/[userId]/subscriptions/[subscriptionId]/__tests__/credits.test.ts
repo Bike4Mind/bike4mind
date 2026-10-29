@@ -46,12 +46,16 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockRecordAdminAction = vi.fn();
-vi.mock('@server/utils/adminAudit', () => ({
-  recordAdminActionFromRequest: (...a: unknown[]) => {
-    insideTransactionAtAudit = inTransaction;
-    return mockRecordAdminAction(...a);
-  },
-}));
+vi.mock('@server/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+  return {
+    ...actual,
+    recordAdminActionFromRequest: (...a: unknown[]) => {
+      insideTransactionAtAudit = inTransaction;
+      return mockRecordAdminAction(...a);
+    },
+  };
+});
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 3, maxSeats: 8, creditsPerSeat: 1000 })),
 }));
@@ -69,13 +73,14 @@ const mockSendToClient = vi.fn();
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => mockSendToClient(...a) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
+import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../credits';
 
 function call(options: { isAdmin?: boolean; body?: object; userId?: string; subscriptionId?: string }) {
   const { req, res } = createMocks({
     method: 'PUT',
     query: { userId: options.userId ?? 'u1', subscriptionId: options.subscriptionId ?? 'sub_123' },
-    body: options.body ?? { creditsPerCycle: 5000 },
+    body: options.body ?? { creditsPerCycle: 5000, reason: 'Billing correction' },
   });
   (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
     isAdmin: options.isAdmin ?? true,
@@ -107,6 +112,25 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
     const { run } = call({ isAdmin: false });
     await expect(run()).rejects.toThrow(/[Aa]dmin/);
     expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 and updates nothing when no reason is sent', async () => {
+    const { res, run } = call({ body: { creditsPerCycle: 5000 } });
+
+    await expect(run()).rejects.toMatchObject({ statusCode: 400, message: ADMIN_ACTION_REASON_MISSING_MESSAGE });
+
+    expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+    expect(mockRecordAdminAction).not.toHaveBeenCalled();
+    expect(res._getData()).toBe('');
+  });
+
+  it('returns 400 and updates nothing for a too-short reason', async () => {
+    const { run } = call({ body: { creditsPerCycle: 5000, reason: 'abc' } });
+
+    await expect(run()).rejects.toMatchObject({ statusCode: 400 });
+
+    expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+    expect(mockRecordAdminAction).not.toHaveBeenCalled();
   });
 
   it('updates the credit rate for an individual subscription for an admin', async () => {
@@ -186,6 +210,16 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
           changes: [{ field: 'customCreditsPerCycle', before: 7000, after: 5000 }],
           details: expect.objectContaining({ credits: -2000, previousCreditsPerCycle: 7000 }),
         })
+      );
+    });
+
+    it('records the reason on the audit entry', async () => {
+      const { run } = call({ body: { creditsPerCycle: 5000, reason: 'Customer goodwill credit' } });
+      await run();
+
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.credits.adjusted', reason: 'Customer goodwill credit' })
       );
     });
 

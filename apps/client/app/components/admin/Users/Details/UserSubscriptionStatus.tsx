@@ -22,8 +22,15 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import dayjs from 'dayjs';
 import React, { useState } from 'react';
-import { useConfirmation } from '@client/app/hooks/useConfirmation';
+import {
+  isLiveStripeBilledSubscription,
+  LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import { ADMIN_REASON_PRESETS } from '@client/app/components/admin/shared/adminReason';
 import EditCreditsModal from './EditCreditsModal';
+
+type RemoveTarget = { subscriptionId: string; name: string; type: 'individual' | 'team' };
 
 interface UserSubscriptionStatusProps {
   user: AdminUserListItem;
@@ -32,7 +39,7 @@ interface UserSubscriptionStatusProps {
 const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user }) => {
   const { data: subscriptionData, isLoading, error } = useGetUserSubscriptions(user.id);
   const removeSubscription = useRemoveSubscription();
-  const confirm = useConfirmation();
+  const [removeTarget, setRemoveTarget] = useState<RemoveTarget | null>(null);
   const [editCreditsModalOpen, setEditCreditsModalOpen] = useState(false);
   const [selectedSubscription, setSelectedSubscription] = useState<{
     subscriptionId: string;
@@ -74,18 +81,14 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
     return status === 'active' ? 'success' : 'danger';
   };
 
-  const handleRemoveSubscription = (subscriptionId: string, subscriptionName: string, type: 'individual' | 'team') => {
-    confirm({
-      title: 'Remove Subscription',
-      description: `Are you sure you want to remove the ${type} subscription "${subscriptionName}" for ${user.name}? This action cannot be undone.`,
-      type: 'danger',
-      onOk: () => {
-        removeSubscription.mutate({
-          userId: user.id,
-          subscriptionId,
-        });
-      },
-    });
+  const handleRemoveSubscription = async (reason: string) => {
+    if (!removeTarget) return;
+    try {
+      await removeSubscription.mutateAsync({ userId: user.id, subscriptionId: removeTarget.subscriptionId, reason });
+      setRemoveTarget(null);
+    } catch {
+      // toast handled by the mutation
+    }
   };
 
   const handleEditCredits = (
@@ -177,23 +180,32 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
                                       <EditIcon />
                                     </IconButton>
                                   </Tooltip>
-                                  <Tooltip title="Remove subscription">
-                                    <IconButton
-                                      size="sm"
-                                      variant="soft"
-                                      color="danger"
-                                      onClick={() =>
-                                        handleRemoveSubscription(
-                                          subscription.subscriptionId!,
-                                          subscription.planName || 'Unknown Plan',
-                                          'individual'
-                                        )
-                                      }
-                                      loading={removeSubscription.isPending}
-                                      data-testid={`remove-subscription-${subscription.subscriptionId}`}
-                                    >
-                                      <DeleteIcon />
-                                    </IconButton>
+                                  <Tooltip
+                                    title={
+                                      isLiveStripeBilledSubscription(subscription)
+                                        ? LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE
+                                        : 'Remove subscription'
+                                    }
+                                  >
+                                    {/* A disabled button fires no hover events, so the span carries the tooltip. */}
+                                    <span>
+                                      <IconButton
+                                        size="sm"
+                                        variant="soft"
+                                        color="danger"
+                                        disabled={isLiveStripeBilledSubscription(subscription)}
+                                        onClick={() =>
+                                          setRemoveTarget({
+                                            subscriptionId: subscription.subscriptionId!,
+                                            name: subscription.planName || 'Unknown Plan',
+                                            type: 'individual',
+                                          })
+                                        }
+                                        data-testid={`remove-subscription-${subscription.subscriptionId}`}
+                                      >
+                                        <DeleteIcon />
+                                      </IconButton>
+                                    </span>
                                   </Tooltip>
                                 </>
                               )}
@@ -293,23 +305,32 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
                                       <EditIcon />
                                     </IconButton>
                                   </Tooltip>
-                                  <Tooltip title="Remove subscription">
-                                    <IconButton
-                                      size="sm"
-                                      variant="soft"
-                                      color="danger"
-                                      onClick={() =>
-                                        handleRemoveSubscription(
-                                          subscription.subscriptionId!,
-                                          organization.name,
-                                          'team'
-                                        )
-                                      }
-                                      loading={removeSubscription.isPending}
-                                      data-testid={`remove-subscription-${subscription.subscriptionId}`}
-                                    >
-                                      <DeleteIcon />
-                                    </IconButton>
+                                  <Tooltip
+                                    title={
+                                      isLiveStripeBilledSubscription(subscription)
+                                        ? LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE
+                                        : 'Remove subscription'
+                                    }
+                                  >
+                                    {/* A disabled button fires no hover events, so the span carries the tooltip. */}
+                                    <span>
+                                      <IconButton
+                                        size="sm"
+                                        variant="soft"
+                                        color="danger"
+                                        disabled={isLiveStripeBilledSubscription(subscription)}
+                                        onClick={() =>
+                                          setRemoveTarget({
+                                            subscriptionId: subscription.subscriptionId!,
+                                            name: organization.name,
+                                            type: 'team',
+                                          })
+                                        }
+                                        data-testid={`remove-subscription-${subscription.subscriptionId}`}
+                                      >
+                                        <DeleteIcon />
+                                      </IconButton>
+                                    </span>
                                   </Tooltip>
                                 </>
                               )}
@@ -363,6 +384,19 @@ const UserSubscriptionStatus: React.FC<UserSubscriptionStatusProps> = ({ user })
           </Box>
         </Stack>
       </CardContent>
+
+      <ActionDialog
+        open={!!removeTarget}
+        onClose={() => setRemoveTarget(null)}
+        title={`Remove ${removeTarget?.type ?? ''} subscription`}
+        description={`Deletes the "${removeTarget?.name ?? ''}" subscription record for ${user.name}. This cannot be undone.`}
+        reasonPresets={ADMIN_REASON_PRESETS.subscriptionRemove}
+        confirmLabel="Remove subscription"
+        tone="danger"
+        pending={removeSubscription.isPending}
+        onConfirm={handleRemoveSubscription}
+        data-testid="remove-subscription-dialog"
+      />
 
       {/* Edit Credits Modal */}
       {selectedSubscription && (
