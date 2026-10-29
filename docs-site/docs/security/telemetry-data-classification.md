@@ -229,6 +229,10 @@ Every self-service signup stores the network it came from on the new account (`s
 | Country       | ISO country code                      | Account lifetime / 90 days (TTL index)                                                 | Abuse and security investigation                    |
 | Hosting flag  | `isDatacenter`                        | Account lifetime / 90 days (TTL index)                                                 | Flag signups from cloud and hosting networks        |
 
+`signupMeta.challengeVerified` records `true` only after a real server-verified challenge pass; skipped or unavailable checks remain null or absent. It shares the other non-IP signup metadata's admin-only access, account lifetime, and account-deletion behavior. Signed signup tokens carry this observation only to preserve it through verification; public test secrets and fail-open checks do not establish proof.
+
+Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
+
 ## Chat turn timing
 
 Each chat reply records where its wall-clock time went, so a slow or retried reply can be diagnosed from the reply itself. The record holds durations, counts and provider metadata only: no prompt or reply text. It is shown in the reply's Answer diagnosis panel, and a short summary with a copyable turn ID appears under replies that retried, switched model or took a minute or more.
