@@ -2,6 +2,7 @@ import { wsConnectTicketRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { randomBytes } from 'crypto';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 
@@ -38,29 +39,33 @@ const handler = baseApi({
   // Sent on every realtime connect and reconnect, so an outage's retries would spend the write budget
   // and a user near it would lose realtime until the window resets.
   defaultWriteRateLimit: false,
-}).post(
-  asyncHandler(async (req, res) => {
-    req.logger.updateMetadata({ endpoint: 'websocket/ticket' });
+})
+  // Its own bucket instead: each mint writes a ticket row. A tab's reconnect backoff peaks near 10 per
+  // minute, so 60 covers several tabs reconnecting after an outage.
+  .use(rateLimit({ limit: 60, windowMs: 60_000, bucket: 'websocket-ticket' }))
+  .post(
+    asyncHandler(async (req, res) => {
+      req.logger.updateMetadata({ endpoint: 'websocket/ticket' });
 
-    const userId = req.user?.id;
-    if (!userId) {
-      throw new BadRequestError('Missing authenticated user');
-    }
+      const userId = req.user?.id;
+      if (!userId) {
+        throw new BadRequestError('Missing authenticated user');
+      }
 
-    const minter = req.user as { tokenVersion?: number; sid?: string; accessTokenExpiresAt?: Date };
-    const ticket = randomBytes(32).toString('hex');
-    await wsConnectTicketRepository.create({
-      ticket,
-      userId,
-      tokenVersion: minter.tokenVersion ?? 0,
-      ...(minter.sid && { sid: minter.sid }),
-      authExpiresAt: minter.accessTokenExpiresAt ?? new Date(Date.now() + ACCESS_TOKEN_TTL_SECONDS * 1000),
-      expiresAt: new Date(Date.now() + TICKET_TTL_MS),
-    });
+      const minter = req.user as { tokenVersion?: number; sid?: string; accessTokenExpiresAt?: Date };
+      const ticket = randomBytes(32).toString('hex');
+      await wsConnectTicketRepository.create({
+        ticket,
+        userId,
+        tokenVersion: minter.tokenVersion ?? 0,
+        ...(minter.sid && { sid: minter.sid }),
+        authExpiresAt: minter.accessTokenExpiresAt ?? new Date(Date.now() + ACCESS_TOKEN_TTL_SECONDS * 1000),
+        expiresAt: new Date(Date.now() + TICKET_TTL_MS),
+      });
 
-    return res.status(201).json({ ticket });
-  })
-);
+      return res.status(201).json({ ticket });
+    })
+  );
 
 export const config = {
   api: {
