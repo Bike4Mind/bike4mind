@@ -137,8 +137,8 @@ const isDevelopment = () => {
 };
 
 // True on stages deployed from this repo's infra (CloudFront sets ORIGIN_VERIFY_SECRET), never
-// for local development or a self-hosted install. Must stay in sync with the `deployed` flag in
-// apps/client/server/auth/networkMeta.ts.
+// for local development or a self-hosted install. infra/web.ts omits that secret when
+// DISABLE_ORIGIN_VERIFY='true', so such a stage reads as not deployed here too.
 const isDeployedStage = () => Boolean(process.env.ORIGIN_VERIFY_SECRET) && process.env.B4M_SELF_HOST !== 'true';
 
 // E2E test endpoint guard - allows /api/test/* on local dev, preview, and staging deployments.
