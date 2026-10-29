@@ -379,6 +379,24 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
       expect(mockUpdate).not.toHaveBeenCalled();
     });
 
+    it('409s when an organization already has another live comp', async () => {
+      mockFindById.mockResolvedValue(compRow({ status: 'canceled', ownerType: 'Organization', ownerId: 'o1' }));
+      mockFindNonTerminal.mockResolvedValue([
+        {
+          id: 'c'.repeat(24),
+          source: 'admin_grant',
+          subscriptionId: 'admin_grant_2',
+          status: 'active',
+          priceId: 'price_b',
+        },
+      ]);
+      await expect(call({ body: { action: 'reopen' } }).run()).rejects.toMatchObject({
+        statusCode: 409,
+        message: 'This owner already has another live comp.',
+      });
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
     it('409s when a user already has an active row on the same plan', async () => {
       mockFindNonTerminal.mockResolvedValue([
         { id: 'c'.repeat(24), source: 'stripe', subscriptionId: 'sub_9', status: 'active', priceId: 'price_a' },
