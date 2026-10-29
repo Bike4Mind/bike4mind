@@ -12,6 +12,7 @@ export * from './briefcasePromptResolution';
 export * from './models';
 export * from './modelPriceCatalog';
 export * from './usagePriceStamp';
+export * from './creditLotAssignment';
 export * from './modelCatalog';
 export * from './modelIdJoin';
 export * from './claudeModelId';

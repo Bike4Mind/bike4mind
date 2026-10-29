@@ -2,7 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { UsageEvent, usageEventRepository } from './UsageEventModel';
+import { UsageEvent, UsageEventRepository, usageEventRepository } from './UsageEventModel';
+import { CreditLot } from './CreditLotModel';
+import { User } from '../auth/UserModel';
 import { CreditHolderType, IUsageEventInput } from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
@@ -967,5 +969,131 @@ describe('UsageEventRepository.creditsSpentByUsers', () => {
 
   it('returns nothing for no users', async () => {
     await expect(usageEventRepository.creditsSpentByUsers([])).resolves.toEqual({});
+  });
+});
+
+describe('UsageEventRepository funding stamp', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  afterEach(async () => {
+    await CreditLot.deleteMany({});
+    await User.deleteMany({});
+  });
+
+  const createLot = (ownerId: string, source: 'promo' | 'pack', amount: number, expiresInDays: number) =>
+    CreditLot.create({
+      ownerId,
+      ownerType: CreditHolderType.User,
+      source,
+      amount,
+      expiresAt: new Date(Date.now() + expiresInDays * DAY_MS),
+    });
+
+  it('splits the charge across the lots it drew from, soonest expiry first', async () => {
+    // 100 promo + 500 pack granted, 480 left after this charge: 120 consumed, the last 50 of it this charge.
+    const user = await User.create({
+      username: `u-${new mongoose.Types.ObjectId()}`,
+      name: 'Funding fixture',
+      currentCredits: 480,
+    });
+    await createLot(user.id, 'pack', 500, 365);
+    await createLot(user.id, 'promo', 100, 90);
+
+    const doc = await record({ userId: user.id, ownerId: user.id, creditsCharged: 50 });
+
+    expect(doc!.fundingBreakdown).toEqual({ granted: 30, purchased: 20, subscription: 0, unknown: 0 });
+  });
+
+  it('marks the charge unknown when the holder has no lots', async () => {
+    const doc = await record({ creditsCharged: 50 });
+
+    expect(doc!.fundingBreakdown).toEqual({ granted: 0, purchased: 0, subscription: 0, unknown: 50 });
+  });
+
+  it('leaves zero-credit rows unstamped', async () => {
+    const doc = await record({ creditsCharged: 0, status: 'refusal' });
+
+    expect(doc!.fundingBreakdown).toBeUndefined();
+  });
+
+  it('keeps a breakdown the caller already supplied', async () => {
+    const supplied = { granted: 0, purchased: 50, subscription: 0, unknown: 0 };
+
+    const doc = await record({ fundingBreakdown: supplied });
+
+    expect(doc!.fundingBreakdown).toEqual(supplied);
+  });
+
+  it('records the event unstamped when the funding lookup fails', async () => {
+    const failing = new UsageEventRepository(UsageEvent, async () => {
+      throw new Error('lots unavailable');
+    });
+
+    const doc = await failing.record(baseEvent);
+
+    expect(doc).not.toBeNull();
+    expect(doc!.fundingBreakdown).toBeUndefined();
+  });
+});
+
+describe('UsageEventRepository.costByFundingCohort', () => {
+  afterEach(async () => {
+    await User.deleteMany({});
+  });
+
+  const createUser = (createdAt: Date) =>
+    User.create({ username: `u-${new mongoose.Types.ObjectId()}`, name: 'Cohort fixture', createdAt });
+
+  it('splits provider cost by funding share and groups spenders by signup week', async () => {
+    // Wednesday and Friday of the same UTC week, and a user from the week before.
+    const early = await createUser(new Date('2026-10-21T10:00:00Z'));
+    const late = await createUser(new Date('2026-10-23T22:00:00Z'));
+    const older = await createUser(new Date('2026-10-14T10:00:00Z'));
+    const recordFor = (userId: string, overrides: Partial<IUsageEventInput>) =>
+      record({ userId, ownerId: userId, ...overrides });
+
+    await recordFor(early.id, {
+      costUsd: 1,
+      creditsCharged: 100,
+      fundingBreakdown: { granted: 75, purchased: 25, subscription: 0, unknown: 0 },
+    });
+    await recordFor(late.id, {
+      costUsd: 2,
+      creditsCharged: 40,
+      fundingBreakdown: { granted: 40, purchased: 0, subscription: 0, unknown: 0 },
+    });
+    await recordFor(late.id, { costUsd: 0.5, creditsCharged: 0, status: 'refusal' });
+    await recordFor(older.id, {
+      costUsd: 4,
+      creditsCharged: 10,
+      fundingBreakdown: { granted: 0, purchased: 0, subscription: 10, unknown: 0 },
+    });
+
+    const rows = await usageEventRepository.costByFundingCohort(30);
+
+    expect(rows).toEqual([
+      {
+        cohortWeek: new Date('2026-10-19T00:00:00Z'),
+        accounts: 2,
+        costUsd: { granted: 2.75, purchased: 0.25, subscription: 0, unknown: 0 },
+        credits: { granted: 115, purchased: 25, subscription: 0, unknown: 0 },
+        unattributedCostUsd: 0.5,
+      },
+      {
+        cohortWeek: new Date('2026-10-12T00:00:00Z'),
+        accounts: 1,
+        costUsd: { granted: 0, purchased: 0, subscription: 4, unknown: 0 },
+        credits: { granted: 0, purchased: 0, subscription: 10, unknown: 0 },
+        unattributedCostUsd: 0,
+      },
+    ]);
+  });
+
+  it('puts spenders without a user record in a null cohort', async () => {
+    await record({ userId: 'gone-user', costUsd: 1, creditsCharged: 0 });
+
+    const rows = await usageEventRepository.costByFundingCohort(30);
+
+    expect(rows).toEqual([expect.objectContaining({ cohortWeek: null, accounts: 1, unattributedCostUsd: 1 })]);
   });
 });

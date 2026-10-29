@@ -21,6 +21,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   getPriceMargin,
+  IFundingCohortCost,
   IModelDayMargin,
   IProviderInvoice,
   IProviderMonthCogs,
@@ -83,6 +84,16 @@ const invoiceStatus = (
   return { label: 'gap', color: 'danger' };
 };
 
+const formatCohortWeek = (cohortWeek: Date | string | null) =>
+  cohortWeek === null ? 'Unknown' : new Date(cohortWeek).toISOString().slice(0, 10);
+
+const formatUsd = (value: number) => `$${value.toFixed(2)}`;
+
+const grantedShare = (costUsd: IFundingCohortCost['costUsd']) => {
+  const attributed = costUsd.granted + costUsd.purchased + costUsd.subscription + costUsd.unknown;
+  return attributed > 0 ? `${Math.round((costUsd.granted / attributed) * 100)}%` : '-';
+};
+
 const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
 
 export const MarginDashboard: React.FC = () => {
@@ -90,6 +101,7 @@ export const MarginDashboard: React.FC = () => {
   const [byUser, setByUser] = useState<MarginResponse<NamedUserMargin> | null>(null);
   const [byProvider, setByProvider] = useState<MarginResponse<IProviderMonthCogs> | null>(null);
   const [settlement, setSettlement] = useState<MarginResponse<ISettlementBreakdown> | null>(null);
+  const [fundingCohort, setFundingCohort] = useState<MarginResponse<IFundingCohortCost> | null>(null);
   const [invoices, setInvoices] = useState<IProviderInvoice[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,17 +119,19 @@ export const MarginDashboard: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [modelDayRes, userRes, providerRes, settlementRes, invoicesRes] = await Promise.all([
+      const [modelDayRes, userRes, providerRes, settlementRes, fundingCohortRes, invoicesRes] = await Promise.all([
         api.get<MarginResponse<IModelDayMargin>>('/api/admin/usage-margin?view=model-day&days=30'),
         api.get<MarginResponse<NamedUserMargin>>('/api/admin/usage-margin?view=user&days=30'),
         api.get<MarginResponse<IProviderMonthCogs>>('/api/admin/usage-margin?view=provider-month'),
         api.get<MarginResponse<ISettlementBreakdown>>('/api/admin/usage-margin?view=settlement&days=30'),
+        api.get<MarginResponse<IFundingCohortCost>>('/api/admin/usage-margin?view=funding-cohort&days=30'),
         api.get<{ invoices: IProviderInvoice[] }>('/api/admin/provider-invoices'),
       ]);
       setModelDay(modelDayRes.data);
       setByUser(userRes.data);
       setByProvider(providerRes.data);
       setSettlement(settlementRes.data);
+      setFundingCohort(fundingCohortRes.data);
       setInvoices(invoicesRes.data.invoices);
     } catch (err) {
       setError((err as Error)?.message || 'Failed to load margin data');
@@ -449,6 +463,63 @@ export const MarginDashboard: React.FC = () => {
                       <td colSpan={7}>
                         <Typography level="body-sm" color="neutral">
                           No settled usage events in the window.
+                        </Typography>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </Table>
+            </Sheet>
+          </Box>
+
+          <Box>
+            <Typography level="title-sm" sx={{ mb: 1 }}>
+              Cost by funding source (last 30 days)
+            </Typography>
+            <Typography level="body-xs" sx={{ mb: 1 }} color="neutral">
+              Provider cost split by what funded the credits, grouped by the week each spender signed up. Unattributed
+              is cost on zero-credit calls and on calls recorded before funding was stamped.
+            </Typography>
+            <Sheet sx={{ overflow: 'auto' }}>
+              <Table size="sm" data-testid="margin-funding-cohort-table">
+                <thead>
+                  <tr>
+                    <th>Signup week</th>
+                    <th style={{ textAlign: 'right' }}>Accounts</th>
+                    <th style={{ textAlign: 'right' }}>Granted $</th>
+                    <th style={{ textAlign: 'right' }}>Purchased $</th>
+                    <th style={{ textAlign: 'right' }}>Subscription $</th>
+                    <th style={{ textAlign: 'right' }}>Unknown $</th>
+                    <th style={{ textAlign: 'right' }}>Unattributed $</th>
+                    <th style={{ textAlign: 'right' }}>Granted share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(fundingCohort?.rows ?? []).map(row => {
+                    const week = formatCohortWeek(row.cohortWeek);
+                    return (
+                      <tr key={week} data-testid={`margin-funding-cohort-row-${week}`}>
+                        <td>{week}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.accounts.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{formatUsd(row.costUsd.granted)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{formatUsd(row.costUsd.purchased)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{formatUsd(row.costUsd.subscription)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{formatUsd(row.costUsd.unknown)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{formatUsd(row.unattributedCostUsd)}</td>
+                        <td
+                          style={{ textAlign: 'right', ...numberCell }}
+                          data-testid={`margin-funding-cohort-share-${week}`}
+                        >
+                          {grantedShare(row.costUsd)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {(fundingCohort?.rows ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={8}>
+                        <Typography level="body-sm" color="neutral">
+                          No usage events yet.
                         </Typography>
                       </td>
                     </tr>
