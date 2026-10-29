@@ -1,5 +1,10 @@
 import type { Types } from 'mongoose';
-import { User, UserAuthAuditLogModel, type UserAuthAuditEvent } from '@bike4mind/database';
+import {
+  User,
+  UserAuthAuditLogModel,
+  USER_AUTH_AUDIT_LOG_RETENTION_SECONDS,
+  type UserAuthAuditEvent,
+} from '@bike4mind/database';
 import {
   SIGNUP_CLUSTER_WINDOW_DAYS,
   type AuditLogCursor,
@@ -152,13 +157,10 @@ export const authRowToSignIn = (row: UserAuthAuditRow, loginRecords: readonly IL
 export const listUserSignIns = async (
   userId: string,
   loginRecords: readonly ILoginRecord[],
-  page: { limit: number; cursor?: AuditLogCursor; successOnly?: boolean }
+  page: { limit: number; cursor?: AuditLogCursor }
 ): Promise<{ entries: UserSignIn[]; nextCursor: AuditLogCursor | null }> => {
   const rows = await UserAuthAuditLogModel.find({
-    $and: [
-      { userId, event: { $in: page.successOnly ? SUCCESS_SIGN_IN_EVENTS : SIGN_IN_EVENTS } },
-      ...createdAtCursorClauses(page.cursor),
-    ],
+    $and: [{ userId, event: { $in: SIGN_IN_EVENTS } }, ...createdAtCursorClauses(page.cursor)],
   })
     .sort({ createdAt: -1, _id: -1 })
     .limit(page.limit + 1)
@@ -167,6 +169,47 @@ export const listUserSignIns = async (
   const entries = rows.slice(0, page.limit).map(row => authRowToSignIn(row, loginRecords));
   const last = entries[entries.length - 1];
   return { entries, nextCursor: rows.length > page.limit && last ? { occurredAt: last.at, id: last.id } : null };
+};
+
+/** Complete, time-bounded inputs for risk rules; a UI page is not a complete risk history. */
+export const listUserRiskSignIns = async (
+  userId: string,
+  loginRecords: readonly ILoginRecord[],
+  now: Date,
+  failedWindowHours: number
+): Promise<UserSignIn[]> => {
+  const failuresFrom = new Date(now.getTime() - failedWindowHours * 60 * 60 * 1000);
+  const successesFrom = new Date(now.getTime() - USER_AUTH_AUDIT_LOG_RETENTION_SECONDS * 1000);
+  const failedEvents = SIGN_IN_EVENTS.filter(event => SIGN_IN_EVENT_RESULTS[event] !== 'success');
+  const cursor = UserAuthAuditLogModel.find({
+    userId,
+    createdAt: { $lte: now },
+    $or: [
+      { event: { $in: SUCCESS_SIGN_IN_EVENTS }, createdAt: { $gte: successesFrom } },
+      { event: { $in: failedEvents }, createdAt: { $gte: failuresFrom } },
+    ],
+  })
+    .select('_id userId event strategy actorIp userAgent createdAt')
+    .sort({ createdAt: -1, _id: -1 })
+    .maxTimeMS(QUERY_MAX_TIME_MS)
+    .lean<UserAuthAuditRow>()
+    .cursor({ batchSize: 200 });
+  const entries: UserSignIn[] = [];
+  try {
+    for await (const row of cursor) {
+      const signIn = authRowToSignIn(row, loginRecords);
+      const parsed = describeUserAgent(row.userAgent);
+      // Client record classifiers differ from the audit parser; compare one canonical device shape.
+      entries.push({
+        ...signIn,
+        browser: parsed.browser,
+        operatingSystem: parsed.operatingSystem,
+      });
+    }
+  } finally {
+    await cursor.close();
+  }
+  return entries;
 };
 
 type ClusterUserRow = { _id: Types.ObjectId; name?: string; email?: string; createdAt: Date };

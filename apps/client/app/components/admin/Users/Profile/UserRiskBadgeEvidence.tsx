@@ -5,15 +5,17 @@ import type { AdminUserRiskFlag } from '@bike4mind/common';
 type UserRiskBadgeEvidenceProps = {
   flag: AdminUserRiskFlag;
   onViewTimeline: (flag: AdminUserRiskFlag) => void;
+  onViewCredits: () => void;
   onViewCompliance: () => void;
 };
 
-const formatWindow = ({ from, to }: AdminUserRiskFlag['window']) => `${from.slice(0, 10)} to ${to.slice(0, 10)} (UTC)`;
+const formatWindow = ({ from, to }: AdminUserRiskFlag['window']) => `${from} to ${to} (UTC)`;
 
 /** The rule that fired and the raw rows behind it, so an admin can verify a flag instead of trusting it. */
 export const UserRiskBadgeEvidence: React.FC<UserRiskBadgeEvidenceProps> = ({
   flag,
   onViewTimeline,
+  onViewCredits,
   onViewCompliance,
 }) => (
   <Stack gap={1} sx={{ pt: 1.5 }} data-testid="user-risk-badge-evidence">
@@ -33,7 +35,7 @@ export const UserRiskBadgeEvidence: React.FC<UserRiskBadgeEvidenceProps> = ({
         </Stack>
       ))}
     </Stack>
-    {flag.timeline && (
+    {flag.timeline && flag.id !== 'credit_spike' && (
       <Link
         component="button"
         type="button"
@@ -43,6 +45,18 @@ export const UserRiskBadgeEvidence: React.FC<UserRiskBadgeEvidenceProps> = ({
         data-testid="user-risk-badge-timeline-link"
       >
         View in timeline
+      </Link>
+    )}
+    {flag.id === 'credit_spike' && (
+      <Link
+        component="button"
+        type="button"
+        level="body-sm"
+        onClick={onViewCredits}
+        sx={{ alignSelf: 'flex-start' }}
+        data-testid="user-risk-badge-credits-link"
+      >
+        View credits
       </Link>
     )}
     {flag.id === 'prior_moderation' && (

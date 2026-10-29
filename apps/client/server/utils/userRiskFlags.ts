@@ -53,7 +53,7 @@ export const evaluateFailedSignIns = (
   if (hits.length < cfg.threshold) return null;
   const counts = new Map<string, number>();
   for (const hit of hits) counts.set(hit.event, (counts.get(hit.event) ?? 0) + 1);
-  const latest = Math.max(...hits.map(h => ms(h.at)));
+  const latest = hits.reduce((latest, hit) => Math.max(latest, ms(hit.at)), -Infinity);
   return {
     id: 'failed_sign_ins',
     severity: hits.length >= cfg.threshold * 2 ? 'high' : 'warn',
@@ -100,7 +100,7 @@ export const evaluateNewSignIn = (
   return {
     id: 'new_ip_or_device',
     severity: 'info',
-    rule: `A successful sign-in in the last ${cfg.windowDays} days from an IP address or device not seen in earlier successful sign-ins (needs ${cfg.minPriorSuccessSignIns} or more earlier sign-ins)`,
+    rule: `A successful sign-in in the last ${cfg.windowDays} days from an IP address or device not seen in earlier retained successful sign-ins (needs ${cfg.minPriorSuccessSignIns} or more earlier sign-ins)`,
     evidence: [
       { label: 'Signed in at', value: iso(ms(hit.at)) },
       ...(ip ? [{ label: newIp ? 'New IP address' : 'IP address', value: ip }] : []),
@@ -147,7 +147,6 @@ export const evaluateCreditSpike = (
       { label: 'Baseline active days', value: String(activeDays) },
     ],
     window: { from, to },
-    timeline: { types: ['usage'], from, to },
   };
 };
 
@@ -169,7 +168,10 @@ export const evaluateModeration = (
     rule: `${cfg.threshold} or more image moderation incidents in the last ${cfg.windowDays} days`,
     evidence: [
       { label: 'Moderation incidents', value: String(hits.length) },
-      { label: 'Most recent', value: iso(Math.max(...hits.map(i => ms(i.createdAt)))) },
+      {
+        label: 'Most recent',
+        value: iso(hits.reduce((latest, hit) => Math.max(latest, ms(hit.createdAt)), -Infinity)),
+      },
       ...(labels.length > 0 ? [{ label: 'Labels', value: labels.join(', ') }] : []),
     ],
     window: { from: iso(from), to: iso(to) },

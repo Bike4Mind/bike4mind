@@ -4,9 +4,13 @@ import { adminUserRiskFlagsSchema, ApiKeyScope } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   findById: vi.fn(),
-  listUserSignIns: vi.fn(),
+  listUserRiskSignIns: vi.fn(),
   summarizeAiSpend: vi.fn(),
   findIncidents: vi.fn(),
+  incidentSelect: vi.fn(),
+  incidentMaxTime: vi.fn(),
+  incidentClose: vi.fn(),
+  incidentBatchError: undefined as Error | undefined,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -27,10 +31,35 @@ vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
   creditTransactionRepository: { summarizeAiSpend: (...a: unknown[]) => mocks.summarizeAiSpend(...a) },
-  imageModerationIncidentRepository: { find: (...a: unknown[]) => mocks.findIncidents(...a) },
+  ImageModerationIncident: {
+    find: (...args: unknown[]) => {
+      const query = {
+        select: (...fields: unknown[]) => {
+          mocks.incidentSelect(...fields);
+          return query;
+        },
+        maxTimeMS: (...limits: unknown[]) => {
+          mocks.incidentMaxTime(...limits);
+          return query;
+        },
+        lean: () => query,
+        cursor: () => ({
+          close: async () => {
+            mocks.incidentClose();
+          },
+          async *[Symbol.asyncIterator]() {
+            const incidents = (await mocks.findIncidents(...args)) as unknown[];
+            for (const incident of incidents) yield incident;
+            if (mocks.incidentBatchError) throw mocks.incidentBatchError;
+          },
+        }),
+      };
+      return query;
+    },
+  },
 }));
 vi.mock('@server/utils/userSignIns', () => ({
-  listUserSignIns: (...a: unknown[]) => mocks.listUserSignIns(...a),
+  listUserRiskSignIns: (...a: unknown[]) => mocks.listUserRiskSignIns(...a),
 }));
 
 import handler from '../risk-flags';
@@ -58,8 +87,9 @@ const flagIds = (res: { _getJSONData: () => unknown }) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.incidentBatchError = undefined;
   mocks.findById.mockResolvedValue({ id: USER_ID, loginRecords: [] });
-  mocks.listUserSignIns.mockResolvedValue({ entries: [], nextCursor: null });
+  mocks.listUserRiskSignIns.mockResolvedValue([]);
   mocks.summarizeAiSpend.mockResolvedValue({ dailyCredits: [] });
   mocks.findIncidents.mockResolvedValue([]);
 });
@@ -75,36 +105,91 @@ describe('GET /api/admin/users/[userId]/risk-flags', () => {
     expect((handler as unknown as { _config?: { auth?: string } })._config?.auth).toBe('jwtOnly');
   });
 
-  it('reads successful sign-ins separately and excludes false-positive moderation incidents', async () => {
+  it('bounds the complete risk reads to their rule windows and projects moderation evidence', async () => {
     await call().promise;
-    expect(mocks.listUserSignIns).toHaveBeenCalledWith(USER_ID, [], { limit: 200, successOnly: true });
-    const priorCall = mocks.listUserSignIns.mock.calls.find(([, , page]) => page.cursor);
-    expect(priorCall?.[2]).toMatchObject({ successOnly: true, cursor: { id: 'f'.repeat(24) } });
-    const windowStart = Date.now() - 7 * 24 * HOUR;
-    expect(Math.abs(priorCall?.[2].cursor.occurredAt.getTime() - windowStart)).toBeLessThan(60_000);
-    expect(mocks.findIncidents).toHaveBeenCalledWith(
-      { userId: USER_ID, reviewStatus: { $ne: 'false_positive' } },
-      expect.anything()
-    );
+    expect(mocks.listUserRiskSignIns).toHaveBeenCalledWith(USER_ID, [], expect.any(Date), 24);
+    const now = mocks.listUserRiskSignIns.mock.calls[0][2] as Date;
+    expect(mocks.findIncidents).toHaveBeenCalledWith({
+      userId: USER_ID,
+      reviewStatus: { $ne: 'false_positive' },
+      createdAt: { $gte: new Date(now.getTime() - 30 * 24 * HOUR), $lte: now },
+    });
+    expect(mocks.incidentSelect).toHaveBeenCalledWith('createdAt labels.name reviewStatus');
+    expect(mocks.incidentMaxTime).toHaveBeenCalledWith(15_000);
   });
 
-  it('still fires new IP when failed rows and recent successes fill their pages but the prior read has the priors', async () => {
-    const success = (id: string, at: Date, ip: string) => ({ id, at, result: 'success', event: 'login_success', ip });
-    const recent = success('n', ago(HOUR), '198.51.100.7');
-    mocks.listUserSignIns.mockImplementation(
-      async (_u: unknown, _l: unknown, page: { successOnly?: boolean; cursor?: unknown }) => ({
-        entries: page.cursor
-          ? ['a', 'b', 'c'].map((id, i) => success(id, ago((30 + i) * 24 * HOUR), '203.0.113.1'))
-          : page.successOnly
-            ? [recent]
-            : [failedSignIn(0), recent],
-        nextCursor: null,
-      })
-    );
+  it('keeps failed sign-ins when more than 200 newer successes exist', async () => {
+    mocks.listUserRiskSignIns.mockResolvedValue([
+      ...Array.from({ length: 201 }, (_, index) => ({
+        id: `s${index}`,
+        at: ago(HOUR / 2),
+        result: 'success',
+        event: 'login_success',
+      })),
+      ...Array.from({ length: 5 }, (_, index) => failedSignIn(index)),
+    ]);
     const { res, promise } = call();
     await promise;
-    expect(flagIds(res)).toEqual(['new_ip_or_device']);
+    expect(flagIds(res)).toEqual(['failed_sign_ins']);
   });
+
+  it('keeps old known addresses and novel recent sign-ins past the first 200 successes', async () => {
+    const success = (id: string, ageHours: number, ip: string) => ({
+      id,
+      at: ago(ageHours * HOUR),
+      result: 'success',
+      event: 'login_success',
+      ip,
+    });
+    const prior = Array.from({ length: 201 }, (_, index) => success(`p${index}`, 240 + index, '203.0.113.1'));
+    mocks.listUserRiskSignIns.mockResolvedValue([
+      success('recent', 1, '198.51.100.7'),
+      ...prior,
+      success('old-known', 720, '198.51.100.7'),
+    ]);
+    const known = call();
+    await known.promise;
+    expect(flagIds(known.res)).toEqual([]);
+
+    mocks.listUserRiskSignIns.mockResolvedValue([
+      ...Array.from({ length: 201 }, (_, index) => success(`r${index}`, 1, '203.0.113.1')),
+      success('novel', 2, '198.51.100.8'),
+      ...prior,
+    ]);
+    const novel = call();
+    await novel.promise;
+    expect(flagIds(novel.res)).toEqual(['new_ip_or_device']);
+  });
+
+  it('reports all moderation incidents and labels beyond the former 50-row cap', async () => {
+    mocks.findIncidents.mockResolvedValue([
+      ...Array.from({ length: 50 }, () => ({ createdAt: ago(HOUR), labels: [{ name: 'A' }] })),
+      { createdAt: ago(2 * HOUR), labels: [{ name: 'Older label' }] },
+    ]);
+    const { res, promise } = call();
+    await promise;
+    expect(res._getJSONData().flags[0].evidence).toContainEqual({ label: 'Moderation incidents', value: '51' });
+    expect(res._getJSONData().flags[0].evidence).toContainEqual({ label: 'Labels', value: 'A, Older label' });
+  });
+
+  it('rejects and closes the moderation cursor when a later batch fails', async () => {
+    const error = new Error('Later moderation batch failed');
+    mocks.findIncidents.mockResolvedValue([{ createdAt: ago(HOUR), labels: [{ name: 'A' }] }]);
+    mocks.incidentBatchError = error;
+    await expect(call().promise).rejects.toBe(error);
+    expect(mocks.incidentClose).toHaveBeenCalledOnce();
+  });
+
+  it.each(['signIns', 'spend', 'moderation'])(
+    'propagates a failed %s read instead of returning no flags',
+    async source => {
+      const error = new Error('Store unavailable');
+      if (source === 'signIns') mocks.listUserRiskSignIns.mockRejectedValueOnce(error);
+      if (source === 'spend') mocks.summarizeAiSpend.mockRejectedValueOnce(error);
+      if (source === 'moderation') mocks.findIncidents.mockRejectedValueOnce(error);
+      await expect(call().promise).rejects.toBe(error);
+    }
+  );
 
   it('rejects a non-admin with 403 before reading anything', async () => {
     await expect(call({}, { id: 'u2', isAdmin: false }).promise).rejects.toMatchObject({ statusCode: 403 });
@@ -126,10 +211,7 @@ describe('GET /api/admin/users/[userId]/risk-flags', () => {
   });
 
   it('fires the failed sign-in rule from audit entries', async () => {
-    mocks.listUserSignIns.mockResolvedValue({
-      entries: Array.from({ length: 5 }, (_, i) => failedSignIn(i)),
-      nextCursor: null,
-    });
+    mocks.listUserRiskSignIns.mockResolvedValue(Array.from({ length: 5 }, (_, i) => failedSignIn(i)));
     const { res, promise } = call();
     await promise;
     expect(adminUserRiskFlagsSchema.safeParse(res._getJSONData()).success).toBe(true);
@@ -156,15 +238,12 @@ describe('GET /api/admin/users/[userId]/risk-flags', () => {
 
   it('fires the new IP rule when the latest success comes from an unseen address', async () => {
     const success = (id: string, at: Date, ip: string) => ({ id, at, result: 'success', event: 'login', ip });
-    mocks.listUserSignIns.mockResolvedValue({
-      entries: [
-        success('n', ago(HOUR), '198.51.100.7'),
-        success('a', ago(30 * 24 * HOUR), '203.0.113.1'),
-        success('b', ago(31 * 24 * HOUR), '203.0.113.1'),
-        success('c', ago(32 * 24 * HOUR), '203.0.113.1'),
-      ],
-      nextCursor: null,
-    });
+    mocks.listUserRiskSignIns.mockResolvedValue([
+      success('n', ago(HOUR), '198.51.100.7'),
+      success('a', ago(30 * 24 * HOUR), '203.0.113.1'),
+      success('b', ago(31 * 24 * HOUR), '203.0.113.1'),
+      success('c', ago(32 * 24 * HOUR), '203.0.113.1'),
+    ]);
     const { res, promise } = call();
     await promise;
     expect(flagIds(res)).toEqual(['new_ip_or_device']);

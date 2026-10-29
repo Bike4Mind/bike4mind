@@ -4,11 +4,22 @@ import type { AdminUserRiskFlags } from '@bike4mind/common';
 import { UserRiskBadges } from './UserRiskBadges';
 import { ProfileTestWrapper } from './profileTestUtils';
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn(), data: undefined as unknown, isLoading: false, isError: false }));
+const mocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  refetch: vi.fn(),
+  data: undefined as unknown,
+  isLoading: false,
+  isError: false,
+}));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@client/app/hooks/data/useUserRiskFlags', () => ({
-  useUserRiskFlags: () => ({ data: mocks.data, isLoading: mocks.isLoading, isError: mocks.isError }),
+  useUserRiskFlags: () => ({
+    data: mocks.data,
+    isLoading: mocks.isLoading,
+    isError: mocks.isError,
+    refetch: mocks.refetch,
+  }),
 }));
 
 const window24h = { from: '2026-10-28T00:00:00.000Z', to: '2026-10-29T00:00:00.000Z' };
@@ -46,6 +57,7 @@ const renderBadges = (onOpenCompliance = vi.fn()) =>
 describe('UserRiskBadges', () => {
   beforeEach(() => {
     mocks.navigate.mockReset();
+    mocks.refetch.mockReset();
     mocks.data = FLAGS;
     mocks.isLoading = false;
     mocks.isError = false;
@@ -84,16 +96,49 @@ describe('UserRiskBadges', () => {
     expect(onOpenCompliance).toHaveBeenCalledTimes(1);
   });
 
+  it('shows exact UTC boundaries for a rolling sign-in window', () => {
+    const window = { from: '2026-10-28T09:30:15.123Z', to: '2026-10-29T09:30:15.123Z' };
+    mocks.data = { flags: [{ ...FLAGS.flags[0], window }] };
+    renderBadges();
+
+    fireEvent.click(screen.getByTestId('user-risk-badge-failed_sign_ins'));
+
+    expect(screen.getByTestId('user-risk-badge-evidence')).toHaveTextContent(
+      `Window: ${window.from} to ${window.to} (UTC)`
+    );
+  });
+
+  it.each([false, true])('links a credit spike to spend even with a legacy timeline descriptor: %s', hasTimeline => {
+    mocks.data = {
+      flags: [
+        {
+          ...FLAGS.flags[0],
+          id: 'credit_spike',
+          timeline: hasTimeline ? { types: ['usage'], ...window24h } : undefined,
+        },
+      ],
+    };
+    renderBadges();
+
+    fireEvent.click(screen.getByTestId('user-risk-badge-credit_spike'));
+    expect(screen.queryByTestId('user-risk-badge-timeline-link')).toBeNull();
+    fireEvent.click(screen.getByTestId('user-risk-badge-credits-link'));
+
+    const updater = mocks.navigate.mock.calls[0][0].search as (p: object) => Record<string, unknown>;
+    expect(updater({ keep: 1, tab: 'overview' })).toEqual({ keep: 1, tab: 'credits' });
+  });
+
   it('shows a neutral empty state when nothing fired', () => {
     mocks.data = { flags: [] };
     renderBadges();
     expect(screen.getByTestId('user-risk-badges-empty')).toHaveTextContent('No risk flags');
   });
 
-  it('renders nothing while loading', () => {
+  it('shows a skeleton while loading', () => {
     Object.assign(mocks, { isLoading: true, data: undefined });
     renderBadges();
     expect(screen.queryByTestId('user-risk-badges')).toBeNull();
+    expect(screen.getByTestId('user-risk-badges-loading')).toBeInTheDocument();
     expect(screen.queryByTestId('user-risk-badges-error')).toBeNull();
   });
 
@@ -102,5 +147,7 @@ describe('UserRiskBadges', () => {
     renderBadges();
     expect(screen.getByTestId('user-risk-badges-error')).toHaveTextContent('could not be loaded');
     expect(screen.queryByTestId('user-risk-badges-empty')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(mocks.refetch).toHaveBeenCalledTimes(1);
   });
 });

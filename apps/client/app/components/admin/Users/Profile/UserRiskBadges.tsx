@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Box, Stack, Typography } from '@mui/joy';
+import { Box, Skeleton, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import type { AdminUserRiskFlag, AdminUserRiskFlagId, AdminUserRiskSeverity } from '@bike4mind/common';
 import { useUserRiskFlags } from '@client/app/hooks/data/useUserRiskFlags';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
-import { StatusChip } from '../../shared';
+import { ErrorState, StatusChip } from '../../shared';
 import { activitySearchFromFilters } from './activitySearch';
 import { UserRiskBadgeEvidence } from './UserRiskBadgeEvidence';
 
@@ -25,12 +25,25 @@ export const UserRiskBadges: React.FC<UserRiskBadgesProps> = ({ userId, onOpenCo
   const navigate = useNavigate({ from: '/admin/users/$userId' });
   const [openId, setOpenId] = useState<AdminUserRiskFlagId | null>(null);
 
-  if (risk.isLoading) return null;
+  if (risk.isLoading) {
+    return (
+      <Stack
+        direction="row"
+        gap={1}
+        flexWrap="wrap"
+        aria-label="Loading risk flags"
+        data-testid="user-risk-badges-loading"
+      >
+        <Skeleton variant="rectangular" width={180} height={24} sx={{ borderRadius: 12 }} />
+        <Skeleton variant="rectangular" width={140} height={24} sx={{ borderRadius: 12 }} />
+      </Stack>
+    );
+  }
   if (risk.isError || !risk.data) {
     return (
-      <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="user-risk-badges-error">
-        Risk flags could not be loaded
-      </Typography>
+      <Box data-testid="user-risk-badges-error">
+        <ErrorState message="Risk flags could not be loaded." onRetry={() => void risk.refetch()} />
+      </Box>
     );
   }
   const flags = risk.data.flags;
@@ -69,7 +82,14 @@ export const UserRiskBadges: React.FC<UserRiskBadgesProps> = ({ userId, onOpenCo
           ))}
         </Stack>
       )}
-      {open && <UserRiskBadgeEvidence flag={open} onViewTimeline={viewTimeline} onViewCompliance={onOpenCompliance} />}
+      {open && (
+        <UserRiskBadgeEvidence
+          flag={open}
+          onViewTimeline={viewTimeline}
+          onViewCredits={() => void navigate({ search: previous => ({ ...previous, tab: 'credits' }) })}
+          onViewCompliance={onOpenCompliance}
+        />
+      )}
     </Box>
   );
 };
