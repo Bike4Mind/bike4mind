@@ -219,10 +219,12 @@ import {
 import {
   appendLiveToolChange,
   declareDeferredTools,
+  estimateToolTokens,
   insertToolChanges,
   offersCoreTools,
   optionalToolNames,
   sameToolState,
+  startToolNames,
   supportsDeferredTools,
   toolStateRecords,
   toolStateReminder,
@@ -418,6 +420,11 @@ export interface ChatServiceDeps {
   /** Owns attachment bytes. Absent in tests that never attach anything. */
   attachments?: AttachmentStore;
   logger: ChatServiceLogger;
+  /**
+   * Deferred tool loading on supported Claude models (chat/deferredTools.ts). Absent keeps today's
+   * request shape. A start set estimated over `startSetMaxTokens` is deferred too; 0 defers all.
+   */
+  deferredTools?: { startSetMaxTokens: number };
   /**
    * The server's model list. Absent in tests that do not exercise model resolution, which then
    * leaves every session on whatever model it was created with.
@@ -2637,7 +2644,12 @@ export class ChatService {
       const toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
       // See chat/deferredTools.ts. Decided once per turn, so a turn never mixes the two shapes.
       const deferred =
-        !localTurn && cacheable && toolsSupported && supportsDeferredTools(modelOption) && offersCoreTools(tools);
+        !!this.deps.deferredTools &&
+        !localTurn &&
+        cacheable &&
+        toolsSupported &&
+        supportsDeferredTools(modelOption) &&
+        offersCoreTools(tools);
       const toolState = (): ChatToolState => ({
         tools: optionalToolNames(toolsFor(roots)),
         text: buildToolStateText({
@@ -2662,11 +2674,14 @@ export class ChatService {
       const declarable = (name: string) => schemaFor(name) !== undefined;
       // Names the wire's tool changes reference; each must stay declared for the rest of the turn.
       const referenced = new Set<string>();
+      // The conversation's loaded start set; declared on every turn, offered or not.
+      let start: string[] = [];
       const requestTools = () =>
         deferred
           ? declareDeferredTools(
               toolsFor(roots),
-              [...referenced].flatMap(name => schemaFor(name) ?? [])
+              [...new Set([...start, ...referenced])].flatMap(name => schemaFor(name) ?? []),
+              new Set(start)
             )
           : toolsFor(roots);
       let liveState: ChatToolState | undefined;
@@ -2674,11 +2689,19 @@ export class ChatService {
       if (deferred) {
         liveState = toolState();
         await this.recordToolStates(session, liveState, declarable);
+        const mcpNames = new Set(mcpTools.map(binding => binding.definition.schema.name));
+        start = startToolNames(
+          session.messages.find(message => message.role === 'user' && message.toolState)?.toolState,
+          name => !mcpNames.has(name) && findTool(name) !== undefined
+        ).filter(declarable);
+        const startTokens = estimateToolTokens(start.flatMap(name => schemaFor(name) ?? []));
+        if (startTokens > (this.deps.deferredTools?.startSetMaxTokens ?? 0)) start = [];
         const marks: ToolStateMark[] = [];
         const replayed = insertToolChanges(
           await toCompletionMessages(session, readAttachment, marks),
           marks,
-          declarable
+          declarable,
+          start
         );
         wire = replayed.wire;
         replayed.referenced.forEach(name => referenced.add(name));

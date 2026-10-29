@@ -50,6 +50,19 @@ function canCarryBreakpoint(message: CompletionMessage): boolean {
 }
 
 /**
+ * The previous request's rolling breakpoint, when that request ended on a tool change: the API looks
+ * back only 20 blocks for an earlier entry, and one block per added tool can push it out of reach
+ * (measured live), so it is marked again and read exactly. -1 when there is none.
+ */
+function lookbackBreakpoint(messages: readonly CompletionMessage[], rolling: number): number {
+  let change = rolling - 1;
+  while (change > 0 && !isToolChangeMessage(messages[change])) change--;
+  if (change <= 0) return -1;
+  const replies = messages.slice(change + 1, rolling).filter(message => message.role === 'assistant').length;
+  return replies === 1 && canCarryBreakpoint(messages[change - 1]) ? change - 1 : -1;
+}
+
+/**
  * The messages as one request should send them: a copy of the system message and of the last
  * message that can carry a breakpoint, marked `cache: true`, the rest untouched. The first
  * breakpoint caches the tools and system prompt, which are stable across a whole turn; the
@@ -68,8 +81,9 @@ export function withCacheBreakpoints(messages: readonly CompletionMessage[]): Co
   while (rolling >= 0 && (isToolChangeMessage(messages[rolling]) || !canCarryBreakpoint(messages[rolling]))) {
     rolling--;
   }
+  const lookback = lookbackBreakpoint(messages, rolling);
   return messages.map((message, index) =>
-    index === rolling || (message.role === 'system' && !isToolChangeMessage(message))
+    index === rolling || index === lookback || (message.role === 'system' && !isToolChangeMessage(message))
       ? { ...message, cache: true }
       : message
   );

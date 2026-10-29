@@ -167,6 +167,17 @@ const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
 
+/**
+ * Deferred tool loading, off unless B4M_DESKTOP_DEFERRED_TOOLS=1. The start-set limit mirrors the
+ * server's DeferredToolStartSetMaxTokens setting (default 100,000; 0 defers every optional tool).
+ */
+const DEFERRED_TOOLS = (() => {
+  if (process.env.B4M_DESKTOP_DEFERRED_TOOLS !== '1') return undefined;
+  const raw = process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS?.trim();
+  const limit = raw ? Number(raw) : NaN;
+  return { startSetMaxTokens: Number.isFinite(limit) && limit >= 0 ? limit : 100_000 };
+})();
+
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
 
@@ -634,6 +645,7 @@ export function registerChat(
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
+    ...(DEFERRED_TOOLS ? { deferredTools: DEFERRED_TOOLS } : {}),
     getApiClient: () => auth.getApiClient(),
     isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,

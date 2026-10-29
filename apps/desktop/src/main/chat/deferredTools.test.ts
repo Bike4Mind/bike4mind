@@ -6,9 +6,11 @@ import type { CompletionMessage } from './completions';
 import {
   appendLiveToolChange,
   declareDeferredTools,
+  estimateToolTokens,
   insertToolChanges,
   offersCoreTools,
   optionalToolNames,
+  startToolNames,
   supportsDeferredTools,
   toolStateRecords,
   type WireTool,
@@ -57,6 +59,36 @@ describe('declareDeferredTools', () => {
       ['bash', true],
       [DEFERRED_ANCHOR_TOOL_NAME, true],
     ]);
+  });
+});
+
+describe('start set', () => {
+  it('keeps the first record built-in tools loaded and diffs later records from them', () => {
+    const first = { tools: [WEB_SEARCH_TOOL_NAME, 'ask_user', 'mcp_tool'], text: 't' };
+    const start = startToolNames(first, name => name !== 'mcp_tool');
+    expect(start).toEqual(['ask_user']);
+
+    const declared = declareDeferredTools(
+      wire(WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, 'mcp_tool'),
+      [schema('ask_user')],
+      new Set(start)
+    );
+    expect(declared.map(tool => [tool.toolSchema.name, !!tool.toolSchema.defer_loading])).toEqual([
+      [WEB_SEARCH_TOOL_NAME, false],
+      [WEB_FETCH_TOOL_NAME, false],
+      ['mcp_tool', true],
+      ['ask_user', false],
+      [DEFERRED_ANCHOR_TOOL_NAME, true],
+    ]);
+
+    const { wire: out } = insertToolChanges(
+      [{ role: 'user', content: 'x' }],
+      [{ index: 0, tools: ['ask_user', 'mcp_tool'] }],
+      all,
+      start
+    );
+    expect(out[1]?.content).toEqual([{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'mcp_tool' } }]);
+    expect(estimateToolTokens([schema('ask_user')])).toBeGreaterThan(0);
   });
 });
 

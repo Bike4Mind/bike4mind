@@ -13,14 +13,15 @@ import type { CompletionMessage } from './completions';
 import type { ToolSchema } from './tools/types';
 
 /**
- * Deferred tools for Desktop turns (the shared rules are in @bike4mind/common deferredTools.ts).
+ * Deferred tools for Desktop turns (the shared rules are in @bike4mind/common deferredTools.ts, the
+ * same policy as in-app chat in b4m-core/services/src/llm/deferredToolLoading.ts).
  *
- * The core tools stay loaded; every other offered tool goes out `defer_loading: true` and is
- * surfaced by a `tool_addition` message right after the user turn that first offered it. That turn
- * also carries the tool and folder guidance as a reminder (ChatMessage.toolState), because the
- * completions proxy refuses text in a tool change message. A later change to tools, folders or MCP
- * servers adds a new record on its own turn, so the system prompt and the history before it never
- * move.
+ * The core tools and the conversation's start set (the built-in tools its first turn offered) stay
+ * loaded; MCP tools and every later addition go out `defer_loading: true` and are surfaced by a
+ * `tool_addition` message right after the user turn that first offered them. The tool and folder
+ * guidance rides that turn as a reminder (ChatMessage.toolState), because the completions proxy
+ * refuses text in a tool change message. A later change to tools, folders or MCP servers adds a new
+ * record on its own turn, so the system prompt and the history before it never move.
  */
 
 /** Offered on every signed-in remote turn, so the loaded set never changes. */
@@ -54,21 +55,39 @@ export function sameToolState(left: ChatToolState | undefined, right: ChatToolSt
 }
 
 /**
- * The tools one deferred request declares: the offered core tools loaded, every other offered tool
- * deferred, the tools earlier records added but this turn no longer offers deferred (so their
- * additions and removals still resolve), and the never-added anchor.
+ * The tools one deferred request declares: the offered core and `loaded` tools loaded, every other
+ * offered tool deferred, the tools this turn no longer offers but earlier changes reference (so they
+ * still resolve; a `loaded` one stays loaded so the head keeps its bytes), and the never-added anchor.
  */
-export function declareDeferredTools(offered: readonly WireTool[], withdrawn: readonly ToolSchema[]): WireTool[] {
+export function declareDeferredTools(
+  offered: readonly WireTool[],
+  withdrawn: readonly ToolSchema[],
+  loaded: ReadonlySet<string> = new Set()
+): WireTool[] {
   const offeredNames = new Set(offered.map(tool => tool.toolSchema.name));
+  const declare = (schema: WireTool['toolSchema']): WireTool =>
+    CORE_TOOL_NAMES.has(schema.name) || loaded.has(schema.name)
+      ? { toolSchema: schema }
+      : { toolSchema: { ...schema, defer_loading: true } };
   return [
-    ...offered.map(tool =>
-      CORE_TOOL_NAMES.has(tool.toolSchema.name) ? tool : { toolSchema: { ...tool.toolSchema, defer_loading: true } }
-    ),
-    ...withdrawn
-      .filter(schema => !offeredNames.has(schema.name))
-      .map(schema => ({ toolSchema: { ...schema, defer_loading: true } })),
+    ...offered.map(tool => declare(tool.toolSchema)),
+    ...withdrawn.filter(schema => !offeredNames.has(schema.name)).map(declare),
     { toolSchema: DEFERRED_ANCHOR_TOOL_SCHEMA },
   ];
+}
+
+/**
+ * The optional tools a conversation keeps loaded: the built-in ones (`isBuiltIn`, never MCP tools)
+ * its first record holds. Fixed per conversation, so its head is the one every chat starting with
+ * the same tools shares.
+ */
+export function startToolNames(first: ChatToolState | undefined, isBuiltIn: (name: string) => boolean): string[] {
+  return (first?.tools ?? []).filter(name => !CORE_TOOL_NAMES.has(name) && isBuiltIn(name)).sort();
+}
+
+/** Rough token count of tool definitions: JSON schemas run about 3 characters per token. */
+export function estimateToolTokens(schemas: readonly ToolSchema[]): number {
+  return Math.ceil(schemas.reduce((total, schema) => total + JSON.stringify(schema).length, 0) / 3);
 }
 
 const sortedUnion = (...lists: (readonly string[])[]) => [...new Set(lists.flat())].sort();
@@ -135,13 +154,14 @@ export interface ToolStateMark {
  * Insert the tool change messages for the replayed records. A record whose turn cannot be followed
  * by a change (a user turn answered by another user turn) moves to the next place that can, and a
  * later record at the same place supersedes it. Names with no schema left are dropped, which
- * re-writes history from their first addition. Returns the names the changes reference, which the
- * request must declare.
+ * re-writes history from their first addition. The changes start from the loaded `start` set.
+ * Returns the names the changes reference, which the request must declare.
  */
 export function insertToolChanges(
   wire: readonly CompletionMessage[],
   marks: readonly ToolStateMark[],
-  declarable: (name: string) => boolean
+  declarable: (name: string) => boolean,
+  start: readonly string[] = []
 ): { wire: CompletionMessage[]; referenced: string[] } {
   const placed = new Map<number, readonly string[]>();
   for (const mark of marks) {
@@ -151,7 +171,7 @@ export function insertToolChanges(
   }
   const inserts = new Map<number, CompletionMessage>();
   const referenced = new Set<string>();
-  let active: readonly string[] = [];
+  let active: readonly string[] = start.filter(declarable);
   for (const [at, tools] of [...placed.entries()].sort(([left], [right]) => left - right)) {
     const { added, removed } = diffToolNames(active, tools);
     if (added.length > 0 || removed.length > 0) {
