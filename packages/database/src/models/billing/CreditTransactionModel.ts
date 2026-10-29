@@ -135,7 +135,7 @@ CreditTransactionSchema.index(
   { ownerId: 1, ownerType: 1, createdAt: -1, _id: -1 },
   { name: 'ownerId_ownerType_createdAt_id' }
 );
-// Serves the hourly young-account spend scan and the daily leaderboard's spend join (CounterLogModel.ts).
+// Serves the hourly young-account spend scan (CounterLogModel.ts).
 // Built by CreditTransaction.createIndexes() in the 20260921235947 ensure migration.
 CreditTransactionSchema.index({ ownerType: 1, createdAt: -1, type: 1 });
 CreditTransactionSchema.index({ stripeDisputeId: 1 }, { unique: true, sparse: true });

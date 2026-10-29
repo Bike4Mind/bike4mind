@@ -540,7 +540,9 @@ describe('findYoungAccountSpend', () => {
     const aggregate = vi.spyOn(CreditTransaction, 'aggregate');
     await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
     const pipeline = aggregate.mock.calls[0][0] as mongoose.PipelineStage[];
-    const plan = JSON.stringify(await CreditTransaction.collection.aggregate(pipeline).explain('queryPlanner'));
+    const explain = await CreditTransaction.collection.aggregate(pipeline).explain('queryPlanner');
+    // Only the winning plan counts; a losing candidate can still name the index.
+    const plan = JSON.stringify(explain, (key, value) => (key === 'rejectedPlans' ? undefined : value));
     expect(plan).toContain('ownerType_1_createdAt_-1_type_1');
     expect(plan).not.toContain('COLLSCAN');
   });
