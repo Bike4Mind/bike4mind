@@ -107,6 +107,14 @@ describe('settings/update large signup grant guard', () => {
     expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 
+  it('treats a policy stored as a JSON string as enabled', async () => {
+    rows = PROTECTIONS.map(row =>
+      row.settingName === 'signupGrantRiskPolicy' ? { ...row, settingValue: '{"enabled":true}' } : row
+    );
+    await runHandler('defaultFreeCredits', LARGE);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
   it('still refuses when a single protection is left off', async () => {
     rows = PROTECTIONS.filter(row => row.settingName !== 'maxSignupsPerIpPerDay');
     await expect(runHandler('defaultFreeCredits', LARGE)).rejects.toThrow(/maxSignupsPerIpPerDay/);
