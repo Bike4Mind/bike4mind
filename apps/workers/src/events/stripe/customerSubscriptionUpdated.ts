@@ -132,6 +132,12 @@ export const handler = withEventContext(async (event, logger) => {
     return false;
   });
 
+  // Straight after the write: a redelivery compares Stripe's state with the row this attempt wrote
+  // and finds no change, so a timeout in the slower work below would lose these posts. Never throws.
+  if (owned && before) {
+    await postSubscriptionChangesToSlack(before, subscription);
+  }
+
   // A cancel recorded at Stripe - the Billing Portal path, where Stripe is the
   // only actor and none of our API routes are called - leaves the unpaid invoice
   // that triggered the dunning still open, and Stripe keeps retrying it and
@@ -168,7 +174,6 @@ export const handler = withEventContext(async (event, logger) => {
   // failures, so once the write commits nothing can skip these. Never throws.
   if (owned && before) {
     await emitSubscriptionChangeEvents(before, subscription);
-    await postSubscriptionChangesToSlack(before, subscription);
   }
 
   // sendToClient calls must be outside the transaction to avoid
@@ -234,7 +239,7 @@ export const handler = withEventContext(async (event, logger) => {
  * The events follow the row, which is only as current as the Stripe state each update fetched.
  * Updates running at once each see the state the other left, so they cannot both report one
  * transition; but one that fetched an older state and wrote it last moves the row back, reports
- * that move, and the next update reports the move forward again.
+ * that move unless the row was terminal, and the next update reports the move forward again.
  *
  * Only user-owned subscriptions, like purchases: no one user's signup can attribute an
  * organization's. Each occurrence names the row version it changed from, so each transition has

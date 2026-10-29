@@ -1,5 +1,5 @@
 import type Stripe from 'stripe';
-import type { ISubscription } from './types';
+import { TERMINAL_SUBSCRIPTION_STATUSES, type ISubscription } from './types';
 
 export interface SubscriptionChanges {
   plan: { fromPriceId: string; toPriceId: string } | null;
@@ -24,6 +24,12 @@ export function detectSubscriptionChanges(
   before: Pick<ISubscription, 'priceId' | 'status' | 'canceledAt'>,
   after: Pick<Stripe.Subscription, 'items' | 'status' | 'canceled_at'>
 ): SubscriptionChanges {
+  // Stripe never moves a subscription out of a terminal status, so a row leaving one is being
+  // overwritten by an update that fetched an older state: no plan move or cancel decision happened.
+  if (TERMINAL_SUBSCRIPTION_STATUSES.has(before.status) && !TERMINAL_SUBSCRIPTION_STATUSES.has(after.status)) {
+    return { plan: null, cancel: null, ended: false };
+  }
+
   const toPriceId = after.items.data[0]?.price.id;
   const plan =
     toPriceId && before.priceId && toPriceId !== before.priceId ? { fromPriceId: before.priceId, toPriceId } : null;

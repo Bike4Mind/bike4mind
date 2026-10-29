@@ -297,6 +297,17 @@ describe('customer.subscription.deleted', () => {
     );
   });
 
+  it('posts the end before the invoice cleanup, so a delivery that times out in it has still posted', async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'active' });
+    mocks.voidOpenSubscriptionInvoices.mockReturnValueOnce(new Promise(() => {}));
+
+    // Not awaited: the handler waits on the cleanup, which here never settles.
+    void deliver(deleted('cancellation_requested'));
+    await vi.waitFor(() => expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalled());
+
+    expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledOnce();
+  });
+
   it('posts the end once across a redelivery', async () => {
     mocks.updateByStripeSubscriptionId
       .mockResolvedValueOnce({ ...userRow, status: 'active' })

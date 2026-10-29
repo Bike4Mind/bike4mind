@@ -75,11 +75,12 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(gatedByTab.size).toBe(2);
   });
 
-  it('only badges the Subscribers tab', () => {
-    const badged = allItems.filter(i => i.badge);
-    expect(badged).toHaveLength(1);
-    expect(badged[0].tab).toBe(AdminTab.Subscribers);
-    expect(badged[0].badge).toBe('waitingSubscribers');
+  it('only badges the Subscribers and Subscriptions tabs', () => {
+    const badged = allItems.filter(i => i.badge).map(i => [i.tab, i.badge]);
+    expect(badged).toEqual([
+      [AdminTab.Subscribers, 'waitingSubscribers'],
+      [AdminTab.Subscriptions, 'newSubscriptions'],
+    ]);
   });
 });
 

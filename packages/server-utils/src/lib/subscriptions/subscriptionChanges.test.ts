@@ -72,6 +72,28 @@ describe('detectSubscriptionChanges', () => {
     ).toBeNull();
   });
 
+  it('reports nothing for a row a stale update moves out of a terminal status', () => {
+    expect(
+      detectSubscriptionChanges(
+        before({ status: 'canceled', canceledAt: new Date() }),
+        after({ priceId: 'price_pro', canceled_at: 1_790_000_000 })
+      )
+    ).toEqual({ plan: null, cancel: null, ended: false });
+    expect(
+      detectSubscriptionChanges(before({ status: 'incomplete_expired', canceledAt: new Date() }), after())
+    ).toEqual({ plan: null, cancel: null, ended: false });
+  });
+
+  it('still reports changes for a row leaving a status that is not terminal', () => {
+    expect(detectSubscriptionChanges(before({ status: 'incomplete' }), after({ priceId: 'price_pro' })).plan).toEqual({
+      fromPriceId: 'price_basic',
+      toPriceId: 'price_pro',
+    });
+    expect(
+      detectSubscriptionChanges(before({ status: 'past_due' }), after({ canceled_at: 1_790_000_000 })).cancel
+    ).toBe('scheduled');
+  });
+
   it('reports both when one update changes the price and schedules a cancel', () => {
     expect(detectSubscriptionChanges(before(), after({ priceId: 'price_pro', canceled_at: 1_790_000_000 }))).toEqual({
       plan: { fromPriceId: 'price_basic', toPriceId: 'price_pro' },

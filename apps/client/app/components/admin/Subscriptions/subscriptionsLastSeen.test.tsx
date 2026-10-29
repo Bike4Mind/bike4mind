@@ -21,8 +21,9 @@ const newest = (createdAt: string | null) => ({
   data: { subscriptions: createdAt ? [{ createdAt }] : [], total: 0, page: 1, totalPages: 0, searchTruncated: false },
 });
 
-const wrapper = () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const createClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+const wrapper = (client = createClient()) => {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
@@ -36,16 +37,66 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe('useNewSubscriptionsDot', () => {
-  it('stores now as the baseline on a first visit and shows no dot for existing rows', async () => {
+  it('takes the newest row as the baseline on a first visit and shows no dot for it', async () => {
     apiGet.mockResolvedValue(newest('2026-09-15T00:00:00.000Z'));
     const { result } = renderHook(() => useNewSubscriptionsDot(true), { wrapper: wrapper() });
-    await waitFor(() => expect(apiGet).toHaveBeenCalled());
-    expect(readStoredLastSeen()).not.toBeNull();
+    await waitFor(() => expect(readStoredLastSeen()).toBe('2026-09-15T00:00:00.000Z'));
+    expect(useSubscriptionsLastSeen.getState().lastSeen).toBe('2026-09-15T00:00:00.000Z');
     expect(result.current).toBe(false);
+  });
+
+  it('ignores a skewed browser clock on a first visit', async () => {
+    // A clock years behind would make every existing row look new if it were the baseline.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2020-01-01T00:00:00.000Z'));
+    const client = createClient();
+    apiGet.mockResolvedValue(newest('2026-09-15T00:00:00.000Z'));
+    const { result } = renderHook(() => useNewSubscriptionsDot(true), { wrapper: wrapper(client) });
+    await waitFor(() => expect(useSubscriptionsLastSeen.getState().lastSeen).toBe('2026-09-15T00:00:00.000Z'));
+    expect(result.current).toBe(false);
+
+    // A clock years ahead would hide this one.
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+    apiGet.mockResolvedValue(newest('2026-09-16T00:00:00.000Z'));
+    await act(() => client.refetchQueries());
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it('lights for the first paid row when there were none at the first visit', async () => {
+    const client = createClient();
+    apiGet.mockResolvedValue(newest(null));
+    const { result } = renderHook(() => useNewSubscriptionsDot(true), { wrapper: wrapper(client) });
+    await waitFor(() => expect(useSubscriptionsLastSeen.getState().lastSeen).toBe(new Date(0).toISOString()));
+    expect(result.current).toBe(false);
+
+    apiGet.mockResolvedValue(newest('2026-09-16T00:00:00.000Z'));
+    await act(() => client.refetchQueries());
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it('clears when another browser tab opens the Subscriptions tab', async () => {
+    act(() => useSubscriptionsLastSeen.setState({ lastSeen: SEEN }));
+    apiGet.mockResolvedValue(newest('2026-10-02T00:00:00.000Z'));
+    const { result } = renderHook(() => useNewSubscriptionsDot(true), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current).toBe(true));
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated', newValue: '2026-10-03T00:00:00.000Z' }));
+    });
+    expect(result.current).toBe(true);
+
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: SUBSCRIPTIONS_LAST_SEEN_KEY, newValue: '2026-10-03T00:00:00.000Z' })
+      );
+    });
+    expect(result.current).toBe(false);
+    expect(useSubscriptionsLastSeen.getState().lastSeen).toBe('2026-10-03T00:00:00.000Z');
   });
 
   it('lights for a Stripe subscription started after the last visit', async () => {
