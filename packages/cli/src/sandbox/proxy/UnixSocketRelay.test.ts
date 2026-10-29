@@ -100,6 +100,34 @@ describe('UnixSocketRelay', () => {
     expect(relay.getSocketPath()).toBeNull();
   });
 
+  it('removes the socket directory when the process exits without a stop', async () => {
+    const before = process.listeners('exit');
+    relay = new UnixSocketRelay();
+    const socketPath = await relay.start(1);
+    const added = process.listeners('exit').filter(listener => !before.includes(listener));
+    expect(added).toHaveLength(1);
+
+    added[0](0);
+
+    expect(existsSync(path.dirname(socketPath))).toBe(false);
+    await relay.stop();
+    expect(process.listeners('exit')).toEqual(before);
+  });
+
+  it('keeps running when the server reports an error after listening', async () => {
+    const createServer = net.createServer;
+    let relayServer!: net.Server;
+    vi.spyOn(net, 'createServer').mockImplementation(((listener: (socket: net.Socket) => void) => {
+      relayServer = createServer(listener);
+      return relayServer;
+    }) as typeof net.createServer);
+    relay = new UnixSocketRelay();
+    const socketPath = await relay.start(1);
+
+    expect(() => relayServer.emit('error', new Error('EMFILE'))).not.toThrow();
+    expect(relay.getSocketPath()).toBe(socketPath);
+  });
+
   it('stop is a no-op when not started', async () => {
     relay = new UnixSocketRelay();
     await expect(relay.stop()).resolves.toBeUndefined();

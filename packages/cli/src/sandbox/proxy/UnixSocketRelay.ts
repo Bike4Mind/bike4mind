@@ -9,7 +9,7 @@ import path from 'path';
 import { mkdtempSync, rmSync } from 'fs';
 
 export class UnixSocketRelay {
-  private listening: { server: net.Server; directory: string; socketPath: string } | null = null;
+  private listening: { server: net.Server; socketPath: string; removeDirectory: () => void } | null = null;
   private activeSockets = new Set<net.Socket>();
 
   async start(targetPort: number): Promise<string> {
@@ -18,6 +18,7 @@ export class UnixSocketRelay {
     // mkdtemp creates the directory 0700, so other local users cannot reach the socket.
     const directory = mkdtempSync(path.join(os.tmpdir(), 'b4m-proxy-'));
     const socketPath = path.join(directory, 'proxy.sock');
+    const removeDirectory = () => rmSync(directory, { recursive: true, force: true });
     const server = net.createServer(client => {
       const upstream = net.connect(targetPort, '127.0.0.1');
       for (const socket of [client, upstream]) {
@@ -31,25 +32,29 @@ export class UnixSocketRelay {
 
     try {
       await new Promise<void>((resolve, reject) => {
-        server.once('error', reject);
+        // Kept after listen too: an unhandled server 'error' would crash the CLI.
+        server.on('error', reject);
         server.listen(socketPath, () => resolve());
       });
     } catch (error) {
-      rmSync(directory, { recursive: true, force: true });
+      removeDirectory();
       throw error;
     }
-    this.listening = { server, directory, socketPath };
+    // A CLI that exits without stopping the proxy would otherwise leave the socket directory behind.
+    process.once('exit', removeDirectory);
+    this.listening = { server, socketPath, removeDirectory };
     return socketPath;
   }
 
   async stop(): Promise<void> {
     if (!this.listening) return;
-    const { server, directory } = this.listening;
+    const { server, removeDirectory } = this.listening;
     this.listening = null;
+    process.off('exit', removeDirectory);
     for (const socket of this.activeSockets) socket.destroy();
     this.activeSockets.clear();
     await new Promise<void>(resolve => server.close(() => resolve()));
-    rmSync(directory, { recursive: true, force: true });
+    removeDirectory();
   }
 
   getSocketPath(): string | null {

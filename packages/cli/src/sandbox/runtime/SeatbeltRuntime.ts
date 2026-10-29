@@ -122,21 +122,22 @@ export class SeatbeltRuntime implements SandboxRuntime {
     // IPC (ssh-agent, gpg-agent, a unix-socket postgres/redis). The
     // unix-socket re-allows below run AFTER it (Seatbelt is last-match-wins), so the
     // NET effect is an IP-only denial. This matches Linux, whose --unshare-net
-    // isolates IP but not AF_UNIX.
-    lines.push('; Deny all network, then re-allow local unix sockets (net: IP-only denial)');
+    // isolates IP but not AF_UNIX. The resolver socket stays denied in every mode: mDNSResponder
+    // would otherwise send DNS queries on the sandbox's behalf, a channel out even with network off.
+    lines.push('; Deny all network, then re-allow local unix sockets except the DNS resolver');
     lines.push('(deny network*)');
     lines.push('(allow network-outbound (remote unix-socket))');
     lines.push('(allow network-inbound (local unix-socket))');
     lines.push('(allow network-bind (local unix-socket))');
+    lines.push(`(deny network-outbound (remote unix-socket (path-literal "${MDNS_RESPONDER_SOCKET}")))`);
     if (options.networkEnabled && options.proxyPort !== undefined) {
       assertProxyPort(options.proxyPort);
       // The proxy resolves hostnames, so clients need no local DNS. Outbound loopback is limited to the
       // proxy port so other local services (databases, dev servers, engine APIs) stay unreachable.
-      lines.push('; Allow outbound loopback to the filtering proxy only; no local DNS resolution');
+      lines.push('; Allow outbound loopback to the filtering proxy only');
       lines.push('(allow network-bind (local ip "localhost:*"))');
       lines.push('(allow network-inbound (local ip "localhost:*"))');
       lines.push(`(allow network-outbound (remote ip "localhost:${options.proxyPort}"))`);
-      lines.push(`(deny network-outbound (remote unix-socket (path-literal "${MDNS_RESPONDER_SOCKET}")))`);
     }
     if (containerDenies) {
       lines.push('; Keep container engine sockets out of reach');

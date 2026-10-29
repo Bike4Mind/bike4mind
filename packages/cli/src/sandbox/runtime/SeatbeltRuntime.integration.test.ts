@@ -120,6 +120,22 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
     }
   });
 
+  it.each([false, true])('resolves no hostnames through the system resolver (network %s)', networkEnabled => {
+    const wrapped = runtime.wrapCommand({
+      command: `dscacheutil -q host -a name example.com | grep -q address && echo resolved || echo unresolved`,
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled,
+      ...(networkEnabled && { proxyPort: 9 }),
+    });
+
+    try {
+      expect(execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 15000 }).trim()).toBe('unresolved');
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
+    }
+  });
+
   it.each([
     [false, 'EPERM'],
     [true, 'open'],

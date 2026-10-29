@@ -313,7 +313,9 @@ describe('SeatbeltRuntime', () => {
 
         expect(profile).toContain('(deny network*)');
         expect(profile).not.toContain('remote ip');
-        expect(profile).not.toContain('mDNSResponder');
+        expect(profile).toContain(
+          '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))'
+        );
       });
     });
 

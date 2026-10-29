@@ -122,11 +122,13 @@ The violation log shows the exact domain that was blocked, including the method 
 
 **Solution:** Install `socat` with your package manager (`sudo apt install socat`, `sudo dnf install socat` or `sudo pacman -S socat`), or turn sandbox network filtering off.
 
+If commands instead fail with `sandbox: network relay failed to start`, `socat` was found on your `PATH` but could not run inside the sandbox, usually because it is installed outside the system directories the sandbox mounts (`/usr`, `/bin`, `/lib`, `/sbin`, `/etc`). Install it through your system package manager.
+
 ## Proxy won't start
 
 **Symptoms:** `/sandbox:enable` succeeds but reports no proxy. Network filtering not active.
 
-**Cause:** Either `network.enabled` is `false` or a port conflict prevented the proxy from binding.
+**Cause:** Either `network.enabled` is `false` or a port conflict prevented the proxy from binding. On Linux the proxy also needs a unix socket in your temp directory; if it cannot be created there (for example, `$TMPDIR` is not writable or its path is too long for a socket), the proxy does not start.
 
 **Solution:**
 

@@ -203,7 +203,7 @@ Set to `true` only if a sandboxed tool genuinely needs to talk to the container 
 
 ### `platform.linux`
 
-- `runtime`: `"bubblewrap"` — Uses `bwrap` with namespace isolation; network filtering also needs `socat`
+- `runtime`: `"bubblewrap"` - Uses `bwrap` with namespace isolation; network filtering also needs `socat`
 
 Platform config is rarely changed. The sandbox auto-detects your platform and uses the appropriate runtime.
 

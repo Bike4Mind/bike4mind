@@ -462,6 +462,19 @@ describe('BubblewrapRuntime', () => {
         expect(() => runtime.wrapCommand({ ...networkOptions, proxyPort })).toThrow('Invalid sandbox proxy port');
       });
 
+      it('passes a socket path with spaces and quotes as one argument and quotes it for the shell', () => {
+        const proxySocketPath = "/tmp/it's a dir/proxy.sock";
+        const { args, commandString } = runtime.wrapCommand({ ...networkOptions, proxySocketPath });
+
+        expect(args[args.indexOf(proxySocketPath) + 1]).toBe('/run/b4m/proxy.sock');
+        expect(commandString).toContain(`--ro-bind '/tmp/it'\\''s a dir/proxy.sock' /run/b4m/proxy.sock`);
+      });
+
+      it.each([1, 65535])('accepts boundary proxy port %s', proxyPort => {
+        const { args } = runtime.wrapCommand({ ...networkOptions, proxyPort });
+        expect(args[args.length - 3]).toContain(`TCP-LISTEN:${proxyPort},`);
+      });
+
       it('ignores proxy settings when network is disabled', () => {
         const { args } = runtime.wrapCommand({ ...networkOptions, networkEnabled: false });
 
