@@ -19,12 +19,12 @@ describe('groupScopeEndpoints', () => {
         'GET /api/data-lakes/:id',
         'GET /api/v1/data-lakes',
         'GET|PUT /api/data-lakes',
-        'OptiHashi run and problem reads',
+        'Example run and problem reads',
       ])
     ).toEqual([
       { prefix: '/api/data-lakes', endpoints: ['GET|PUT /api/data-lakes', 'GET /api/data-lakes/:id'] },
       { prefix: '/api/v1/data-lakes', endpoints: ['GET /api/v1/data-lakes'] },
-      { prefix: 'OptiHashi run and problem reads', endpoints: ['OptiHashi run and problem reads'] },
+      { prefix: 'Example run and problem reads', endpoints: ['Example run and problem reads'] },
     ]);
   });
 });
