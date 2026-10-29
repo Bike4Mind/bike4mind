@@ -124,6 +124,14 @@ The violation log shows the exact domain that was blocked, including the method 
 
 If commands instead fail with `sandbox: network relay failed to start`, `socat` was found on your `PATH` but could not run inside the sandbox, usually because it is installed outside the system directories the sandbox mounts (`/usr`, `/bin`, `/lib`, `/sbin`, `/etc`). Install it through your system package manager.
 
+## macOS: a local test server is unreachable inside the sandbox
+
+**Symptoms:** With network filtering enabled on macOS, a sandboxed command that starts a server on a loopback port and then connects to it (for example, tests using `supertest` or `listen(0)`, or a dev server checked with `curl`) fails with `ECONNREFUSED`, `EPERM` or `curl: (7)`. The same command works on Linux.
+
+**Cause:** On macOS the sandbox allows outbound loopback connections only to the network proxy port. Seatbelt cannot distinguish a server the command started itself from other services on your machine, so it blocks both.
+
+**Solution:** Run the command outside the sandbox (`/sandbox:disable`, then `/sandbox:enable` afterwards). Turning network filtering off does not help on macOS, because with the network off the sandbox blocks all IP traffic, loopback included.
+
 ## Proxy won't start
 
 **Symptoms:** `/sandbox:enable` succeeds but reports no proxy. Network filtering not active.

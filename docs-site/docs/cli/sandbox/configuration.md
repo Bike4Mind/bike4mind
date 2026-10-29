@@ -124,7 +124,7 @@ Must be `true` for the network proxy to start. When disabled, sandboxed commands
 
 When enabled, the only connection a sandboxed command can open is to the proxy, which it finds through the `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` environment variables. Direct connections to other hosts, and to other loopback ports on your machine, are blocked, and hostnames resolve only through the proxy. A tool that ignores the proxy variables fails to connect rather than bypassing the allowlist.
 
-- **macOS:** the Seatbelt profile allows outbound loopback traffic to the proxy port only.
+- **macOS:** the Seatbelt profile allows outbound loopback traffic to the proxy port only. Seatbelt cannot tell a host service from a server the sandboxed command started itself, so this also blocks connecting to a local server the command runs, such as a test suite that starts an HTTP server on an ephemeral port, or a dev server checked with `curl`. On Linux those connections work, because loopback inside the sandbox's own network namespace is available.
 - **Linux:** the command runs in its own network namespace with no route to the host network. The proxy is exposed to it through a unix socket, and `socat` inside the sandbox relays the proxy port on the sandbox's loopback to that socket. `socat` must be installed; without it, sandboxed commands fail with an error instead of running with network access.
 
 Node's built-in `fetch` honors the proxy only on recent Node releases (24.3 and newer are known to work); on older versions it connects directly and fails inside the sandbox.
