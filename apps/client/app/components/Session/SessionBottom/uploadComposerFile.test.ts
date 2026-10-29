@@ -186,6 +186,42 @@ describe('uploadComposerFile', () => {
     });
   });
 
+  describe('deferred file name', () => {
+    it('shows the tile before the name resolves, then uploads under that name', async () => {
+      mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'chart.png', mimeType: 'text/plain' });
+      let resolveName!: (name: string) => void;
+      const fileName = new Promise<string>(resolve => {
+        resolveName = resolve;
+      });
+
+      const upload = uploadComposerFile(makeFile('image.txt', 'text/plain'), makeContext(), { fileName });
+      expect(pending()[0]).toMatchObject({ status: 'uploading', fabFile: { fileName: 'image.txt' } });
+      expect(mockCreateFabFile).not.toHaveBeenCalled();
+
+      resolveName('chart.txt');
+      await upload;
+
+      const [input, uploaded] = mockCreateFabFile.mock.calls[0]!;
+      expect(input).toMatchObject({ fileName: 'chart.txt' });
+      expect(uploaded).toMatchObject({ name: 'chart.txt' });
+    });
+
+    it('does not upload when cancelled while the name is pending', async () => {
+      let resolveName!: (name: string) => void;
+      const fileName = new Promise<string>(resolve => {
+        resolveName = resolve;
+      });
+
+      const upload = uploadComposerFile(pdf(), makeContext(), { fileName });
+      cancelComposerUpload(pending()[0]!.fabFile.id);
+      resolveName('later.pdf');
+
+      await expect(upload).rejects.toMatchObject({ name: 'AbortError' });
+      expect(mockCreateFabFile).not.toHaveBeenCalled();
+      expect(pending()).toEqual([]);
+    });
+  });
+
   describe('cancellation', () => {
     it('removing the tile mid-upload aborts it, drops the item and never promotes the file', async () => {
       holdUploadUntilAborted();

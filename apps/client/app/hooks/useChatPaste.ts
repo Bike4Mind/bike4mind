@@ -46,10 +46,12 @@ function addToFileBrowserCache(queryClient: QueryClient, fabFile: IFabFileDocume
  * Upload a pasted file through the same pipeline as dropped/picked files, so it gets a
  * composer thumbnail, moderation state and attach scope.
  */
-async function uploadPastedFile(file: File, deps: UseChatPasteDeps) {
+async function uploadPastedFile(file: File, fileName: Promise<string>, deps: UseChatPasteDeps) {
   const { queryClient } = deps;
   try {
-    const fabFile = await uploadComposerFile(file, deps);
+    // The tile goes up before the smart name (an LLM round trip) resolves, so the paste shows at once
+    // and the pending upload blocks sending in the meantime.
+    const fabFile = await uploadComposerFile(file, deps, { fileName });
     addToFileBrowserCache(queryClient, fabFile);
   } catch {
     // The failure is shown on the file's tile (uploadComposerFile marks it errored).
@@ -83,11 +85,11 @@ export function useChatPaste(deps: UseChatPasteDeps) {
         e.preventDefault();
         const file = item.getAsFile();
         if (file) {
-          const smartFileName = await generateSmartFileName('', 'image', {
+          const smartFileName = generateSmartFileName('', 'image', {
             hasSession: !!currentSession,
             chatHistory,
           });
-          await uploadPastedFile(new File([file], smartFileName, { type: file.type }), latest);
+          await uploadPastedFile(file, smartFileName, latest);
           return true;
         }
       }
@@ -106,9 +108,9 @@ export function useChatPaste(deps: UseChatPasteDeps) {
     if (lines.length > 30) {
       e.preventDefault();
 
-      const smartFileName = await generateSmartFileName(pastedContent, 'text');
-      const file = new File([pastedContent], smartFileName, { type: 'text/plain' });
-      await uploadPastedFile(file, latest);
+      const smartFileName = generateSmartFileName(pastedContent, 'text');
+      const file = new File([pastedContent], 'pasted-text.txt', { type: 'text/plain' });
+      await uploadPastedFile(file, smartFileName, latest);
       return true;
     }
 

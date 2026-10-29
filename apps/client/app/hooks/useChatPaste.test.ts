@@ -44,7 +44,7 @@ describe('useChatPaste', () => {
     mockUploadComposerFile.mockResolvedValue({ id: 'f1' });
   });
 
-  it('uploads a pasted image as a composer attachment under its generated name', async () => {
+  it('uploads a pasted image as a composer attachment, handing over its generated name', async () => {
     mockGenerateSmartFileName.mockResolvedValue('screenshot-chart.png');
     const image = new File(['png'], 'image.png', { type: 'image/png' });
     const event = pasteEvent([{ type: 'image/png', file: image }]);
@@ -53,10 +53,10 @@ describe('useChatPaste', () => {
     await expect(result.current(event)).resolves.toBe(true);
 
     expect(event.preventDefault).toHaveBeenCalled();
-    const [uploaded, context] = mockUploadComposerFile.mock.calls[0]!;
-    expect(uploaded).toBeInstanceOf(File);
-    expect(uploaded).toMatchObject({ name: 'screenshot-chart.png', type: 'image/png' });
+    const [uploaded, context, options] = mockUploadComposerFile.mock.calls[0]!;
+    expect(uploaded).toBe(image);
     expect(context).toMatchObject({ attachScopeMode: 'auto', currentSessionId: 'session-1', queryClient });
+    await expect(options.fileName).resolves.toBe('screenshot-chart.png');
   });
 
   it('uploads more than 30 pasted lines as a text file', async () => {
@@ -68,9 +68,10 @@ describe('useChatPaste', () => {
     await expect(result.current(event)).resolves.toBe(true);
 
     expect(event.preventDefault).toHaveBeenCalled();
-    const [uploaded] = mockUploadComposerFile.mock.calls[0]!;
-    expect(uploaded).toMatchObject({ name: 'notes.txt', type: 'text/plain' });
+    const [uploaded, , options] = mockUploadComposerFile.mock.calls[0]!;
+    expect(uploaded).toMatchObject({ type: 'text/plain' });
     await expect((uploaded as File).text()).resolves.toBe(text);
+    await expect(options.fileName).resolves.toBe('notes.txt');
   });
 
   it('leaves a short paste to the editor', async () => {

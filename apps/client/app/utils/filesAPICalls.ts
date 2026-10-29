@@ -171,6 +171,11 @@ export const createFabFileOnServerWithUpload = async (
       }
       throw new DOMException('Upload cancelled', 'AbortError'); // Always throw DOMException for consistency
     }
+    // A raw string body is an S3 XML error or a gateway HTML page; callers toast getErrorMessage(err),
+    // which would show it verbatim.
+    if (axios.isAxiosError(err) && typeof err.response?.data === 'string') {
+      throw new Error('Failed to upload fab file', { cause: err });
+    }
     throw err;
   }
 };

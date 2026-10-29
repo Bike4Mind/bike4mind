@@ -41,6 +41,8 @@ export interface ComposerUploadContext {
 interface UploadComposerFileOptions {
   signal?: AbortSignal;
   onProgress?: (loaded: number, total: number) => void;
+  /** The name to upload under, when it is still being worked out; the tile shows `file.name` until then. */
+  fileName?: Promise<string>;
 }
 
 // A first upload unlocks the 'files' gear server-side, but the Gears status
@@ -83,7 +85,7 @@ const uploadErrorMessage = (err: unknown) =>
 export async function uploadComposerFile(
   file: File,
   { attachScopeMode, currentSessionId, addToNotebookContext, queryClient }: ComposerUploadContext,
-  { signal, onProgress }: UploadComposerFileOptions = {}
+  { signal, onProgress, fileName }: UploadComposerFileOptions = {}
 ): Promise<IFabFileDocument> {
   // Each file is judged alone; files of one drop that only overflow together are
   // refused by the server, whose message the catch below surfaces.
@@ -124,20 +126,32 @@ export async function uploadComposerFile(
   try {
     controller.signal.throwIfAborted();
 
-    const freshCheck = await checkAttachStorageFresh(file);
+    let upload = file;
+    if (fileName) {
+      const name = await fileName;
+      controller.signal.throwIfAborted();
+      upload = new File([file], name, { type: file.type });
+      setPendingMessageFiles(prev =>
+        prev.map(item =>
+          item.fabFile.id === tempId ? { ...item, fabFile: { ...item.fabFile, fileName: name } } : item
+        )
+      );
+    }
+
+    const freshCheck = await checkAttachStorageFresh(upload);
     if (freshCheck.status === 'exceeds') throw new StorageLimitExceededError(freshCheck);
 
-    const lowerName = file.name.toLowerCase();
-    const mimeType = lowerName.endsWith('.md') || lowerName.endsWith('.mdx') ? 'text/markdown' : file.type;
+    const lowerName = upload.name.toLowerCase();
+    const mimeType = lowerName.endsWith('.md') || lowerName.endsWith('.mdx') ? 'text/markdown' : upload.type;
 
     const fabFile = await createFabFileOnServerWithUpload(
       {
         type: KnowledgeType.FILE,
-        fileName: file.name,
+        fileName: upload.name,
         mimeType,
-        fileSize: file.size,
+        fileSize: upload.size,
       },
-      file,
+      upload,
       controller.signal,
       (loaded, total) => {
         const progressPercent = Math.round((loaded / total) * 100);
