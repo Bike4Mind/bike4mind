@@ -245,6 +245,7 @@ test.describe('Teams', () => {
       await asAdmin.page.getByTestId(`org-actions-${fullTeamId}`).filter({ visible: true }).first().click();
       await asAdmin.page.getByTestId(`adjust-seats-${fullTeamId}`).click();
       await asAdmin.page.getByTestId('seats-input').locator('input').fill('4');
+      await asAdmin.page.getByTestId('seats-reason-input-preset-0').click();
       const seatsSaved = asAdmin.page.waitForResponse(
         r => r.request().method() === 'PATCH' && r.url().includes(`/api/admin/organizations/${fullTeamId}/seats`)
       );
