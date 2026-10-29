@@ -3,7 +3,12 @@ import type { HubTier } from '../schemas/modelHub';
 import { machine } from './__fixtures__/hubManifest';
 import { curatedTier, hardwareClass } from './tiers';
 
-const tier = (memoryKind: HubTier['memoryKind'], minGiB: number): HubTier => ({ memoryKind, minGiB, picks: [] });
+const PICKS: HubTier['picks'] = [{ slot: 'best', entry: 'an-entry', build: 'a-build' }];
+const tier = (memoryKind: HubTier['memoryKind'], minGiB: number, picks: HubTier['picks'] = PICKS): HubTier => ({
+  memoryKind,
+  minGiB,
+  picks,
+});
 const TIERS = [tier('discrete', 0), tier('discrete', 8), tier('discrete', 16), tier('unified', 16), tier('cpu', 0)];
 const GIB = 1024 ** 3;
 
@@ -23,6 +28,12 @@ describe('curatedTier', () => {
   it('returns null when the list has no tier for the class or the memory', () => {
     expect(curatedTier([tier('unified', 32)], machine('unified', 16))).toBeNull();
     expect(curatedTier([], machine('cpu', 64))).toBeNull();
+  });
+
+  it('skips a tier with no picks so a smaller tier that has them wins', () => {
+    const tiers = [tier('discrete', 8), tier('discrete', 16, [])];
+    expect(curatedTier(tiers, machine('discrete', 64, 24))).toMatchObject({ minGiB: 8 });
+    expect(curatedTier([tier('cpu', 0, [])], machine('cpu', 64))).toBeNull();
   });
 
   it('classes a machine by its GPU memory on a discrete GPU and its total memory otherwise', () => {
