@@ -64,6 +64,23 @@ function providerLabel(model: ChatModelOption): string | undefined {
   return model.server ? undefined : model.backend;
 }
 
+/**
+ * Each row's secondary line, keyed by model id: the provider, plus the id only where another row
+ * in the same group shows the same name and provider - the catalog lists some models twice.
+ */
+export function rowDetails(models: readonly ChatModelOption[]): Map<string, string | undefined> {
+  const rowKey = (model: ChatModelOption) => `${model.server?.id ?? ''}\n${model.name}\n${providerLabel(model) ?? ''}`;
+  const counts = new Map<string, number>();
+  for (const model of models) counts.set(rowKey(model), (counts.get(rowKey(model)) ?? 0) + 1);
+  return new Map(
+    models.map(model => {
+      const provider = providerLabel(model);
+      if ((counts.get(rowKey(model)) ?? 0) < 2) return [model.id, provider];
+      return [model.id, provider ? `${provider} - ${model.id}` : model.id];
+    })
+  );
+}
+
 /** The first model row of the menu the filter box sits in - the one the query narrowed to. */
 function topMatch(filterInput: HTMLElement): HTMLElement | null {
   return (
@@ -144,12 +161,15 @@ export function ModelPicker({
   const unavailable = missing && !selecting;
   const serverDown = models.find(model => model.id === modelId)?.unavailable;
 
+  const details = useMemo(() => rowDetails(models), [models]);
   const matches = useMemo(() => {
     const query = filter.trim().toLowerCase();
     const sorted = sortByRecency(models);
     if (!query) return sorted;
-    return sorted.filter(model => [model.name, providerLabel(model)].some(text => text?.toLowerCase().includes(query)));
-  }, [models, filter]);
+    return sorted.filter(model =>
+      [model.name, details.get(model.id)].some(text => text?.toLowerCase().includes(query))
+    );
+  }, [models, details, filter]);
   const groups = useMemo(() => groupByServer(matches), [matches]);
 
   const label =
@@ -308,14 +328,14 @@ export function ModelPicker({
                     {model.id === modelId ? '\u2022 ' : ''}
                     {model.name}
                   </Typography>
-                  {(model.unavailable ?? providerLabel(model)) && (
+                  {(model.unavailable ?? details.get(model.id)) && (
                     <Typography
                       level="body-xs"
                       textColor="text.tertiary"
                       noWrap
                       data-testid="model-picker-option-detail"
                     >
-                      {model.unavailable ?? providerLabel(model)}
+                      {model.unavailable ?? details.get(model.id)}
                     </Typography>
                   )}
                 </Stack>

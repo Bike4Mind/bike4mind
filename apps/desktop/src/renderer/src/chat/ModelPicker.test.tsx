@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatModelOption } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { groupByServer, ModelPicker, sortByRecency } from './ModelPicker';
+import { groupByServer, ModelPicker, rowDetails, sortByRecency } from './ModelPicker';
 import type { ModelCatalogController } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -227,5 +227,36 @@ describe('ModelPicker recency order', () => {
     act(() => el('model-picker-btn').click());
     typeInto(filterBox(), 'vendor/');
     expect(options()).toHaveLength(0);
+  });
+});
+
+describe('ModelPicker twin rows', () => {
+  const twins: ChatModelOption[] = [
+    { id: 'gpt-4.1-2025-04-14', name: 'GPT-4.1', backend: 'openai' },
+    { id: 'gpt-4.1', name: 'GPT-4.1', backend: 'openai' },
+    { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', backend: 'openai' },
+    { id: 'local:srv-a:llama3', name: 'llama3', server: { id: 'a', name: 'a' } },
+    { id: 'local:srv-b:llama3', name: 'llama3', server: { id: 'b', name: 'b' } },
+  ];
+
+  it('adds the id only where name and provider collide within a group', () => {
+    expect(Object.fromEntries(rowDetails(twins))).toEqual({
+      'gpt-4.1-2025-04-14': 'openai - gpt-4.1-2025-04-14',
+      'gpt-4.1': 'openai - gpt-4.1',
+      'gpt-4.1-mini': 'openai',
+      'local:srv-a:llama3': undefined,
+      'local:srv-b:llama3': undefined,
+    });
+  });
+
+  it('shows the ids that tell twins apart, and filters on them', () => {
+    mount([...twins, ...MODELS]);
+    const details = () =>
+      Array.from(document.querySelectorAll('[data-testid="model-picker-option-detail"]')).map(node => node.textContent);
+    expect(details()).toContain('openai - gpt-4.1-2025-04-14');
+    expect(details()).toContain('openai');
+
+    typeInto(filterBox(), '2025-04');
+    expect(options()).toHaveLength(1);
   });
 });
