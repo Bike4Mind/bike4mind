@@ -134,5 +134,14 @@ describe('UserSelector', () => {
     renderSelector();
     await userEvent.type(input(), 'gra');
     expect(input().value).toBe('gra');
+    await waitFor(() =>
+      expect(mockUseGetUsers).toHaveBeenLastCalledWith({
+        search: 'gra',
+        page: 1,
+        limit: 20,
+        sortField: 'name',
+        sortOrder: 'asc',
+      })
+    );
   });
 });
