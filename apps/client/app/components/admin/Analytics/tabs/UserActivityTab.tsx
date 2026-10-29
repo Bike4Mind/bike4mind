@@ -230,11 +230,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
                     </MenuButton>
                     <Menu sx={{ maxHeight: 300, overflowY: 'auto', minWidth: 200 }}>
                       <MenuItem onClick={() => toggleOrganization('all')} data-testid="user-activity-org-option-all">
-                        <Checkbox
-                          checked={selectedOrganizations.includes(ALL_VALUE)}
-                          onChange={() => toggleOrganization('all')}
-                          sx={{ mr: 1 }}
-                        />
+                        <Checkbox checked={isAllSelected} onChange={() => toggleOrganization('all')} sx={{ mr: 1 }} />
                         All
                       </MenuItem>
                       {organizations?.map(org => (
