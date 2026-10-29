@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { undoHeldGrantRelease } from './heldSignupGrants';
+import { revokeHeldGrantRelease } from './heldSignupGrants';
 
 const BATCH_ID = 'batch-1';
 
-const buildUndoAdapters = (balance: number) => {
+const buildRevokeAdapters = (balance: number) => {
   const state = { balance, claimed: false };
   const adapters = {
     batches: {
@@ -35,23 +35,23 @@ const buildUndoAdapters = (balance: number) => {
     },
     creditTransactions: { createTransaction: vi.fn().mockResolvedValue({}) },
   };
-  // Test doubles: undo only calls the repository methods stubbed above.
-  return { state, adapters: adapters as unknown as Parameters<typeof undoHeldGrantRelease>[1] & typeof adapters };
+  // Test doubles: revoke only calls the repository methods stubbed above.
+  return { state, adapters: adapters as unknown as Parameters<typeof revokeHeldGrantRelease>[1] & typeof adapters };
 };
 
-const undo = (adapters: Parameters<typeof undoHeldGrantRelease>[1]) =>
-  undoHeldGrantRelease({ batchId: BATCH_ID, actorId: 'admin-1' }, adapters);
+const revoke = (adapters: Parameters<typeof revokeHeldGrantRelease>[1]) =>
+  revokeHeldGrantRelease({ batchId: BATCH_ID, actorId: 'admin-1' }, adapters);
 
-describe('undoHeldGrantRelease', () => {
+describe('revokeHeldGrantRelease', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   it('debits the released credits, records the ledger row and keeps the entry claimed', async () => {
-    const { state, adapters } = buildUndoAdapters(100);
+    const { state, adapters } = buildRevokeAdapters(100);
 
-    const result = await undo(adapters);
+    const result = await revoke(adapters);
 
     expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'reversed', credits: 40 }]);
     expect(state).toEqual({ balance: 60, claimed: true });
@@ -67,10 +67,10 @@ describe('undoHeldGrantRelease', () => {
   });
 
   it('restores the balance and unclaims the entry when the ledger write fails', async () => {
-    const { state, adapters } = buildUndoAdapters(100);
+    const { state, adapters } = buildRevokeAdapters(100);
     adapters.creditTransactions.createTransaction.mockRejectedValueOnce(new Error('ledger down'));
 
-    const result = await undo(adapters);
+    const result = await revoke(adapters);
 
     expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'failed', credits: 40 }]);
     expect(state).toEqual({ balance: 100, claimed: false });
@@ -78,18 +78,18 @@ describe('undoHeldGrantRelease', () => {
   });
 
   it('leaves the entry claimed when neither the ledger write nor the refund lands', async () => {
-    const { state, adapters } = buildUndoAdapters(100);
+    const { state, adapters } = buildRevokeAdapters(100);
     adapters.creditTransactions.createTransaction.mockRejectedValueOnce(new Error('ledger down'));
     adapters.users.incrementCredits.mockRejectedValueOnce(new Error('users down'));
 
-    const result = await undo(adapters);
+    const result = await revoke(adapters);
 
     expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'failed', credits: 40 }]);
     expect(state).toEqual({ balance: 60, claimed: true });
     expect(adapters.batches.unclaimReversal).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('manual repair'), expect.any(Error));
 
-    expect((await undo(adapters))?.results).toEqual([{ userId: 'user-1', outcome: 'already_reversed', credits: 40 }]);
+    expect((await revoke(adapters))?.results).toEqual([{ userId: 'user-1', outcome: 'already_reversed', credits: 40 }]);
     expect(adapters.users.decrementCreditsFloored).toHaveBeenCalledOnce();
   });
 });

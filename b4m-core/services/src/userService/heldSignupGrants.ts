@@ -75,10 +75,10 @@ export async function bulkReleaseHeldGrants(
   return { batchId: batch.id, results: entries };
 }
 
-export type UndoOutcome = 'reversed' | 'already_reversed' | 'insufficient_balance' | 'failed';
+export type RevokeOutcome = 'reversed' | 'already_reversed' | 'insufficient_balance' | 'failed';
 
-/** Claws back only the credits an earlier batch released; a balance already spent is left alone. */
-export async function undoHeldGrantRelease(
+/** Revokes only the credits an earlier batch released; a balance already spent is left alone. */
+export async function revokeHeldGrantRelease(
   input: { batchId: string; actorId: string },
   adapters: {
     batches: HeldReleaseBatchRepository;
@@ -91,10 +91,10 @@ export async function undoHeldGrantRelease(
 ) {
   const batch = await adapters.batches.findBatch(input.batchId);
   if (!batch) return null;
-  const results: { userId: string; outcome: UndoOutcome; credits: number }[] = [];
+  const results: { userId: string; outcome: RevokeOutcome; credits: number }[] = [];
   for (const entry of batch.entries) {
     if (entry.outcome !== 'released' || entry.credits <= 0) continue;
-    const row = (outcome: UndoOutcome) => results.push({ userId: entry.userId, outcome, credits: entry.credits });
+    const row = (outcome: RevokeOutcome) => results.push({ userId: entry.userId, outcome, credits: entry.credits });
     if (!(await adapters.batches.claimReversal(batch.id, entry.userId))) {
       row('already_reversed');
       continue;
@@ -123,7 +123,7 @@ export async function undoHeldGrantRelease(
           ownerType: CreditHolderType.User,
           credits: -entry.credits,
           reason: 'admin_adjustment',
-          description: 'Reversed a released signup grant',
+          description: 'Revoked a released signup grant',
           metadata: { actorId: input.actorId, releaseBatchId: batch.id },
         });
       } catch (error) {

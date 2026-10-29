@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Alert, Button, Checkbox, Option, Select, Stack, Typography } from '@mui/joy';
+import { Alert, Button, Checkbox, DialogActions, DialogContent, Option, Select, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
+import { AdminDialog } from './shared/AdminDialog';
 import { DataTable } from './shared/DataTable';
 
 const QUERY_KEY = ['held-signup-grants'];
@@ -14,7 +15,7 @@ type ReleaseResult = {
   batchId: string;
   results: { userId: string; outcome: string; credits: number }[];
 };
-type UndoResult = { batchId: string; results: { userId: string; outcome: string; credits: number }[] };
+type RevokeResult = { batchId: string; results: { userId: string; outcome: string; credits: number }[] };
 
 const REASON_LABELS: Record<HeldReason, string> = {
   budget_exhausted: 'Daily budget spent',
@@ -42,14 +43,15 @@ export default function HeldSignupGrantsTab() {
       await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
     },
   });
-  const undo = useMutation({
-    mutationFn: async (batchId: string) => (await api.post<UndoResult>(`${ENDPOINT}/undo`, { batchId })).data,
+  const revoke = useMutation({
+    mutationFn: async (batchId: string) => (await api.post<RevokeResult>(`${ENDPOINT}/revoke`, { batchId })).data,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
     },
   });
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
   const rows = query.data?.data ?? [];
-  const busy = release.isPending || undo.isPending;
+  const busy = release.isPending || revoke.isPending;
   const toggle = (id: string) =>
     setSelected(current => {
       const next = new Set(current);
@@ -64,10 +66,11 @@ export default function HeldSignupGrantsTab() {
       <Typography>
         Free credits withheld from new accounts, oldest first. A grant held by the daily budget is also paid
         automatically once a new day&apos;s budget opens. Releasing here pays the original grant without drawing the
-        budget; Undo reclaims only the credits a release paid, and skips balances already spent.
+        budget; Revoke permanently debits the credits a release paid (balances already spent are skipped), and the
+        account is not paid this grant again.
       </Typography>
       {release.error && <Alert color="danger">{getErrorMessage(release.error)}</Alert>}
-      {undo.error && <Alert color="danger">{getErrorMessage(undo.error)}</Alert>}
+      {revoke.error && <Alert color="danger">{getErrorMessage(revoke.error)}</Alert>}
       {release.data && (
         <Alert color="success" data-testid="held-signup-grants-release-result">
           Released {paid.length} of {release.data.results.length} grants
@@ -77,19 +80,52 @@ export default function HeldSignupGrantsTab() {
             size="sm"
             variant="outlined"
             sx={{ ml: 2 }}
-            data-testid="held-signup-grants-undo-btn"
-            disabled={busy || !paid.length || undo.data?.batchId === release.data.batchId}
-            onClick={() => undo.mutate(release.data.batchId)}
+            data-testid="held-signup-grants-revoke-btn"
+            disabled={busy || !paid.length || revoke.data?.batchId === release.data.batchId}
+            onClick={() => setConfirmRevoke(true)}
           >
-            Undo
+            Revoke
           </Button>
         </Alert>
       )}
-      {undo.data && (
-        <Alert color="neutral" data-testid="held-signup-grants-undo-result">
-          Reversed {undo.data.results.filter(result => result.outcome === 'reversed').length} of{' '}
-          {undo.data.results.length} grants.
+      {revoke.data && (
+        <Alert color="neutral" data-testid="held-signup-grants-revoke-result">
+          Revoked {revoke.data.results.filter(result => result.outcome === 'reversed').length} of{' '}
+          {revoke.data.results.length} grants.
         </Alert>
+      )}
+      {confirmRevoke && (
+        <AdminDialog
+          title="Revoke this release?"
+          role="alertdialog"
+          onClose={() => setConfirmRevoke(false)}
+          data-testid="held-signup-grants-revoke-dialog"
+        >
+          <DialogContent>
+            This permanently debits the credits granted by this release. The accounts will not be paid this grant again,
+            and they leave the held list.
+          </DialogContent>
+          <DialogActions>
+            <Button
+              color="danger"
+              data-testid="held-signup-grants-revoke-confirm-btn"
+              onClick={() => {
+                setConfirmRevoke(false);
+                if (release.data) revoke.mutate(release.data.batchId);
+              }}
+            >
+              Revoke credits
+            </Button>
+            <Button
+              variant="plain"
+              color="neutral"
+              data-testid="held-signup-grants-revoke-cancel-btn"
+              onClick={() => setConfirmRevoke(false)}
+            >
+              Cancel
+            </Button>
+          </DialogActions>
+        </AdminDialog>
       )}
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
         <Select

@@ -39,7 +39,7 @@ describe('HeldSignupGrantsTab', () => {
     expect(screen.getByTestId('held-signup-grants-release-btn')).toBeDisabled();
   });
 
-  it('releases the selected grants, then undoes that batch', async () => {
+  it('releases the selected grants, then revokes that batch', async () => {
     postMock
       .mockResolvedValueOnce({
         data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'released', credits: 12 }] },
@@ -53,12 +53,17 @@ describe('HeldSignupGrantsTab', () => {
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith('/api/admin/held-signup-grants/release', { userIds: [rows[1].id] })
     );
-    fireEvent.click(await screen.findByTestId('held-signup-grants-undo-btn'));
-    await waitFor(() =>
-      expect(postMock).toHaveBeenLastCalledWith('/api/admin/held-signup-grants/undo', { batchId: 'batch-1' })
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
+    expect(await screen.findByTestId('held-signup-grants-revoke-dialog')).toHaveTextContent(
+      'permanently debits the credits granted by this release'
     );
-    expect(await screen.findByTestId('held-signup-grants-undo-result')).toHaveTextContent('Reversed 1 of 1');
-    expect(screen.getByTestId('held-signup-grants-undo-btn')).toBeDisabled();
+    expect(postMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('held-signup-grants-revoke-confirm-btn'));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenLastCalledWith('/api/admin/held-signup-grants/revoke', { batchId: 'batch-1' })
+    );
+    expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent('Revoked 1 of 1');
+    expect(screen.getByTestId('held-signup-grants-revoke-btn')).toBeDisabled();
     expect(getMock).toHaveBeenCalledTimes(3);
   });
 

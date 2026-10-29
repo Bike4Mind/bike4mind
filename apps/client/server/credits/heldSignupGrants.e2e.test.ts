@@ -158,7 +158,7 @@ describe('held signup grant release', () => {
     expect(await creditsOf(users[2].id)).toBe(12);
   });
 
-  it('admin release bypasses the budget, leaves one ledger row after a backfill, and undo reclaims once', async () => {
+  it('admin release bypasses the budget, leaves one ledger row after a backfill, and revoke debits once', async () => {
     const users = await holdUsers(2);
     const held = users[1];
     const batches = signupGrantReleaseRepository;
@@ -177,11 +177,17 @@ describe('held signup grant release', () => {
     expect(await ledgerRows(held.id)).toBe(1);
     expect(await creditsOf(held.id)).toBe(12);
 
-    const undoAdapters = { batches, users: userRepository, creditTransactions: txRepo };
-    const undone = await userService.undoHeldGrantRelease({ batchId: out.batchId, actorId: 'admin-1' }, undoAdapters);
-    expect(undone?.results).toEqual([{ userId: held.id, outcome: 'reversed', credits: 12 }]);
+    const revokeAdapters = { batches, users: userRepository, creditTransactions: txRepo };
+    const revoked = await userService.revokeHeldGrantRelease(
+      { batchId: out.batchId, actorId: 'admin-1' },
+      revokeAdapters
+    );
+    expect(revoked?.results).toEqual([{ userId: held.id, outcome: 'reversed', credits: 12 }]);
     expect(await creditsOf(held.id)).toBe(0);
-    const again = await userService.undoHeldGrantRelease({ batchId: out.batchId, actorId: 'admin-1' }, undoAdapters);
+    const again = await userService.revokeHeldGrantRelease(
+      { batchId: out.batchId, actorId: 'admin-1' },
+      revokeAdapters
+    );
     expect(again?.results[0].outcome).toBe('already_reversed');
     expect(await creditsOf(held.id)).toBe(0);
   });
@@ -193,14 +199,14 @@ describe('held signup grant release', () => {
       { ...heldAdapters, batches: signupGrantReleaseRepository }
     );
     await User.updateOne({ _id: users[1].id }, { currentCredits: 5 });
-    const undone = await userService.undoHeldGrantRelease(
+    const revoked = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
       { batches: signupGrantReleaseRepository, users: userRepository, creditTransactions: txRepo }
     );
-    expect(undone?.results[0].outcome).toBe('insufficient_balance');
+    expect(revoked?.results[0].outcome).toBe('insufficient_balance');
     expect(await creditsOf(users[1].id)).toBe(5);
     expect(
-      await userService.undoHeldGrantRelease(
+      await userService.revokeHeldGrantRelease(
         { batchId: '0'.repeat(24), actorId: 'a' },
         { batches: signupGrantReleaseRepository, users: userRepository, creditTransactions: txRepo }
       )
@@ -244,7 +250,7 @@ describe('held signup grant release', () => {
     expect(held?.signupGrantHeldReason).toBe('budget_exhausted');
   });
 
-  it('records no credits when the grant was already paid, so undo cannot claw it back', async () => {
+  it('records no credits when the grant was already paid, so revoke cannot debit it', async () => {
     config.defaultFreeCredits = '12';
     const user = await createUser(false, 7);
     expect(await userService.grantFreeCredits(user, adapters)).toMatchObject({ creditsGranted: 12 });
@@ -257,15 +263,15 @@ describe('held signup grant release', () => {
       { ...heldAdapters, batches: signupGrantReleaseRepository }
     );
     expect(out.results).toEqual([{ userId: user.id, outcome: 'released', credits: 0 }]);
-    const undone = await userService.undoHeldGrantRelease(
+    const revoked = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
       { batches: signupGrantReleaseRepository, users: userRepository, creditTransactions: txRepo }
     );
-    expect(undone?.results).toEqual([]);
+    expect(revoked?.results).toEqual([]);
     expect(await creditsOf(user.id)).toBe(12);
   });
 
-  it('never drives the balance negative when credits are spent between the undo check and the debit', async () => {
+  it('never drives the balance negative when credits are spent between the revoke check and the debit', async () => {
     const users = await holdUsers(2);
     const out = await userService.bulkReleaseHeldGrants(
       { actorId: 'admin-1', userIds: [users[1].id] },
@@ -279,11 +285,11 @@ describe('held signup grant release', () => {
       decrementCreditsFloored: (...args: Parameters<typeof userRepository.decrementCreditsFloored>) =>
         userRepository.decrementCreditsFloored(...args),
     };
-    const undone = await userService.undoHeldGrantRelease(
+    const revoked = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
       { batches: signupGrantReleaseRepository, users: stale, creditTransactions: txRepo }
     );
-    expect(undone?.results[0].outcome).toBe('insufficient_balance');
+    expect(revoked?.results[0].outcome).toBe('insufficient_balance');
     expect(await creditsOf(users[1].id)).toBe(5);
   });
 
