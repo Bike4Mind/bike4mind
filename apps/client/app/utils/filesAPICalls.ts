@@ -171,7 +171,7 @@ export const createFabFileOnServerWithUpload = async (
       }
       throw new DOMException('Upload cancelled', 'AbortError'); // Always throw DOMException for consistency
     }
-    throw new Error('Failed to upload fab file');
+    throw err;
   }
 };
 
