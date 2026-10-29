@@ -9,7 +9,7 @@ const ADMIN_USER_ROW_KEYS = Object.fromEntries([...ADMIN_USER_LIST_FIELDS, 'id']
 
 // Key boundary only, built from the same list as the GET /api/users projection: a field the
 // projection does not return is not declared here, so the rows hydrate() pads with schema defaults
-// (isAdmin, level, ...) are stripped rather than shipped as if they were the user's own data.
+// (passwordHash, isSystem, ...) are stripped rather than shipped as if they were the user's own data.
 // `organizationId` already left through withSafeOrganization; `mfa` is narrowed to enrollment status.
 const adminUserRowSchema = z.object({
   ...passthroughShape(ADMIN_USER_ROW_KEYS),
