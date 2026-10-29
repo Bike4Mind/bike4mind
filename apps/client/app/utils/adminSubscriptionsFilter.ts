@@ -26,6 +26,11 @@ export const SUBSCRIPTION_SOURCE_FILTERS = ['stripe', 'admin_grant'] as const;
 export const SUBSCRIPTION_INTERVAL_FILTERS = ['monthly', 'yearly'] as const;
 /** `overdue` is a non-terminal row whose period already ended: a renewal that never landed. */
 export const SUBSCRIPTION_RENEWS_FILTERS = ['next7', 'next30', 'overdue'] as const;
+/**
+ * `scheduled` is a non-terminal row with a cancel requested. `last30` is canceledAt within CHURNED_WINDOW_MS
+ * on any status, so the Churned view pairs it with status canceled.
+ */
+export const SUBSCRIPTION_CANCEL_FILTERS = ['scheduled', 'last30'] as const;
 
 /** Plan filter value for rows whose price id is not in the checkout catalog. */
 export const UNKNOWN_PLAN_FILTER = 'unknown';
@@ -71,6 +76,7 @@ export const AdminSubscriptionsFilterSchema = z.object({
   source: z.enum(SUBSCRIPTION_SOURCE_FILTERS).optional(),
   interval: z.enum(SUBSCRIPTION_INTERVAL_FILTERS).optional(),
   renews: z.enum(SUBSCRIPTION_RENEWS_FILTERS).optional(),
+  cancel: z.enum(SUBSCRIPTION_CANCEL_FILTERS).optional(),
 });
 export type AdminSubscriptionsFilter = z.infer<typeof AdminSubscriptionsFilterSchema>;
 
@@ -146,8 +152,8 @@ export type AdminSubscriptionsListResponse = {
 };
 
 /**
- * Counts for the built-in views, each intersected with the current filters. Canceling and Mismatched
- * arrive with the mirrored cancel flag and the reconciliation findings.
+ * Counts for the built-in views, each intersected with the current filters. Canceling is counted by
+ * the summary route with cancel=scheduled, not a views field. Mismatched arrives with reconciliation.
  */
 export type AdminSubscriptionsSummary = {
   total: number;

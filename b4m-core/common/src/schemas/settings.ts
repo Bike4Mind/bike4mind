@@ -556,6 +556,7 @@ export const SettingKeySchema = z.enum([
   'SlackFeedbackWebhookUrl',
   'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
+  'SlackSubscriptionsWebhookUrl',
   'SlackSecurityAlertsWebhookUrl',
 
   // Admin Audit Log alerting
@@ -2027,6 +2028,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'SlackLiveopsWebhookUrl', order: 5 },
       { key: 'SlackUserActivityWebhookUrl', order: 6 },
       { key: 'SlackEmailAuditWebhookUrl', order: 6.5 },
+      { key: 'SlackSubscriptionsWebhookUrl', order: 6.6 },
       { key: 'SlackFeedbackWebhookUrl', order: 6.75 },
       { key: 'SlackNonProdFeedbackWebhookUrl', order: 6.8 },
       { key: 'FeedbackSendEmailUsername', order: 7 },
@@ -3499,6 +3501,17 @@ export const settingsMap = {
     category: 'Feedback',
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 8,
+    isSensitive: true,
+  }),
+  SlackSubscriptionsWebhookUrl: makeStringSetting({
+    key: 'SlackSubscriptionsWebhookUrl',
+    name: 'Subscriptions Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL for subscription lifecycle posts: new paid subscriptions, plan changes, scheduled and reverted cancellations, ended subscriptions and first failed payments. Posts come from production only and carry internal IDs and admin links, never customer names or emails. Falls back to the default webhook URL when empty.',
+    category: 'Feedback',
+    group: API_SERVICE_GROUPS.FEEDBACK.id,
+    order: 6.6,
     isSensitive: true,
   }),
   SlackSecurityAlertsWebhookUrl: makeStringSetting({

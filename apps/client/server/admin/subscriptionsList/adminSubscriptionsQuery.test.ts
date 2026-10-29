@@ -149,3 +149,26 @@ describe('subscriptionPlanCatalog', () => {
     expect([...subscriptionPlanCatalog().keys()].every(Boolean)).toBe(true);
   });
 });
+
+describe('buildAdminSubscriptionsMatch cancel filter', () => {
+  it('reads scheduled as a non-terminal row with a cancel requested', () => {
+    expect(buildAdminSubscriptionsMatch({ cancel: 'scheduled' }, context)).toEqual({
+      status: { $nin: TERMINAL },
+      canceledAt: { $ne: null },
+    });
+  });
+
+  it('reads last30 as canceledAt inside the churn window, on any status', () => {
+    expect(buildAdminSubscriptionsMatch({ cancel: 'last30' }, context)).toEqual({
+      canceledAt: { $gte: new Date(now.getTime() - 30 * DAY) },
+    });
+  });
+
+  it('builds the churned view condition from status canceled plus last30', () => {
+    const { churned } = viewConditions(now);
+    expect(conditionsOf(buildAdminSubscriptionsMatch({ status: ['canceled'], cancel: 'last30' }, context))).toEqual([
+      { status: { $in: [churned.status] } },
+      { canceledAt: churned.canceledAt },
+    ]);
+  });
+});

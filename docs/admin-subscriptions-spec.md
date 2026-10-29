@@ -158,6 +158,8 @@ The anatomy matches the users list (`Users/index.tsx`, `Users/List/*`).
 | Mismatched | has an open reconciliation finding | J6 |
 | All | none | |
 
+   The default view is Paying (status active or past_due, source stripe), so comps and canceled rows stay hidden until another view or the Source filter brings them in.
+
    Saved custom views work as in the users list (built on the saved-views PR).
 5. `FilterBar` filters, all server-side and in the URL through `useAdminListUrlState`, with keys registered in `adminTabParams.ts`:
    - Status
@@ -169,7 +171,9 @@ The anatomy matches the users list (`Users/index.tsx`, `Users/List/*`).
    - Mismatch (yes)
 
    Search covers owner name, owner email, org name, Stripe customer id and Stripe subscription id (exact match on ids). Group by: Plan, Status, Owner type.
-6. `DataTable` in server-paged mode (`pagination` with a one-based page, `sort`/`onSortChange`, `pageResetKey`). The whole row opens the detail page.
+6. `DataTable` in server-paged mode (`pagination` with a one-based page, `sort`/`onSortChange`, `pageResetKey`). The whole row opens the detail page. Until the detail page exists, a row opens its owner: the user profile, or the org in the Organizations tab.
+
+Comped rows show a neutral Comped chip and never a price, including ended comps.
 
 | Column | Content | Notes |
 |---|---|---|
@@ -315,6 +319,15 @@ To make this possible, `RevenueSnapshot` (6.4) also stores per day:
 - new and churned MRR;
 - past-due and canceling MRR.
 
+### 5.8 Sidebar indicator
+
+Money > Subscriptions shows a dot when Stripe-sourced subscriptions started after this browser last opened the tab.
+
+- Last-seen is a localStorage timestamp, so it is per browser, not per admin account.
+- The first visit sets the baseline and shows no dot.
+- The count refreshes every 5 minutes while the admin sidebar is mounted.
+- Opening the tab clears the dot and marks the rows started since the previous visit with a New chip.
+
 ---
 
 ## 6. Data and server work
@@ -379,7 +392,42 @@ The endpoints use the contract pattern only if they become public; these stay ad
 | `GET /api/admin/revenue` | Snapshot series and current totals |
 | `POST /api/admin/subscriptions/[id]/sync` | Sync from Stripe (5.2, 7) |
 
+`GET /api/admin/subscriptions` takes an optional `cancel` filter, inherited by the list, summary and export routes:
+
+| Value | Meaning |
+|---|---|
+| `scheduled` | Status is not terminal and `canceledAt` is set. Stripe sets `canceled_at` when a cancel is requested. Switches to the mirrored cancel fields (6.1) once they exist. |
+| `last30` | `canceledAt` is within the 30-day churn window. |
+
+The Canceling view is `cancel=scheduled`. The Churned (30 days) view is status canceled plus `cancel=last30`, the same definition as `summary.views.churned`.
+
 The old `GET /api/subscriptions` and `/stats` admin routes are deleted once nothing reads them.
+
+### 6.6 Slack notifications
+
+Subscription events post to a Slack channel for the admins.
+
+- **Webhook:** the admin setting `SlackSubscriptionsWebhookUrl` (Feedback group), falling back to the default Slack webhook and then the `SLACK_WEBHOOK_URL` secret, like the other channels.
+- **Stage:** posts only on the production stage. Self-host and preview stages never post.
+
+Events:
+
+| Event | Posts when |
+|---|---|
+| New paid subscription | The first invoice has amount paid > 0. Shows the recurring price per interval, plus a First charge line when the amount paid differs (for example a coupon or proration). |
+| Plan upgraded / downgraded / changed | The plan changes on the stored row. |
+| Cancellation scheduled | A cancel is requested. Shows the end date. |
+| Cancellation reverted | A scheduled cancel is undone. |
+| Subscription ended | The row transitions into canceled, from whichever of the update or delete event gets there first. Shows Stripe's cancellation reason. |
+| Payment failed | The first failed attempt only. |
+
+Renewals do not post. $0 first invoices do not post.
+
+Content: plan, interval, amount, seats for org subscriptions, the owner's ID, and a link to the owner in admin (the user profile, or the org in the Organizations tab). Never email, name, username or org name.
+
+Redelivery: plan and cancel posts are gated by the stored-row diff, and ended is gated by the prior status. An exact redelivery of a new-subscription or first-failure event can post twice.
+
+The existing refund and dispute posts (Liveops channel) show the owner ID and admin link instead of names or emails. The earlier new-subscription post that included the customer email is removed.
 
 ---
 
@@ -427,8 +475,9 @@ Ordered by value. Each item ships on its own behind the existing admin gate. Lab
 |---|---|---|---|
 | 1 ([#6012](https://github.com/Bike4Mind/bike4mind/issues/6012)) | **Rename Subscribers to Waitlist**: nav, slug alias redirect, palette, page copy, email audience labels, docs-site with redirect; move Email marketing to People | S | - |
 | 2 ([#6013](https://github.com/Bike4Mind/bike4mind/issues/6013)) | **Close reason/audit gaps on existing money routes**: reason required on credits-per-cycle, remove, seats, revoke, convert-to-paid; block "remove" on live Stripe-billed rows; new reason preset sets. The existing Organizations-tab modals get the minimum change needed to send a reason; their redesign belongs to [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772) | S | - |
-| 3 ([#6014](https://github.com/Bike4Mind/bike4mind/issues/6014)) | **Admin subscriptions list API**: `GET /api/admin/subscriptions` + `summary` + `export`, server filters, org subscriptions included, indexes | M | - |
-| 4 ([#6015](https://github.com/Bike4Mind/bike4mind/issues/6015)) | **Subscriptions list page on the shared toolkit**: views, FilterBar, DataTable server mode, StatStrip (counts only), status tone map, money formatter, CSV export | M | 3 |
+| 3 ([#6014](https://github.com/Bike4Mind/bike4mind/issues/6014)) | **Admin subscriptions list API**: `GET /api/admin/subscriptions` + `summary` + `export`, server filters, org subscriptions included, indexes. **Shipped.** | M | - |
+| 4 ([#6015](https://github.com/Bike4Mind/bike4mind/issues/6015)) | **Subscriptions list page on the shared toolkit**: views, FilterBar, DataTable server mode, StatStrip (counts only), status tone map, money formatter, CSV export. **Partly shipped.** Remaining: saved custom views, Group by, bulk Export selected, Open in Stripe, the MRR column and tile (with [#6018](https://github.com/Bike4Mind/bike4mind/issues/6018)), the Mismatched view and anomaly banner (with [#6021](https://github.com/Bike4Mind/bike4mind/issues/6021)), and the detail page link (with [#6016](https://github.com/Bike4Mind/bike4mind/issues/6016)) | M | 3 |
+| 4b | **Additions shipped with [#6015](https://github.com/Bike4Mind/bike4mind/issues/6015)**: Slack notifications (6.6) and the sidebar indicator (5.8) | S | 3 |
 | 5 ([#6016](https://github.com/Bike4Mind/bike4mind/issues/6016)) | **Subscription detail page (Mongo-only)**: header, Overview (Plan, Credits, Owner, Seats), Admin log, comp actions moved to ActionDialog (grant, extend, end, edit credits per cycle, remove); profile and org cards link here; delete legacy `UserSubscriptionStatus` and `EditCreditsModal`. The Organizations-tab modals (`AdjustSeatsModal`, revoke) stay with [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772) | L | 2, 3 |
 | 6 ([#6017](https://github.com/Bike4Mind/bike4mind/issues/6017)) | **Mirror price and cancel fields on Subscription** (6.1), plus a read-only backfill script | M | - |
 | 7 ([#6018](https://github.com/Bike4Mind/bike4mind/issues/6018)) | **MRR in the list**: MRR column and tile, Canceling view | S | 4, 6 |

@@ -94,3 +94,18 @@ describe('GET /api/admin/subscriptions', () => {
     expect(mockList).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /api/admin/subscriptions cancel filter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockList.mockResolvedValue({ subscriptions: [], total: 0, page: 1, totalPages: 0, searchTruncated: false });
+  });
+
+  it('passes a cancel filter through and rejects an unknown one with 400', async () => {
+    await call({ cancel: 'last30', status: 'canceled' });
+    expect(mockList.mock.calls[0][0]).toMatchObject({ cancel: 'last30', status: ['canceled'] });
+
+    expect((await call({ cancel: 'soon' }))._getStatusCode()).toBe(400);
+    expect(mockList).toHaveBeenCalledTimes(1);
+  });
+});

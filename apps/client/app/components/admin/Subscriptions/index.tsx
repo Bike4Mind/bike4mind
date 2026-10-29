@@ -1,151 +1,288 @@
-import { useGetAllSubscriptions, useGetSubscriptionStats } from '@client/app/hooks/data/subscriptions';
-import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
-import type Stripe from 'stripe';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Button, Dropdown, IconButton, Menu, MenuButton, MenuItem, Skeleton, Stack } from '@mui/joy';
+import DownloadIcon from '@mui/icons-material/Download';
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { Sheet, Stack, LinearProgress, Typography, Box } from '@mui/joy';
-import { useMemo, useState } from 'react';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import type { AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import { downloadData } from '@client/app/utils/download';
+import { AdminTab } from '../adminSidebarConfig';
+import {
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  StatStrip,
+  StatTile,
+  ViewTabs,
+  type DataTableSort,
+  type ViewTab,
+} from '../shared';
+import { adminFocus } from '../shared/adminStyles';
+import { useAdminModal } from '../useAdminModal';
+import { SUBSCRIPTIONS_SORT_COLUMNS, subscriptionsColumns } from './subscriptionsColumns';
+import { useSubscriptionsSeenOnOpen } from './subscriptionsLastSeen';
+import {
+  SUBSCRIPTIONS_BUILT_IN_VIEWS,
+  activeSubscriptionsView,
+  applySubscriptionsView,
+} from './subscriptionsListViews';
+import { SubscriptionsToolbar } from './SubscriptionsToolbar';
+import { CLEARED_FILTER_PARAMS } from './subscriptionsTabSearch';
+import {
+  fetchSubscriptionsExport,
+  toAdminSubscriptionsFilter,
+  useAdminSubscriptionsList,
+  useAdminSubscriptionsSummary,
+  useSubscriptionsViewCounts,
+} from './useAdminSubscriptionsList';
+import { useOpenSubscriptionRow } from './useOpenSubscriptionRow';
+import { useSubscriptionsParams, useSubscriptionsTab, useSubscriptionsTabUrlSync } from './useSubscriptionsTabParams';
 
-import SubscriptionStatsCards from './components/SubscriptionStatsCards';
-import SubscriptionFilters from './components/SubscriptionFilters';
-import SubscriptionTable from './components/SubscriptionTable';
-import PaginationControls from './components/PaginationControls';
-import { SubscriptionListResponse, PlanInfo } from './types';
+const copyToClipboard = async (value: string, what: string) => {
+  try {
+    await navigator.clipboard.writeText(value);
+    toast.success(`${what} copied`);
+  } catch {
+    toast.error(`Could not copy the ${what.toLowerCase()}.`);
+  }
+};
 
-const AdminSubscriptions = () => {
-  const [page, setPage] = useState(1);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
-  const [status, setStatus] = useState('all');
-  const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
+function SubscriptionRowActions({ row, onOpen }: { row: AdminSubscriptionRow; onOpen: () => void }) {
+  return (
+    <Dropdown>
+      <MenuButton
+        slots={{ root: IconButton }}
+        slotProps={{
+          root: {
+            size: 'sm',
+            variant: 'plain',
+            'aria-label': `Actions for subscription ${row.subscriptionId}`,
+            sx: { ...adminFocus, color: 'admin.inkMuted' },
+          },
+        }}
+        data-testid={`admin-subscriptions-row-actions-${row.id}`}
+        // The row opens the customer on click; the menu must not.
+        onClick={event => event.stopPropagation()}
+        onKeyDown={event => event.stopPropagation()}
+      >
+        <MoreHorizIcon sx={{ fontSize: 18 }} />
+      </MenuButton>
+      <Menu size="sm" placement="bottom-end" sx={{ zIndex: 1300 }} onClick={event => event.stopPropagation()}>
+        {row.owner && (
+          <MenuItem onClick={onOpen} data-testid={`admin-subscriptions-row-open-${row.id}`}>
+            Open customer
+          </MenuItem>
+        )}
+        {row.source === 'stripe' && (
+          <MenuItem onClick={() => copyToClipboard(row.subscriptionId, 'Stripe subscription ID')}>
+            Copy Stripe subscription ID
+          </MenuItem>
+        )}
+        <MenuItem onClick={() => copyToClipboard(row.ownerId, 'Owner ID')}>Copy owner ID</MenuItem>
+      </Menu>
+    </Dropdown>
+  );
+}
 
-  const subscriptions = useGetAllSubscriptions({
-    search: debouncedSearch,
-    page: 1,
-    limit: 100,
-  });
-  const plans = useGetSubscriptionPlans();
-  const stats = useGetSubscriptionStats();
-  const planMap = useMemo(() => {
-    if (!plans.data) return {};
+const tileValue = (value: number | undefined) =>
+  value === undefined ? <Skeleton variant="text" level="h3" width="3ch" data-testid="admin-stat-skeleton" /> : value;
 
-    return plans.data.reduce((acc: Record<string, PlanInfo>, plan: Stripe.Price) => {
-      const availablePlan = SUBSCRIPTION_PLANS_MAP[plan.id];
-      if (availablePlan) {
-        acc[plan.id] = {
-          name: availablePlan.name,
-          amount: plan.unit_amount ? plan.unit_amount / 100 : 0,
-          interval: availablePlan.interval,
-        };
-      }
-      return acc;
-    }, {});
-  }, [plans.data]);
+const AdminSubscriptions: React.FC = () => {
+  useSubscriptionsTabUrlSync();
+  const [params, setParams] = useSubscriptionsParams();
+  const newSince = useSubscriptionsSeenOnOpen();
+  const openRow = useOpenSubscriptionRow();
+  const setAdminTab = useAdminModal(state => state.setActiveTab);
+  const [exporting, setExporting] = useState(false);
 
-  const subscriptionData: SubscriptionListResponse = useMemo(() => {
-    if (!subscriptions.data) {
-      return {
-        subscriptions: [],
-        pagination: {
-          total: 0,
-          page: 1,
-          limit: rowsPerPage,
-          totalPages: 1,
-        },
-      };
+  // Seeded from the persisted params so a restored search is not wiped on mount.
+  const {
+    value: search,
+    debouncedValue: debouncedSearch,
+    setValue: setSearch,
+  } = useDebounceValue(useSubscriptionsTab.getState().params.search ?? '');
+  useEffect(() => {
+    if (debouncedSearch === params.search) return;
+    setParams({ search: debouncedSearch, page: 1 });
+  }, [debouncedSearch, params.search, setParams]);
+
+  const filter = toAdminSubscriptionsFilter(params);
+  const listQuery = useAdminSubscriptionsList(params);
+  const summaryQuery = useAdminSubscriptionsSummary(filter);
+  // Another cancel filter would be overwritten, so the tile only counts when none (or this one) is set.
+  const cancelingCountable = filter.cancel === undefined || filter.cancel === 'scheduled';
+  const cancelingQuery = useAdminSubscriptionsSummary(
+    { ...filter, cancel: 'scheduled' },
+    { enabled: cancelingCountable }
+  );
+  const viewCounts = useSubscriptionsViewCounts();
+
+  const rows = useMemo(() => listQuery.data?.subscriptions ?? [], [listQuery.data]);
+  const total = listQuery.data?.total;
+  const columns = useMemo(() => subscriptionsColumns({ now: new Date(), newSince }), [newSince]);
+
+  const activeView = activeSubscriptionsView(params);
+  const viewTabs: ViewTab[] = SUBSCRIPTIONS_BUILT_IN_VIEWS.map(view => ({
+    id: view.id,
+    label: view.label,
+    count: viewCounts?.[view.id],
+  }));
+  const applyView = (id: string) => {
+    const view = SUBSCRIPTIONS_BUILT_IN_VIEWS.find(candidate => candidate.id === id);
+    if (!view) return;
+    setSearch('');
+    setParams({ ...applySubscriptionsView(view), search: '' });
+  };
+
+  const sortColumn = Object.entries(SUBSCRIPTIONS_SORT_COLUMNS).find(([, field]) => field === params.sortField)?.[0];
+  const sort: DataTableSort | undefined = sortColumn
+    ? { columnId: sortColumn, direction: params.sortOrder }
+    : undefined;
+  const onSortChange = (next: DataTableSort) => {
+    const sortField = SUBSCRIPTIONS_SORT_COLUMNS[next.columnId];
+    if (sortField) setParams({ sortField, sortOrder: next.direction, page: 1 });
+  };
+
+  const searching = params.search.trim().length > 0;
+  const clearFilters = () => {
+    setSearch('');
+    setParams({ ...CLEARED_FILTER_PARAMS, search: '' });
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const result = await fetchSubscriptionsExport(filter);
+      downloadData(result.blob, result.fileName, 'text/csv;charset=utf-8;');
+      if (result.truncated) toast.warning('The export hit its row cap. Narrow the filters to export the rest.');
+      if (result.searchTruncated)
+        toast.warning('The search matched too many accounts. Narrow it to export every match.');
+    } catch (error) {
+      console.error('Failed to export subscriptions CSV:', error);
+      toast.error('Failed to download the subscriptions CSV.');
+    } finally {
+      setExporting(false);
     }
-
-    const filteredSubscriptions =
-      status === 'all'
-        ? subscriptions.data.subscriptions || []
-        : (subscriptions.data.subscriptions || []).filter(sub => sub.status === status);
-
-    const startIndex = (page - 1) * rowsPerPage;
-    const endIndex = startIndex + rowsPerPage;
-    const paginatedSubscriptions = filteredSubscriptions.slice(startIndex, endIndex);
-
-    return {
-      subscriptions: paginatedSubscriptions,
-      pagination: {
-        total: filteredSubscriptions.length,
-        page: page,
-        limit: rowsPerPage,
-        totalPages: Math.ceil(filteredSubscriptions.length / rowsPerPage),
-      },
-    };
-  }, [subscriptions.data, rowsPerPage, status, page]);
-
-  const handleRefresh = () => {
-    subscriptions.refetch();
-    stats.refetch();
-    plans.refetch();
   };
 
-  const handlePageChange = (newPage: number) => {
-    setPage(newPage);
-  };
+  const viewAll = (
+    <Button variant="outlined" onClick={() => applyView('all')} data-testid="admin-subscriptions-empty-view-all-btn">
+      View all subscriptions
+    </Button>
+  );
+  const empty =
+    activeView && !searching ? (
+      activeView.id === 'all' ? (
+        <EmptyState
+          title={activeView.empty.title}
+          description={activeView.empty.description}
+          action={
+            <Button
+              variant="outlined"
+              onClick={() => setAdminTab(AdminTab.GrowthPricing)}
+              data-testid="admin-subscriptions-empty-pricing-btn"
+            >
+              View pricing settings
+            </Button>
+          }
+        />
+      ) : (
+        <EmptyState title={activeView.empty.title} description={activeView.empty.description} action={viewAll} />
+      )
+    ) : (
+      <EmptyState
+        title="No subscriptions match these filters"
+        description="Try removing a filter, or search by an exact Stripe ID."
+        action={
+          <Button variant="outlined" onClick={clearFilters} data-testid="admin-subscriptions-empty-clear-btn">
+            Clear filters
+          </Button>
+        }
+      />
+    );
 
-  const handleItemsPerPageChange = (newItemsPerPage: number) => {
-    setRowsPerPage(newItemsPerPage);
-    setPage(1);
-  };
-
-  const handleStatusChange = (newStatus: string) => {
-    setStatus(newStatus);
-    setPage(1);
-  };
+  const summary = summaryQuery.data;
+  const pastDue = summary?.views.pastDue;
 
   return (
-    <Sheet sx={{ px: 2, py: 1 }}>
-      <Stack spacing={1}>
-        <SubscriptionFilters
-          search={search}
-          onSearchChange={setSearch}
-          onRefresh={handleRefresh}
-          isLoading={subscriptions.isPending || plans.isPending}
-          status={status}
-          onStatusChange={handleStatusChange}
+    <Stack
+      gap={2}
+      sx={{ width: '100%', minWidth: 0, px: { xs: 2, sm: 3 }, py: 2.5 }}
+      data-testid="admin-subscriptions-tab"
+    >
+      <AdminPageHeader
+        title="Subscriptions"
+        count={total}
+        description="Stripe plans and admin comps, for users and organizations."
+        actions={
+          <Button
+            size="sm"
+            startDecorator={<DownloadIcon sx={{ fontSize: 16 }} />}
+            onClick={handleExport}
+            loading={exporting}
+            disabled={!total}
+            data-testid="admin-subscriptions-export-btn"
+            sx={adminFocus}
+          >
+            Export CSV
+          </Button>
+        }
+      />
+
+      <StatStrip aria-label="Subscription counts for the current filters">
+        <StatTile label="Paying" value={tileValue(summary?.views.paying)} />
+        <StatTile
+          label="Past due"
+          value={tileValue(pastDue)}
+          valueColor={pastDue ? 'admin.status.warn.foreground' : undefined}
         />
-
-        <SubscriptionStatsCards
-          stats={stats.data || { total: 0, active: 0, expiringThisMonth: 0, canceled: 0 }}
-          isLoading={stats.isPending}
+        <StatTile
+          label="Canceling"
+          value={cancelingCountable ? tileValue(cancelingQuery.data?.total) : '\u2014'}
+          comparison={cancelingCountable ? 'Cancel requested, still running' : undefined}
         />
+      </StatStrip>
 
-        <Box sx={{ display: { xs: 'none', sm: 'block' } }}>
-          <PaginationControls
-            currentPage={page}
-            totalPages={subscriptionData.pagination.totalPages}
-            itemsPerPage={rowsPerPage}
-            totalItems={subscriptionData.pagination.total}
-            onPageChange={handlePageChange}
-            onItemsPerPageChange={handleItemsPerPageChange}
-          />
-        </Box>
+      <ViewTabs
+        aria-label="Subscription views"
+        data-testid="admin-subscriptions-views"
+        activeId={activeView?.id ?? ''}
+        views={viewTabs}
+        onSelect={applyView}
+      />
+      <SubscriptionsToolbar params={params} search={search} onSearchChange={setSearch} onChange={setParams} />
+      {listQuery.data?.searchTruncated && (
+        <Alert color="warning" data-testid="admin-subscriptions-search-truncated">
+          This search matches more accounts than the list can resolve. Narrow it to see every match.
+        </Alert>
+      )}
 
-        {(subscriptions.isPending || plans.isPending) && <LinearProgress />}
-
-        <SubscriptionTable
-          subscriptions={subscriptionData.subscriptions}
-          planMap={planMap}
-          isLoading={subscriptions.isPending}
-        />
-
-        {subscriptionData.subscriptions.length === 0 && !subscriptions.isPending && (
-          <Typography level="body-lg" textAlign="center" sx={{ my: 4 }}>
-            No subscriptions found
-          </Typography>
-        )}
-
-        <PaginationControls
-          currentPage={page}
-          totalPages={subscriptionData.pagination.totalPages}
-          itemsPerPage={rowsPerPage}
-          totalItems={subscriptionData.pagination.total}
-          onPageChange={handlePageChange}
-          onItemsPerPageChange={handleItemsPerPageChange}
-        />
-      </Stack>
-    </Sheet>
+      <DataTable
+        label="Subscriptions"
+        testId="admin-subscriptions-table"
+        rows={rows}
+        columns={columns}
+        getRowId={row => row.id}
+        rowTestId={row => `admin-subscriptions-row-${row.id}`}
+        loading={listQuery.isLoading}
+        error={listQuery.isError ? 'Could not load subscriptions.' : undefined}
+        onRetry={() => listQuery.refetch()}
+        empty={empty}
+        onRowActivate={openRow}
+        sort={sort}
+        onSortChange={onSortChange}
+        rowActions={row => <SubscriptionRowActions row={row} onOpen={() => openRow(row)} />}
+        pagination={{
+          page: params.page,
+          pageSize: params.limit,
+          total: total ?? 0,
+          onPageChange: page => setParams({ page }),
+          onPageSizeChange: limit => setParams({ limit, page: 1 }),
+        }}
+        minWidth="64rem"
+        maxHeight="none"
+      />
+    </Stack>
   );
 };
 
