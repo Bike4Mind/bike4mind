@@ -8,13 +8,15 @@ import {
 import { withTransaction } from '@bike4mind/db-core';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
-import { evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskSignals } from './signupRisk';
+import { evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskBand, type SignupRiskSignals } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
 
 type GrantAdapters = FreeCreditAdapters & {
   audit?: (input: { userId: string; credits: number; creditTransactionId?: string }) => Promise<void>;
 };
+
+type AssessedGrantResult = GrantFreeCreditsResult & { assessedBand?: SignupRiskBand };
 
 /** `unlockedOrgId` releases the full remainder and records the org that vouched for the account. */
 export type SignupGrantValidator = (
@@ -59,7 +61,7 @@ async function releaseStage(
     }
   }
   try {
-    return await withTransaction(async () => {
+    const result = await withTransaction<AssessedGrantResult>(async () => {
       const user = await db.users.findById(userId);
       if (!isReleaseEligible(user, expected)) return noGrant();
       const grant = user.signupGrant;
@@ -74,6 +76,7 @@ async function releaseStage(
       )
         throw new Error('Invalid staged grant amount');
       let assessment = user.signupGrantAssessment;
+      let assessedBand: SignupRiskBand | undefined;
       let target: number;
       if (expected === 'pending_email') {
         if (!assessment) {
@@ -99,6 +102,7 @@ async function releaseStage(
             }
           }
           assessment = evaluateSignupRisk(policy, signals, grant.signupCredits);
+          assessedBand = assessment.band;
           if (assessment.status === 'unavailable') {
             console.warn('[signup-risk] Assessment unavailable; holding signup grant');
           }
@@ -166,8 +170,16 @@ async function releaseStage(
       });
       if (!updated) throw new Error('Staged grant account update failed');
       await audit?.({ userId, credits: amount, creditTransactionId });
-      return { creditsGranted: amount, currentCredits: balance };
+      return { creditsGranted: amount, currentCredits: balance, assessedBand };
     });
+    if (result.assessedBand && adapters.emitRiskBand) {
+      try {
+        await adapters.emitRiskBand(result.assessedBand);
+      } catch {
+        console.warn('[signup-risk] Band telemetry failed after grant commit');
+      }
+    }
+    return { creditsGranted: result.creditsGranted, currentCredits: result.currentCredits };
   } catch (error) {
     if (!(error instanceof DuplicateCreditTransactionError) && !(error instanceof InboxGrantClaimDeniedError))
       throw error;

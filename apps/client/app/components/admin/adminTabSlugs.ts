@@ -5,6 +5,8 @@ import {
   ADMIN_MODEL_LOGS_TAB_SLUG,
   ADMIN_ORGANIZATIONS_TAB_SLUG,
   ADMIN_SETTINGS_TAB_SLUG,
+  ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
+  ADMIN_SUBSCRIPTIONS_TAB_SLUG,
   ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
 } from './adminTabParams';
 
@@ -30,8 +32,8 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Documentation]: 'documentation',
   [AdminTab.WorldTime]: 'world-time',
   [AdminTab.Analysts]: 'analysts',
-  [AdminTab.Subscribers]: 'subscribers',
-  [AdminTab.Subscriptions]: 'subscriptions',
+  [AdminTab.Waitlist]: 'waitlist',
+  [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',
@@ -74,6 +76,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.PublishedPages]: 'published-pages',
   [AdminTab.PartnerSignupRules]: 'partner-signup-rules',
   [AdminTab.SignupDomainHolds]: 'signup-domain-holds',
+  [AdminTab.SignupRiskReview]: ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
   [AdminTab.EmbedKeys]: 'embed-keys',
   [AdminTab.ModelLifecycle]: 'model-lifecycle',
   [AdminTab.PrReport]: 'pr-report',
@@ -91,9 +94,11 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
  * lookup would resolve `?tab=toString` to an inherited Object.prototype member instead of
  * undefined - which then passes the caller's `!== undefined` guard.
  */
-const SLUG_TO_ADMIN_TAB: ReadonlyMap<string, AdminTab> = new Map(
-  Object.entries(ADMIN_TAB_TO_SLUG).map(([tab, slug]) => [slug, Number(tab) as AdminTab])
-);
+const SLUG_TO_ADMIN_TAB: ReadonlyMap<string, AdminTab> = new Map([
+  ...Object.entries(ADMIN_TAB_TO_SLUG).map(([tab, slug]): [string, AdminTab] => [slug, Number(tab) as AdminTab]),
+  // Renamed slugs that shared links still carry; useAdminTabUrlSync rewrites the URL to the current slug.
+  ['subscribers', AdminTab.Waitlist],
+]);
 
 /** Resolves a `?tab=` slug, or undefined when it is absent or not a known tab. */
 export function adminTabFromSlug(slug: string | undefined): AdminTab | undefined {

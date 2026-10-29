@@ -28,6 +28,15 @@ describe('selectUsableModels', () => {
     expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('maxOutputTokens');
   });
 
+  it('carries the release date only when the server sent a non-empty string', () => {
+    expect(selectUsableModels([wireModel({ releaseDate: '2025-04-14' })])[0]).toMatchObject({
+      releaseDate: '2025-04-14',
+    });
+    expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('releaseDate');
+    expect(selectUsableModels([wireModel({ releaseDate: '' })])[0]).not.toHaveProperty('releaseDate');
+    expect(selectUsableModels([wireModel({ releaseDate: 20250414 })])[0]).not.toHaveProperty('releaseDate');
+  });
+
   it('keeps only text models that can call tools', () => {
     const models = selectUsableModels([
       wireModel(),

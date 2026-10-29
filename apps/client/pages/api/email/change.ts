@@ -12,7 +12,7 @@ import {
   buildEmailLogoImg,
   escapeHtml,
 } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
-import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
+import { logAuthAudit } from '@server/utils/authAudit';
 import { z } from 'zod';
 import { stepUpGate } from '@server/auth/stepUp';
 
@@ -202,18 +202,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
           }
         );
 
-        // Log email change request (inside transaction - part of the write)
-        await logAuditEvent(
-          {
-            userId: req.user.id,
-            action: EmailAuditEvents.EMAIL_CHANGE_REQUESTED,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
-            oldEmail: req.user.email || undefined,
-            newEmail,
-          },
-          req.logger
-        );
+        await logAuthAudit(req, {
+          userId: req.user.id,
+          event: 'email_change_requested',
+          metadata: { oldEmail: req.user.email || undefined, newEmail },
+        });
       });
 
       // Publish emails after the transaction commits - prevents SQS messages from

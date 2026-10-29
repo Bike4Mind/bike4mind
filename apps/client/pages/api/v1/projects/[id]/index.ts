@@ -12,6 +12,7 @@ import { deleteProjectContract, getProjectContract, ProjectEvents, updateProject
 import { fabFileRepository, projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
@@ -82,6 +83,9 @@ const deleteRoute = nextRouteForContract(deleteProjectContract, {
 }).delete(async (req, res) => {
   const project = await getAccessibleProject(req.user.id, req.validatedParams.id);
 
+  // Read before the delete: its cascade prunes the project's file list.
+  const cleanUpTargets = await projectRevokeCleanupTargets(project.id, undefined, req.logger);
+
   await projectService.deleteProject(
     req.user.id,
     { id: project.id },
@@ -94,6 +98,8 @@ const deleteRoute = nextRouteForContract(deleteProjectContract, {
       },
     }
   );
+
+  await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
 
   // Same analytics event DELETE /api/projects/[id] emits.
   await logEventSafe(

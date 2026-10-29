@@ -78,7 +78,7 @@ describe('POST /api/v1/music-generations', () => {
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, object: 'music_generation', state: 'pending' });
     expect(h.createMusicJob).toHaveBeenCalledWith(
       {
-        user: { id: 'user-1', organizationId: null },
+        user: { id: 'user-1', organizationId: null, adminRoleWithheld: true },
         source: 'api',
         request: { model: 'test-music', prompt: 'a calm piano piece' },
       },
@@ -162,7 +162,11 @@ describe('POST /api/v1/music-generations', () => {
     const { req, res } = post({ model: 'test-music', prompt: 'p', organization_id: 'some-org' });
     await handler(req, res);
     expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), 'some-org');
-    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: 'billing-org' });
+    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+      id: 'user-1',
+      organizationId: 'billing-org',
+      adminRoleWithheld: true,
+    });
   });
 
   it('bills personal credits when organization_id is explicitly null', async () => {
@@ -173,7 +177,11 @@ describe('POST /api/v1/music-generations', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(202);
     expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), null);
-    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+      id: 'user-1',
+      organizationId: null,
+      adminRoleWithheld: true,
+    });
   });
 
   it.each(['', '   '])('rejects a blank organization_id %j (422) instead of billing personal', async orgId => {
@@ -204,7 +212,11 @@ describe('POST /api/v1/music-generations', () => {
       const { req, res } = post(base);
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: KEY_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it('bills the key org when the body names the same org', async () => {
@@ -212,7 +224,11 @@ describe('POST /api/v1/music-generations', () => {
       const { req, res } = post({ ...base, organization_id: KEY_ORG });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: KEY_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it.each([
@@ -253,7 +269,11 @@ describe('POST /api/v1/music-generations', () => {
         const { req, res } = post(base);
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+          id: 'user-1',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: true,
+        });
         expect(h.orgFindById).not.toHaveBeenCalled();
       });
 
@@ -262,7 +282,11 @@ describe('POST /api/v1/music-generations', () => {
         const { req, res } = post({ ...base, organization_id: HOME_ORG });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+          id: 'user-1',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: true,
+        });
       });
 
       it('keeps a session caller on the org the body names', async () => {
@@ -274,7 +298,11 @@ describe('POST /api/v1/music-generations', () => {
         });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'jwt-user', organizationId: HOME_ORG });
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+          id: 'jwt-user',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: false,
+        });
         expect(h.orgFindById).not.toHaveBeenCalled();
       });
     });

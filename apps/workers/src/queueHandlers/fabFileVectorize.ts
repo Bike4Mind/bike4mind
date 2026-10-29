@@ -1,6 +1,6 @@
 import {
   FabFileSourceType,
-  getQuestErrorCode,
+  isTerminalCreditRefusal,
   SupportedEmbeddingModelSchema,
   usdToCredits,
   usdToCreditsStochastic,
@@ -790,11 +790,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
     // switch does not flip itself): retrying only re-reserves spend from the wider meters
     // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
-    // Insufficient credits and an administrator's AI-access revocation are likewise terminal.
+    // Insufficient credits, the free-tier daily cap and an administrator's AI-access revocation are
+    // likewise terminal.
     // Match the moderation refusal specifically; unrelated authorization failures still retry.
     const isTerminalVectorizeDenial =
       (err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable) ||
-      getQuestErrorCode(err) === 'insufficient_credits' ||
+      isTerminalCreditRefusal(err) ||
       (err instanceof ForbiddenError && err.message === AI_ACCESS_REVOKED_MESSAGE);
 
     // Only account a failure into the batch/file state on the LAST SQS delivery attempt -

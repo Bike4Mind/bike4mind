@@ -27,7 +27,9 @@ import { ExternalLink } from '../chat/ExternalLink';
 import { SearchIcon } from '../chat/icons';
 import { readShowAbliterated, writeShowAbliterated } from './abliteratedSetting';
 import { AccessSteps } from './AccessSteps';
+import { FitBadge } from './FitBadge';
 import { HuggingFaceToken } from './HuggingFaceToken';
+import type { ModelTarget } from './modelTarget';
 import { PullDialog, type PullConsent } from './PullDialog';
 import { pullLabel, pullPercent } from './pullDisplay';
 
@@ -48,6 +50,35 @@ export function hubErrorText(error: ModelHubError): string {
     return `Hugging Face is rate limiting this computer. Try again ${seconds ? `in ${seconds} seconds` : 'in a minute'}.`;
   }
   return error.message;
+}
+
+/** Opens Explore on `repo` the next time the tab mounts. */
+export function rememberExploreRepo(repo: string): void {
+  remembered.query = repo;
+  remembered.selected = repo;
+}
+
+/** Starts a pull of a reviewed build; resolves to an error the screen should show, or null. */
+export async function startPull(
+  model: HubModelView,
+  build: HubBuildView,
+  consent: PullConsent,
+  onRecheck: () => void,
+  { serverId, curated }: { serverId?: string; curated?: { entryId: string; buildId: string } } = {}
+): Promise<ModelHubError | null> {
+  const result = await window.b4m.models.pull({
+    repo: model.id,
+    buildId: build.id,
+    revision: model.revision,
+    sizeBytes: build.sizeBytes,
+    ...consent,
+    ...(serverId === undefined ? {} : { serverId }),
+    ...(curated ? { curated } : {}),
+  });
+  if (result.ok) return null;
+  if (result.error.kind === 'runtime-unavailable') onRecheck();
+  if (result.listed || result.error.kind === 'cancelled') return null;
+  return result.error;
 }
 
 function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selected: boolean; onSelect: () => void }) {
@@ -106,12 +137,14 @@ function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selecte
   );
 }
 
-function BuildRow({
+export function BuildRow({
   repo,
   build,
   pull,
   installed,
   runtimeReady,
+  canPull,
+  preparing = false,
   onPull,
 }: {
   repo: string;
@@ -119,14 +152,17 @@ function BuildRow({
   pull: ModelPull | undefined;
   installed: boolean;
   runtimeReady: boolean;
+  canPull: boolean;
+  /** The Download button waits on a check before the dialog opens. */
+  preparing?: boolean;
   onPull: () => void;
 }) {
-  let action;
+  let action = null;
   if (pull && pull.phase !== 'failed') {
     action = (
       <Stack spacing={0.5} sx={{ minWidth: 160 }} data-testid="models-build-progress">
         <LinearProgress
-          determinate={pull.phase === 'downloading'}
+          determinate={pull.phase === 'downloading' || pull.phase === 'paused'}
           value={pullPercent(pull)}
           aria-label={`Download of ${repo} ${build.label}`}
           aria-valuetext={pullLabel(pull)}
@@ -151,12 +187,13 @@ function BuildRow({
         {build.blockedReason}
       </Typography>
     );
-  } else {
+  } else if (canPull) {
     action = (
       <Button
         size="sm"
         variant="soft"
         disabled={!runtimeReady}
+        loading={preparing}
         onClick={onPull}
         data-testid="models-build-pull-btn"
         data-build={build.id}
@@ -182,6 +219,7 @@ function BuildRow({
           {formatBytes(build.sizeBytes)}
         </Typography>
       </Box>
+      <FitBadge fit={build.fit} />
       {action}
     </Stack>
   );
@@ -190,19 +228,26 @@ function BuildRow({
 function ModelDetail({
   repo,
   status,
+  target,
   installedNames,
   pulls,
   onRecheck,
 }: {
   repo: string;
   status: ModelRuntimeStatus | null;
+  target: ModelTarget;
   installedNames: Set<string>;
   pulls: ModelPull[];
   onRecheck: () => void;
 }) {
   const [detail, setDetail] = useState<DetailState>({ state: 'loading' });
-  const [confirming, setConfirming] = useState<HubBuildView | null>(null);
+  const [confirmingOn, setConfirming] = useState<{ build: HubBuildView; serverId: string | undefined } | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
+  const canPull = target.management === 'allowed';
+
+  useEffect(() => {
+    if (!canPull) setConfirming(null);
+  }, [canPull]);
 
   const load = useCallback(async () => {
     setDetail({ state: 'loading' });
@@ -239,21 +284,15 @@ function ModelDetail({
 
   const model = detail.model;
   const runtimeReady = status?.reachable === true;
-  const start = async (build: HubBuildView, consent: PullConsent) => {
+  // Fit rates this computer, not a saved server.
+  const shown = (build: HubBuildView): HubBuildView => (target.local ? build : { ...build, fit: null });
+  const start = async (build: HubBuildView, serverId: string | undefined, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
-    const result = await window.b4m.models.pull({
-      repo: model.id,
-      buildId: build.id,
-      revision: model.revision,
-      sizeBytes: build.sizeBytes,
-      ...consent,
-    });
-    if (result.ok) return;
-    if (result.error.kind === 'runtime-unavailable') onRecheck();
-    if (result.listed || result.error.kind === 'cancelled') return;
-    setPullError(hubErrorText(result.error));
-    if (result.error.kind === 'changed') void load();
+    const error = await startPull(model, build, consent, onRecheck, { serverId });
+    if (!error) return;
+    setPullError(hubErrorText(error));
+    if (error.kind === 'changed') void load();
   };
 
   return (
@@ -314,12 +353,14 @@ function ModelDetail({
 
       {model.needsAccess && (
         <Alert color="warning" variant="soft" data-testid="models-detail-access">
-          <AccessSteps model={model} />
+          <AccessSteps model={model} server={target.local ? null : target.name} />
         </Alert>
       )}
-      {!runtimeReady && (
+      {canPull && !runtimeReady && (
         <Alert color="neutral" variant="soft" data-testid="models-detail-runtime-down">
-          Downloads need Ollama running on this computer.
+          {target.local
+            ? 'Downloads need Ollama running on this computer.'
+            : `Downloads need ${target.name} to be reachable.`}
         </Alert>
       )}
       {pullError && (
@@ -339,11 +380,12 @@ function ModelDetail({
             <BuildRow
               key={build.id}
               repo={model.id}
-              build={build}
-              pull={pulls.find(entry => entry.key === pullKey(model.id, build.id))}
+              build={shown(build)}
+              pull={pulls.find(entry => entry.key === pullKey(model.id, build.id, target.id))}
               installed={build.installedNames.some(name => installedNames.has(name))}
               runtimeReady={runtimeReady}
-              onPull={() => setConfirming(build)}
+              canPull={canPull}
+              onPull={() => setConfirming({ build, serverId: target.local ? undefined : target.id })}
             />
           ))
         )}
@@ -354,12 +396,13 @@ function ModelDetail({
         )}
       </Box>
 
-      {confirming && (
+      {canPull && confirmingOn && (
         <PullDialog
           model={model}
-          build={confirming}
+          build={shown(confirmingOn.build)}
+          target={target}
           onClose={() => setConfirming(null)}
-          onConfirm={consent => void start(confirming, consent)}
+          onConfirm={consent => void start(confirmingOn.build, confirmingOn.serverId, consent)}
         />
       )}
     </Stack>
@@ -368,11 +411,13 @@ function ModelDetail({
 
 export function ExploreTab({
   status,
+  target,
   installed,
   pulls,
   onRecheck,
 }: {
   status: ModelRuntimeStatus | null;
+  target: ModelTarget;
   installed: InstalledModelsResult | null;
   pulls: ModelPull[];
   onRecheck: () => void;
@@ -505,6 +550,9 @@ export function ExploreTab({
         <Stack direction="row" alignItems="center" spacing={1}>
           <Typography level="body-xs" textColor="text.tertiary" sx={{ flex: 1 }}>
             Searches Hugging Face from this computer. Only GGUF repos are listed.
+            {!target.local &&
+              target.management === 'allowed' &&
+              ` Downloads go to ${target.name}, which fetches them from Hugging Face itself.`}
           </Typography>
           <Typography component="label" level="body-xs" sx={{ display: 'flex', gap: 1 }}>
             Show abliterated models
@@ -581,9 +629,10 @@ export function ExploreTab({
       <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2, position: { md: 'sticky' }, top: { md: 8 } }}>
         {selected ? (
           <ModelDetail
-            key={`${selected}:${tokenVersion}`}
+            key={`${target.id}:${selected}:${tokenVersion}`}
             repo={selected}
             status={status}
+            target={target}
             installedNames={installedNames}
             pulls={pulls}
             onRecheck={onRecheck}
