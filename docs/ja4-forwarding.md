@@ -14,9 +14,12 @@ its managed policy, including S3's filtering of response override query paramete
 Shared development routers must receive this change through their owning stage.
 
 SST's lazy router preserves the viewer domain in `x-forwarded-host`, then selects
-the URL origin using `cf.updateRequestOrigin({ domainName: ... })`. Under AWS's
-documented contract, that sets the origin Host to the destination domain even
-when the policy forwards viewer Host. This avoids a new Lambda@Edge function.
+the URL origin using `cf.updateRequestOrigin`. The request-function transform
+explicitly sets `hostHeader` to the destination domain; relying on the implicit
+default caused Lambda URL access-denied responses on the preview when viewer
+Host forwarding was enabled. The transform fails deployment if SST's URL-origin
+helper changes shape, so an upgrade requires reviewing this compatibility step.
+This avoids a new Lambda@Edge function.
 The viewer-request function removes supplied JA4 before CloudFront adds its own.
 Origin verification continues to reject requests that bypass the distribution.
 

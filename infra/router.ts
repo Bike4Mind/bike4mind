@@ -7,8 +7,8 @@ import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/use
 import { isPreviewStage } from './constants';
 import {
   USER_FILE_MARKER_HEADER,
-  minifyRouterFunction,
   noindexResponseInjection,
+  prepareRouterRequestFunction,
   userFileCdnPrefixes as bareUserFileCdnPrefixes,
   userFileCspInjection as userFileCspInjectionFor,
 } from './routerFunctionCode';
@@ -165,7 +165,7 @@ const devCorsInjection = `
 // that exceeds CloudFront's 10 KB limit. Transform only this Router's generated request code.
 $transform(aws.cloudfront.Function, (args, _opts, name) => {
   if (name !== 'RouterCloudfrontFunctionRequest') return;
-  args.code = $output(args.code).apply(minifyRouterFunction);
+  args.code = $output(args.code).apply(prepareRouterRequestFunction);
 });
 
 // CloudFront caps functions per account, and every preview's viewer-response code is the same
@@ -276,8 +276,8 @@ const routerInstance = shouldUseSharedRouter
             };
           }
 
-          // SST's lazy router sets domainName with updateRequestOrigin, which also sets the origin
-          // Host. Keep x-forwarded-host, cookies, Authorization and the existing cache/edge settings.
+          // The request-function transform pins origin Host separately from the viewer hostname.
+          // Keep x-forwarded-host, cookies, Authorization and the existing cache/edge settings.
           // Scope this policy to auth so S3 keeps the managed policy's response-* query filtering.
           if (authNetworkOriginRequestPolicy && args.defaultCacheBehavior) {
             const existing = args.orderedCacheBehaviors as
