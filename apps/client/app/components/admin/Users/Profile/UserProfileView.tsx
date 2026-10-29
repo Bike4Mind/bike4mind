@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import BlockIcon from '@mui/icons-material/Block';
+import { useAdminProfileModal } from '../../AdminProfileModal';
 import { useComplianceModal } from '../ComplianceModal';
 import GrantSubscriptionModal from '../Details/GrantSubscriptionModal';
 import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
@@ -166,6 +167,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   const showUndo = useUndoToast();
   const queryClient = useQueryClient();
   const setComplianceUserId = useComplianceModal(state => state.setUserId);
+  const setEditProfileUserId = useAdminProfileModal(state => state.setUserId);
   const openAdminLog = () => onTabChange('admin');
 
   // The palette ignores its single-key shortcuts while any dialog is open, so `c` never fires behind one.
@@ -225,7 +227,12 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
       <Breadcrumb name={displayName(user)} onBack={onBack} />
       <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />
       <StatusBanner user={user} onReinstate={() => void reinstate()} onLiftRestriction={() => setAction('restrict')} />
-      <UserProfileHeader user={user} onAction={setAction} onCompliance={() => setComplianceUserId(user.id)} />
+      <UserProfileHeader
+        user={user}
+        onAction={setAction}
+        onEditProfile={() => setEditProfileUserId(user.id)}
+        onCompliance={() => setComplianceUserId(user.id)}
+      />
       <UserProfileStats user={user} />
       <Box>
         <UserProfileTabs value={tab} onChange={onTabChange} />

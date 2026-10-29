@@ -12,9 +12,10 @@ import {
   type AdminUserProfile,
 } from './userProfileModel';
 
-type MenuEntry = { action: ProfileAction | 'compliance'; label: string; danger?: boolean } | 'divider';
+type MenuEntry = { action: ProfileAction | 'editProfile' | 'compliance'; label: string; danger?: boolean } | 'divider';
 
 const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
+  { action: 'editProfile', label: 'Edit profile' },
   { action: 'loginAs', label: 'Log in as user' },
   { action: 'message', label: 'Send message' },
   { action: 'subscription', label: 'Grant subscription' },
@@ -42,11 +43,17 @@ const joinedPrefix = (user: AdminUserProfile): string => {
 type UserProfileHeaderProps = {
   user: AdminUserProfile;
   onAction: (action: ProfileAction) => void;
+  onEditProfile: () => void;
   onCompliance: () => void;
 };
 
 /** Identity, status and the page's actions: Adjust credits and Suspend up front, the rest under More. */
-export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAction, onCompliance }) => {
+export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
+  user,
+  onAction,
+  onEditProfile,
+  onCompliance,
+}) => {
   const name = displayName(user);
   const status = accountStatus(user);
   const org = organizationName(user);
@@ -121,7 +128,11 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ user, onAc
                   <MenuItem
                     key={entry.action}
                     color={entry.danger ? 'danger' : 'neutral'}
-                    onClick={() => (entry.action === 'compliance' ? onCompliance() : onAction(entry.action))}
+                    onClick={() => {
+                      if (entry.action === 'editProfile') onEditProfile();
+                      else if (entry.action === 'compliance') onCompliance();
+                      else onAction(entry.action);
+                    }}
                     data-testid={`user-profile-menu-${entry.action}-item`}
                   >
                     {entry.label}

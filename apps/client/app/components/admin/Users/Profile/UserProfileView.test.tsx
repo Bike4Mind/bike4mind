@@ -9,6 +9,7 @@ import type { AdminUserProfile } from './userProfileModel';
 const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   setComplianceUserId: vi.fn(),
+  setEditProfileUserId: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
@@ -29,6 +30,10 @@ vi.mock('../BulkAbuseResponseModal', () => ({
   ),
 }));
 vi.mock('./actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks.update }));
+vi.mock('../../AdminProfileModal', () => ({
+  useAdminProfileModal: (select: (state: { setUserId: (id: string) => void }) => unknown) =>
+    select({ setUserId: mocks.setEditProfileUserId }),
+}));
 vi.mock('../ComplianceModal', () => ({
   useComplianceModal: (select: (state: { setUserId: (id: string) => void }) => unknown) =>
     select({ setUserId: mocks.setComplianceUserId }),
@@ -230,6 +235,16 @@ describe('UserProfileView', () => {
       fireEvent.click(await screen.findByTestId(`user-profile-menu-${action}-item`));
 
       expect(await screen.findByTestId(dialogId)).toBeInTheDocument();
+    });
+
+    it('the Edit profile item opens the profile editor for this user', async () => {
+      const user = buildProfile();
+      setup(user);
+
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      fireEvent.click(await screen.findByTestId('user-profile-menu-editProfile-item'));
+
+      expect(mocks.setEditProfileUserId).toHaveBeenCalledWith(user.id);
     });
 
     it('the Compliance record item opens the compliance modal for this user', async () => {
