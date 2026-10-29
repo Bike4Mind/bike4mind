@@ -7,6 +7,7 @@ type SignupGrantBudgetDay = {
   reservedIds: string[];
   alerted50: boolean;
   alerted100: boolean;
+  createdAt?: Date;
 };
 
 const budgetDaySchema = new Schema<SignupGrantBudgetDay>(
@@ -17,8 +18,11 @@ const budgetDaySchema = new Schema<SignupGrantBudgetDay>(
     alerted50: { type: Boolean, default: false },
     alerted100: { type: Boolean, default: false },
   },
-  { versionKey: false }
+  { versionKey: false, timestamps: { createdAt: true, updatedAt: false } }
 );
+
+// Days are kept 90 days for reporting.
+budgetDaySchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 
 export const SignupGrantBudgetDayModel =
   (mongoose.models.SignupGrantBudgetDay as mongoose.Model<SignupGrantBudgetDay>) ??
@@ -53,6 +57,7 @@ export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
         if (existing && existing.spent > headroom) return null;
       }
     }
+    console.warn('[signup-grant-budget] Reservation contended after retries', { day, transactionId });
     throw new Error('Signup grant budget reservation contended');
   },
   async refund(day, transactionId, amount) {
