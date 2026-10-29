@@ -1,4 +1,5 @@
-import { User } from '@bike4mind/database';
+import { User, authSessionRepository } from '@bike4mind/database';
+import { isAuthSessionActive } from '@bike4mind/common';
 import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 
@@ -58,6 +59,17 @@ export async function verifyJwtPayload(
         return done(null, false);
       }
       assertAccountStateUsable(user);
+      if (jwt_payload.impersonatedBy) {
+        const session = jwt_payload.sid ? await authSessionRepository.findBySid(jwt_payload.sid) : null;
+        if (
+          !session ||
+          session.userId !== user.id ||
+          session.impersonatedBy !== jwt_payload.impersonatedBy ||
+          !isAuthSessionActive(session)
+        )
+          return done(null, false);
+        Object.assign(user, { impersonationWriteEnabled: !!session.impersonationWriteEnabled });
+      }
       (user as any).mfaPending = !!jwt_payload.mfaPending;
       if (jwt_payload.mfaPending && jwt_payload.signInStrategy && jwt_payload.signInVia) {
         (user as any).mfaSignIn = { strategy: jwt_payload.signInStrategy, createdVia: jwt_payload.signInVia };

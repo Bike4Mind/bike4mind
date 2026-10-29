@@ -47,13 +47,13 @@ const wired = (
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   hostedOnly(
     'eventRule:infra/accountCreationAlarms.ts:AccountCreationMetricsSchedule',
-    '43add6f506047225259825c608612686bf15e0f97d11432a5607e4ea06e35e04',
-    'Opt-in hosted CloudWatch account census; no local notification destination is configured.',
+    '9ecd499546afefc96b5204f91ccaa0292f7eaf73bce58d0bf91a30adda3497e7',
+    'Hosted CloudWatch account census on monitored stages; no local notification destination is configured.',
     ['cloudwatch:PutMetricData', 'cloudwatch:namespace', 'import:@aws-sdk/client-cloudwatch']
   ),
   broker(
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
-    'c51286a11ea2ee3a29b05d4d3586737a2e39f3cc0f0268e083f506f614a5fc32'
+    'aa48c95e91e528e37c56987140eb2432dc050caa462b4c8f28e9043bf22d4a77'
   ),
   broker(
     'queue:infra/businessMetricAlerts.ts:businessMetricAlertsDLQ',
@@ -125,12 +125,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('event:infra/eventBus.ts:SreFixDispatch', 'fa1122e45e2de82ee4a61c73ce860a679f2f5ce735bc628dd56a35c82977a648'),
   gap(
     'event:infra/eventBus.ts:stripe-customer-subscription-updated',
-    '8f5037deab58d486aa279c634c26f8c5754125a767eed3823cf4ea73c4ff318c',
+    '4c4fc4ab9c35065deecb949f1fac91f03147e83a2d0e4d69d325a4cffbb41c35',
     ['cloudwatch:PutMetricData']
   ),
   gap(
     'event:infra/eventBus.ts:stripe-invoice-payment-succeeded',
-    'd8089deb5d5acdfc5eeadafe24844b1039b26c686ed26d7ed6079f71f437bffe',
+    '9bd7d67d91b7ed92af560f2bec4a2dc3a3fe76a8f907f503c253cd82811d556e',
     ['cloudwatch:PutMetricData']
   ),
   gap('event:infra/eventBus.ts:telemetry-alert', 'da2a32170866774933b17511f32fa3be3347981ebc58cde3f749a7bed484afe7', [
@@ -146,7 +146,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap('event:infra/llm.ts:slack-completion-start', '0327e6d6416681996dd3357ce5511201cacc5b3f8a8c97081578246ac5d9bbfd', [
+  gap('event:infra/llm.ts:slack-completion-start', 'b77d1f7e9b8c57c03f19f7e5cb0e5963301d329d453acafe321c4f158d0f2fd9', [
     'bedrock:*',
     'cloudwatch:PutMetricData',
     'events:PutEvents',
@@ -157,7 +157,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    'f98f4acace3c519c47884cd0c32a7a98da153c3a6ba586a887a9d42e9d900519',
+    'c6a14f07ef855138ab12c6c1970bf1ce56f0746a8c9adcbf0a896bafd9488cd2',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
@@ -173,7 +173,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'function:infra/imageProcessor.ts:ImageProcessor',
     '6acb07ce9209d186c6446e5c91d9bdce2c79c2870a86e13cf0c4d28fe5d30b0a'
   ),
-  gap('function:infra/mcp.ts:mcpHandler', 'e3bfed090995364d360c725c2215d1295cff7f6e64722943495293d1899b6334'),
+  gap('function:infra/mcp.ts:mcpHandler', '6823c55927c3c438006ff24b5388c4ac716c126bef6b90f1504045c83b5295f7'),
   hostedOnly(
     'function:infra/queues.ts:PublishThumbnailRenderer',
     'a250460c0bc75a4ff9c0176e6dd4655883ec598578667051d5ae2de9c911d441',
@@ -265,7 +265,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    '10451e3dff4deee6e0f6c8ac19aa2ebf7c42fa443b7ac43f734029dfea99fff1',
+    'cbcae199c1ef49338db41aab63f0419c50c681f8d3e31e0ad69bf21e7b711d18',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(
@@ -441,7 +441,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:githubLakeRevokeQueueDLQ',
     '4491856037e8f9226cdeb137466706aa7bc84abb90e191d01aef7f42424825d1'
   ),
-  gap('queue:infra/queues.ts:githubWebhookQueue', '1a910a1ee11039eda342513e6809d2c75912fb015ad7932c7de49f489ccff2e6', [
+  gap('queue:infra/queues.ts:githubWebhookQueue', '912af3d9c7f8cb4a5cdafcd410c4db8789167b19815b534c6eb0cebd2f7d13f3', [
     'import:@aws-sdk/client-cloudwatch',
   ]),
   broker(
@@ -498,7 +498,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:libreoncologyAudioRenderQueueDLQ',
     '2ee2385d94d02b314ad0029cadb2c26a937f5a674ff43eb5a82816c228b00b6c'
   ),
-  gap('queue:infra/queues.ts:liveOpsTriageQueue', 'fe88d271c0c62d2b40b28abdf73bf5bb3d4ee51bb98c25104381bb3f3367b5ae', [
+  gap('queue:infra/queues.ts:liveOpsTriageQueue', '10f7067691b764999174d0040001fef91b6db622855893dfcbad5cfb803a9ba7', [
     'cloudwatch:PutMetricData',
     'import:@aws-sdk/client-cloudwatch',
   ]),
@@ -649,7 +649,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    '2cfe1879f740c9535d520227a2891ead024a1bcb51ac1438380286e10cc8d8ee'
+    '6066a79188816238482fa1a91f2da527bdd8017cdd3fb815fe2b4002ff234a93',
+    ['ssm:GetParameter']
   ),
   broker(
     'queue:infra/youngAccountSpendAlertDeadLetter.ts:youngAccountSpendAlertDlq',
@@ -690,7 +691,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:CloudSecurityScan',
-    '8d5e90dbe26d58d76b4938de730b48c3163dbfd077855bf2f9c121e2bbcd6877',
+    '75ebb60c42949289eaa820ed09809f498c8859e5b8b0f7035e463913926d561d',
     'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
   ),
   wired(
@@ -897,7 +898,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:youngAccountSpendAlert',
-    'cf9c4f3143a0f002186d47a5dbe4e5e91cfdebcd9f8df6c5bf65707ca48a8a1a',
+    '0f351e3081a732ae7ebcb35c048e4d5a5031666986942fbba872f472c6fa7ad2',
     'Hosted production abuse alert to Slack; not applicable to a portable deployment.'
   ),
   hostedOnly(
@@ -947,7 +948,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '7b08bfaf0b70ff251f5e13ae09796982af92f7ec594e5dae77e24ffbe10f2988',
+    '65f26f577c13203463e31692dd274aff85c4dcfdca6c822b954b5ee6d6e41e11',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),
@@ -961,7 +962,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '0134b180dc4d296c9c16d225b728aa16db37828008a76c3fb71a946057fc7f3c'
+    '368f2fda89a530ff780c20f48f90b0b10fbbc8a1a05a195f9cc195b61804e9df',
+    ['ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
@@ -969,15 +971,17 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
-    'c99a32479bb9e43c1b583b6abbcc96ce355305de79bff143d0b276ffc8e90cc7'
+    'e049191c0ab4767b337b43790f36eb45df8e11dfb8fbf0043e8d5249583168e5',
+    ['ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    'cc0b27017c70d79b8f89f6851f0949bd1b5a3158a78a1e518396d1abc2df847b',
-    ['lambda:InvokeFunction']
+    '49907efa33b805b563e7f36381353886fc10ddd1beb74721772e36c1d24e14a8',
+    ['lambda:InvokeFunction', 'ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    '4582eff167e27ee198757bdbe3f86d7191f3c5a922552e0df9f3b7822494d393'
+    'c39161f23c01b940505e3caa92cd7ef982273ad081f5d91b83756b93ad8279c6',
+    ['ssm:GetParameter']
   ),
 ];

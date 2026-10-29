@@ -1,18 +1,6 @@
 import React, { useId, useState } from 'react';
-import {
-  Button,
-  DialogContent,
-  DialogTitle,
-  FormControl,
-  FormLabel,
-  Input,
-  Modal,
-  ModalClose,
-  ModalDialog,
-  Stack,
-  Typography,
-} from '@mui/joy';
-import { adminFocusScope } from './adminStyles';
+import { Button, DialogContent, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
+import { AdminDialog } from './AdminDialog';
 import {
   ADMIN_REASON_HINT,
   type AdminReasonDraft,
@@ -63,27 +51,20 @@ export type ActionDialogProps = {
 };
 
 /**
- * The one dialog for audited admin writes (DESIGN_GUIDE.md section 4). Joy's Modal supplies the
- * focus trap, Esc to close and focus return to the opener.
+ * The one dialog for audited admin writes (DESIGN_GUIDE.md section 4), built on the AdminDialog
+ * shell, which supplies the focus trap, Esc to close and focus return to the opener.
  */
-export const ActionDialog: React.FC<ActionDialogProps> = props => {
-  const titleId = useId();
-  return (
-    <Modal open={props.open} onClose={props.onClose}>
-      <ModalDialog
-        aria-labelledby={titleId}
-        data-testid={props['data-testid']}
-        sx={{ ...adminFocusScope, width: 'min(560px, calc(100vw - 32px))', overflowY: 'auto' }}
-      >
-        <ModalClose data-testid={`${props['data-testid']}-close-btn`} />
-        <DialogTitle id={titleId} component="h2">
-          {props.title}
-        </DialogTitle>
-        <ActionDialogForm {...props} />
-      </ModalDialog>
-    </Modal>
-  );
-};
+export const ActionDialog: React.FC<ActionDialogProps> = props => (
+  <AdminDialog
+    open={props.open}
+    onClose={props.onClose}
+    title={props.title}
+    width={560}
+    data-testid={props['data-testid']}
+  >
+    <ActionDialogForm {...props} />
+  </AdminDialog>
+);
 
 // Separate from ActionDialog so its state lives inside the Modal and resets on every open.
 const ActionDialogForm: React.FC<ActionDialogProps> = ({

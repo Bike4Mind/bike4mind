@@ -852,11 +852,23 @@ describe('McpConnectionModel', () => {
       );
       await mcpConnectionRepository.create(baseConnection({ ownerKey: 'user-3', userId: 'user-3' }));
 
-      const all = await mcpConnectionRepository.listMemberConnections('org-1');
+      const members = ['user-1', 'user-2', 'user-3'];
+      const all = await mcpConnectionRepository.listMemberConnections('org-1', members);
       expect(all.map(c => c.userId).sort()).toEqual(['user-1', 'user-2']);
-      const linear = await mcpConnectionRepository.listMemberConnections('org-1', { urlHost: 'MCP.LINEAR.APP' });
+      const linear = await mcpConnectionRepository.listMemberConnections('org-1', members, {
+        urlHost: 'MCP.LINEAR.APP',
+      });
       expect(linear.map(c => c.userId)).toEqual(['user-1']);
       for (const doc of all) expect(secretValues(doc)).toEqual([]);
+    });
+
+    it('listMemberConnections leaves out a connection whose owner is no longer a member', async () => {
+      await mcpConnectionRepository.create(member('user-1'));
+      await mcpConnectionRepository.create(member('user-left', { slug: 'left' }));
+
+      const listed = await mcpConnectionRepository.listMemberConnections('org-1', ['user-1']);
+      expect(listed.map(c => c.userId)).toEqual(['user-1']);
+      expect(await mcpConnectionRepository.listMemberConnections('org-1', [])).toEqual([]);
     });
 
     it('finds and cascades by definition, leaving the definition and other connections', async () => {

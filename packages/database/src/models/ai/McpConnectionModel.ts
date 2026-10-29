@@ -490,11 +490,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
 
   async listMemberConnections(
     organizationId: string,
+    memberUserIds: readonly string[],
     options: { urlHost?: string } = {}
   ): Promise<IMcpConnectionSummary[]> {
+    if (memberUserIds.length === 0) return [];
     return this.findSummaries({
       organizationId,
       ownerType: 'user',
+      userId: { $in: [...memberUserIds] },
       ...(options.urlHost ? { urlHost: options.urlHost.toLowerCase() } : {}),
     });
   }

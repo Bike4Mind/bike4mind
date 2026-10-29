@@ -1,7 +1,8 @@
 import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userRepository, withTransaction } from '@bike4mind/database';
+import { userRepository, withTransaction, SupportAccess } from '@bike4mind/database';
+import { impersonationLifetimeMs } from '@server/auth/impersonation';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { readRefreshCookie, setAdminReturnCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -80,11 +81,17 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     // The session doc and the started entry commit together; the sid groups everything done in
     // this impersonation. Cookies are written only after the commit.
     const { accessToken, refreshToken } = await withTransaction(async () => {
+      const startedAt = new Date();
+      const expiresAt = new Date(startedAt.getTime() + impersonationLifetimeMs());
       const session = await issueSessionForRequest(req, targetUser.id, {
         createdVia: 'impersonation',
         tokenVersion: targetUser.tokenVersion ?? 0,
         impersonatedBy: adminUser.id,
+        impersonationExpiresAt: expiresAt,
       });
+      await SupportAccess.create([
+        { sid: session.sid, userId: targetUser.id, adminId: adminUser.id, reason, startedAt, expiresAt },
+      ]);
       await recordAdminActionFromRequest(req, {
         action: 'user.impersonation.started',
         target: {
@@ -94,6 +101,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         },
         summary: 'started impersonating the user',
         reason,
+        details: { expiresAt: expiresAt.toISOString(), readOnly: true, escalated: false },
         related: { impersonationSessionId: session.sid },
       });
       return session;

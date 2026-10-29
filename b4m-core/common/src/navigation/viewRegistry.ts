@@ -454,8 +454,8 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'admin.whats_new',
     section: 'admin',
-    label: 'What&apos;s New',
-    description: 'Manage What&apos;s New release notes and changelogs',
+    label: "What's New",
+    description: "Manage What's New release notes and changelogs",
     navigationType: 'tab',
     target: '32', // AdminTab.WhatsNewModals
     keywords: ['whats new', 'release notes', 'changelog', 'updates'],
@@ -629,6 +629,342 @@ export const VIEW_REGISTRY: NavigableView[] = [
     navigationType: 'tab',
     target: '35', // AdminTab.LiveOpsTriage
     keywords: ['liveops', 'triage', 'errors', 'incidents', 'production issues', 'monitoring'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.dashboard',
+    section: 'admin',
+    label: 'Dashboard',
+    description: 'Admin landing overview: signups, active users, client mix and links to the other dashboards',
+    navigationType: 'tab',
+    target: '67', // AdminTab.Dashboard
+    keywords: ['dashboard', 'overview', 'home', 'summary', 'signups', 'kpis'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.help_analytics',
+    section: 'admin',
+    label: 'Help usage',
+    description: 'What users ask the in-app help assistant, which help articles they read, and unanswered questions',
+    navigationType: 'tab',
+    target: '39', // AdminTab.HelpAnalytics
+    keywords: ['help', 'help usage', 'help analytics', 'support questions', 'docs usage', 'unanswered'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.partner_signups',
+    section: 'admin',
+    label: 'Partner signups',
+    description: 'Rules that auto-add verified signups from a partner email domain to an organization, with backfill',
+    navigationType: 'tab',
+    target: '55', // AdminTab.PartnerSignupRules
+    keywords: ['partner', 'partner signups', 'email domain', 'auto-join', 'domain rules', 'organization signup'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.signup_domain_holds',
+    section: 'admin',
+    label: 'Signup domain holds',
+    description: 'Review email domains whose free signup credits are held as suspicious; confirm or release them',
+    navigationType: 'tab',
+    target: '68', // AdminTab.SignupDomainHolds
+    keywords: ['domain holds', 'suspicious signups', 'disposable email', 'signup abuse', 'held credits', 'fraud'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.migrate_users',
+    section: 'admin',
+    label: 'Migration',
+    description:
+      'Bulk-migrate users into the platform and optionally send welcome emails (only when user migration is enabled)',
+    navigationType: 'tab',
+    target: '6', // AdminTab.Migrate
+    keywords: ['migrate', 'migration', 'import users', 'move users', 'welcome email'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.growth_pricing',
+    section: 'admin',
+    label: 'Pricing',
+    description:
+      'Growth and monetization knobs: credit pricing, free-credit grants, referral credits and related pricing settings',
+    navigationType: 'tab',
+    target: '64', // AdminTab.GrowthPricing
+    keywords: ['pricing', 'prices', 'credit price', 'free credits', 'referral credits', 'monetization', 'growth'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.email_marketing',
+    section: 'admin',
+    label: 'Email marketing',
+    description: 'Build marketing email templates and send email campaigns to users',
+    navigationType: 'tab',
+    target: '36', // AdminTab.EmailMarketing
+    keywords: ['email marketing', 'campaigns', 'newsletter', 'email templates', 'marketing email'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.secops_triage',
+    section: 'admin',
+    label: 'SecOps triage',
+    description:
+      'Configure the SecOps triage pipeline: enablement, dry-run, GitHub issue filing and Slack alerts for security findings',
+    navigationType: 'tab',
+    target: '51', // AdminTab.SecOpsTriage
+    keywords: ['secops', 'security triage', 'security alerts', 'vulnerabilities', 'security issues'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.audit_log',
+    section: 'admin',
+    label: 'Audit log',
+    description: 'Review recorded admin and system changes with their actors and reasons',
+    navigationType: 'tab',
+    target: '66', // AdminTab.AuditLog
+    keywords: ['audit log', 'audit trail', 'who changed', 'change history', 'activity log', 'compliance'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.oauth_clients',
+    section: 'admin',
+    label: 'OAuth clients',
+    description: 'Register OAuth client apps, edit their redirect URIs and rotate client secrets',
+    navigationType: 'tab',
+    target: '63', // AdminTab.OAuthClients
+    keywords: ['oauth', 'oauth clients', 'client id', 'client secret', 'redirect uri', 'third-party apps'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.api_key_scopes',
+    section: 'admin',
+    label: 'API key scopes',
+    description: 'Preflight which API keys would lose access before requiring a new scope on an endpoint',
+    navigationType: 'tab',
+    target: '61', // AdminTab.ApiKeyScopePreflight
+    keywords: ['api key scopes', 'scopes', 'api keys', 'preflight', 'permissions', 'scope migration'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.published_pages',
+    section: 'admin',
+    label: 'Published pages',
+    description: 'Moderate publicly published pages: review reported ones, take a page down or restore it',
+    navigationType: 'tab',
+    target: '54', // AdminTab.PublishedPages
+    keywords: ['published pages', 'public pages', 'moderation', 'takedown', 'reported content', 'abuse'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.gears',
+    section: 'admin',
+    label: 'Gears',
+    description:
+      'Override the Gears progression system live: toggle gears, change credit rewards, reword cards and CTAs',
+    navigationType: 'tab',
+    target: '56', // AdminTab.ManageGears
+    keywords: ['gears', 'progression', 'rewards', 'gamification', 'achievements', 'onboarding rewards'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.model_lifecycle',
+    section: 'admin',
+    label: 'Model lifecycle',
+    description: 'Review detected LLM model deprecations, accept successor models and see stale model references',
+    navigationType: 'tab',
+    target: '58', // AdminTab.ModelLifecycle
+    keywords: [
+      'model lifecycle',
+      'deprecation',
+      'deprecated models',
+      'model retirement',
+      'successor model',
+      'end of life',
+    ],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.retrieval',
+    section: 'admin',
+    label: 'Retrieval',
+    description:
+      'How often the model chooses to call knowledge-retrieval tools when they are offered rather than forced',
+    navigationType: 'tab',
+    target: '60', // AdminTab.RetrievalRate
+    keywords: ['retrieval', 'retrieval rate', 'rag', 'knowledge tools', 'search usage'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.context_inspector',
+    section: 'admin',
+    label: 'Context inspector',
+    description: 'Inspect per-request LLM context telemetry: prompt size, context health and anomalies',
+    navigationType: 'tab',
+    target: '40', // AdminTab.ContextInspector
+    keywords: ['context', 'context window', 'prompt size', 'telemetry', 'tokens', 'context health'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.stuck_executions',
+    section: 'admin',
+    label: 'Stuck executions',
+    description: 'Find agent executions that stopped progressing and release their concurrency slots',
+    navigationType: 'tab',
+    target: '53', // AdminTab.AgentExecutions
+    keywords: ['stuck agents', 'agent executions', 'hung', 'stalled', 'concurrency slots', 'release'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.embed_keys',
+    section: 'admin',
+    label: 'Embed keys',
+    description:
+      'Create, configure and rotate embed keys and their allowed origins for embedding Bike4Mind on other sites',
+    navigationType: 'tab',
+    target: '57', // AdminTab.EmbedKeys
+    keywords: ['embed', 'embed keys', 'widget', 'allowed origins', 'iframe', 'embedding'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.voice',
+    section: 'admin',
+    label: 'Voice',
+    description: 'Configure voice assistant agents and the default voice for users without a personal selection',
+    navigationType: 'tab',
+    target: '52', // AdminTab.VoiceSettings
+    keywords: ['voice', 'voice agent', 'speech', 'elevenlabs', 'voice assistant'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.sre_agent',
+    section: 'admin',
+    label: 'SRE agent',
+    description:
+      'Configure and monitor the SRE agent pipeline that triages production errors: controls, models and patterns',
+    navigationType: 'tab',
+    target: '44', // AdminTab.SreAgent
+    keywords: ['sre', 'sre agent', 'error triage', 'auto-fix', 'production errors', 'incident'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.integrations',
+    section: 'admin',
+    label: 'Integrations',
+    description: 'Health and uptime of third-party integrations (GitHub, Jira, Confluence, Slack and others)',
+    navigationType: 'tab',
+    target: '43', // AdminTab.IntegrationHealth
+    keywords: ['integrations', 'integration health', 'connectors', 'uptime', 'third-party', 'outage'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.dead_letters',
+    section: 'admin',
+    label: 'Dead letters',
+    description: 'Inspect dead-letter queues and replay failed background messages',
+    navigationType: 'tab',
+    target: '42', // AdminTab.DlqReplay
+    keywords: ['dlq', 'dead letters', 'dead-letter queue', 'failed messages', 'replay', 'retry'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.rate_limits',
+    section: 'admin',
+    label: 'Rate limits',
+    description:
+      'Monitor rate-limit usage and throttling against third-party integration APIs (GitHub, Jira, Confluence, Slack); per-plan API request limits are in Admin Settings',
+    navigationType: 'tab',
+    target: '41', // AdminTab.RateLimits
+    keywords: ['rate limit', 'rate limits', 'throttle', 'throttling', 'quota', 'requests per minute', '429'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.github',
+    section: 'admin',
+    label: 'GitHub',
+    description:
+      'Configure the system GitHub connection (GitHub App or service-account token) and the repository allow-list',
+    navigationType: 'tab',
+    target: '38', // AdminTab.GitHubConnection
+    keywords: ['github', 'github app', 'repositories', 'repo whitelist', 'personal access token', 'source control'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.webhook_logs',
+    section: 'admin',
+    label: 'Webhook logs',
+    description: 'Browse incoming webhook deliveries with their status, payload and processing outcome',
+    navigationType: 'tab',
+    target: '37', // AdminTab.WebhookAuditLogs
+    keywords: ['webhooks', 'webhook logs', 'deliveries', 'payload', 'webhook failures'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.integration_demand',
+    section: 'admin',
+    label: 'Integration demand',
+    description: 'Which integrations users have requested from the Integrations page roadmap, and who asked',
+    navigationType: 'tab',
+    target: '65', // AdminTab.IntegrationDemand
+    keywords: ['integration requests', 'roadmap', 'demand', 'requested integrations', 'feature requests'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.pr_digest',
+    section: 'admin',
+    label: 'PR digest',
+    description: 'Configure and generate the pull-request digest report, then review and send it',
+    navigationType: 'tab',
+    target: '59', // AdminTab.PrReport
+    keywords: ['pr digest', 'pull requests', 'pr report', 'changelog digest', 'weekly digest'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.release_notes',
+    section: 'admin',
+    label: 'Release notes',
+    description: 'Write, edit and publish product release notes',
+    navigationType: 'tab',
+    target: '62', // AdminTab.ReleaseNotes
+    keywords: ['release notes', 'changelog', 'what changed', 'product updates', 'releases'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.api_reference',
+    section: 'admin',
+    label: 'API reference',
+    description: 'Browse the public REST API reference: endpoints, parameters and schemas',
+    navigationType: 'tab',
+    target: '45', // AdminTab.ApiReference
+    keywords: ['api', 'api reference', 'endpoints', 'openapi', 'rest api', 'api docs'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.api_cookbook',
+    section: 'admin',
+    label: 'API cookbook',
+    description: 'Practical recipes and code patterns for working with the API',
+    navigationType: 'tab',
+    target: '49', // AdminTab.ApiCookbook
+    keywords: ['api cookbook', 'recipes', 'examples', 'code samples', 'api guide'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.architecture',
+    section: 'admin',
+    label: 'Architecture',
+    description: 'System architecture diagrams of the platform and its data flows',
+    navigationType: 'tab',
+    target: '47', // AdminTab.ArchitectureDiagrams
+    keywords: ['architecture', 'diagrams', 'system design', 'data flow', 'infrastructure'],
+    requiresAdmin: true,
+  },
+  {
+    id: 'admin.dependencies',
+    section: 'admin',
+    label: 'Dependencies',
+    description: "Overview of the platform's software and service dependencies",
+    navigationType: 'tab',
+    target: '48', // AdminTab.Dependencies
+    keywords: ['dependencies', 'packages', 'libraries', 'third-party services', 'versions'],
     requiresAdmin: true,
   },
 

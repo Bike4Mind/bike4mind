@@ -6,6 +6,8 @@ import {
   IEmbedBranding,
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
   type ApiKeyRateLimitUsage,
+  type AdminApiKeyAccess,
+  type AdminApiKeyRequestCounts,
 } from '@bike4mind/common';
 import type { ApiKeyEligibilityResponse } from '@client/pages/api/user-api-keys/eligibility';
 import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
@@ -265,6 +267,10 @@ export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: Cre
 export interface AdminUserApiKeysResponse {
   apiKeys: IUserApiKeyDocument[];
   liveUsage: Record<string, ApiKeyRateLimitUsage>;
+  /** Requests per key from the usage log; a key with none is absent. */
+  requests: Record<string, AdminApiKeyRequestCounts>;
+  /** Where the user stands with the API key subscription gate. */
+  access: AdminApiKeyAccess;
 }
 
 export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {

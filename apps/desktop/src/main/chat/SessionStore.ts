@@ -14,8 +14,10 @@ import type {
   ReasoningEffortSetting,
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import type { WorkspaceOwner } from '@shared/worktreeRemoval';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { storedReasoningEffortSetting } from './reasoningEffort';
+import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
@@ -96,6 +98,8 @@ export interface CreateOptions {
  */
 const SUMMARY_INDEX = '.summary-index';
 const SUMMARY_INDEX_VERSION = 1;
+/** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
+const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
 
 interface IndexedSummary {
@@ -249,7 +253,7 @@ export interface ApprovalModeMemory {
  * directly in `baseDirectory`, which is what a test that does not care builds and what every
  * install before this looked like on disk.
  */
-export class SessionStore {
+export class SessionStore implements SessionWritesStore {
   /** One preparation - the mkdir, and the legacy migration - per scope directory, not per call. */
   private readonly prepared = new Map<string, Promise<string>>();
 
@@ -497,6 +501,11 @@ export class SessionStore {
 
   /** Only workspace bindings cross account scopes; conversation contents stay private. */
   async workspaceProjectsExcept(sessionId: string): Promise<ChatProject[]> {
+    return (await this.workspaceOwnersExcept(sessionId)).flatMap(owner => (owner.project ? [owner.project] : []));
+  }
+
+  /** Folder references cross scopes for preservation; titles stay within the current scope. */
+  async workspaceOwnersExcept(sessionId: string): Promise<WorkspaceOwner[]> {
     const currentDirectory = await this.directoryFor(false);
     if (!currentDirectory) throw new Error('No conversation scope is available');
     const entries = await readdir(this.baseDirectory, { withFileTypes: true });
@@ -507,20 +516,39 @@ export class SessionStore {
         .filter(entry => entry.isDirectory())
         .map(entry => join(this.baseDirectory, assertScopeKey(entry.name))),
     ];
-    const projects: ChatProject[] = [];
-    const schema = z.object({ project: z.unknown().optional() });
+    const owners: WorkspaceOwner[] = [];
+    const directorySchema = z.string().min(1).refine(isAbsolute);
+    const schema = z.object({
+      project: z
+        .object({ contextDirectories: z.array(directorySchema).optional() })
+        .passthrough()
+        .nullish(),
+      grantedDirectories: z.array(directorySchema).optional(),
+      title: z.unknown().optional(),
+    });
     for (const directory of directories) {
       for (const name of await readdir(directory)) {
         if (!name.endsWith('.json')) continue;
         if (directory === currentDirectory && name === `${sessionId}.json`) continue;
         const record = schema.parse(JSON.parse(await readFile(join(directory, name), 'utf8')));
-        if (record.project == null) continue;
-        const project = normalizeProject(record.project);
-        if (!project) throw new Error('Cannot verify all conversation workspaces');
-        projects.push(project);
+        const project = record.project == null ? undefined : normalizeProject(record.project);
+        if (project === null) throw new Error('Cannot verify all conversation workspaces');
+        const directories = [
+          ...(project ? [project.directory, project.workingDirectory, ...project.contextDirectories] : []),
+          ...(record.grantedDirectories ?? []),
+        ];
+        if (directories.length === 0) continue;
+        owners.push({
+          ...(project ? { project } : {}),
+          directories: [...new Set(directories)],
+          title:
+            directory === currentDirectory
+              ? (typeof record.title === 'string' && record.title.trim()) || UNTITLED
+              : 'Another conversation',
+        });
       }
     }
-    return projects;
+    return owners;
   }
 
   private summaryIndex(directory: string): Promise<Map<string, IndexedSummary>> {
@@ -838,44 +866,68 @@ export class SessionStore {
   }
 
   /** Grant one more folder to a Code session alone. No-op for a Chat session, which has no project. */
-  async addContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      if (!session.project) return null;
-      if (session.project.contextDirectories.includes(directory)) return false;
-      session.project.contextDirectories.push(directory);
-      return true;
-    });
+  async addContextDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (!session.project) return null;
+        if (session.project.contextDirectories.includes(directory)) return false;
+        session.project.contextDirectories.push(directory);
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Grant a folder to this conversation alone, for a session with no project to hold it as a
    * context directory. Reached only from a folder the user shared: a `request_directory` card they clicked, the picker, or `/add-dir`.
    */
-  async addGrantedDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      const granted = session.grantedDirectories ?? [];
-      if (granted.includes(directory)) return false;
-      session.grantedDirectories = [...granted, directory];
-      return true;
-    });
+  async addGrantedDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const granted = session.grantedDirectories ?? [];
+        if (granted.includes(directory)) return false;
+        session.grantedDirectories = [...granted, directory];
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Take a folder back from this conversation, whichever list it was granted into: a session's
    * chips draw both, and one remove control must revoke either.
    */
-  async removeContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      const granted = session.grantedDirectories ?? [];
-      if (!session.project && !granted.includes(directory)) return null;
-      if (session.project) {
-        session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
-      }
-      const kept = granted.filter(entry => entry !== directory);
-      if (kept.length > 0) session.grantedDirectories = kept;
-      else delete session.grantedDirectories;
-      return true;
-    });
+  async removeContextDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const granted = session.grantedDirectories ?? [];
+        if (!granted.includes(directory) && !session.project?.contextDirectories.includes(directory)) return null;
+        if (session.project) {
+          session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
+        }
+        const kept = granted.filter(entry => entry !== directory);
+        if (kept.length > 0) session.grantedDirectories = kept;
+        else delete session.grantedDirectories;
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
@@ -954,6 +1006,36 @@ export class SessionStore {
       if (!directory) return;
       await rm(this.filePath(directory, id), { force: true });
     });
+  }
+
+  async loadSessionWrites(id: string): Promise<unknown> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return null;
+    try {
+      return JSON.parse(await readFile(this.sessionWritesPath(directory, id), 'utf8')) as unknown;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  async saveSessionWrites(id: string, writes: StoredSessionWrites): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (!directory) return;
+    const path = this.sessionWritesPath(directory, id);
+    await mkdir(join(directory, SESSION_WRITES), { recursive: true });
+    const temporary = `${path}.tmp`;
+    await writeFile(temporary, JSON.stringify(writes), 'utf8');
+    await rename(temporary, path);
+  }
+
+  async deleteSessionWrites(id: string): Promise<void> {
+    const directory = await this.directoryFor(false);
+    if (directory) await rm(this.sessionWritesPath(directory, id), { force: true });
+  }
+
+  private sessionWritesPath(directory: string, id: string): string {
+    return join(directory, SESSION_WRITES, basename(this.filePath(directory, id)));
   }
 
   /**

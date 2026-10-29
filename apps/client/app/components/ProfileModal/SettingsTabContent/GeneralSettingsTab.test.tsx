@@ -48,6 +48,9 @@ vi.mock('@/app/components/ProfileModal/ImportHistoryJobsList', () => ({ default:
 vi.mock('./MfaCard', () => ({ default: () => <div data-testid="mfa-card-stub" /> }));
 vi.mock('./VoicePreferenceSection', () => ({ default: () => null }));
 vi.mock('./ActiveSessionsSection', () => ({ default: () => null }));
+vi.mock('../SecurityTab/tabs/SupportAccessActivity', () => ({
+  SupportAccessActivity: () => <div data-testid="support-access-activity" />,
+}));
 vi.mock('./ApprovedAppsSection', () => ({ default: () => null }));
 vi.mock('./DocxTemplateSection', () => ({ default: () => null }));
 vi.mock('./WorkspaceVisibilitySection', () => ({ default: () => null }));
@@ -65,6 +68,7 @@ describe('GeneralSettingsTab security section', () => {
   it('mounts the MFA card inside the Security section', () => {
     renderTab();
     expect(within(screen.getByTestId('settings-security-section')).getByTestId('mfa-card-stub')).toBeTruthy();
+    expect(within(screen.getByTestId('settings-security-section')).getByTestId('support-access-activity')).toBeTruthy();
   });
 });
 

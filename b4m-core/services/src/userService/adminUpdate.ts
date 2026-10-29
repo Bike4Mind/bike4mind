@@ -49,7 +49,6 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   systemFiles: z.array(z.object({ fileId: z.string(), enabled: z.boolean() })).optional(),
   level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).optional(),
   lastNotebookId: z.string().optional().nullable(),
-  userNotes: z.array(z.object({ timestamp: z.string(), note: z.string(), userName: z.string() })).optional(),
   numReferralsAvailable: z.number().optional(),
   disputePending: z.boolean().optional(),
   // Admin control over the per-user moderation escalation state. Routed through

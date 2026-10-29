@@ -58,6 +58,9 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
   if (decoded.mfaPending) {
     throw new UnauthorizedError('MFA verification required');
   }
+  if (decoded.impersonatedBy) {
+    throw new ForbiddenError('Impersonated sessions cannot use realtime credentials.');
+  }
 
   const user = await User.findById(decoded.id);
   if (!user) throw new NotFoundError('User not found');

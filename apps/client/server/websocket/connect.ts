@@ -111,6 +111,9 @@ async function resolveIdentity(
     if (decoded?.mfaPending) {
       throw new UnauthorizedError('MFA verification required');
     }
+    if (decoded?.impersonatedBy) {
+      throw new UnauthorizedError('Impersonated sessions cannot use realtime credentials');
+    }
     // JWT connections are always version-gated. A legacy token issued before
     // this field existed carries no version and normalizes to 0, mirroring the
     // REST path (auth.ts) so the kill switch still fires for it once the user's

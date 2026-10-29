@@ -71,6 +71,7 @@ const AUTH_EVENT_SEVERITY: Partial<Record<UserAuthAuditEvent, AdminAuditSeverity
   refresh_recovery_capped: 'notice',
   trusted_device_revoked: 'notice',
   oauth_grant_revoked: 'notice',
+  email_change_confirmed: 'notice',
 };
 
 const humanize = (value: string): string => {

@@ -10,7 +10,7 @@ import { MCP_TOOL_PREFIX } from '../mcp/names';
  *
  * `session_send` is deliberately NOT here, though the turn it starts does cost credits. The
  * cycle it could run away with is already bounded in code - MAX_MESSAGE_HOPS on the chain and
- * MAX_SENDS_PER_TURN on the fan, so a user turn caps out at 14 relayed turns whatever the
+ * MAX_SENDS_PER_TURN on the fan, so a user turn caps out at 62 relayed turns whatever the
  * agents do - and a per-send click on top of that bound only stops the autonomy the feature
  * exists for: a session that has finished its work sits waiting for a human purely to hand its
  * summary back. It rides the approval mode like any other tool instead, so 'ask' still asks
