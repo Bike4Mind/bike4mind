@@ -49,6 +49,7 @@ const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) =>
             component="li"
             key={model.id}
             data-testid={`locked-model-row-${model.id}`}
+            aria-disabled="true"
             title="Upgrade to a paid plan to use this model"
             sx={{
               display: 'flex',
