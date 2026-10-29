@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Box, Typography, Radio } from '@mui/joy';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +26,9 @@ interface FiltersPanelProps {
   /** The Filters button's wrapper: the panel opens centred under it. */
   anchorRef: RefObject<HTMLElement | null>;
 }
+
+// The least room the panel keeps from either side of the screen.
+const SCREEN_EDGE = 8;
 
 const sectionTitleSx = { color: 'text.tertiary', fontSize: '12px', fontWeight: 400, letterSpacing: 0, mb: '12px' };
 
@@ -101,26 +104,37 @@ export default function FiltersPanel({
   anchorRef,
 }: FiltersPanelProps) {
   const { t } = useTranslation();
-  // Placed once on open, before paint: the full-screen backdrop below takes the pointer, so nothing
-  // scrolls under it while it is up.
+  // Under the button's middle when that fits the screen with SCREEN_EDGE to spare; otherwise (a phone,
+  // where the sidebar spans the screen) centred on the screen. Placed before paint, and again on a resize
+  // or rotation, as the bulk-actions panel is (useBulkActions); the backdrop below stops page scroll.
+  const panelRef = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState({ top: 0, left: 0 });
+  const placePanel = useCallback(() => {
+    const anchor = anchorRef.current?.getBoundingClientRect();
+    if (!anchor) return;
+    const width = panelRef.current?.offsetWidth ?? 0;
+    const underButton = anchor.left + anchor.width / 2;
+    const fits = underButton - width / 2 >= SCREEN_EDGE && underButton + width / 2 <= window.innerWidth - SCREEN_EDGE;
+    setPlace({ top: anchor.bottom + 8, left: fits ? underButton : window.innerWidth / 2 });
+  }, [anchorRef]);
   // On a short viewport the panel scrolls; a fade at its foot says there is more below until the end.
   const scrollRef = useRef<HTMLDivElement>(null);
   const [moreBelow, setMoreBelow] = useState(false);
-  const measure = () => {
+  const measure = useCallback(() => {
     const el = scrollRef.current;
     setMoreBelow(!!el && el.scrollTop + el.clientHeight < el.scrollHeight - 1);
-  };
-  useLayoutEffect(() => {
-    const anchor = anchorRef.current?.getBoundingClientRect();
-    if (anchor) setPlace({ top: anchor.bottom + 8, left: anchor.left + anchor.width / 2 });
-  }, [anchorRef]);
-  // After the placement lands, so the scroll check reads the panel at its final height.
-  useLayoutEffect(measure, [place]);
-  useEffect(() => {
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
   }, []);
+  useLayoutEffect(placePanel, [placePanel]);
+  // After the placement lands, so the scroll check reads the panel at its final height.
+  useLayoutEffect(measure, [measure, place]);
+  useEffect(() => {
+    const onResize = () => {
+      placePanel();
+      measure();
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [placePanel, measure]);
 
   const contentOptions: { value: NotebookContentFilter; testId: string; label: string }[] = [
     { value: 'all', testId: 'sidenav-filter-content-all', label: t('filter.content.all', 'All') },
@@ -137,6 +151,7 @@ export default function FiltersPanel({
     <>
       <Box onClick={onClose} sx={{ position: 'fixed', inset: 0, zIndex: 10000 }} />
       <Box
+        ref={panelRef}
         data-testid="sidenav-filters-panel"
         sx={theme => ({
           position: 'fixed',

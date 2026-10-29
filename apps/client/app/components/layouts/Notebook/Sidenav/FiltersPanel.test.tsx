@@ -1,6 +1,6 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { vi, describe, it, expect } from 'vitest';
+import { vi, describe, it, expect, afterEach } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import FiltersPanel from './FiltersPanel';
 
@@ -62,6 +62,59 @@ describe('FiltersPanel placement', () => {
     expect(style.left).toBe('312px');
     expect(style.transform).toBe('translateX(-50%)');
     expect(style.width).toBe('max-content');
+  });
+
+  // The sidebar keeps its width on a phone, so the button's middle sits near x=312 on any screen; a
+  // ~230px panel centred there runs off a 390px screen. It is centred on the screen instead.
+  describe('on a screen too narrow to centre it under the button', () => {
+    const widths = { screen: window.innerWidth };
+    const setScreen = (width: number) => {
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+    };
+    const anchorAt = () => {
+      const anchor = document.createElement('div');
+      anchor.getBoundingClientRect = () => ({
+        top: 100,
+        bottom: 136,
+        left: 294,
+        right: 330,
+        width: 36,
+        height: 36,
+        x: 294,
+        y: 100,
+        toJSON: () => ({}),
+      });
+      return anchor;
+    };
+    afterEach(() => {
+      setScreen(widths.screen);
+      vi.restoreAllMocks();
+    });
+
+    it('centres it on the screen', () => {
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(230);
+      setScreen(390);
+      renderPanel({ anchorRef: { current: anchorAt() } });
+      expect(getComputedStyle(screen.getByTestId('sidenav-filters-panel')).left).toBe('195px');
+    });
+
+    it('keeps it under the button when it fits', () => {
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(230);
+      setScreen(1440);
+      renderPanel({ anchorRef: { current: anchorAt() } });
+      expect(getComputedStyle(screen.getByTestId('sidenav-filters-panel')).left).toBe('312px');
+    });
+
+    it('places it again on a resize or rotation', () => {
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(230);
+      setScreen(1440);
+      renderPanel({ anchorRef: { current: anchorAt() } });
+      setScreen(390);
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+      expect(getComputedStyle(screen.getByTestId('sidenav-filters-panel')).left).toBe('195px');
+    });
   });
 });
 
