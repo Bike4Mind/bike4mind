@@ -11,7 +11,7 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { AdminLayoutRoute, isAdminUserProfilePath } from './AdminLayout';
+import { AdminLayoutRoute, isAdminSubscriptionDetailPath, isAdminUserProfilePath } from './AdminLayout';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 
@@ -146,5 +146,14 @@ describe('isAdminUserProfilePath', () => {
     expect(isAdminUserProfilePath('/admin/users/abc')).toBe(true);
     expect(isAdminUserProfilePath('/admin')).toBe(false);
     expect(isAdminUserProfilePath('/admin/users')).toBe(false);
+  });
+});
+
+describe('isAdminSubscriptionDetailPath', () => {
+  it('matches only subscription detail paths', () => {
+    expect(isAdminSubscriptionDetailPath('/admin/subscriptions/abc')).toBe(true);
+    expect(isAdminSubscriptionDetailPath('/admin/subscriptions/by-stripe/sub_1')).toBe(true);
+    expect(isAdminSubscriptionDetailPath('/admin')).toBe(false);
+    expect(isAdminSubscriptionDetailPath('/admin/users/abc')).toBe(false);
   });
 });

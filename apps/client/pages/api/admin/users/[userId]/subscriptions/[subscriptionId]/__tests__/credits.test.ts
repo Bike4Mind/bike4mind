@@ -62,10 +62,12 @@ vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
 
 const mockFindByStripeSubId = vi.fn();
 const mockUpdateByStripeSubId = vi.fn();
+const mockClearCustomCredits = vi.fn();
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     findByStripeSubscriptionId: (...a: unknown[]) => mockFindByStripeSubId(...a),
     updateByStripeSubscriptionId: (...a: unknown[]) => mockUpdateByStripeSubId(...a),
+    clearCustomCreditsPerCycle: (...a: unknown[]) => mockClearCustomCredits(...a),
   },
 }));
 
@@ -211,6 +213,56 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
           details: expect.objectContaining({ credits: -2000, previousCreditsPerCycle: 7000 }),
         })
       );
+    });
+
+    describe('clearing the override (creditsPerCycle: null)', () => {
+      it('unsets the override and audits the move back to the plan default', async () => {
+        mockFindByStripeSubId.mockResolvedValue({
+          id: 'sub-1',
+          ownerType: 'User',
+          ownerId: 'u1',
+          priceId: 'price_unknown',
+          customCreditsPerCycle: 8000,
+        });
+
+        const { res, run } = call({ body: { creditsPerCycle: null, reason: 'Undo the edit' } });
+        await run();
+
+        expect(mockClearCustomCredits).toHaveBeenCalledWith('sub_123');
+        expect(mockUpdateByStripeSubId).not.toHaveBeenCalled();
+        expect(res._getJSONData()).toMatchObject({ success: true, creditsPerCycle: null });
+        expect(mockRecordAdminAction).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            summary: 'cleared the subscription credits override',
+            changes: [{ field: 'customCreditsPerCycle', before: 8000, after: null }],
+            details: expect.objectContaining({ credits: -8000, previousCreditsPerCycle: 8000, creditsPerCycle: 0 }),
+          })
+        );
+      });
+
+      it('computes a team default from seats when clearing', async () => {
+        mockFindByStripeSubId.mockResolvedValue({
+          id: 'sub-1',
+          ownerType: 'Organization',
+          ownerId: 'org-1',
+          quantity: 3,
+          customCreditsPerCycle: 7000,
+        });
+        mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', users: [] });
+
+        const { run } = call({ body: { creditsPerCycle: null, reason: 'Undo the edit' } });
+        await run();
+
+        expect(mockClearCustomCredits).toHaveBeenCalledWith('sub_123');
+        expect(mockRecordAdminAction).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            organizationId: 'org-1',
+            details: expect.objectContaining({ credits: -4000, creditsPerCycle: 3000 }),
+          })
+        );
+      });
     });
 
     it('records the reason on the audit entry', async () => {

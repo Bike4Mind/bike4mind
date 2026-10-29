@@ -290,6 +290,8 @@ export const useGetUserSubscriptions = (userId: string) => {
             users: Array<{ userId: string; email: string; name: string }>;
           };
           subscription: ISubscription & {
+            /** The Subscription document's Mongo id, which the admin detail page is keyed by. */
+            id: string;
             effectiveCreditsPerCycle?: number;
             defaultCreditsPerCycle?: number;
           };
@@ -352,13 +354,14 @@ export const useUpdateSubscriptionCredits = () => {
     }: {
       userId: string;
       subscriptionId: string;
-      creditsPerCycle: number;
+      /** `null` clears the admin override, so the plan's own rate applies again. */
+      creditsPerCycle: number | null;
       reason: string;
     }) => {
       const { data } = await api.put<{
         success: boolean;
         message: string;
-        creditsPerCycle: number;
+        creditsPerCycle: number | null;
       }>(`/api/admin/users/${userId}/subscriptions/${subscriptionId}/credits`, {
         creditsPerCycle,
         reason,

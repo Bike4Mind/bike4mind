@@ -11,6 +11,8 @@ export type GrantIndividualAdminSubscriptionResult =
   | {
       status: 'granted';
       subscriptionId: string;
+      /** The Mongo id of the new row, which the admin subscription detail page is keyed on. */
+      subscriptionRecordId: string;
       priceId: string;
       periodEndsAt: Date;
       credits: number;
@@ -48,7 +50,11 @@ export async function grantIndividualAdminSubscription(params: {
   skipIfAnyActiveIndividual?: boolean;
   subscriptionId?: string;
   /** Runs inside the grant transaction, so a throw rolls the grant back (used for strict audit writes). */
-  onGranted?: (grant: { credits: number; creditTransactionId: string | undefined }) => Promise<void>;
+  onGranted?: (grant: {
+    credits: number;
+    creditTransactionId: string | undefined;
+    subscriptionId: string;
+  }) => Promise<void>;
 }): Promise<GrantIndividualAdminSubscriptionResult> {
   const { userId, priceId, durationMonths, grantedBy, grantedReason, skipIfAnyActiveIndividual } = params;
 
@@ -76,9 +82,10 @@ export async function grantIndividualAdminSubscription(params: {
   const subscriptionId = params.subscriptionId ?? `admin_grant_${randomUUID()}`;
 
   let currentCredits: number | null = null;
+  let subscriptionRecordId = '';
   try {
     await withTransaction(async () => {
-      await subscriptionRepository.create({
+      const created = await subscriptionRepository.create({
         ownerType: SubscriptionOwnerType.User,
         ownerId: userId,
         subscriptionId,
@@ -92,6 +99,7 @@ export async function grantIndividualAdminSubscription(params: {
         quantity: 1, // Always 1 for individual subscriptions (not team seats)
         canceledAt: null,
       });
+      subscriptionRecordId = String(created.id);
 
       const { creditHolder: holder, creditTransactionId } = await creditService.addCreditsWithLedgerRow(
         {
@@ -111,12 +119,12 @@ export async function grantIndividualAdminSubscription(params: {
       );
       currentCredits = holder?.currentCredits ?? null;
 
-      await params.onGranted?.({ credits, creditTransactionId });
+      await params.onGranted?.({ credits, creditTransactionId, subscriptionId });
     });
   } catch (error) {
     if (params.subscriptionId && isDuplicateKeyError(error)) return { status: 'already_granted' };
     throw error;
   }
 
-  return { status: 'granted', subscriptionId, priceId, periodEndsAt, credits, currentCredits };
+  return { status: 'granted', subscriptionId, subscriptionRecordId, priceId, periodEndsAt, credits, currentCredits };
 }
