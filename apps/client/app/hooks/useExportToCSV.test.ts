@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 import { toCsv, toCsvCell } from './useExportToCSV';
 
@@ -24,6 +25,11 @@ describe('toCsvCell', () => {
     expect(toCsvCell(input).replace(/^"|"$/g, '').startsWith("'")).toBe(true);
   });
 
+  it('puts the formula prefix inside the quotes when a field needs both', () => {
+    expect(toCsvCell('=a,b')).toBe(`"'=a,b"`);
+    expect(toCsvCell('=say "x"')).toBe(`"'=say ""x"""`);
+  });
+
   it('leaves numbers and booleans untouched, including negatives', () => {
     expect(toCsvCell(-5)).toBe('-5');
     expect(toCsvCell(3.5)).toBe('3.5');
@@ -36,7 +42,11 @@ describe('toCsvCell', () => {
   });
 
   it('formats ISO dates', () => {
-    expect(toCsvCell('2025-03-04T10:00:00Z')).toBe('2025-03-04');
+    expect(toCsvCell('2025-03-04T10:00:00')).toBe('2025-03-04');
+  });
+
+  it('formats Dayjs instances with the given format', () => {
+    expect(toCsvCell(dayjs('2025-03-04T10:30:00'), 'YYYY-MM-DD HH:mm')).toBe('2025-03-04 10:30');
   });
 });
 
@@ -49,6 +59,10 @@ describe('toCsv', () => {
       ],
       ['a', 'b']
     );
-    expect(csv).toBe(['a,b', '"x,y",-2', "'=1,"].join('\n'));
+    expect(csv).toBe(['a,b', '"x,y",-2', "'=1,"].join('\r\n'));
+  });
+
+  it('escapes header names', () => {
+    expect(toCsv([{ 'a,b': 1 }], ['a,b'])).toBe('"a,b"\r\n1');
   });
 });

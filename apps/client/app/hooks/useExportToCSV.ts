@@ -17,7 +17,7 @@ const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}/;
 /** Serialises one value as an RFC 4180 CSV field; string cells that start like a formula are neutralised. */
 export const toCsvCell = (value: unknown, dateFormat = 'YYYY-MM-DD'): string => {
   if (value === null || value === undefined) return '';
-  if (dayjs.isDayjs(value)) return dayjs(value).format(dateFormat);
+  if (dayjs.isDayjs(value)) return value.format(dateFormat);
 
   let text: string;
   if (typeof value === 'string') {
@@ -39,7 +39,10 @@ export const toCsv = (rows: CsvRow[], columns: string[], dateFormat = 'YYYY-MM-D
     ...rows.map(row => columns.map(column => toCsvCell(row[column], dateFormat))),
   ]
     .map(cells => cells.join(','))
-    .join('\n');
+    .join('\r\n');
+
+// Excel only decodes a CSV as UTF-8 when it starts with a byte-order mark.
+export const CSV_BOM = '\uFEFF';
 
 export const useExportToCSV = () => {
   const exportToCSV = useCallback((data: CsvRow[], options: ExportOptions = {}) => {
@@ -53,7 +56,7 @@ export const useExportToCSV = () => {
 
     const csvContent = toCsv(transformedData, headers, dateFormat);
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([CSV_BOM, csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
