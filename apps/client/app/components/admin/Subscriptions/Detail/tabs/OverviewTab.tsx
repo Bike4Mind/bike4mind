@@ -153,7 +153,9 @@ const CreditsCard: React.FC<{ detail: AdminSubscriptionDetail; onOpenLedger: (us
       <Fact label="Override" data-testid="subscription-detail-credits-override">
         {credits.customPerCycle === null ? null : formatCredits(credits.customPerCycle)}
       </Fact>
-      <Fact label="Owner's recent grants">{credits.recentGrants.length === 0 ? null : <RecentGrants detail={detail} />}</Fact>
+      <Fact label="Owner's recent grants">
+        {credits.recentGrants.length === 0 ? null : <RecentGrants detail={detail} />}
+      </Fact>
     </SectionCard>
   );
 };
