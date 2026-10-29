@@ -21,6 +21,7 @@ import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../cre
 import { accountBlockReasons } from './accountState';
 import { isDisposableEmail } from './disposableEmail';
 import { protectSignupCredits } from './signupProtection';
+import { InboxGrantClaimDeniedError } from './stagedSignupGrant';
 
 /** `reasonGranted`: this user already holds a ledger row for the reason, e.g. a concurrent request won the grant. */
 export type NoCardUnlockRelease = (opts: { reasonGranted: boolean }) => Promise<void>;
@@ -265,6 +266,12 @@ export async function grantNoCardUnlock(
       const amount = Math.min(reasonCredits, settings.maxCredits - granted);
       if (amount <= 0) return refused('cap_reached');
 
+      // Unlocks share the one free-credit entitlement per canonical inbox with signup grants, so an
+      // alias of an inbox that already earned credits anywhere earns none here. Claimed on the first
+      // payout, which also stops a later signup grant on a sibling alias. A denied claim may have
+      // aborted Mongo's transaction: throw out of it rather than running another operation.
+      if (!(await db.users.claimFreeCreditGrant(userId))) throw new InboxGrantClaimDeniedError();
+
       const { creditHolder } = await addCreditsWithLedgerRow(
         {
           ownerId: userId,
@@ -284,6 +291,7 @@ export async function grantNoCardUnlock(
     });
   } catch (error) {
     if (error instanceof DuplicateCreditTransactionError) result = refused('already_granted');
+    else if (error instanceof InboxGrantClaimDeniedError) result = refused('inbox_already_claimed');
     else failure = error;
   }
   if (commit?.ok && !result?.granted) {

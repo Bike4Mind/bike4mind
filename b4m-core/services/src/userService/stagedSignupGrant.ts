@@ -23,7 +23,8 @@ export type SignupGrantValidator = (
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
-class InboxGrantClaimDeniedError extends Error {}
+/** Thrown inside a grant transaction when another account already holds this inbox's claim. */
+export class InboxGrantClaimDeniedError extends Error {}
 
 function isReleaseEligible(
   user: IUserDocument | null | undefined,

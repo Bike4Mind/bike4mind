@@ -18,6 +18,7 @@ export type NoCardUnlockRefusal =
   | 'domain_cap_reached'
   | 'signup_held'
   | 'cap_reached'
+  | 'inbox_already_claimed'
   | 'already_granted';
 
 export function noCardUnlockTransactionId(reason: NoCardUnlockReason, userId: string): string {

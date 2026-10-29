@@ -1,16 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 
-const { creditLotRepository, mockAddTagsToUser } = vi.hoisted(() => ({
+const { creditLotRepository, mockAddTagsToUser, mockClaimFreeCreditGrant } = vi.hoisted(() => ({
   creditLotRepository: { id: 'lots' },
   mockAddTagsToUser: vi.fn(),
+  mockClaimFreeCreditGrant: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditLotRepository,
   creditTransactionRepository: {},
   organizationRepository: {},
-  userRepository: { addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a) },
+  userRepository: {
+    addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
+    claimFreeCreditGrant: (...a: unknown[]) => mockClaimFreeCreditGrant(...a),
+  },
 }));
 
 const mockAddCredits = vi.fn();
@@ -81,6 +85,7 @@ describe('applySignupDomainGrant', () => {
       tags: ['Partner', 'cohort-a'],
     });
     mockAddTagsToUser.mockResolvedValue(undefined);
+    mockClaimFreeCreditGrant.mockResolvedValue(true);
     mockGrantSubscription.mockResolvedValue({ status: 'granted', credits: 3000, currentCredits: 4100 });
     premiumPartnerSignupHooks.length = 0;
     mockAddCredits.mockResolvedValue({ currentCredits: 1100 });
@@ -294,6 +299,97 @@ describe('applySignupDomainGrant', () => {
     expect(mockAddTagsToUser).not.toHaveBeenCalled();
     expect(mockPushInvalidation).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+  });
+
+  describe('one free-credit grant per canonical inbox', () => {
+    it('claims the inbox before crediting', async () => {
+      await run();
+
+      expect(mockClaimFreeCreditGrant).toHaveBeenCalledWith('user-1');
+      expect(mockClaimFreeCreditGrant.mock.invocationCallOrder[0]).toBeLessThan(
+        mockAddCredits.mock.invocationCallOrder[0]
+      );
+    });
+
+    it('withholds the credits when another account already holds the claim', async () => {
+      mockClaimFreeCreditGrant.mockResolvedValue(false);
+      const logger = makeLogger();
+
+      const result = await run(logger);
+
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(result.creditsGranted).toBe(0);
+      expect(result.currentCredits).toBeNull();
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('withheld'));
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('still applies membership, tags and the subscription when the credits are withheld', async () => {
+      mockClaimFreeCreditGrant.mockResolvedValue(false);
+      mockPartnerGrant.mockResolvedValue({
+        matched: true,
+        ruleId: 'rule-1',
+        domain: 'partner.example',
+        entitlements: new Set(['optihashi:pro']),
+        signupCredits: 1000,
+        organizationId: 'org-1',
+        tags: ['Partner', 'cohort-a'],
+        subscription: { priceId: 'price_pro', durationMonths: 3 },
+      });
+
+      const result = await run();
+
+      expect(result).toEqual({
+        creditsGranted: 0,
+        currentCredits: 4100,
+        joinedOrganizationId: 'org-1',
+        tagsApplied: ['Partner', 'cohort-a'],
+        subscriptionCreditsGranted: 3000,
+        subscriptionGranted: true,
+      });
+      expect(mockPushInvalidation).toHaveBeenCalledWith('user-1', expect.anything());
+    });
+
+    it('treats a withheld grant as a normal outcome, so the partner hooks still run', async () => {
+      const mockHook = vi.fn().mockResolvedValue(undefined);
+      premiumPartnerSignupHooks.push({ name: 'overlay-grant', run: mockHook });
+      mockClaimFreeCreditGrant.mockResolvedValue(false);
+      const logger = makeLogger();
+
+      await run(logger);
+
+      expect(mockHook).toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('does not spend the claim on a matched rule worth 0 credits', async () => {
+      mockPartnerGrant.mockResolvedValue({
+        matched: true,
+        ruleId: 'rule-1',
+        domain: 'partner.example',
+        entitlements: new Set(['optihashi:pro']),
+        signupCredits: 0,
+        organizationId: null,
+        tags: [],
+      });
+
+      await run();
+
+      expect(mockClaimFreeCreditGrant).not.toHaveBeenCalled();
+      expect(mockAddCredits).not.toHaveBeenCalled();
+    });
+
+    it('logs and applies membership when the claim store is down', async () => {
+      mockClaimFreeCreditGrant.mockRejectedValue(new Error('claim store down'));
+      const logger = makeLogger();
+
+      const result = await run(logger);
+
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(result.creditsGranted).toBe(0);
+      expect(result.joinedOrganizationId).toBe('org-1');
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
+    });
   });
 
   describe('partner-rule subscription', () => {

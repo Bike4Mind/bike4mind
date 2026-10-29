@@ -23,6 +23,7 @@ const REFUSAL_TEXT: Record<NoCardUnlockRefusal, string> = {
   domain_cap_reached: 'Too many unlocks have been claimed for this domain today. Try again tomorrow.',
   signup_held: 'Unlocks for your email domain are on hold while we review recent signups.',
   cap_reached: 'You have already unlocked the maximum available.',
+  inbox_already_claimed: 'Free credits have already been claimed for this email inbox.',
   already_granted: 'This unlock has already been applied to your account.',
 };
 
