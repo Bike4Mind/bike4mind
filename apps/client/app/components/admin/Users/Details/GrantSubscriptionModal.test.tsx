@@ -24,7 +24,7 @@ vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
   useTeamSeatLimits: mocks.seatLimits,
   useTeamCreditsPerSeat: () => 1000,
 }));
-vi.mock('./UserSelector', () => ({
+vi.mock('@client/app/components/admin/shared/UserSelector', () => ({
   default: ({ onChange }: { onChange: (id: string | null) => void }) => (
     <button type="button" data-testid="user-selector-pick-btn" onClick={() => onChange('billing-owner')}>
       Pick billing owner
