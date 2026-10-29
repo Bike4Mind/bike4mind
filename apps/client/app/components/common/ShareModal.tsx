@@ -603,7 +603,12 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                       minRows={4}
                       variant={'outlined'}
                       name={'description'}
-                      slotProps={{ textarea: { maxLength: MAX_INVITE_MESSAGE_LENGTH } }}
+                      slotProps={{
+                        textarea: {
+                          maxLength: MAX_INVITE_MESSAGE_LENGTH,
+                          'data-testid': 'share-modal-description-input',
+                        },
+                      }}
                       placeholder={
                         isBulkSharing
                           ? `Description for others to understand what you are sharing (${itemCount} files)...`

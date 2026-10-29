@@ -5,7 +5,14 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { InviteType, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
-import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
+import {
+  MAX_EMAIL_MESSAGE_LENGTH,
+  MAX_EMAIL_RECIPIENTS,
+  MAX_EMAIL_RECIPIENTS_ERROR,
+  MAX_INVITE_MESSAGE_LENGTH,
+  MAX_INVITE_RECIPIENTS,
+  MAX_INVITE_RECIPIENTS_ERROR,
+} from '@client/types/api';
 import ShareDocumentModal from './ShareModal';
 
 // ShareModal pulls in several data/context hooks. Stub them so the modal renders
@@ -214,6 +221,28 @@ describe('ShareModal - By Link tab', () => {
 });
 
 describe('ShareModal - By Users tab', () => {
+  it('blocks more recipients than the invite route accepts without calling the API', async () => {
+    const user = await openByUsersTab();
+    const input = screen.getByTestId('share-modal-recipients-input');
+    await user.click(input);
+    for (let i = 0; i <= MAX_INVITE_RECIPIENTS; i++) {
+      await user.paste(`u${i}@example.com`);
+      await user.keyboard('{Enter}');
+    }
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(MAX_INVITE_RECIPIENTS_ERROR));
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('caps the description at the server limit', async () => {
+    await openByUsersTab();
+    expect(screen.getByTestId('share-modal-description-input')).toHaveAttribute(
+      'maxLength',
+      String(MAX_INVITE_MESSAGE_LENGTH)
+    );
+  });
+
   it('fires the share request when a recipient is committed with Enter', async () => {
     const user = await openByUsersTab();
     const input = screen.getByTestId('share-modal-recipients-input');
