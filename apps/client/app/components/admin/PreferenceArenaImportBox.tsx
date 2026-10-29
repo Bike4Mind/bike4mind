@@ -7,6 +7,8 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { SectionCard } from './shared';
 
 const MAX_SHOWN_ERRORS = 10;
+// 50 pairs at the schema maximum (50k chars each) stay well under the endpoint's 4 MB body limit.
+const IMPORT_CHUNK_SIZE = 50;
 
 type ParseResult = { ok: true; pairs: ArenaPairImport[] } | { ok: false; errors: string[] };
 
@@ -36,22 +38,31 @@ export function parseArenaPairImport(raw: string): ParseResult {
 export default function PreferenceArenaImportBox() {
   const [raw, setRaw] = useState('');
   const [errors, setErrors] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
   const importPairs = useImportArenaPairs();
 
-  const submit = () => {
+  const submit = async () => {
     const result = parseArenaPairImport(raw);
     if (!result.ok) {
       setErrors(result.errors);
       return;
     }
     setErrors([]);
-    importPairs.mutate(result.pairs, {
-      onSuccess: ({ inserted }) => {
-        toast.success(`Imported ${inserted} pair${inserted === 1 ? '' : 's'}`);
-        setRaw('');
-      },
-      onError: error => toast.error(getErrorMessage(error)),
-    });
+    setImporting(true);
+    let inserted = 0;
+    try {
+      for (let start = 0; start < result.pairs.length; start += IMPORT_CHUNK_SIZE) {
+        const response = await importPairs.mutateAsync(result.pairs.slice(start, start + IMPORT_CHUNK_SIZE));
+        inserted += response.inserted;
+      }
+      toast.success(`Imported ${inserted} pair${inserted === 1 ? '' : 's'}`);
+      setRaw('');
+    } catch (error) {
+      const progress = inserted > 0 ? ` (${inserted} imported before the failure)` : '';
+      toast.error(`${getErrorMessage(error)}${progress}`);
+    } finally {
+      setImporting(false);
+    }
   };
 
   return (
@@ -88,7 +99,7 @@ export default function PreferenceArenaImportBox() {
         <Stack direction="row" justifyContent="flex-end">
           <Button
             onClick={submit}
-            loading={importPairs.isPending}
+            loading={importing}
             disabled={raw.trim() === ''}
             data-testid="arena-import-submit-btn"
           >

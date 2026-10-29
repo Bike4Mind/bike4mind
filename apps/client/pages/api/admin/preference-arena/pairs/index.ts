@@ -25,4 +25,8 @@ const handler = adminApi({
     return res.status(201).json({ inserted });
   });
 
+export const config = {
+  api: { externalResolver: true, bodyParser: { sizeLimit: '4mb' } },
+};
+
 export default handler;
