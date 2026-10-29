@@ -349,42 +349,83 @@ const sqsClient = new SQSClient({});
 // WebSocket streaming helpers
 // ---------------------------------------------------------------------------
 
+/** Viewer list cache lifetime (ms); these actions always re-read it so a new viewer catches the next step. */
+const VIEWER_CACHE_MS = 2_000;
+const VIEWER_REFRESH_ACTIONS = new Set(['iteration_step', 'completed', 'failed', 'abort_acknowledged']);
+
+function isGoneError(err: unknown): boolean {
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } } | undefined;
+  return e?.name === 'GoneException' || e?.$metadata?.httpStatusCode === 410;
+}
+
 /**
- * Exported for `agentExecutor.headless.test.ts`: the headless short-circuit below is
- * the only thing standing between a REST-started run and a failed `PostToConnection`
- * on every single step - which this sender swallows, so the failure would be invisible.
+ * Exported for `agentExecutor.headless.test.ts` and `agentExecutor.viewers.test.ts`: the
+ * headless short-circuit below is the only thing standing between a REST-started run and
+ * a failed `PostToConnection` on every single step - which this sender swallows, so the
+ * failure would be invisible.
+ *
+ * With `viewerExecutionId`, every frame is also sent to that execution's
+ * `viewerConnectionIds` (the WS `subscribe` command in `apps/client/server/websocket/agentExecute.ts`),
+ * even on a headless run. Viewers never change `connectionId` or `hasApprover`.
  */
-export function createWsSender(connectionId: string, logger: Logger) {
+export function createWsSender(connectionId: string, logger: Logger, viewerExecutionId?: string) {
   // A REST-dispatched run has no WebSocket peer. Sending to the sentinel id would fail
   // on every single step - and this sender swallows send errors, so those failures
   // would be invisible noise rather than a signal. Short-circuit instead, with one log
   // line so "no events streamed" stays distinguishable from "events were sent and
   // dropped". See `headlessConnection.ts` for why a later reconnect does not promote
   // a headless run to a streaming one.
-  if (isHeadlessConnection(connectionId)) {
+  const headless = isHeadlessConnection(connectionId);
+  if (headless) {
     logger.info('[WS] Headless execution: streaming disabled; poll GET /api/v1/agent-executions/{id}');
-    // Same signature as the real sender, so a call site that starts passing a new
-    // argument cannot silently type-check against a narrower no-op.
-    return async (_action: string, _payload: Record<string, unknown> = {}) => {};
+    if (!viewerExecutionId) {
+      // Same signature as the real sender, so a call site that starts passing a new
+      // argument cannot silently type-check against a narrower no-op.
+      return async (_action: string, _payload: Record<string, unknown> = {}) => {};
+    }
   }
 
   const wsEndpoint = Resource.websocket.managementEndpoint;
   const client = new ApiGatewayManagementApiClient({ endpoint: wsEndpoint });
 
-  return async (action: string, payload: Record<string, unknown> = {}) => {
+  const viewers: { ids: string[]; at: number } = { ids: [], at: 0 };
+  const post = async (target: string, action: string, data: Buffer) => {
     try {
-      await client.send(
-        new PostToConnectionCommand({
-          ConnectionId: connectionId,
-          Data: Buffer.from(JSON.stringify({ action, ...payload })),
-        })
-      );
+      await client.send(new PostToConnectionCommand({ ConnectionId: target, Data: data }));
     } catch (err) {
+      if (viewerExecutionId && target !== connectionId && isGoneError(err)) {
+        viewers.ids = viewers.ids.filter(id => id !== target);
+        agentExecutionRepository.removeViewer(viewerExecutionId, target).catch(() => {});
+        return;
+      }
       // Connection may be stale - log but don't fail the execution
-      logger.warn(`[WS] Failed to send ${action} to ${connectionId}:`, {
+      logger.warn(`[WS] Failed to send ${action} to ${target}:`, {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  };
+
+  const viewerTargets = async (action: string): Promise<string[]> => {
+    if (!viewerExecutionId) return [];
+    if (VIEWER_REFRESH_ACTIONS.has(action) || Date.now() - viewers.at > VIEWER_CACHE_MS) {
+      try {
+        viewers.ids = await agentExecutionRepository.findViewerConnectionIds(viewerExecutionId);
+      } catch (err) {
+        logger.warn('[WS] Failed to read viewers; keeping the last list', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      viewers.at = Date.now();
+    }
+    // A tab viewing its own chat run already gets the frame as the owner connection.
+    return viewers.ids.filter(id => id !== connectionId);
+  };
+
+  return async (action: string, payload: Record<string, unknown> = {}) => {
+    const data = Buffer.from(JSON.stringify({ action, ...payload }));
+    const targets = await viewerTargets(action);
+    if (!headless) targets.unshift(connectionId);
+    await Promise.all(targets.map(target => post(target, action, data)));
   };
 }
 
@@ -931,7 +972,7 @@ async function processExecution(
   checkpointDepth: number = 0
 ): Promise<void> {
   logger.updateMetadata({ executionId });
-  const sendWs = createWsSender(connectionId, logger);
+  const sendWs = createWsSender(connectionId, logger, executionId);
 
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
@@ -3627,7 +3668,9 @@ async function processSubagentDispatch(
   depth?: number
 ): Promise<void> {
   logger.updateMetadata({ executionId: childExecutionId, role: 'subagent_dispatch' });
-  const sendWs = createWsSender(connectionId, logger);
+  // Viewers subscribe to the top-level run, so child frames fan out to the root's viewers.
+  const rootExecutionId = await agentExecutionRepository.findRootExecutionId(childExecutionId).catch(() => undefined);
+  const sendWs = createWsSender(connectionId, logger, rootExecutionId);
 
   let parentId: string | undefined;
   let agentName: string | undefined;

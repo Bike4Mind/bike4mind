@@ -17,7 +17,13 @@ import { withWebSocketContext } from '@server/websocket/utils';
 import { TooManyRequestsError } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
-import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentExecutionRepository,
+  sessionToolApprovalRepository,
+  type IAgentExecution,
+} from '@bike4mind/database';
+import { canReadAgentExecution } from '@server/utils/loadAgentExecutionTrace';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
@@ -71,7 +77,7 @@ async function sendAgentEvent(connectionId: string, endpoint: string, payload: R
 const BaseMessageSchema = z.object({
   accessToken: z.string(),
   action: z.literal('agent_execute'),
-  command: z.enum(['start', 'abort', 'permission_response', 'gate_response', 'reconnect']),
+  command: z.enum(['start', 'abort', 'permission_response', 'gate_response', 'reconnect', 'subscribe', 'unsubscribe']),
 });
 
 const StartCommandSchema = BaseMessageSchema.extend({
@@ -195,6 +201,19 @@ const ReconnectCommandSchema = BaseMessageSchema.extend({
   sessionId: z.string().optional(),
 });
 
+// Watch a run without taking it over: answered with `reconnect_result`, but adds this
+// connection as a viewer instead of re-stamping the run's `connectionId`.
+const SubscribeCommandSchema = BaseMessageSchema.extend({
+  command: z.literal('subscribe'),
+  requestId: z.string().max(128).optional(),
+  executionId: z.string(),
+});
+
+const UnsubscribeCommandSchema = BaseMessageSchema.extend({
+  command: z.literal('unsubscribe'),
+  executionId: z.string(),
+});
+
 // ---------------------------------------------------------------------------
 // Cached resources
 // ---------------------------------------------------------------------------
@@ -279,6 +298,17 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     case 'reconnect': {
       const reconnectCmd = ReconnectCommandSchema.parse(rawBody);
       await handleReconnect(reconnectCmd, userId, connectionId, endpoint, logger);
+      break;
+    }
+    case 'subscribe': {
+      const subscribeCmd = SubscribeCommandSchema.parse(rawBody);
+      await handleSubscribe(subscribeCmd, userId, connectionId, endpoint, logger);
+      break;
+    }
+    case 'unsubscribe': {
+      const unsubscribeCmd = UnsubscribeCommandSchema.parse(rawBody);
+      // Removes only this connection's own id, so no ownership check is needed.
+      await agentExecutionRepository.removeViewer(unsubscribeCmd.executionId, connectionId);
       break;
     }
   }
@@ -866,6 +896,55 @@ async function handleReconnect(
   // Update connection ID for future streaming
   await agentExecutionRepository.updateConnectionId(execution.id, connectionId);
 
+  await sendExecutionSnapshot(
+    execution,
+    cmd.requestId,
+    connectionId,
+    endpoint,
+    logger,
+    '[Reconnect] Client reconnected'
+  );
+}
+
+async function handleSubscribe(
+  cmd: z.infer<typeof SubscribeCommandSchema>,
+  userId: string,
+  connectionId: string,
+  endpoint: string,
+  logger: Logger
+): Promise<void> {
+  const execution = await agentExecutionRepository.findById(cmd.executionId);
+  if (!execution || !(await canReadAgentExecution(execution, userId))) {
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'reconnect_result',
+      requestId: cmd.requestId,
+      found: false,
+    });
+    return;
+  }
+
+  // Never `updateConnectionId` here: that would steal the stream from the run's own client
+  // and, for a headless run, flip `hasApprover` (see the executor's `createWsSender`).
+  await agentExecutionRepository.addViewer(execution.id, connectionId);
+  await sendExecutionSnapshot(
+    execution,
+    cmd.requestId,
+    connectionId,
+    endpoint,
+    logger,
+    '[Subscribe] Viewer subscribed'
+  );
+}
+
+/** The `reconnect_result` snapshot shared by `reconnect` and `subscribe`; callers authorize first. */
+async function sendExecutionSnapshot(
+  execution: IAgentExecution,
+  requestId: string | undefined,
+  connectionId: string,
+  endpoint: string,
+  logger: Logger,
+  logLabel: string
+): Promise<void> {
   // Persisted iteration trace for step replay. The checkpoint
   // carries the full step history; we include it inline when it fits in
   // `STEPS_INLINE_BUDGET_BYTES` (see the module-level constant above for
@@ -892,7 +971,7 @@ async function handleReconnect(
   // Send current state to client
   await sendAgentEvent(connectionId, endpoint, {
     action: 'reconnect_result',
-    requestId: cmd.requestId,
+    requestId,
     found: true,
     executionId: execution.id,
     // Safe to echo: only sent past the ownership check above.
@@ -925,7 +1004,7 @@ async function handleReconnect(
         : { childrenTruncated: true }),
   });
 
-  logger.info('[Reconnect] Client reconnected', {
+  logger.info(logLabel, {
     executionId: execution.id,
     status: execution.status,
     stepCount: persistedSteps.length,

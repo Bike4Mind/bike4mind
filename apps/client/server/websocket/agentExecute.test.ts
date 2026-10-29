@@ -19,6 +19,9 @@ const mockDenyPendingPermission = vi.fn();
 const mockRememberDecision = vi.fn();
 const mockFindActiveBySessionId = vi.fn();
 const mockUpdateConnectionId = vi.fn();
+const mockAddViewer = vi.fn();
+const mockRemoveViewer = vi.fn();
+const mockFindSessionById = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
@@ -33,6 +36,11 @@ vi.mock('@bike4mind/database', () => ({
     denyPendingPermission: (...args: unknown[]) => mockDenyPendingPermission(...args),
     findActiveBySessionId: (...args: unknown[]) => mockFindActiveBySessionId(...args),
     updateConnectionId: (...args: unknown[]) => mockUpdateConnectionId(...args),
+    addViewer: (...args: unknown[]) => mockAddViewer(...args),
+    removeViewer: (...args: unknown[]) => mockRemoveViewer(...args),
+  },
+  sessionRepository: {
+    findById: (...args: unknown[]) => mockFindSessionById(...args),
   },
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
@@ -884,6 +892,84 @@ describe('reconnect command', () => {
 
     expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
     expect(mockUpdateConnectionId).not.toHaveBeenCalled();
+  });
+});
+
+describe('subscribe / unsubscribe commands', () => {
+  const wsEvent = (body: Record<string, unknown>) => ({
+    requestContext: { connectionId: 'viewer-conn', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({ accessToken: 'jwt', action: 'agent_execute', ...body }),
+  });
+  const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+  const sentPayloads = () =>
+    mockApiGwSend.mock.calls.map(([cmd]) => JSON.parse((cmd as { input: { Data: Buffer } }).input.Data.toString()));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiGwSend.mockResolvedValue(undefined);
+    vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
+    mockFindSessionById.mockResolvedValue({ userId: 'user-1' });
+  });
+
+  it('adds the owner as a viewer and sends the snapshot without taking over the run', async () => {
+    mockFindById.mockResolvedValueOnce({
+      ...baseExecution,
+      status: 'running',
+      checkpoint: { iteration: 2, steps: [{ type: 'thought', content: 'hi' }] },
+    });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
+    expect(mockUpdateConnectionId).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([
+      expect.objectContaining({
+        action: 'reconnect_result',
+        requestId: 'req-1',
+        found: true,
+        executionId: 'exec-1',
+        status: 'running',
+        iterationCount: 2,
+        steps: [{ type: 'thought', content: 'hi' }],
+      }),
+    ]);
+  });
+
+  it('lets a member of a shared session watch the run', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-2' } as never);
+    mockFindSessionById.mockResolvedValueOnce({ userId: 'user-1', users: [{ userId: 'user-2' }] });
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
+    expect(sentPayloads()[0]).toMatchObject({ found: true });
+  });
+
+  it("refuses another user's run and never adds them as a viewer", async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'intruder' } as never);
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-2' }), {}, noopLogger);
+
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-2', found: false }]);
+  });
+
+  it('applies the owner check to a run without a session', async () => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'intruder' } as never);
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, sessionId: undefined, status: 'running' });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
+  });
+
+  it('removes this connection on unsubscribe', async () => {
+    await invoke(wsEvent({ command: 'unsubscribe', executionId: 'exec-1' }), {}, noopLogger);
+    expect(mockRemoveViewer).toHaveBeenCalledWith('exec-1', 'viewer-conn');
   });
 });
 
