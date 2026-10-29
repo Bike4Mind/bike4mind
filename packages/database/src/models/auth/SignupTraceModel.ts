@@ -41,9 +41,10 @@ const SignupTraceSchema = new Schema<ISignupTraceDocument>(
 );
 
 SignupTraceSchema.index({ accountHash: 1, signedUpAt: 1 }, { unique: true });
-// The collection only ever holds two days of deleted signups, so the TTL index doubles as the
-// range index for the counts.
 SignupTraceSchema.index({ signedUpAt: 1 }, { expireAfterSeconds: SIGNUP_TRACE_RETENTION_SECONDS });
+SignupTraceSchema.index({ ipHash: 1, signedUpAt: 1 });
+SignupTraceSchema.index({ prefixHash: 1, signedUpAt: 1 });
+SignupTraceSchema.index({ asn: 1, signedUpAt: 1 });
 
 export const SignupTraceModel: Model<ISignupTraceDocument> =
   (mongoose.models.SignupTrace as unknown as Model<ISignupTraceDocument>) ??

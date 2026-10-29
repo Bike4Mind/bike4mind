@@ -67,8 +67,13 @@ describe('signupTraceRepository', () => {
 
   it('expires traces two days after the signup', async () => {
     const indexes = await SignupTraceModel.collection.indexes();
-    expect(indexes.find(index => index.key.signedUpAt === 1 && !index.key.accountHash)).toMatchObject({
+    expect(indexes.find(index => Object.keys(index.key).join() === 'signedUpAt')).toMatchObject({
       expireAfterSeconds: 2 * 24 * 60 * 60,
     });
+  });
+
+  it('indexes each network count by network then time', async () => {
+    const keys = (await SignupTraceModel.collection.indexes()).map(index => Object.keys(index.key).join());
+    expect(keys).toEqual(expect.arrayContaining(['ipHash,signedUpAt', 'prefixHash,signedUpAt', 'asn,signedUpAt']));
   });
 });
