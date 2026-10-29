@@ -7,12 +7,13 @@ import { isTerminalSubscriptionStatus } from '@client/app/utils/adminSubscriptio
 import { ErrorState } from '../shared/ErrorState';
 import { StatusChip } from '../shared/StatusChip';
 import {
+  COMPED_DISPLAY,
   isCancelScheduled,
-  showsCompedChip,
+  isCompedRow,
   subscriptionStatusDisplay,
   type SubscriptionStatusDisplay,
   type SubscriptionStatusFields,
-} from './Detail/subscriptionStatus';
+} from './subscriptionStatusTone';
 
 type SummaryRow = {
   id: string;
@@ -44,11 +45,10 @@ const dateLabel = (row: DateFields): string => {
   return `Renews ${formatDate(row.periodEndsAt)}`;
 };
 
-const isComped = (row: { source?: string; subscriptionId?: string; status: string }): boolean =>
-  showsCompedChip({
+const isComped = (row: { source?: string; subscriptionId?: string }): boolean =>
+  isCompedRow({
     source: row.source === 'admin_grant' ? 'admin_grant' : 'stripe',
     subscriptionId: row.subscriptionId ?? '',
-    status: row.status,
   });
 
 const SummaryRowLink: React.FC<{ row: SummaryRow }> = ({ row }) => {
@@ -81,7 +81,13 @@ const SummaryRowLink: React.FC<{ row: SummaryRow }> = ({ row }) => {
             </Typography>
           )}
           <StatusChip tone={statusDisplay.tone} label={statusDisplay.label} data-testid="subscription-summary-status" />
-          {row.isComped && <StatusChip tone="info" label="Comped" data-testid="subscription-summary-comped" />}
+          {row.isComped && (
+            <StatusChip
+              tone={COMPED_DISPLAY.tone}
+              label={COMPED_DISPLAY.label}
+              data-testid="subscription-summary-comped"
+            />
+          )}
         </Stack>
         <Typography level="body-sm" sx={{ color: 'admin.inkMuted', textAlign: 'right' }}>
           {row.dateLabel}

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAdminSubscriptionCompChange } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, StatusChip, useUndoToast } from '../../../shared';
-import { subscriptionStatusDisplay } from '../subscriptionStatus';
+import { subscriptionStatusDisplay } from '../../subscriptionStatusTone';
 import { ownerDisplayName, undoReason, type SubscriptionDialogProps } from '../subscriptionDetailModel';
 
 /** End comp: cancels the comp now; undo reopens it with its original end date. */

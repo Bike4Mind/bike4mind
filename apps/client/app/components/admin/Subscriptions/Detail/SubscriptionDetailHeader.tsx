@@ -3,7 +3,7 @@ import { Button, Dropdown, Link, ListDivider, ListItemContent, Menu, MenuButton,
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { EntityHeader, StatusChip } from '../../shared';
-import { showsCompedChip, subscriptionStatusDisplay } from './subscriptionStatus';
+import { COMPED_DISPLAY, isCompedRow, subscriptionStatusDisplay } from '../subscriptionStatusTone';
 import {
   ownerDisplayName,
   ownerLink,
@@ -67,8 +67,12 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
       status={
         <>
           <StatusChip tone={status.tone} label={status.label} dot data-testid="subscription-detail-status-chip" />
-          {showsCompedChip(subscription) && (
-            <StatusChip tone="info" label="Comped" data-testid="subscription-detail-comped-chip" />
+          {isCompedRow(subscription) && (
+            <StatusChip
+              tone={COMPED_DISPLAY.tone}
+              label={COMPED_DISPLAY.label}
+              data-testid="subscription-detail-comped-chip"
+            />
           )}
         </>
       }

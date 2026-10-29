@@ -54,7 +54,8 @@ describe('SubscriptionDetailHeader', () => {
     setup(buildDetail({ subscription: { status: 'canceled' } }));
 
     expect(screen.getByTestId('subscription-detail-status-chip')).toHaveTextContent('Canceled');
-    expect(screen.queryByTestId('subscription-detail-comped-chip')).not.toBeInTheDocument();
+    // An ended comp keeps its Comped chip, so it does not read as a lost payer.
+    expect(screen.getByTestId('subscription-detail-comped-chip')).toHaveTextContent('Comped');
     expect(screen.queryByTestId('subscription-detail-extend-btn')).not.toBeInTheDocument();
     expect(menuItem('credits')).not.toBeInTheDocument();
     expect(menuItem('remove')).not.toHaveAttribute('aria-disabled', 'true');

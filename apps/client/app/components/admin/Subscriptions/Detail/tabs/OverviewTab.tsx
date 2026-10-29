@@ -7,7 +7,7 @@ import {
 } from '@client/app/utils/adminSubscriptionDetail';
 import { CopyValue, EmptyState, Fact, SectionCard, StatusChip } from '../../../shared';
 import { formatCreditDelta, formatCredits } from '../../../Users/Profile/actions/creditAdjustment';
-import { subscriptionStatusDisplay } from '../subscriptionStatus';
+import { subscriptionStatusDisplay } from '../../subscriptionStatusTone';
 import {
   INTERVAL_LABELS,
   formatDate,
