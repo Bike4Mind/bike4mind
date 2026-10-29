@@ -6,7 +6,7 @@ import type {
   ModelServerSpecs,
   ModelServerTransport,
 } from '@shared/modelServers';
-import { LOCAL_SERVER_NAME, specsProblem } from '@shared/modelServers';
+import { LOCAL_SERVER_NAME, readSpecsShape, specsProblem } from '@shared/modelServers';
 import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
 
 export type StoredAuth = { type: 'none' } | { type: 'bearer' } | { type: 'header'; name: string };
@@ -397,15 +397,8 @@ function checkedSpecs(specs: ModelServerSpecs | null, local: boolean): ModelServ
 
 /** Specs as stored; a hand-edited or newer shape that does not check out is ignored, so the server stays unrated. */
 function readSpecs(value: unknown): ModelServerSpecs | null {
-  if (typeof value !== 'object' || value === null) return null;
-  const raw = value as Record<string, unknown>;
-  const figure = (field: unknown) => (typeof field === 'number' ? field : null);
-  const specs: ModelServerSpecs = {
-    ramGiB: figure(raw.ramGiB),
-    gpuMemoryGiB: figure(raw.gpuMemoryGiB),
-    bandwidthGBps: figure(raw.bandwidthGBps),
-    unified: raw.unified === true,
-  };
+  const specs = readSpecsShape(value);
+  if (!specs) return null;
   if (specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null) return null;
   return specsProblem(specs, true) ? null : specs;
 }

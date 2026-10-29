@@ -11,6 +11,7 @@ import type {
   ModelServerUpdateInput,
   ModelServerView,
 } from '@shared/modelServers';
+import { readSpecsShape } from '@shared/modelServers';
 import type { MachineView } from '@shared/models';
 import type { ModelServerRegistry } from './ModelServerRegistry';
 import { MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS } from './ModelServerStore';
@@ -45,15 +46,7 @@ export function credentialInput(value: unknown): ModelServerCredentialInput {
 /** Undefined leaves the specs as they are; null clears them. The store checks the figures. */
 export function specsInput(value: unknown): ModelServerSpecs | null | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== 'object' || value === null) return null;
-  const raw = value as Record<string, unknown>;
-  const figure = (field: unknown) => (typeof field === 'number' ? field : null);
-  return {
-    ramGiB: figure(raw.ramGiB),
-    gpuMemoryGiB: figure(raw.gpuMemoryGiB),
-    bandwidthGBps: figure(raw.bandwidthGBps),
-    unified: raw.unified === true,
-  };
+  return readSpecsShape(value);
 }
 
 function probeInput(value: unknown): ModelServerProbeInput {
