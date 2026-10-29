@@ -17,8 +17,18 @@ import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 // The cookie value is `<deviceId>.<secret>`; the server stores only SHA-256(secret)
 // (see TrustedDeviceModel). Grant lives in /api/auth/mfa/verify, consumption in
 // /api/otc/verify, revocation in /api/auth/trusted-devices.
+//
+// One cookie per account, so remembering account B on a browser does not overwrite
+// account A's trust when a user switches between accounts.
 
-export const TRUSTED_DEVICE_COOKIE = 'b4m_td';
+const TRUSTED_DEVICE_COOKIE_PREFIX = 'b4m_td_';
+
+/**
+ * The single shared cookie used before trust became per-account. Still accepted on read
+ * so existing trusts keep working; nothing sets it any more, so it can be dropped once
+ * TRUSTED_DEVICE_TTL_MS has passed since the per-account cookie shipped.
+ */
+export const LEGACY_TRUSTED_DEVICE_COOKIE = 'b4m_td';
 
 /**
  * The `allowTrustedDevices` admin kill switch, read UNCACHED on purpose. The shared
@@ -50,6 +60,14 @@ const COOKIE_VALUE = /^([a-f0-9]{24})\.([A-Za-z0-9_-]{20,128})$/;
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
+/**
+ * Keyed by a hash of the user id so the raw id stays out of the cookie jar. Not an HMAC:
+ * the name only routes the lookup (the server still verifies the secret against the
+ * user's own record), and a keyed name would orphan every trust on a secret rotation.
+ */
+export const trustedDeviceCookieName = (userId: string): string =>
+  `${TRUSTED_DEVICE_COOKIE_PREFIX}${sha256(userId).slice(0, 16)}`;
+
 /** Minimal cookie-header parser (same pattern as publishGateToken). */
 function cookieFromHeader(cookieHeader: string | undefined, name: string): string | null {
   if (!cookieHeader) return null;
@@ -61,11 +79,32 @@ function cookieFromHeader(cookieHeader: string | undefined, name: string): strin
   return null;
 }
 
-function parseCookie(req: TrustedDeviceRequest): { id: string; secret: string } | null {
-  const raw = cookieFromHeader(req.headers.cookie, TRUSTED_DEVICE_COOKIE);
+type PresentedToken = { id: string; secret: string; legacy: boolean };
+
+function parseCookie(req: TrustedDeviceRequest, name: string): { id: string; secret: string } | null {
+  const raw = cookieFromHeader(req.headers.cookie, name);
   if (!raw) return null;
   const match = COOKIE_VALUE.exec(raw);
   return match ? { id: match[1], secret: match[2] } : null;
+}
+
+/** The user's own cookie first, then the legacy shared one. */
+function presentedTokens(req: TrustedDeviceRequest, userId: string): PresentedToken[] {
+  const own = parseCookie(req, trustedDeviceCookieName(userId));
+  const legacy = parseCookie(req, LEGACY_TRUSTED_DEVICE_COOKIE);
+  return [...(own ? [{ ...own, legacy: false }] : []), ...(legacy ? [{ ...legacy, legacy: true }] : [])];
+}
+
+/** The first presented token that verifies against a live trust of `userId`. */
+async function findPresentedTrust(
+  req: TrustedDeviceRequest,
+  userId: string
+): Promise<{ device: ITrustedDeviceDocument; token: PresentedToken } | null> {
+  for (const token of presentedTokens(req, userId)) {
+    const device = await trustedDeviceRepository.findValidForUser(token.id, userId);
+    if (device && secretMatches(token.secret, device.tokenHash)) return { device, token };
+  }
+  return null;
 }
 
 /** Append rather than overwrite - a string Set-Cookie replaces the whole header. */
@@ -79,17 +118,20 @@ function appendCookie(res: Response, cookie: string): void {
   res.setHeader('Set-Cookie', next);
 }
 
-function setCookie(res: Response, value: string, maxAgeSeconds: number): void {
+function setCookie(res: Response, name: string, value: string, maxAgeSeconds: number): void {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  appendCookie(
-    res,
-    `${TRUSTED_DEVICE_COOKIE}=${value}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Lax${secure}`
-  );
+  appendCookie(res, `${name}=${value}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Lax${secure}`);
 }
 
-export function clearTrustedDeviceCookie(res: Response): void {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  appendCookie(res, `${TRUSTED_DEVICE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure}`);
+const expireCookie = (res: Response, name: string): void => setCookie(res, name, '', 0);
+
+/**
+ * Drops `userId`'s cookie only, leaving other accounts' trusts on this browser intact.
+ * A legacy shared cookie is left alone because it may belong to another account; once
+ * the caller revokes this user's records it no longer verifies for them anyway.
+ */
+export function clearTrustedDeviceCookie(res: Response, userId: string): void {
+  expireCookie(res, trustedDeviceCookieName(userId));
 }
 
 /**
@@ -141,14 +183,16 @@ export async function grantTrustedDevice(
   const maxAgeSeconds = Math.floor(TRUSTED_DEVICE_TTL_MS / 1000);
   const ip = clientIp(req);
 
-  const presented = parseCookie(req);
+  const cookieName = trustedDeviceCookieName(userId);
+
+  const presented = await findPresentedTrust(req, userId);
   if (presented) {
-    const existing = await trustedDeviceRepository.findValidForUser(presented.id, userId);
-    if (existing && secretMatches(presented.secret, existing.tokenHash)) {
-      await trustedDeviceRepository.extend(existing.id, expiresAt, ip);
-      setCookie(res, `${presented.id}.${presented.secret}`, maxAgeSeconds);
-      return existing;
-    }
+    const { device, token } = presented;
+    await trustedDeviceRepository.extend(device.id, expiresAt, ip);
+    setCookie(res, cookieName, `${token.id}.${token.secret}`, maxAgeSeconds);
+    // It verified for this user, so the legacy cookie is theirs and safe to retire.
+    if (token.legacy) expireCookie(res, LEGACY_TRUSTED_DEVICE_COOKIE);
+    return device;
   }
 
   const secret = randomBytes(32).toString('base64url');
@@ -161,7 +205,7 @@ export async function grantTrustedDevice(
     createdIp: ip,
     expiresAt,
   });
-  setCookie(res, `${device.id}.${secret}`, maxAgeSeconds);
+  setCookie(res, cookieName, `${device.id}.${secret}`, maxAgeSeconds);
   return device;
 }
 
@@ -204,11 +248,8 @@ export async function identifyTrustedDevice(
   userId: string
 ): Promise<ITrustedDeviceDocument | null> {
   try {
-    const presented = parseCookie(req);
-    if (!presented) return null;
-    const device = await trustedDeviceRepository.findValidForUser(presented.id, userId);
-    if (!device || !secretMatches(presented.secret, device.tokenHash)) return null;
-    return device;
+    const presented = await findPresentedTrust(req, userId);
+    return presented?.device ?? null;
   } catch {
     return null;
   }
