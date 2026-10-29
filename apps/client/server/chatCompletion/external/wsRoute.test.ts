@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
-import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, CliCompletionChunkAction, TooManyRequestsError } from '@bike4mind/common';
 import { checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
@@ -66,6 +66,13 @@ vi.mock('sst', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
 
+const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitApiKeyCompletion,
+  NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
+}));
+
 import { registerWsCompletionRoutes } from './wsRoute';
 
 let server: Server;
@@ -93,6 +100,7 @@ afterAll(
 
 beforeEach(() => {
   vi.mocked(checkRateLimit).mockResolvedValue(undefined);
+  mockAdmitApiKeyCompletion.mockResolvedValue({ release: quotaRelease });
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -319,6 +327,69 @@ describe('admin role on the reloaded owner', () => {
 
   it('keeps the role for a JWT session', async () => {
     expect(await runAs()).toBeUndefined();
+  });
+});
+
+describe('untrusted owner quotas', () => {
+  const asKey = () =>
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [],
+      billingOwnerType: 'User',
+      ownerUntrusted: true,
+    } as never);
+
+  it('admits an API-key completion with a slot and frees it once the background completion ends', async () => {
+    asKey();
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
+      owner: 'u1',
+      ownerUntrusted: true,
+      billingOwnerType: 'User',
+      holdSlot: true,
+    });
+    expect(quotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('frees the slot when the background completion fails', async () => {
+    asKey();
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockRejectedValueOnce(new Error('boom'));
+    vi.mocked(logCompletionAnalytics).mockResolvedValueOnce(undefined);
+
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+
+    expect(quotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers a refused quota with a 429, its errorCode and Retry-After, without starting the completion', async () => {
+    asKey();
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    mockAdmitApiKeyCompletion.mockRejectedValueOnce(
+      new TooManyRequestsError('Concurrency limit exceeded', { errorCode: 'concurrency_limit_exceeded', retryAfter: 3 })
+    );
+
+    const response = await postAs({});
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('3');
+    expect(await response.json()).toMatchObject({ errorCode: 'concurrency_limit_exceeded' });
+    expect(executeCompletion).not.toHaveBeenCalled();
+  });
+
+  it('does not apply them to a JWT session', async () => {
+    vi.mocked(Connection.find).mockResolvedValueOnce([{ connectionId: 'conn-1' }] as never);
+    vi.mocked(executeCompletion).mockResolvedValueOnce(undefined);
+    expect((await postAs({})).status).toBe(202);
+    await Promise.all(tracked);
+    expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
   });
 });
 

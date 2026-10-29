@@ -108,6 +108,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   // Resend cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Synchronous: isPending re-renders too late to stop a double-clicked Resend starting a second challenge.
+  const resendingRef = useRef(false);
 
   const navigate = useNavigate();
   const joinWaitlist = useJoinWaitlist();
@@ -267,7 +269,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0 || rateLimit.secondsLeft > 0) return;
+    if (resendingRef.current || resendCooldown > 0 || rateLimit.secondsLeft > 0) return;
+    resendingRef.current = true;
     try {
       const sendResult = await sendOTC({ email: email.trim(), ...botFields });
       setPendingToken(sendResult.pendingToken);
@@ -278,6 +281,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       if (rateLimit.handleError(error)) return;
       const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
+    } finally {
+      resendingRef.current = false;
     }
   };
 

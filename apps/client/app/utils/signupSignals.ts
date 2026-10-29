@@ -11,6 +11,9 @@ export const SIGNUP_SIGNALS = [
   'earlyApiKey',
   'patternedEmail',
   'dormantAfterSignup',
+  'signupSpike',
+  'sharedNetwork',
+  'aliasedEmail',
 ] as const;
 
 export type SignupSignal = (typeof SIGNUP_SIGNALS)[number];
@@ -47,7 +50,20 @@ export const SIGNUP_SIGNAL_LABELS: Record<SignupSignal, { label: string; descrip
   },
   dormantAfterSignup: {
     label: 'No activity after signup',
-    description: 'The account is over a day old and was never active after its first session.',
+    description: 'The account is over a day old and was never active after its first session, or never active at all.',
+  },
+  signupSpike: {
+    label: 'Signup spike',
+    description:
+      'Created in an hour with at least ten times the usual number of signups, webmail included. Weak alone: real users can sign up during a spike too.',
+  },
+  sharedNetwork: {
+    label: 'Shared network',
+    description: 'Three or more accounts signed up from the same network range within 24 hours.',
+  },
+  aliasedEmail: {
+    label: 'Aliased address',
+    description: 'Delivers to the same inbox as another new account once Gmail dots and plus tags are removed.',
   },
 };
 

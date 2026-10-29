@@ -6,7 +6,7 @@
  * so the 503 mapping and the empty-output guard are exercised as they ship.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, TooManyRequestsError } from '@bike4mind/common';
 import { fire, resetHarness, validateWithScopes } from '@server/generations/__test__/routeHarness';
 
 const { mockGetOperationsModel, mockRefineText, mockFindByKey, mockCreateOrUpdate, cacheStore, mockMeter } = vi.hoisted(
@@ -21,7 +21,10 @@ const { mockGetOperationsModel, mockRefineText, mockFindByKey, mockCreateOrUpdat
 );
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', async orig => ({
   ...(await orig<typeof import('@bike4mind/server-utils/services/operationsModelService')>()),
@@ -61,6 +64,17 @@ vi.mock('@server/billing/meterPlatformCompletion', async orig => ({
   createRequestCompletionMeter: () => mockMeter,
 }));
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
+
+const { mockAdmitRequestCompletion, mockQuotaRelease } = vi.hoisted(() => {
+  const mockQuotaRelease = vi.fn(async () => {});
+  return {
+    mockQuotaRelease,
+    mockAdmitRequestCompletion: vi.fn(async (..._a: unknown[]) => ({ release: mockQuotaRelease })),
+  };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
+}));
 
 import handler from '../text-refinements';
 import { OperationsModelUnavailableError } from '@bike4mind/server-utils/services/operationsModelService';
@@ -306,5 +320,46 @@ describe('POST /api/v1/text-refinements', () => {
       expect(res._getJSONData()).toMatchObject({ errorCode: 'insufficient_credits' });
       expect(complete).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('POST /api/v1/text-refinements - untrusted owner quotas', () => {
+  beforeEach(() => {
+    resetHarness();
+    cacheStore.clear();
+    mockGetOperationsModel.mockResolvedValue({ modelId: 'ops-model', llm: { complete: vi.fn() } });
+    mockFindByKey.mockResolvedValue(null);
+    mockCreateOrUpdate.mockResolvedValue(undefined);
+    mockAdmitRequestCompletion.mockReset().mockResolvedValue({ release: mockQuotaRelease });
+    mockQuotaRelease.mockClear();
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+  });
+
+  it('holds a slot for the refinement and frees it once the answer is ready', async () => {
+    mockRefineText.mockResolvedValue('Refined');
+    const { req, res } = post({ text: 'quota slot one' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(req, { holdSlot: true });
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('frees the slot when the refinement fails', async () => {
+    mockRefineText.mockRejectedValue(new Error('provider down'));
+    const { req, res } = post({ text: 'quota slot two' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBeGreaterThanOrEqual(500);
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses with a 429 and its errorCode without calling the model', async () => {
+    mockAdmitRequestCompletion.mockRejectedValue(
+      new TooManyRequestsError('Concurrency limit exceeded', { errorCode: 'concurrency_limit_exceeded' })
+    );
+    const { req, res } = post({ text: 'quota slot three' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'concurrency_limit_exceeded' });
+    expect(mockRefineText).not.toHaveBeenCalled();
   });
 });

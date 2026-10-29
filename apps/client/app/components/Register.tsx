@@ -115,6 +115,8 @@ const Register: React.FC = () => {
   // Resend cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Synchronous: isPending re-renders too late to stop a double-clicked Resend starting a second challenge.
+  const resendingRef = useRef(false);
 
   const [emailFocused, setEmailFocused] = React.useState<boolean>(false);
   const [emailBlurred, setEmailBlurred] = React.useState<boolean>(false);
@@ -222,7 +224,8 @@ const Register: React.FC = () => {
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0 || rateLimit.secondsLeft > 0 || !submittedData) return;
+    if (resendingRef.current || resendCooldown > 0 || rateLimit.secondsLeft > 0 || !submittedData) return;
+    resendingRef.current = true;
     try {
       const result = await sendOTC({ email: submittedData.email, ...botFields });
       setPendingToken(result.pendingToken);
@@ -232,6 +235,8 @@ const Register: React.FC = () => {
       if (rateLimit.handleError(error)) return;
       const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
+    } finally {
+      resendingRef.current = false;
     }
   };
 
@@ -845,6 +850,7 @@ const Register: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '20px', gap: 2 }}>
                 <Link
                   className="resend-code-link"
+                  data-testid="register-resend-btn"
                   color="primary"
                   onClick={handleResendCode}
                   sx={{

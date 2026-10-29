@@ -94,6 +94,7 @@ export {
   verifyOrgSlackConnectStateToken,
   buildOrgSlackOAuthUrl,
 } from './org-slack-helpers';
+export type { SystemSlackAppCredentials } from './org-slack-helpers';
 
 // ─── User Link Helpers ───────────────────────────────────────────────────────
 export {
@@ -139,6 +140,7 @@ export { TARGET_SYSTEM_AGENT_MAP } from './constants/routing';
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 export { handleChannelCommand } from './handlers/channel-manager';
+export type { ChannelCommandUser, ChannelCommandResponse } from './handlers/channel-manager';
 export {
   handleGlobalShortcut,
   handleCreateNotebookSubmission,

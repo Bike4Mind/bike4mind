@@ -1,6 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { systemPromptRepository } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 import { z } from 'zod';
 
@@ -105,11 +106,37 @@ const handler = adminApi({
           req.user?.name || 'Admin'
         );
 
+        if (!updated) {
+          return res.status(404).json({
+            error: 'Prompt not found',
+            message: `System prompt with ID "${promptId}" not found`,
+          });
+        }
+
         if (validated.enabled !== undefined && validated.enabled !== updated?.enabled) {
           await systemPromptRepository.toggleEnabled(promptId, validated.enabled);
         }
 
         const final = await systemPromptRepository.findByPromptId(promptId);
+
+        const changedFields = (
+          ['name', 'description', 'content', 'category', 'tags', 'variables', 'enabled'] as const
+        ).filter(
+          field =>
+            validated[field] !== undefined && JSON.stringify(validated[field]) !== JSON.stringify(existing[field])
+        );
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.system_prompt.updated',
+          target: { kind: 'settings', id: promptId, displayName: final?.name ?? existing.name },
+          summary:
+            changedFields.length === 0
+              ? `re-saved system prompt ${promptId} with no changes`
+              : `updated system prompt ${promptId}`,
+          changes: (['name', 'category', 'enabled'] as const)
+            .filter(field => changedFields.includes(field))
+            .map(field => ({ field, before: existing[field], after: validated[field] })),
+          details: { changedFields, fromVersion: existing.version, toVersion: final?.version },
+        });
 
         return res.status(200).json({
           success: true,
@@ -133,6 +160,13 @@ const handler = adminApi({
           createdBy: req.user?.id || 'system',
           lastUpdatedBy: req.user?.id || 'system',
           lastUpdatedByName: req.user?.name || 'Admin',
+        });
+
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.system_prompt.created',
+          target: { kind: 'settings', id: promptId, displayName: newPrompt.name },
+          summary: `created system prompt ${promptId}`,
+          details: { category: newPrompt.category, enabled: newPrompt.enabled, version: newPrompt.version },
         });
 
         return res.status(201).json({
@@ -197,6 +231,13 @@ const handler = adminApi({
           message: `System prompt with ID "${promptId}" not found`,
         });
       }
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.system_prompt.deleted',
+        target: { kind: 'settings', id: promptId, displayName: dbPrompt.name },
+        summary: `deleted system prompt ${promptId}`,
+        details: { deletedVersion: dbPrompt.version, historyPreserved: result.historyPreserved },
+      });
 
       return res.status(200).json({
         success: true,

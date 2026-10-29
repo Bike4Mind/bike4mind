@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { VIDEO_MODEL_CATALOG, VIDEO_MODEL_IDS } from './catalog';
+import {
+  isVideoModelRetired,
+  retiredVideoModelMessage,
+  VIDEO_MODEL_CATALOG,
+  VIDEO_MODEL_IDS,
+  VideoModelIdSchema,
+} from './catalog';
 import type { VideoGenerationRequest } from './request';
 import type { DurationCapability } from './types';
 import { validateAgainstCapabilities } from './validate';
@@ -160,6 +166,19 @@ describe('grok-imagine-video-1.5', () => {
   });
 });
 
+describe('retired models', () => {
+  it.each(VIDEO_MODEL_IDS.filter(isVideoModelRetired))('%s points at a live, default-enabled replacement', id => {
+    const { replacement } = VIDEO_MODEL_CATALOG[id].retired!;
+    expect(isVideoModelRetired(replacement)).toBe(false);
+    expect(VIDEO_MODEL_CATALOG[replacement].defaultEnabled).toBe(true);
+    expect(VIDEO_MODEL_CATALOG[id].defaultEnabled).toBe(false);
+  });
+
+  it('leaves live models without a refusal', () => {
+    expect(retiredVideoModelMessage('gemini-omni-1.1-flash')).toBeNull();
+  });
+});
+
 describe('veo-3.1-fast-generate-preview', () => {
   const caps = VIDEO_MODEL_CATALOG['veo-3.1-fast-generate-preview'];
   const request = (overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest => ({
@@ -185,8 +204,21 @@ describe('veo-3.1-fast-generate-preview', () => {
       typicalRenderSeconds: 90,
       audio: 'always',
       pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
-      defaultEnabled: true,
+      defaultEnabled: false,
+      retired: { date: '2026-10-22', replacement: 'gemini-omni-1.1-flash' },
     });
+  });
+
+  it('still parses as a model id, so stored jobs and usage records keep reading', () => {
+    expect(VideoModelIdSchema.safeParse('veo-3.1-fast-generate-preview').success).toBe(true);
+  });
+
+  it('is retired, with a refusal that names the working replacement', () => {
+    expect(isVideoModelRetired('veo-3.1-fast-generate-preview')).toBe(true);
+    expect(retiredVideoModelMessage('veo-3.1-fast-generate-preview')).toBe(
+      'Veo 3.1 Fast (veo-3.1-fast-generate-preview) was retired by its provider on 2026-10-22; ' +
+        'use gemini-omni-1.1-flash (Gemini Omni Flash) instead'
+    );
   });
 
   it('prices an 8s clip at the per-second rate', () => {

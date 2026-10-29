@@ -46,6 +46,8 @@ import {
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { normalizeOpenAIFinishReason } from './stopReason';
 
+type ToolRoundResult = { tool: IChoiceEndToolUse['tool']; result: string };
+
 /**
  * DeepSeek's models, served from their own OpenAI-compatible endpoint.
  *
@@ -357,13 +359,10 @@ export class DeepSeekBackend implements ICompletionBackend {
                   }
             );
 
-            // Only the first replayed assistant message carries the monologue:
-            // repeating it once per parallel tool call would feed DeepSeek the
-            // same reasoning several times over.
             const inheritedArtifactGuard = options._internal?.artifactGuard;
             let artifactGuard = inheritedArtifactGuard;
 
-            let turnReasoning = reasoningContent;
+            const roundResults: ToolRoundResult[] = [];
             for (const outcome of outcomes) {
               if (outcome.ok) {
                 // For tools that return artifacts (like recharts), stream the result directly -
@@ -382,12 +381,10 @@ export class DeepSeekBackend implements ICompletionBackend {
                 );
                 const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
-                this.pushToolMessages(
-                  messages,
-                  { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  resultStr,
-                  turnReasoning ? [turnReasoning] : undefined
-                );
+                roundResults.push({
+                  tool: { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+                  result: resultStr,
+                });
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
@@ -396,15 +393,13 @@ export class DeepSeekBackend implements ICompletionBackend {
                   ARTIFACT_REMOVED_PLACEHOLDER
                 );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
-                this.pushToolMessages(
-                  messages,
-                  { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  observation,
-                  turnReasoning ? [turnReasoning] : undefined
-                );
+                roundResults.push({
+                  tool: { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+                  result: observation,
+                });
               }
-              turnReasoning = undefined;
             }
+            this.pushToolRound(messages, roundResults, reasoningContent);
 
             const roundText = c.message.content || '';
             const requestedToolNames = c.message.tool_calls.flatMap(toolCall =>
@@ -744,7 +739,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         const inheritedArtifactGuard = options._internal?.artifactGuard;
         let artifactGuard = inheritedArtifactGuard;
 
-        let turnReasoning: string | undefined = streamedReasoning || undefined;
+        const roundResults: ToolRoundResult[] = [];
         for (const outcome of outcomes) {
           if (outcome.ok) {
             // For tools that return artifacts (like recharts), stream the result directly -
@@ -763,12 +758,10 @@ export class DeepSeekBackend implements ICompletionBackend {
             );
             const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
-            this.pushToolMessages(
-              messages,
-              { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              resultStr,
-              turnReasoning ? [turnReasoning] : undefined
-            );
+            roundResults.push({
+              tool: { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+              result: resultStr,
+            });
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
@@ -777,15 +770,13 @@ export class DeepSeekBackend implements ICompletionBackend {
               ARTIFACT_REMOVED_PLACEHOLDER
             );
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
-            this.pushToolMessages(
-              messages,
-              { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              observation,
-              turnReasoning ? [turnReasoning] : undefined
-            );
+            roundResults.push({
+              tool: { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+              result: observation,
+            });
           }
-          turnReasoning = undefined;
         }
+        this.pushToolRound(messages, roundResults, streamedReasoning || undefined);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
@@ -876,28 +867,40 @@ export class DeepSeekBackend implements ICompletionBackend {
    */
   pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, thinkingBlocks?: unknown[]) {
     const reasoningContent = typeof thinkingBlocks?.[0] === 'string' ? thinkingBlocks[0] : undefined;
+    this.pushToolRound(messages, [{ tool, result }], reasoningContent);
+  }
+
+  /**
+   * Replays one round as a single assistant message carrying every parallel
+   * `tool_calls` entry plus the round's `reasoning_content`, then one `tool`
+   * message per result. Splitting a parallel round into one assistant message
+   * per call leaves every message after the first without `reasoning_content`,
+   * which DeepSeek's thinking mode rejects with a 400.
+   */
+  private pushToolRound(messages: IMessage[], round: ToolRoundResult[], reasoningContent: string | undefined) {
+    if (round.length === 0) return;
 
     messages.push({
       content: null,
       role: 'assistant',
       ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
-      tool_calls: [
-        {
-          id: tool.id,
-          type: 'function',
-          function: {
-            name: tool.name,
-            arguments: tool.parameters,
-          },
+      tool_calls: round.map(({ tool }) => ({
+        id: tool.id,
+        type: 'function',
+        function: {
+          name: tool.name,
+          arguments: tool.parameters,
         },
-      ],
+      })),
     } as unknown as IMessage);
 
-    messages.push({
-      role: 'tool',
-      content: JSON.stringify({ result }),
-      tool_call_id: tool.id,
-    } as unknown as IMessage);
+    for (const { tool, result } of round) {
+      messages.push({
+        role: 'tool',
+        content: JSON.stringify({ result }),
+        tool_call_id: tool.id,
+      } as unknown as IMessage);
+    }
   }
 
   replaceLastToolResultObservation(messages: IMessage[], toolCallId: string, newObservation: string): void {

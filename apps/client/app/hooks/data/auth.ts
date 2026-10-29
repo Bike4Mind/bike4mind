@@ -13,10 +13,10 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AxiosError } from 'axios';
 import { useRouter, useSearch } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
-import { getTurnstileToken, TurnstileError } from '@client/app/utils/turnstile';
+import { getTurnstileToken, TurnstileCancelledError, TurnstileError } from '@client/app/utils/turnstile';
 import type { ServerConfigPublic } from '@pages/api/settings/serverConfigPublic';
 import type { TurnstileClientFailure } from '@pages/api/turnstile/client-failure';
 
@@ -146,6 +146,9 @@ async function solveTurnstileIfRequired(
   try {
     return await getTurnstileToken(config.turnstileSiteKey, action);
   } catch (error) {
+    if (error instanceof TurnstileCancelledError) {
+      throw new Error('Verification cancelled. Try again when you are ready.');
+    }
     reportTurnstileFailure(action, error);
     throw new Error('Could not complete the verification check. Please refresh and try again.');
   }
@@ -188,12 +191,30 @@ export function oauthStartUrl(startUrl: string, redirectTo: string | null, turns
  */
 export function useStartOAuthSignIn() {
   const queryClient = useQueryClient();
+  // Synchronous: a double-clicked provider button must not start a second challenge while the first is open.
+  const startingRef = useRef(false);
+  // Back from the provider can restore this page from bfcache with the guard still set.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) startingRef.current = false;
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
   return async (startUrl: string): Promise<void> => {
-    const turnstileToken = isTurnstileOAuthProvider(oauthStartProvider(startUrl))
-      ? await solveTurnstileIfRequired(queryClient, TURNSTILE_ACTION_OAUTH_START)
-      : undefined;
-    const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
-    window.location.href = oauthStartUrl(startUrl, redirectTo, turnstileToken);
+    if (startingRef.current) return;
+    startingRef.current = true;
+    try {
+      const turnstileToken = isTurnstileOAuthProvider(oauthStartProvider(startUrl))
+        ? await solveTurnstileIfRequired(queryClient, TURNSTILE_ACTION_OAUTH_START)
+        : undefined;
+      const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
+      window.location.href = oauthStartUrl(startUrl, redirectTo, turnstileToken);
+    } catch (error) {
+      // Only cleared on failure: assigning href does not unload the page synchronously.
+      startingRef.current = false;
+      throw error;
+    }
   };
 }
 

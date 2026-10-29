@@ -57,6 +57,11 @@ import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
 import { getUserEntitlements } from '@server/entitlements';
+import {
+  admitApiKeyCompletion,
+  NO_COMPLETION_QUOTA,
+  type CompletionQuotaGrant,
+} from '@server/utils/untrustedCompletionQuota';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 /**
@@ -247,6 +252,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     let userId: string | undefined;
     let apiKeyInfo: ApiKeyInfo | undefined;
     let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
+    let quota: CompletionQuotaGrant = NO_COMPLETION_QUOTA;
 
     try {
       // The service connects at boot in the background; a request can land first.
@@ -289,6 +295,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           userId: apiKeyInfo.userId,
           endpoint: COMPLETIONS_ENDPOINT,
           method: req.method,
+        });
+        // The slot is freed in `finally`, once executeCompletion settles, not on disconnect: the
+        // provider call keeps running after the client goes.
+        quota = await admitApiKeyCompletion({
+          owner: apiKeyInfo.userId,
+          ownerUntrusted: apiKeyInfo.ownerUntrusted,
+          billingOwnerType: apiKeyInfo.billingOwnerType,
+          holdSlot: true,
         });
       } else {
         logger.info('[CLI_LLM] Authenticated via JWT', { userId });
@@ -444,6 +458,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
     } finally {
       if (heartbeat) clearInterval(heartbeat);
+      await quota.release();
       if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
     }
   });

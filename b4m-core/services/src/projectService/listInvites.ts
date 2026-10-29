@@ -16,7 +16,6 @@ interface ListProjectInvitesAdapters {
     projects: IProjectRepository;
     invites: Pick<IInviteModelAdapter, 'searchInvites'>;
   };
-  ability: any; // Replace with proper ability type
 }
 
 export const listInvites = async (

@@ -257,6 +257,8 @@ export interface ICompletionOptions {
   anthropicEffort?: AnthropicEffort;
   _internal?: {
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
+    /** Set by anthropicBackend when a turn starts from another provider's tool history; keeps thinking off for its remaining rounds. */
+    thinkingSuppressed?: boolean;
     /** Epoch ms of the first round of this chat turn; set once, carried through recursive tool rounds (timing logs only). */
     requestStartedAt?: number;
     /** Per-request override for the recursive tool-call ceiling (defaults to DEFAULT_MAX_TOOL_CALLS).

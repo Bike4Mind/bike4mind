@@ -252,6 +252,32 @@ describe('Register - second-factor handoff', () => {
     );
   });
 
+  it('ignores a second Resend click while a resend is still in flight', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let finishResend: (value: { pendingToken: string }) => void = () => {};
+      mocks.sendOTC
+        .mockResolvedValueOnce({ pendingToken: 'ptok-1' })
+        .mockReturnValueOnce(new Promise(resolve => (finishResend = resolve)));
+      renderRegister();
+      await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
+      await user.type(within(screen.getByTestId('register-email-input')).getByRole('textbox'), 'new@test.com');
+      await user.click(within(screen.getByTestId('register-aup-tos-checkbox')).getByRole('checkbox'));
+      await user.click(within(screen.getByTestId('register-age-checkbox')).getByRole('checkbox'));
+      await user.click(screen.getByTestId('register-submit-btn'));
+      await screen.findByTestId('register-resend-btn');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31000);
+      });
+      await user.dblClick(screen.getByTestId('register-resend-btn'));
+      expect(mocks.sendOTC).toHaveBeenCalledTimes(2);
+      await act(async () => finishResend({ pendingToken: 'ptok-2' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('requires an invite before sending a code on an invite-only instance', async () => {
     mocks.allowOpenRegistration = false;
     renderRegister();

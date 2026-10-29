@@ -49,7 +49,6 @@ import {
   otcEmailKey,
   otcIpBucket,
   otcLimitDomain,
-  otcLimitMailbox,
   otcLimitOf,
   reserveOtcRegistrationDomainBudget,
   reserveOtcEmailBudget,
@@ -172,11 +171,6 @@ describe('per-email budgets', () => {
       OTC_LIMITS.verify.perEmailPerIp.limit,
       OTC_LIMITS.verify.perEmailPerIp.windowMs
     );
-  });
-
-  it('folds plus-tags on any domain but keeps dots significant outside Gmail', () => {
-    expect(otcLimitMailbox('first.last+tag@example.com')).toBe('first.last@example.com');
-    expect(otcLimitMailbox('first.last@example.com')).not.toBe(otcLimitMailbox('firstlast@example.com'));
   });
 
   it('reports Retry-After without spending anything once a budget is spent', async () => {

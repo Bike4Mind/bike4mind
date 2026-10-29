@@ -90,7 +90,7 @@ function generateSimpleDiff(original: string, modified: string): DiffResult {
 
 export const editFileTool: ToolDefinition = {
   name: 'edit_file',
-  implementation: (context, config?: { model?: string }) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async (parameters?: unknown) => {
       const params = parameters as EditFileParams;
       const { fileId, instruction, selection, preserveFormatting, returnDiff } = params;
@@ -207,7 +207,7 @@ Return only the edited content without any markdown code blocks or explanations.
         let completionInfo: CompletionInfo | undefined;
         // The backend uses whatever model id is passed here (the interface's `model` arg
         // is authoritative), so record this same id for the usage event.
-        const editModel = config?.model ?? DEFAULT_EDIT_MODEL;
+        const editModel = (config as { model?: string } | undefined)?.model ?? DEFAULT_EDIT_MODEL;
         const startTime = Date.now();
         await context.llm.complete(
           editModel,
