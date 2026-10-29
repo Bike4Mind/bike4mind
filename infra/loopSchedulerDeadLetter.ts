@@ -1,7 +1,7 @@
-import { runsScheduledJobs } from './constants';
+import { runsLoopScheduler } from './constants';
 import { createEventBusDeadLetter } from './eventBusDeadLetter';
 
-const loopSchedulerDlq = runsScheduledJobs
+const loopSchedulerDlq = runsLoopScheduler
   ? new sst.aws.Queue('loopSchedulerDlq', {
       transform: { queue: { messageRetentionSeconds: 1209600 } },
     })
