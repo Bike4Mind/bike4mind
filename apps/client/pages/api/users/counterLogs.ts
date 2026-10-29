@@ -249,7 +249,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       // For report requests, check cache first
       if (report || weeklyReport) {
-        const cacheKey = `reports:v2:${startDate}:${endDate}:${report}:${weeklyReport}:${includeInsights}`;
+        const cacheKey = `reports:v2:d${DAILY_ACTIVITY_REPORT_VERSION}w${WEEKLY_ACTIVITY_REPORT_VERSION}:${startDate}:${endDate}:${report}:${weeklyReport}:${includeInsights}`;
 
         const cachedResult = await cacheRepository.findByKey(cacheKey);
         if (cachedResult) {
