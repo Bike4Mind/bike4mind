@@ -170,7 +170,7 @@ async function releaseStage(
       const updated = await db.users.update({
         id: userId,
         ...(assessment ? { signupGrantAssessment: assessment } : {}),
-        ...(user.signupGrantHeldReason && amount > 0 ? { signupGrantHeldReason: null } : {}),
+        ...(user.signupGrantHeldReason ? { signupGrantHeldReason: null } : {}),
         signupGrant: {
           ...grant,
           stage: unlocked ? 'unlocked' : 'signup',
@@ -194,8 +194,15 @@ async function releaseStage(
     if (!(error instanceof DuplicateCreditTransactionError)) await releaseReservations();
     if (!(error instanceof DuplicateCreditTransactionError) && !(error instanceof InboxGrantClaimDeniedError))
       throw error;
+    // Paid elsewhere, or never payable to this inbox: either way the tranche is no longer held.
+    await clearHeldReason(db.users, userId);
     return noGrant();
   }
+}
+
+async function clearHeldReason(users: FreeCreditAdapters['db']['users'], userId: string) {
+  if ((await users.findById(userId))?.signupGrantHeldReason)
+    await users.update({ id: userId, signupGrantHeldReason: null });
 }
 
 export const releaseSignupTranche = (userId: string, adapters: GrantAdapters) =>
