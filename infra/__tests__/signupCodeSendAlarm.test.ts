@@ -310,6 +310,7 @@ describe('signup grant protection gap alarm wiring', () => {
     const filter = callFor(resources.filter, 'signupGrantProtectionGapFilter');
     expect(filter).toMatchObject({
       name: 'test-app-production-signup-grant-protection-gap',
+      pattern: `{ $.message = "${SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE}" }`,
       metricTransformation: {
         name: 'SignupGrantProtectionGaps',
         namespace: 'test-app/production/Signup',
@@ -319,7 +320,7 @@ describe('signup grant protection gap alarm wiring', () => {
     });
     const pattern = filter?.pattern;
     if (typeof pattern !== 'string') throw new Error('Missing metric filter pattern');
-    const expression = new RegExp(pattern.slice(1, -1));
+    const expression = { test: (line: string) => matchesMessageFilterPattern(pattern, line) };
     const prefix = '2026-10-23T00:00:00.000Z request-id WARN ';
     expect(expression.test(prefix + JSON.stringify({ message: SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE }))).toBe(true);
     expect(
