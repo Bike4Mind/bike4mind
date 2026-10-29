@@ -133,7 +133,7 @@ import { describeAlways } from './approvalScope';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
-import { OllamaLocal } from './OllamaLocal';
+import { LocalModelRemovedError, OllamaLocal } from './OllamaLocal';
 import type { LocalChat } from './localChat';
 import { ServerCredentialsError } from '../modelServers/errors';
 import { ContextOverflowError, localTranscriptChars, shrunkTranscriptChars } from './localContext';
@@ -278,9 +278,9 @@ const TURN_LIMITS: TurnLimits = {
   wallClockMs: 30 * 60 * 1000,
 };
 
-/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type SettledModel = { session: ChatSession; summary?: ChatSessionSummary; notice?: string } | { error: string };
 
+/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 
 /** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
@@ -1971,7 +1971,7 @@ export class ChatService {
     if (!api && !isLocalModel(claimed.model) && !this.deviceLocal())
       return { ok: false, error: 'Sign in to send a message.' };
     const settled: SettledModel = this.deviceLocal()
-      ? await this.settleDeviceLocal(claimed, (await this.deps.models?.listLocal?.(true)) ?? [])
+      ? await this.settleDeviceLocal(claimed, await this.localModelsFor(claimed.model))
       : { session: claimed };
     if ('error' in settled) return { ok: false, error: settled.error };
     const existing = settled.session;
@@ -2455,6 +2455,16 @@ export class ChatService {
     };
   }
 
+  /**
+   * The last local list when it still has `model`, so a turn costs Ollama no discovery; otherwise one forced
+   * read. A model removed outside the app since that list fails its turn, which forgets the list.
+   */
+  private async localModelsFor(model: string): Promise<ChatModelOption[]> {
+    const last = this.deps.models?.lastLocal?.();
+    if (last?.some(option => option.id === model)) return last;
+    return (await this.deps.models?.listLocal?.(true)) ?? [];
+  }
+
   /** Saves the model a send would use, so the picker shows it before the user sends. Null when nothing changed. */
   async settleSessionModel(sessionId: string): Promise<{ session: ChatSessionSummary; notice?: string } | null> {
     if (!this.deviceLocal()) return null;
@@ -2608,7 +2618,7 @@ export class ChatService {
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
       const catalog =
         localTurn && this.deps.models?.listLocal
-          ? { models: await this.deps.models.listLocal() }
+          ? { models: await this.localModelsFor(session.model) }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = catalog?.models.find(option => option.id === session.model);
@@ -2937,6 +2947,7 @@ export class ChatService {
         // - deliberately not one of them, because Continue would re-send the same oversized
         // conversation and fail identically.
         if (failure) {
+          if (failure instanceof LocalModelRemovedError) this.deps.models?.forgetLocal?.();
           if (!isContextOverflow(failure)) throw failure;
           this.deps.logger.warn(`CHAT: turn stopped, context exhausted: ${failure.message}`);
           stopReason = 'context_limit';

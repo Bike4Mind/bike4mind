@@ -612,6 +612,31 @@ describe('models pull (Hugging Face)', () => {
     expect(same.hub.getModel).toHaveBeenCalledTimes(2);
   });
 
+  it('pulls when the Hub lists the same license IDs in another order after the prompt', async () => {
+    const getModel = vi
+      .fn()
+      .mockResolvedValueOnce(detail({ licenses: ['apache-2.0', 'mit'] }))
+      .mockResolvedValueOnce(detail({ licenses: ['mit', 'apache-2.0'] }));
+    const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
+    expect(await pullModel(REPO, h.deps, OPTS)).toBe('pulled');
+    expect(h.runtime.pull).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['added', ['apache-2.0', 'mit'], ['apache-2.0', 'mit', 'gemma']],
+    ['removed', ['apache-2.0', 'mit'], ['mit']],
+    ['duplicated', ['mit'], ['mit', 'mit']],
+    ['duplicated in place of another', ['apache-2.0', 'apache-2.0', 'mit'], ['apache-2.0', 'mit', 'mit']],
+  ])('refuses when a license ID was %s after the prompt', async (_label, before, licenses) => {
+    const getModel = vi
+      .fn()
+      .mockResolvedValueOnce(detail({ licenses: before }))
+      .mockResolvedValueOnce(detail({ licenses }));
+    const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
+    await expect(pullModel(REPO, h.deps, OPTS)).rejects.toThrow(/changed since you reviewed it/);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
   it('refuses changed license IDs even when their display is unchanged', async () => {
     const original = detail({ licenses: ['mit'] });
     const current = detail({ licenses: ['other'], licenseName: 'mit' });
