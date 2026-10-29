@@ -34,8 +34,7 @@ export const oauthSignupsRefusedAlarm =
             if (!lg) throw new Error('server function is missing its CloudWatch log group');
             return lg.name;
           }),
-          // The server Lambda keeps the default text format (`ts\treqId\tLEVEL\t{json}`), so a JSON `{ $.field = ... }`
-          // selector never matches; match the message key and value inside the line instead.
+          // Shared top-level message selector; see messageFilterPattern for why it is not a regex.
           pattern: messageFilterPattern('oauth-signup-refused'),
           metricTransformation: {
             name: METRIC_NAME,
