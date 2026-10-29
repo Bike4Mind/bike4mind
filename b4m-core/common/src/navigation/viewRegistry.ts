@@ -675,7 +675,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'admin.held_signup_grants',
     section: 'admin',
     label: 'Held signup grants',
-    description: 'Release free signup credits held by the daily budget or risk review, in bulk, with undo',
+    description: 'Release free signup credits held by the daily budget, in bulk, with undo',
     navigationType: 'tab',
     target: '69', // AdminTab.HeldSignupGrants
     keywords: ['held grants', 'signup budget', 'free credits', 'release credits', 'bulk release'],

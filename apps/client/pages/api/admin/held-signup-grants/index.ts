@@ -6,7 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 
 const querySchema = z.object({
-  reason: z.enum(['budget_exhausted', 'risk_review']).optional(),
+  reason: z.enum(['budget_exhausted']).optional(),
   after: z
     .string()
     .regex(/^[a-f0-9]{24}$/i)

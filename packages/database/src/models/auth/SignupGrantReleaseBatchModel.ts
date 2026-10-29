@@ -37,7 +37,7 @@ export const SignupGrantReleaseBatchModel =
   (mongoose.models.SignupGrantReleaseBatch as mongoose.Model<SignupGrantReleaseBatch>) ??
   mongoose.model('SignupGrantReleaseBatch', batchSchema);
 
-export type HeldSignupGrantReason = 'budget_exhausted' | 'risk_review';
+export type HeldSignupGrantReason = 'budget_exhausted';
 
 export type HeldSignupGrantRow = {
   id: string;
@@ -73,7 +73,7 @@ export const signupGrantReleaseRepository = {
   /** Held grants in creation order (ObjectId order); `afterId` is the previous page's last id. */
   async listHeld(input: { reason?: HeldSignupGrantReason; afterId?: string; limit: number; payableOnly?: boolean }) {
     const users = await User.find({
-      signupGrantHeldReason: input.reason ?? { $in: ['budget_exhausted', 'risk_review'] },
+      signupGrantHeldReason: input.reason ?? 'budget_exhausted',
       tags: PENDING_FREE_CREDITS_TAG,
       // Mirrors accountBlockReasons/isAiAccessRevoked: unpayable accounts must not eat the cron's scan window.
       ...(input.payableOnly

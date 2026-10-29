@@ -8,7 +8,7 @@ import { DataTable } from './shared/DataTable';
 const QUERY_KEY = ['held-signup-grants'];
 const ENDPOINT = '/api/admin/held-signup-grants';
 
-type HeldReason = 'budget_exhausted' | 'risk_review';
+type HeldReason = 'budget_exhausted';
 type HeldRow = { id: string; email: string | null; reason: HeldReason; createdAt: string };
 type ReleaseResult = {
   batchId: string;
@@ -18,7 +18,6 @@ type UndoResult = { batchId: string; results: { userId: string; outcome: string;
 
 const REASON_LABELS: Record<HeldReason, string> = {
   budget_exhausted: 'Daily budget spent',
-  risk_review: 'Risk review',
 };
 
 export default function HeldSignupGrantsTab() {
@@ -102,7 +101,6 @@ export default function HeldSignupGrantsTab() {
         >
           <Option value="all">All reasons</Option>
           <Option value="budget_exhausted">{REASON_LABELS.budget_exhausted}</Option>
-          <Option value="risk_review">{REASON_LABELS.risk_review}</Option>
         </Select>
         <Button
           size="sm"
