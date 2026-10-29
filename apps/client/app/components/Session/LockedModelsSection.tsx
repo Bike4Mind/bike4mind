@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Button, Stack, Typography } from '@mui/joy';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import type { ModelInfo } from '@bike4mind/common';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
 
 type LockedModelsSectionProps = {
   models: ModelInfo[];
@@ -10,9 +11,8 @@ type LockedModelsSectionProps = {
 };
 
 /**
- * Paid-only models a free account can see but not pick. Rows are deliberately inert - no button, no click
- * handler - so nothing here can set the session model; the only action is the upgrade CTA. The server still
- * refuses a locked model at call time (createModelAdmission), this is display only.
+ * Paid-only models a free account can see but not pick (see ModelInfo.access). Rows are deliberately inert so
+ * nothing here can set the session model; the only action is the upgrade CTA.
  */
 const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) => {
   if (models.length === 0) return null;
@@ -49,7 +49,6 @@ const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) =>
             component="li"
             key={model.id}
             data-testid={`locked-model-row-${model.id}`}
-            aria-disabled="true"
             title="Upgrade to a paid plan to use this model"
             sx={{
               display: 'flex',
@@ -65,6 +64,9 @@ const LockedModelsSection = ({ models, onUpgrade }: LockedModelsSectionProps) =>
             <Typography level="body-sm" sx={{ color: 'text.secondary' }} noWrap>
               {model.name}
             </Typography>
+            <Box component="span" sx={visuallyHidden}>
+              (requires a paid plan)
+            </Box>
           </Box>
         ))}
       </Box>
