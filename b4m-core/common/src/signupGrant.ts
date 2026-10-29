@@ -1,3 +1,4 @@
+import { signupGrantRiskPolicySchema } from './signupRiskPolicy';
 import type { IAdminSettingsRepository } from './types';
 
 export const SIGNUP_GRANT_UNLOCK_REASONS = [
@@ -89,8 +90,9 @@ export function findUnsetSignupProtections(
   values: Partial<Record<SignupGrantProtectionKey, unknown>>
 ): SignupGrantProtectionKey[] {
   const policy = parsePolicyValue(values.signupGrantRiskPolicy);
-  // Boolean literal only: signupRiskPolicySchema rejects the string 'true', so that shape offers no protection.
-  const policyOn = typeof policy === 'object' && policy !== null && (policy as { enabled?: unknown }).enabled === true;
+  // Same check the runtime applies: a policy that fails the schema is never assessed, so it offers no protection.
+  const parsedPolicy = signupGrantRiskPolicySchema.safeParse(policy);
+  const policyOn = parsedPolicy.success && parsedPolicy.data.enabled;
   const checks: Record<SignupGrantProtectionKey, boolean> = {
     signupGrantRiskPolicy: policyOn,
     maxSignupsPerIpPerDay: nonnegativeGrantCredits(values.maxSignupsPerIpPerDay) > 0,
