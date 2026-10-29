@@ -20,6 +20,7 @@ import type {
   ChatProject,
   ChatQueuedMessage,
   ChatReplyRound,
+  ChatSentRound,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -31,6 +32,7 @@ import type {
   ChatToolCall,
   ChatToolDetail,
   ChatToolNotice,
+  ChatToolState,
   ChatUsage,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
@@ -217,8 +219,23 @@ import {
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
+  type ToolSchema,
   type WebContext,
 } from './tools/types';
+import {
+  appendLiveToolChange,
+  declareDeferredTools,
+  estimateToolTokens,
+  insertToolChanges,
+  offersCoreTools,
+  optionalToolNames,
+  sameToolState,
+  startToolNames,
+  supportsDeferredTools,
+  toolStateRecords,
+  toolStateReminder,
+  type ToolStateMark,
+} from './deferredTools';
 import {
   IMPORTED_TAINT_SOURCE,
   importedHistoryNeedsCompaction,
@@ -410,6 +427,11 @@ export interface ChatServiceDeps {
   attachments?: AttachmentStore;
   logger: ChatServiceLogger;
   /**
+   * Deferred tool loading on supported Claude models (chat/deferredTools.ts). Absent keeps today's
+   * request shape. A start set estimated over `startSetMaxTokens` is deferred too; 0 defers all.
+   */
+  deferredTools?: { startSetMaxTokens: number };
+  /**
    * The server's model list. Absent in tests that do not exercise model resolution, which then
    * leaves every session on whatever model it was created with.
    */
@@ -552,6 +574,7 @@ interface RawRound {
   reasoning: string;
   timing: ChatRoundTiming;
   usage?: ChatUsage;
+  sent: ChatSentRound;
 }
 
 /**
@@ -2718,13 +2741,78 @@ export class ChatService {
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
       const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
       if (!resume) await this.reportSuggestionOutcomes(session);
-      const wire = await toCompletionMessages(
-        session,
-        (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
-      );
+      const readAttachment = (attachment: ChatAttachment) =>
+        this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null);
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
       const toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
+      // See chat/deferredTools.ts. Decided once per turn, so a turn never mixes the two shapes.
+      const deferred =
+        !!this.deps.deferredTools &&
+        !localTurn &&
+        cacheable &&
+        toolsSupported &&
+        supportsDeferredTools(modelOption) &&
+        offersCoreTools(tools);
+      const toolState = (): ChatToolState => ({
+        tools: optionalToolNames(toolsFor(roots)),
+        text: buildToolStateText({
+          roots,
+          media: !!media,
+          host: !!host,
+          explore: !!explore,
+          mcpServers: this.deps.mcp ? mcpServers : null,
+          dependencyLines: this.deps.dependencies?.promptLines(session.id) ?? [],
+          projectContext: !!projectContext,
+          browser: !!browser,
+          patchEdits,
+          memory: !!memory,
+          ask,
+          screen: !!screen,
+        }),
+      });
+      const schemaFor = (name: string): ToolSchema | undefined =>
+        toolsFor(roots).find(tool => tool.toolSchema.name === name)?.toolSchema ??
+        findTool(name)?.schema ??
+        mcpTools.find(binding => binding.definition.schema.name === name)?.definition.schema;
+      const declarable = (name: string) => schemaFor(name) !== undefined;
+      // Names the wire's tool changes reference; each must stay declared for the rest of the turn.
+      const referenced = new Set<string>();
+      // The conversation's loaded start set; declared on every turn, offered or not.
+      let start: string[] = [];
+      const requestTools = () =>
+        deferred
+          ? declareDeferredTools(
+              toolsFor(roots),
+              [...new Set([...start, ...referenced])].flatMap(name => schemaFor(name) ?? []),
+              new Set(start)
+            )
+          : toolsFor(roots);
+      let liveState: ChatToolState | undefined;
+      let wire: CompletionMessage[];
+      if (deferred) {
+        liveState = toolState();
+        await this.recordToolStates(session, liveState, declarable);
+        const mcpNames = new Set(mcpTools.map(binding => binding.definition.schema.name));
+        start = startToolNames(
+          session.messages.find(message => message.role === 'user' && message.toolState)?.toolState,
+          name => !mcpNames.has(name) && findTool(name) !== undefined
+        ).filter(declarable);
+        const startTokens = estimateToolTokens(start.flatMap(name => schemaFor(name) ?? []));
+        if (startTokens > (this.deps.deferredTools?.startSetMaxTokens ?? 0)) start = [];
+        const marks: ToolStateMark[] = [];
+        const replayed = insertToolChanges(
+          await toCompletionMessages(session, readAttachment, marks),
+          marks,
+          declarable,
+          start
+        );
+        wire = replayed.wire;
+        replayed.referenced.forEach(name => referenced.add(name));
+        tools = requestTools();
+      } else {
+        wire = await toCompletionMessages(session, readAttachment);
+      }
       const systemMessage = () =>
         buildSystemMessage(
           toolsSupported ? roots : [],
@@ -2744,7 +2832,11 @@ export class ChatService {
           toolsSupported && !!web,
           toolsSupported && !!screen
         );
-      wire.unshift(systemMessage());
+      wire.unshift(
+        deferred
+          ? buildDeferredSystemMessage(session.project, projectContext, skillsSection, session.model)
+          : systemMessage()
+      );
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
       // conversation around. It rides on the newest turn only, after the cached prefix.
       const carried = this.pendingPlanReminder.get(sessionId);
@@ -2786,6 +2878,7 @@ export class ChatService {
               timing: entry.round.timing,
               ...(entry.round.usage ? { usage: entry.round.usage } : {}),
               ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
+              sent: entry.round.sent,
             }))
             // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
             .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
@@ -2824,6 +2917,16 @@ export class ChatService {
       const screenshotTurns: number[] = [];
 
       for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
+        if (liveState && roundIndex > 0) {
+          const next = toolState();
+          if (!sameToolState(liveState, next)) {
+            appendLiveToolChange(wire, liveState.tools, next);
+            [...liveState.tools, ...next.tools].forEach(name => referenced.add(name));
+            await this.recordMidTurnToolState(session, next);
+            liveState = next;
+            tools = requestTools();
+          }
+        }
         const requested: RequestedTool[] = [];
         let turnText = '';
         let turnThinking: unknown[] | undefined;
@@ -2930,6 +3033,7 @@ export class ChatService {
           reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
           ...(turnUsage ? { usage: turnUsage } : {}),
+          sent: { ...(turnThinking ? { thinking: turnThinking } : {}), text: turnText },
         };
         produced.push(round);
 
@@ -2981,7 +3085,7 @@ export class ChatService {
           const before = roots;
           ({ roots, workingDirectory } = await this.resolveToolScope(current));
           explore = exploreFor(roots);
-          tools = toolsFor(roots);
+          tools = requestTools();
           return describeRootChange(before, roots);
         };
         const baseBefore = roots[0];
@@ -3024,6 +3128,7 @@ export class ChatService {
                 ask,
                 title: session.title,
                 directories: directoryTurn,
+                ...(deferred ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
                 permissions: {
                   project: session.project?.directory ?? null,
                   workingDirectory: session.project ? (workingDirectory ?? session.project.workingDirectory) : null,
@@ -3050,8 +3155,9 @@ export class ChatService {
         if (mcpToolsChanged(mcpTools, mcpNow)) {
           mcpTools = mcpNow;
           mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
-          tools = toolsFor(roots);
-          wire[0] = systemMessage();
+          tools = requestTools();
+          // A deferred turn's system prompt holds no MCP state; the next round's reminder does.
+          if (!deferred) wire[0] = systemMessage();
         }
         round.toolCallIds = settled.map(call => call.id);
 
@@ -3084,9 +3190,13 @@ export class ChatService {
           roundsSincePlanUpdate
         );
         const lastResult = results[results.length - 1];
+        const resultBase = lastResult?.content;
         if (nudge && lastResult) lastResult.content = `${lastResult.content}\n\n${nudge}`;
         if (rootNote.length > 0 && lastResult) {
           lastResult.content = [lastResult.content, '', 'The user changed the shared folders:', ...rootNote].join('\n');
+        }
+        if (lastResult && typeof resultBase === 'string' && lastResult.content !== resultBase) {
+          round.sent.resultNote = lastResult.content.slice(resultBase.length);
         }
         wire.push({ role: 'user', content: results });
         const { kept, dropped } = withinImageBudget(
@@ -3521,6 +3631,11 @@ export class ChatService {
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
       directories?: DirectoryTurn;
+      /**
+       * The tool names this round offers, on a deferred-tools turn. The request also declares tools
+       * it no longer offers (see declareDeferredTools), and those must not run.
+       */
+      offered?: ReadonlySet<string>;
       /** Which project's permission rules apply. */
       permissions?: PermissionScopeKey;
     },
@@ -3560,6 +3675,16 @@ export class ChatService {
         const tool = isOfferedEditTool(request.name, patchEdits)
           ? (findTool(request.name) ?? this.deps.mcp?.findTool(request.name))
           : undefined;
+        if (tool && scope.offered && !scope.offered.has(request.name)) {
+          const withdrawn: ChatToolCall = {
+            ...call,
+            status: 'error',
+            error: `${request.name} is not available in this conversation any more.`,
+          };
+          this.emit({ type: 'tool-start', sessionId, messageId, call });
+          this.emit({ type: 'tool-end', sessionId, messageId, call: withdrawn });
+          return withdrawn;
+        }
         if (tool?.interactive && !ask) {
           const unavailable: ChatToolCall = {
             ...call,
@@ -4062,6 +4187,46 @@ export class ChatService {
 
   private async announceSuggestions(sessionId: string): Promise<void> {
     this.emitSuggestions(sessionId, await this.deps.store.spawnSuggestions(sessionId));
+  }
+
+  /**
+   * Store the tool-state records a deferred-tools turn needs before its request is built, so this
+   * request and every later replay render the same bytes. See toolStateRecords.
+   */
+  private async recordToolStates(
+    session: ChatSession,
+    current: ChatToolState,
+    declarable: (name: string) => boolean
+  ): Promise<void> {
+    for (const { messageId, state } of toolStateRecords(sentHistory(session.messages), current, declarable)) {
+      await this.storeToolState(session, messageId, state);
+    }
+  }
+
+  /**
+   * A mid-turn change, recorded on the newest user turn so the next turn replays it there. It keeps
+   * every tool the turn already had, so nothing this turn called is replayed before its addition;
+   * the next turn's record drops what is no longer offered.
+   */
+  private async recordMidTurnToolState(session: ChatSession, next: ChatToolState): Promise<void> {
+    const history = sentHistory(session.messages);
+    const target = history.findLast(message => message.role === 'user' && !message.boundary);
+    if (!target) return;
+    const previous = history.findLast(message => message.role === 'user' && message.toolState)?.toolState;
+    await this.storeToolState(session, target.id, {
+      tools: [...new Set([...(previous?.tools ?? []), ...next.tools])].sort(),
+      text: next.text,
+    });
+  }
+
+  private async storeToolState(session: ChatSession, messageId: string, state: ChatToolState): Promise<void> {
+    const message = session.messages.find(entry => entry.id === messageId);
+    if (message) message.toolState = state;
+    try {
+      await this.deps.store.updateMessage(session.id, messageId, { toolState: state });
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: could not store the tool state: ${String(err)}`);
+    }
   }
 
   /**
@@ -5696,22 +5861,7 @@ export function buildSystemMessage(
     return {
       role: 'system',
       content: [
-        'You currently have NO access to the user files or filesystem, and no tools to read them.',
-        'Earlier turns in this conversation may show successful file reads; that access has since',
-        'been revoked and you cannot rely on it.',
-        'Never claim to have read, listed or searched a file, and never invent a file name, size,',
-        'path or contents.',
-        ...(ask
-          ? [
-              'If the task needs local files, call request_directory with the folder and your reason:',
-              'the user adds it with one click and you continue in this turn with file tools. Do not',
-              'tell the user you have no filesystem access, and do not ask them to share it themselves.',
-            ]
-          : [
-              // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
-              'If asked about local files, say plainly that you have no access and ask the user to share',
-              'the folder by typing /add-dir followed by its path in this conversation.',
-            ]),
+        ...noAccessLines(ask),
         // The browser is not file access and is not withheld with it: a conversation that can
         // read nothing on disk can still open a page, and needs to be told how.
         ...(browser ? BROWSER_GUIDANCE : []),
@@ -5740,109 +5890,11 @@ export function buildSystemMessage(
       ...dependencyLines,
       'These folders are shared with you, including everything beneath them:',
       ...roots.map(root => `  ${root}`),
-      'Always pass absolute paths. The file tools deny any path outside those folders;',
-      ...(ask
-        ? [
-            'if you need one, call request_directory with that folder and your reason - the user adds it',
-            'with one click and you continue in this turn. Never tell the user you lack access to it, and',
-            'never ask them to share it themselves.',
-          ]
-        : [
-            // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
-            'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
-            'path in this conversation. No typed message grants access on its own.',
-          ]),
-      'Bash commands run as the user with their full environment, not inside those folders: git,',
-      'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
-      'on authentication, report the command error; do not conclude the user is logged out.',
-      ...(projectContext
-        ? [
-            'The instruction files that apply here are already below in full, each labelled with its',
-            'path, and so is the file tree: do not list the root, and do not re-read those files or',
-            'anything they import. Use glob_files for anything deeper than the tree shows.',
-          ]
-        : []),
-      'Explore with grep_search and glob_files, not grep, find or ls through bash_execute: they need',
-      'no approval, skip ignored and binary files, and are faster.',
-      'Tool calls made together in one reply run in parallel, so batch independent searches and',
-      'reads into one reply instead of one per turn, and do not re-read lines you already have.',
-      'Before a batch of searches, reads or edits, say in one short sentence what you are after and',
-      'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
-      'above them. One sentence per round of work, not per call, with no label in front of it, and',
-      'none at all when a single call speaks for itself.',
-      'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
-      'things to do, or the work clearly runs to five or more steps, usually across several files.',
-      'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
-      'small edit: answer those directly.',
-      'When you do keep one, send the whole list each time and mark one item in_progress before',
-      'starting it. Before writing the message that ends a turn, make the plan match what actually',
-      'happened: an item whose result you are about to report as done is marked completed in that',
-      'same reply, not left for later. Never end a turn with an item still in_progress.',
-      ...(patchEdits
-        ? [
-            'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
-            'by an apply_patch Add or Delete, or re-read later; read it again if you still need it. An',
-            'apply_patch Update does not invalidate earlier reads, and its result shows the edited lines,',
-            'so patch again without reading the file first.',
-          ]
-        : [
-            'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
-            'with file_write or re-read later; read it again if you still need it. A file_edit does not',
-            'invalidate earlier reads, and its result shows the edited lines, so edit again without',
-            'reading the file first.',
-          ]),
-      'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
-      'already know which part you need or the file is too large to read at once. It shows you a',
-      'PNG, JPEG, GIF or WebP file as an image, so read a screenshot or image to look at it.',
-      ...(explore
-        ? [
-            'For open-ended exploration across many files, call explore instead - a faster read-only',
-            'sub-agent that returns a report - several in parallel for separate questions. Say what you',
-            'mean to build so its report ends with the edit points. When you already know the file or',
-            'symbol, use grep_search and file_read directly.',
-            'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
-            `lacks, and ${patchEdits ? 'an apply_patch hunk' : 'file_edit'} can match against its quoted text directly.`,
-          ]
-        : []),
-      'Running a command needs the user to approve it first, and they see the exact command, so',
-      'prefer one clear command over several speculative ones. If they decline, accept it and ask',
-      'what they would like instead rather than trying a variation of the same command.',
-      'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
-      ...(patchEdits
-        ? [
-            'change before they answer. Read a file before you edit it. Change files only with',
-            'apply_patch: Add File to create one, Update File for an in-place change (hunks with',
-            'context lines, in file order), Delete File to remove one. Make all the changes you have',
-            'planned, across every file, in a single apply_patch call: it applies all or nothing, and',
-            'each round trip costs you the whole context.',
-          ]
-        : [
-            'change before they answer. Read a file before you edit it, and prefer file_edit over',
-            'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
-            'Make all the changes you have planned for one file in a single file_edit call with edits:',
-            'they apply in order and all or nothing, and each round trip costs you the whole context.',
-          ]),
-      'Dev servers, watchers and anything else meant to keep running go to bash_background, not',
-      'bash_execute. Background processes belong to this conversation, are all killed when the app',
-      'quits, and none survive a restart - so check bash_list rather than assuming one from an',
-      'earlier session is still up, and stop what you no longer need with bash_kill.',
-      'When one you started exits on its own you are told in a message, even after your turn has',
-      'ended. To wait for a long build or test run, end your turn saying what you are waiting for;',
-      'never sleep or poll bash_output in a loop until it finishes.',
-      'To test a running app, drive the app itself: take its URL from bash_list and bash_output or',
-      'the user, read code only for the routes, request bodies and test credentials you need, then',
-      'exercise it (curl with a cookie jar, or a short script) and report the responses you saw.',
-      'Make the first request early and let the app correct your assumptions, rather than reading',
-      'the whole feature first. Unit tests passing is not an end-to-end result.',
+      ...localToolLines(ask, projectContext ? 'below' : null, explore, patchEdits),
       ...(browser ? BROWSER_GUIDANCE : []),
       ...(screen ? SCREEN_GUIDANCE : []),
       ...(web ? WEB_GUIDANCE : []),
-      'Never invent a file name, size or contents, or the output of a command: if a tool did not',
-      'return it, you do not know it.',
-      'When you mention a GitHub issue, pull request or commit, write it as a markdown link with its',
-      'full URL, e.g. [owner/repo#123](https://github.com/owner/repo/pull/123). Take owner/repo from',
-      'the repo the item belongs to (gh output or the git remote), not guesswork; never write a bare',
-      '#123, and never invent a URL you have not seen or cannot derive.',
+      ...HONESTY_LINES,
       ...(media ? MEDIA_GUIDANCE : []),
       ...(host ? HOST_GUIDANCE : []),
       ...(memory ? MEMORY_GUIDANCE : []),
@@ -5857,6 +5909,210 @@ export function buildSystemMessage(
       ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
     ].join('\n'),
   };
+}
+
+function noAccessLines(ask: boolean): string[] {
+  return [
+    'You currently have NO access to the user files or filesystem, and no tools to read them.',
+    'Earlier turns in this conversation may show successful file reads; that access has since',
+    'been revoked and you cannot rely on it.',
+    'Never claim to have read, listed or searched a file, and never invent a file name, size,',
+    'path or contents.',
+    ...(ask
+      ? [
+          'If the task needs local files, call request_directory with the folder and your reason:',
+          'the user adds it with one click and you continue in this turn with file tools. Do not',
+          'tell the user you have no filesystem access, and do not ask them to share it themselves.',
+        ]
+      : [
+          // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
+          'If asked about local files, say plainly that you have no access and ask the user to share',
+          'the folder by typing /add-dir followed by its path in this conversation.',
+        ]),
+  ];
+}
+
+const HONESTY_LINES: readonly string[] = [
+  'Never invent a file name, size or contents, or the output of a command: if a tool did not',
+  'return it, you do not know it.',
+  'When you mention a GitHub issue, pull request or commit, write it as a markdown link with its',
+  'full URL, e.g. [owner/repo#123](https://github.com/owner/repo/pull/123). Take owner/repo from',
+  'the repo the item belongs to (gh output or the git remote), not guesswork; never write a bare',
+  '#123, and never invent a URL you have not seen or cannot derive.',
+];
+
+/** The local file and command guidance; `instructions` says where the project's instruction files are, if loaded. */
+function localToolLines(
+  ask: boolean,
+  instructions: 'below' | 'in the system prompt' | null,
+  explore: boolean,
+  patchEdits: boolean
+): string[] {
+  return [
+    'Always pass absolute paths. The file tools deny any path outside those folders;',
+    ...(ask
+      ? [
+          'if you need one, call request_directory with that folder and your reason - the user adds it',
+          'with one click and you continue in this turn. Never tell the user you lack access to it, and',
+          'never ask them to share it themselves.',
+        ]
+      : [
+          // `/add-dir` is a renderer command: keep the name in sync with COMPOSER_COMMANDS.
+          'if you need one, name it and ask the user to share it by typing /add-dir followed by its',
+          'path in this conversation. No typed message grants access on its own.',
+        ]),
+    'Bash commands run as the user with their full environment, not inside those folders: git,',
+    'gh, pnpm, the keychain and git credentials work as in their terminal. If a command fails',
+    'on authentication, report the command error; do not conclude the user is logged out.',
+    ...(instructions
+      ? [
+          `The instruction files that apply here are already ${instructions} in full, each labelled with its`,
+          'path, and so is the file tree: do not list the root, and do not re-read those files or',
+          'anything they import. Use glob_files for anything deeper than the tree shows.',
+        ]
+      : []),
+    'Explore with grep_search and glob_files, not grep, find or ls through bash_execute: they need',
+    'no approval, skip ignored and binary files, and are faster.',
+    'Tool calls made together in one reply run in parallel, so batch independent searches and',
+    'reads into one reply instead of one per turn, and do not re-read lines you already have.',
+    'Before a batch of searches, reads or edits, say in one short sentence what you are after and',
+    'why - including the first batch of the turn, which otherwise draws as tool rows with nothing',
+    'above them. One sentence per round of work, not per call, with no label in front of it, and',
+    'none at all when a single call speaks for itself.',
+    'Most work needs no plan. Keep one with todo_write only when the user gave you several separate',
+    'things to do, or the work clearly runs to five or more steps, usually across several files.',
+    'Never for a question, an explanation, an investigation, a piece of research, a single fix or a',
+    'small edit: answer those directly.',
+    'When you do keep one, send the whole list each time and mark one item in_progress before',
+    'starting it. Before writing the message that ends a turn, make the plan match what actually',
+    'happened: an item whose result you are about to report as done is marked completed in that',
+    'same reply, not left for later. Never end a turn with an item still in_progress.',
+    ...(patchEdits
+      ? [
+          'An older file_read result may show as a [stale: ...] placeholder once the file was replaced',
+          'by an apply_patch Add or Delete, or re-read later; read it again if you still need it. An',
+          'apply_patch Update does not invalidate earlier reads, and its result shows the edited lines,',
+          'so patch again without reading the file first.',
+        ]
+      : [
+          'An older file_read result may show as a [stale: ...] placeholder once the file was rewritten',
+          'with file_write or re-read later; read it again if you still need it. A file_edit does not',
+          'invalidate earlier reads, and its result shows the edited lines, so edit again without',
+          'reading the file first.',
+        ]),
+    'file_read returns the whole file, up to 2000 lines; pass offset and limit only when you',
+    'already know which part you need or the file is too large to read at once. It shows you a',
+    'PNG, JPEG, GIF or WebP file as an image, so read a screenshot or image to look at it.',
+    ...(explore
+      ? [
+          'For open-ended exploration across many files, call explore instead - a faster read-only',
+          'sub-agent that returns a report - several in parallel for separate questions. Say what you',
+          'mean to build so its report ends with the edit points. When you already know the file or',
+          'symbol, use grep_search and file_read directly.',
+          'Treat an explore report as already read: do not re-read ranges it quotes, read only what it',
+          `lacks, and ${patchEdits ? 'an apply_patch hunk' : 'file_edit'} can match against its quoted text directly.`,
+        ]
+      : []),
+    'Running a command needs the user to approve it first, and they see the exact command, so',
+    'prefer one clear command over several speculative ones. If they decline, accept it and ask',
+    'what they would like instead rather than trying a variation of the same command.',
+    'Changing a file needs the same approval, and the user sees a line-by-line diff of the',
+    ...(patchEdits
+      ? [
+          'change before they answer. Read a file before you edit it. Change files only with',
+          'apply_patch: Add File to create one, Update File for an in-place change (hunks with',
+          'context lines, in file order), Delete File to remove one. Make all the changes you have',
+          'planned, across every file, in a single apply_patch call: it applies all or nothing, and',
+          'each round trip costs you the whole context.',
+        ]
+      : [
+          'change before they answer. Read a file before you edit it, and prefer file_edit over',
+          'file_write so the rest of the file is left alone; file_write replaces a file entirely.',
+          'Make all the changes you have planned for one file in a single file_edit call with edits:',
+          'they apply in order and all or nothing, and each round trip costs you the whole context.',
+        ]),
+    'Dev servers, watchers and anything else meant to keep running go to bash_background, not',
+    'bash_execute. Background processes belong to this conversation, are all killed when the app',
+    'quits, and none survive a restart - so check bash_list rather than assuming one from an',
+    'earlier session is still up, and stop what you no longer need with bash_kill.',
+    'When one you started exits on its own you are told in a message, even after your turn has',
+    'ended. To wait for a long build or test run, end your turn saying what you are waiting for;',
+    'never sleep or poll bash_output in a loop until it finishes.',
+    'To test a running app, drive the app itself: take its URL from bash_list and bash_output or',
+    'the user, read code only for the routes, request bodies and test credentials you need, then',
+    'exercise it (curl with a cookie jar, or a short script) and report the responses you saw.',
+    'Make the first request early and let the app correct your assumptions, rather than reading',
+    'the whole feature first. Unit tests passing is not an end-to-end result.',
+  ];
+}
+
+/**
+ * The system prompt of a deferred-tools turn: only what is fixed for the session, so a change of
+ * tools, folders or MCP servers never moves it. That part travels in the tool-state reminder
+ * instead; see buildToolStateText and chat/deferredTools.ts.
+ */
+export function buildDeferredSystemMessage(
+  project: ChatProject | undefined,
+  projectContext: string,
+  skillsSection: string,
+  modelId: string
+): CompletionMessage {
+  return {
+    role: 'system',
+    content: [
+      'Which tools you have and which folders are shared with you are stated in a system reminder on',
+      'a user turn. When there are several, the latest one is current and replaces the earlier ones.',
+      ...(project ? projectPreamble(project) : []),
+      ...WEB_GUIDANCE,
+      ...HONESTY_LINES,
+      ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
+      ...desktopAppGuidance(null),
+      ...(skillsSection ? [skillsSection] : []),
+      '',
+      DESKTOP_ARTIFACT_PROMPT,
+      ...(projectContext ? ['', projectContext] : []),
+    ].join('\n'),
+  };
+}
+
+/** The tool and access half of buildSystemMessage, for the tool-state reminder of a deferred-tools turn. */
+export function buildToolStateText(state: {
+  roots: readonly string[];
+  media: boolean;
+  host: boolean;
+  explore: boolean;
+  mcpServers: readonly McpServerState[] | null;
+  dependencyLines: readonly string[];
+  projectContext: boolean;
+  browser: boolean;
+  patchEdits: boolean;
+  memory: boolean;
+  ask: boolean;
+  screen: boolean;
+}): string {
+  const { roots, ask, mcpServers } = state;
+  const mcp = mcpServers ? (ask ? 'manage' : 'read') : null;
+  return [
+    'Your tools and access from this turn on:',
+    ...(roots.length === 0
+      ? noAccessLines(ask)
+      : [
+          'You can read and change files on the user machine, and run bash commands on it, with the',
+          'provided tools.',
+          ...state.dependencyLines,
+          'These folders are shared with you, including everything beneath them:',
+          ...roots.map(root => `  ${root}`),
+          ...localToolLines(ask, state.projectContext ? 'in the system prompt' : null, state.explore, state.patchEdits),
+        ]),
+    ...(state.browser ? BROWSER_GUIDANCE : []),
+    ...(state.screen ? SCREEN_GUIDANCE : []),
+    ...(state.media ? MEDIA_GUIDANCE : []),
+    ...(state.host ? HOST_GUIDANCE : []),
+    ...(state.memory ? MEMORY_GUIDANCE : []),
+    ...(ask ? ASK_GUIDANCE : []),
+    ...desktopAppGuidance(mcp).slice(desktopAppGuidance(null).length),
+    ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
+  ].join('\n');
 }
 
 /** Whether the connected MCP tools differ from the ones declared, by name. */
@@ -6540,7 +6796,9 @@ function parseArguments(raw: string | undefined): Record<string, unknown> {
  */
 async function toCompletionMessages(
   session: ChatSession,
-  readAttachment: ReadAttachment
+  readAttachment: ReadAttachment,
+  /** Deferred-tools turns only: tool-state reminders are rendered and each one's position is pushed here. */
+  toolStateMarks?: ToolStateMark[]
 ): Promise<CompletionMessage[]> {
   const wire: CompletionMessage[] = [];
 
@@ -6550,7 +6808,16 @@ async function toCompletionMessages(
     const calls = message.toolCalls ?? [];
     // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
     // that cannot see the artifact it just wrote cannot revise it.
-    const text = withNotes(message, frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message))));
+    const noted = withNotes(message, frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message))));
+    const toolState = toolStateMarks && message.role === 'user' ? message.toolState : undefined;
+    const text = toolState
+      ? noted
+        ? `${noted}\n\n${toolStateReminder(toolState)}`
+        : toolStateReminder(toolState)
+      : noted;
+    const markToolState = () => {
+      if (toolState) toolStateMarks?.push({ index: wire.length - 1, tools: toolState.tools });
+    };
 
     if (isImportedToolTurn(message)) {
       const flattened = importedTurnAsText(message, text);
@@ -6562,13 +6829,24 @@ async function toCompletionMessages(
       const attachments = message.attachments ?? [];
       if (attachments.length > 0) {
         const content = await toAttachedContent(text, attachments, readAttachment);
-        if (content.length > 0) wire.push({ role: message.role, content });
+        if (content.length > 0) {
+          wire.push({ role: message.role, content });
+          markToolState();
+        }
         continue;
       }
-      if (text.length > 0) wire.push({ role: message.role, content: text });
+      if (text.length > 0) {
+        wire.push({ role: message.role, content: text });
+        markToolState();
+      }
       continue;
     }
 
+    const asSent = sentRounds(message);
+    if (asSent) {
+      wire.push(...asSent);
+      continue;
+    }
     wire.push({
       role: 'assistant',
       content: [
@@ -6577,18 +6855,55 @@ async function toCompletionMessages(
         ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
       ],
     });
-    wire.push({
-      role: 'user',
-      content: calls.map(call => ({
-        type: 'tool_result',
-        tool_use_id: call.id,
-        content: toolResultContent(call),
-        ...(call.error ? { is_error: true } : {}),
-      })),
-    });
+    wire.push({ role: 'user', content: calls.map(call => toolResultBlock(call)) });
   }
 
   return wire;
+}
+
+function toolResultBlock(call: ChatToolCall, note = ''): Record<string, unknown> {
+  return {
+    type: 'tool_result',
+    tool_use_id: call.id,
+    content: `${toolResultContent(call)}${call.cleared ? '' : note}`,
+    ...(call.error ? { is_error: true } : {}),
+  };
+}
+
+/**
+ * A tool turn as its rounds sent it: each round's assistant message and tool results, then the
+ * answer as its own assistant message, so the next turn reads the entry the last round cached.
+ * Must stay in step with the round loop in runReply. Undefined when a round predates `sent`.
+ */
+function sentRounds(message: ChatMessage): CompletionMessage[] | undefined {
+  const rounds = message.rounds;
+  if (!rounds?.length || rounds.some(round => !round.sent)) return undefined;
+  const byId = new Map((message.toolCalls ?? []).map(call => [call.id, call]));
+  const out: CompletionMessage[] = [];
+  for (const round of rounds) {
+    const sent = round.sent as ChatSentRound;
+    const calls = round.toolCallIds.flatMap(id => byId.get(id) ?? []);
+    if (calls.length !== round.toolCallIds.length) return undefined;
+    if (calls.length === 0) {
+      if (sent.text) out.push({ role: 'assistant', content: sent.text });
+      continue;
+    }
+    out.push({
+      role: 'assistant',
+      content: [
+        ...(sent.thinking ?? []),
+        ...(sent.text ? [{ type: 'text', text: sent.text }] : []),
+        ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
+      ],
+    });
+    out.push({
+      role: 'user',
+      content: calls.map((call, index) =>
+        toolResultBlock(call, index === calls.length - 1 ? (sent.resultNote ?? '') : '')
+      ),
+    });
+  }
+  return out;
 }
 
 /** App-written notes ride after the turn's own words, so what the user said stays first. */

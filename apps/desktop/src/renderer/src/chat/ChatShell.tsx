@@ -29,6 +29,7 @@ import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
+import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
@@ -1119,6 +1120,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   noLocal={noLocal}
                   local={localMode}
                   onOpenModels={() => setScreen('models')}
+                  switchCredits={model => modelSwitchCredits(model, composerUsage.contextTokens ?? 0)}
                 />
                 <ReasoningEffortPicker
                   models={catalog.models}

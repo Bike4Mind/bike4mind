@@ -89,6 +89,15 @@ function topMatch(filterInput: HTMLElement): HTMLElement | null {
   );
 }
 
+function SwitchCost({ credits }: { credits: number | null }) {
+  if (credits === null) return null;
+  return (
+    <Typography level="body-xs" textColor="warning.plainColor" noWrap data-testid="model-picker-switch-cost">
+      About {credits.toLocaleString('en-US')} credits to re-read this chat
+    </Typography>
+  );
+}
+
 /**
  * Which model answers this conversation, changed without leaving it.
  *
@@ -104,6 +113,7 @@ export function ModelPicker({
   noLocal,
   onOpenModels,
   local,
+  switchCredits,
 }: {
   catalog: ModelCatalogController;
   /** The conversation's saved model. May not be in `catalog.models` - see `unavailable`. */
@@ -115,6 +125,8 @@ export function ModelPicker({
   onOpenModels?: () => void;
   /** Signed out: models are on this device, not on a server. */
   local?: boolean;
+  /** Credits the first turn on another model spends re-reading this conversation, or null to say nothing. */
+  switchCredits?: (model: ChatModelOption) => number | null;
 }) {
   const [filter, setFilter] = useState('');
   const { models, loading, error } = catalog;
@@ -338,6 +350,9 @@ export function ModelPicker({
                     >
                       {details.get(model.id)}
                     </Typography>
+                  )}
+                  {!model.unavailable && model.id !== modelId && switchCredits && (
+                    <SwitchCost credits={switchCredits(model)} />
                   )}
                 </Stack>
               </MenuItem>

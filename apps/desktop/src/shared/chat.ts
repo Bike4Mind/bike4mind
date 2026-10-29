@@ -739,6 +739,19 @@ export interface ChatMessage {
    * per request so the replayed history stays byte-identical and the prompt cache holds.
    */
   notes?: string[];
+  /**
+   * On a user turn of a deferred-tools conversation: the optional tools offered from this turn on
+   * and the guidance that goes with them. Stored for the same reason as `notes`; see
+   * chat/deferredTools.ts for how a request replays it.
+   */
+  toolState?: ChatToolState;
+}
+
+export interface ChatToolState {
+  /** Optional tool names, sorted. The core tools are always loaded and never listed. */
+  tools: string[];
+  /** The tool and access guidance, read by the model as a reminder on this turn. */
+  text: string;
 }
 
 /**
@@ -919,6 +932,8 @@ export interface ChatModelOption {
   server?: { id: string; name: string };
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
+  /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
+  pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
 }
 
 /** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
@@ -1731,6 +1746,18 @@ export interface ChatReplyRound {
    * `thinking`, never this.
    */
   reasoning?: string;
+  /**
+   * Main only: what this round put on the wire, so later requests replay the turn byte for byte and
+   * read the cache entry its last round wrote (see toCompletionMessages). Absent on older rounds.
+   */
+  sent?: ChatSentRound;
+}
+
+/** A round's assistant message as sent, plus any app text appended to its last tool result. */
+export interface ChatSentRound {
+  thinking?: unknown[];
+  text: string;
+  resultNote?: string;
 }
 
 /**

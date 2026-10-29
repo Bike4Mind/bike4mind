@@ -359,8 +359,9 @@ describe('ChatService tool loop', () => {
         toolCallIds: [expect.any(String)],
         timing: expect.any(Object),
         usage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, creditsUsed: 20 },
+        sent: { text: 'Reading the config.' },
       },
-      { text: 'Done.', toolCallIds: [], timing: expect.any(Object) },
+      { text: 'Done.', toolCallIds: [], timing: expect.any(Object), sent: { text: 'Done.' } },
     ]);
   });
 
@@ -485,6 +486,12 @@ describe('ChatService tool loop', () => {
     });
 
     const wireOf = (request: number): string => JSON.stringify(post.mock.calls[request][1].messages);
+    /** Only the running turn: earlier turns replay the nudges they were sent. */
+    const turnWireOf = (request: number): string => {
+      const messages: { role: string; content: unknown }[] = post.mock.calls[request][1].messages;
+      const prompt = messages.findLastIndex(message => message.role === 'user' && typeof message.content === 'string');
+      return JSON.stringify(messages.slice(prompt));
+    };
 
     /** Three tool rounds that leave the plan alone - enough to earn a nudge if one is owed. */
     async function bareRounds(from: number): Promise<void> {
@@ -534,12 +541,13 @@ describe('ChatService tool loop', () => {
       streams[4].write(frame('[DONE]'));
       await waitFor(events, 'done');
 
-      // Ephemeral: the rebuilt history carries only the results themselves, so the cached prefix
-      // a later turn sends is byte-for-byte the one it was built from.
+      // The rebuilt history replays the nudge where it was sent, so a later turn's prefix is
+      // byte-for-byte the one the last round cached; the stored results stay clean.
       await service.send(id, 'thanks');
       await vi.waitUntil(() => post.mock.calls.length === 6, { timeout: 3000, interval: 5 });
-      const rebuilt = post.mock.calls[5][1].messages;
-      expect(JSON.stringify(rebuilt.slice(0, -1))).not.toContain('system-reminder');
+      const unmarked = ({ cache: _cache, ...rest }: { cache?: boolean }) => rest;
+      const lastRound = post.mock.calls[4][1].messages;
+      expect(post.mock.calls[5][1].messages.slice(0, lastRound.length).map(unmarked)).toEqual(lastRound.map(unmarked));
       const stored = (await service.getSession(id))?.messages[1];
       expect(JSON.stringify(stored?.toolCalls)).not.toContain('system-reminder');
     });
@@ -566,7 +574,7 @@ describe('ChatService tool loop', () => {
       // Two replies back: the panel has dropped it, and so has the nudge.
       await service.send(id, 'and again');
       await bareRounds(6);
-      expect(wireOf(9)).not.toContain('system-reminder');
+      expect(turnWireOf(9)).not.toContain('system-reminder');
       await endTurn(9, 3);
     });
 

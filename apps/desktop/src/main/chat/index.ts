@@ -75,6 +75,7 @@ import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService, type ChatServiceDeps } from './ChatService';
+import { parseDeferredToolsSetting } from './deferredTools';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
@@ -167,6 +168,12 @@ const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
  * SessionStore - so this only reaches a conversation that has never been given one.
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
+
+/** Deferred tool loading, on unless B4M_DESKTOP_DEFERRED_TOOLS=0. */
+const DEFERRED_TOOLS = parseDeferredToolsSetting(
+  process.env.B4M_DESKTOP_DEFERRED_TOOLS,
+  process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS
+);
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
@@ -621,6 +628,7 @@ export function registerChat(
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
+    ...(DEFERRED_TOOLS ? { deferredTools: DEFERRED_TOOLS } : {}),
     getApiClient: () => auth.getApiClient(),
     isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
     getEnvironmentUrl: () => auth.getState().environment.url,
