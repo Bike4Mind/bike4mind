@@ -6,10 +6,15 @@ type Route = (req: unknown, res: unknown) => unknown;
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const routes: Record<string, Route> = {};
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method: string }).method]?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method: string }).method]?.(req, res);
+      },
       {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (fn: Route) => ((routes.GET = fn), chain),
         put: (fn: Route) => ((routes.PUT = fn), chain),
         delete: (fn: Route) => ((routes.DELETE = fn), chain),

@@ -1,6 +1,11 @@
+import { randomUUID } from 'crypto';
+import { estimateImageCredits } from '@bike4mind/services/imageCost';
+import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { usdToCreditsStochastic } from '@bike4mind/common';
+import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
 import type { Logger } from '@bike4mind/observability';
 import { agentRepository } from '@bike4mind/database';
-import { ImageModels, IAgent, ModelInfo, UNKNOWN_MODEL_ERROR_CODE } from '@bike4mind/common';
+import { ImageModels, isGPTImageModel, IAgent, ModelInfo, UNKNOWN_MODEL_ERROR_CODE } from '@bike4mind/common';
 import {
   BadRequestError,
   getSettingsByNames,
@@ -114,7 +119,8 @@ export async function generateAgentAvatar(
   agent: IAgent,
   user: Parameters<typeof checkStorageLimit>[0],
   userImageModel: string | undefined,
-  logger: Logger
+  logger: Logger,
+  billingRequest?: Parameters<typeof reserveRequestCredits>[0]['req']
 ): Promise<{ portraitUrl: string; generationPrompt: string }> {
   const userId = user.id;
   // Get operations model for text generation (LLM for prompt generation)
@@ -183,6 +189,8 @@ export async function generateAgentAvatar(
     imageBackend: imageModelInfo.backend,
   });
 
+  await assertMediaModelAdmission(user, imageModelId, !user.isAdmin);
+
   const userPrompt = buildAgentVisualPrompt(agent);
   let generatedPrompt = '';
 
@@ -243,6 +251,9 @@ export async function generateAgentAvatar(
     imageParams.prompt_upsampling = true; // Better quality
   }
 
+  // The SDK defaults to auto; reserve its ceiling rather than pricing an omitted tier as medium.
+  if (isGPTImageModel(imageModelId)) imageParams.quality ??= 'auto';
+
   // Get API keys for the image generation
   const dbAdapters = {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
@@ -285,11 +296,33 @@ export async function generateAgentAvatar(
     : aiImageService('openai', apiKeyTable.openai!, logger);
 
   imageLogger.info(`Generating with ${imageModelId} using ${isBFLModel ? 'BFL' : 'OpenAI'} service:`, imageParams);
-  const generatedImages = await imageService.generate(cleanPrompt, imageParams);
-
-  if (!generatedImages || generatedImages.length === 0) {
-    throw new Error('No images were generated');
+  const { requiredCredits, usdCost } = estimateImageCredits(imageModelInfo, 1, imageParams);
+  const billingSettings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
+  const reservation = await reserveRequestCredits({
+    req: billingRequest ?? { user, logger },
+    requiredCredits,
+    enforceCredits: getSettingsValue('enforceCredits', billingSettings),
+    featureLabel: 'avatar generation',
+  });
+  let generatedImages: string[];
+  try {
+    generatedImages = await imageService.generate(cleanPrompt, imageParams);
+    if (!generatedImages?.length) throw new Error('No images were generated');
+  } catch (error) {
+    await reservation.refund();
+    throw error;
   }
+  const generationId = randomUUID();
+  // Settle before moderation/storage checks: the provider has already billed for the image.
+  await reservation.settle(usdToCreditsStochastic(usdCost), {
+    type: 'image_generation_usage',
+    model: imageModelId,
+    questId: generationId,
+    sessionId: generationId,
+  });
 
   const imageUrl = generatedImages[0];
   imageLogger.info(`Generated image URL: ${imageUrl.substring(0, 100)}...`);

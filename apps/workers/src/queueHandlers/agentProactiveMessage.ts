@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { getUserEntitlements } from '@server/entitlements';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import {
   sessionAgentConfigRepository,
@@ -104,6 +105,7 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
         agent,
         session,
         user,
+        getEntitlements: () => getUserEntitlements(user),
         logger,
         recentMessages: recentMessages.reverse(), // Reverse to get chronological order
         db: {

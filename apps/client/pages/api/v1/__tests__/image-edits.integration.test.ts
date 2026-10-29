@@ -224,6 +224,7 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     expect(res._getJSONData()).toMatchObject({ id: 'quest-1' });
     expect(ImageQuestSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
   });
 
   describe('referenceImageFabFileIds', () => {

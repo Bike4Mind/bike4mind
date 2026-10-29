@@ -524,6 +524,11 @@ export async function planPull(
     build,
     id,
     license: withCuratedLicense(licenseFor(detail, hub.endpoint), `hf.co/${detail.id}:${build.quant}`, deps),
-    projectorBytes: Math.max(0, ...detail.projectors.map(entry => entry.sizeBytes)),
+    projectorBytes: largestProjectorBytes(detail),
   };
+}
+
+/** The largest vision projector Ollama's Hugging Face registry may add to a pull from this repo; 0 when none. */
+export function largestProjectorBytes(detail: Pick<HubModelDetail, 'projectors'>): number {
+  return Math.max(0, ...detail.projectors.map(entry => entry.sizeBytes));
 }
