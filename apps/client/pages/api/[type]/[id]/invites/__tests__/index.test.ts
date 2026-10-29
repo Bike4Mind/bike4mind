@@ -158,9 +158,9 @@ describe('POST /api/[type]/[id]/invites', () => {
     tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
   });
 
-  it('rate limits invite creation per user with one bucket for every type', () => {
+  it('rate limits invite creation per user with the bucket every invite route shares', () => {
     expect(mockRefs.postMiddleware).toEqual([
-      { rateLimitOptions: expect.objectContaining({ limit: 100, bucket: 'POST /api/[type]/[id]/invites' }) },
+      { rateLimitOptions: expect.objectContaining({ limit: 100, bucket: 'POST invites' }) },
     ]);
   });
 
@@ -204,28 +204,24 @@ describe('POST /api/[type]/[id]/invites', () => {
     expect(createInvite).not.toHaveBeenCalled();
   });
 
-  it('charges typed addresses against the budget the project route shares and stops once it is spent', async () => {
-    tryIncrementWithinLimitFixedWindow
-      .mockResolvedValueOnce({ success: true, expiresAt: new Date() })
-      .mockResolvedValueOnce({ success: false, expiresAt: new Date() });
+  // Only project invites can name an address with no account, so the typed-address budget is
+  // the project route's alone; charging it here would fail bulk shares to account holders.
+  it('does not charge the typed-address budget, which only project invites need', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { type: 'sessions', id: '507f1f77bcf86cd799439011' },
-      body: { permissions: ['read'], recipients: ['a@example.com', '507f1f77bcf86cd799439034', 'b@example.com'] },
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com', 'b@example.com'] },
     });
     (req as any).user = { id: 'u1' };
 
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many email invitations/);
-    expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(2);
-    expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
-      'rate-limit:u1:invite-typed-address',
-      20,
-      60 * 60 * 1000
-    );
-    expect(createInvite).not.toHaveBeenCalled();
-    expect(sendInviteNotificationEmails).not.toHaveBeenCalled();
+    await mockRefs.postHandler!(req, res);
+
+    expect(tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(createInvite).toHaveBeenCalledOnce();
   });
 
+  // No type this route accepts puts an address with no account in `pending` today; this pins the
+  // shared mailer's fallback should the sharing service ever start to.
   it('emails an address with no account the fixed template only, and an account holder the message', async () => {
     createInvite.mockResolvedValue({
       id: 'i1',

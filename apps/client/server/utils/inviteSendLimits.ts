@@ -1,6 +1,9 @@
 import { cacheRepository, User } from '@bike4mind/database';
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
+import { MAX_INVITE_MESSAGE_LENGTH, MAX_INVITE_RECIPIENTS } from '@client/types/api';
+
+export { MAX_INVITE_MESSAGE_LENGTH, MAX_INVITE_RECIPIENTS };
 
 // Creating an invite emails every recipient, including addresses with no account, with the
 // inviter's name, the document name and their message. These bounds keep the invite routes
@@ -8,11 +11,12 @@ import { sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotific
 // relay. The request limit is loose because the Add Members modal sends one request per selected
 // user; typed addresses, the only way to reach someone with no account, get their own tighter
 // hourly budget, counted per address and the same whether or not the address has an account.
-export const MAX_INVITE_RECIPIENTS = 25;
-export const MAX_INVITE_MESSAGE_LENGTH = 1000;
-export const INVITE_REQUESTS_PER_HOUR = 100;
-export const TYPED_ADDRESS_INVITES_PER_HOUR = 20;
-export const HOUR_MS = 60 * 60 * 1000;
+const TYPED_ADDRESS_INVITES_PER_HOUR = 20;
+const HOUR_MS = 60 * 60 * 1000;
+
+// One bucket for both routes and every type, so the per-user request budget cannot be multiplied
+// by switching routes or types.
+export const INVITE_RATE_LIMIT = { limit: 100, windowMs: HOUR_MS, bucket: 'POST invites' } as const;
 
 const MAX_EMAILED_NAME_LENGTH = 60;
 
@@ -20,14 +24,15 @@ const capLength = (value: string, max: number) => (value.length > max ? `${value
 
 /**
  * Charges each typed address (a recipient containing '@') against the user's hourly budget and
- * throws once it is spent. One counter shared by every invite route, so a caller cannot double
- * the budget by switching routes. Call it before the invite is created.
+ * throws once it is spent. Call it before the invite is created. Only project invites need it:
+ * they are the one type the sharing service lets name an address with no account
+ * (sharingService/create.ts); every other type refuses or drops such an address.
  */
 export async function chargeTypedAddressBudget(userId: string, recipients: string[] | undefined): Promise<void> {
   const typedAddresses = (recipients ?? []).filter(recipient => recipient.includes('@'));
   for (let i = 0; i < typedAddresses.length; i++) {
     const { success } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-      `rate-limit:${userId}:invite-typed-address`,
+      `rate-limit:${userId}:project-invite-typed-address`,
       TYPED_ADDRESS_INVITES_PER_HOUR,
       HOUR_MS
     );

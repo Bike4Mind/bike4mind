@@ -7,7 +7,6 @@ import {
   Group,
   Session,
   withTransaction,
-  Project,
   fabFileRepository,
   sessionRepository,
   userRepository,
@@ -25,9 +24,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
 import {
-  chargeTypedAddressBudget,
-  HOUR_MS,
-  INVITE_REQUESTS_PER_HOUR,
+  INVITE_RATE_LIMIT,
   MAX_INVITE_MESSAGE_LENGTH,
   MAX_INVITE_RECIPIENTS,
   notifyInvitees,
@@ -65,13 +62,6 @@ const createInviteBodySchema = z.object({
   ),
   available: z.number().optional(),
 });
-
-// One bucket across every [type], so the per-user budget cannot be multiplied by switching types.
-const INVITE_RATE_LIMIT = {
-  limit: INVITE_REQUESTS_PER_HOUR,
-  windowMs: HOUR_MS,
-  bucket: 'POST /api/[type]/[id]/invites',
-} as const;
 
 const handler = baseApi()
   /**
@@ -132,14 +122,14 @@ const handler = baseApi()
       if (!inviteType) throw new BadRequestError('Invalid type');
       // Project invites have their own route (pages/api/projects/[id]/invites.ts), which shadows the
       // `projects` alias here. Only the raw `Project` value reaches this handler, and creating one
-      // here would skip that route's API-key scope checks.
+      // here would skip that route's API-key scope checks and its budget for addresses with no
+      // account, which only project invites can name.
       if (inviteType === InviteType.Project) {
         throw new BadRequestError('Create project invites at /api/projects/:id/invites');
       }
       if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
-      await chargeTypedAddressBudget(req.user.id, restBody.recipients);
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
@@ -281,10 +271,6 @@ const getDocumentName = async (type: InviteType, id: string): Promise<string> =>
     case InviteType.Session: {
       const session = await Session.findById(id);
       return session?.name || 'a notebook';
-    }
-    case InviteType.Project: {
-      const project = await Project.findById(id);
-      return project?.name || 'a project';
     }
     case InviteType.Organization: {
       const org = await Organization.findById(id);

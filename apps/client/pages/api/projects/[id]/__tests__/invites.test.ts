@@ -73,9 +73,9 @@ describe('POST /api/projects/:id/invites', () => {
     tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
   });
 
-  it('rate limits invite creation per user with a route-wide bucket', () => {
+  it('rate limits invite creation per user with the bucket every invite route shares', () => {
     expect(mockRefs.postMiddleware).toEqual([
-      { rateLimitOptions: expect.objectContaining({ bucket: 'POST /api/projects/[id]/invites' }) },
+      { rateLimitOptions: expect.objectContaining({ limit: 100, bucket: 'POST invites' }) },
     ]);
   });
 
@@ -118,7 +118,7 @@ describe('POST /api/projects/:id/invites', () => {
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many email invitations/);
     expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(2);
     expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
-      'rate-limit:u1:invite-typed-address',
+      'rate-limit:u1:project-invite-typed-address',
       20,
       60 * 60 * 1000
     );

@@ -26,19 +26,12 @@ import { z } from 'zod';
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
 import {
   chargeTypedAddressBudget,
-  HOUR_MS,
-  INVITE_REQUESTS_PER_HOUR,
+  INVITE_RATE_LIMIT,
   MAX_INVITE_MESSAGE_LENGTH,
   MAX_INVITE_RECIPIENTS,
   notifyInvitees,
 } from '@server/utils/inviteSendLimits';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-
-const PROJECT_INVITE_RATE_LIMIT = {
-  limit: INVITE_REQUESTS_PER_HOUR,
-  windowMs: HOUR_MS,
-  bucket: 'POST /api/projects/[id]/invites',
-} as const;
 
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
@@ -70,7 +63,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
     return res.json({ ...result, data: await toSharerInviteViews(result.data, req.user!) });
   })
   .post(
-    rateLimit(PROJECT_INVITE_RATE_LIMIT),
+    rateLimit(INVITE_RATE_LIMIT),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
       assertProjectsWriteScope(req);
       const { id } = req.query as { id: string };
