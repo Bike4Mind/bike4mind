@@ -77,6 +77,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.PartnerSignupRules]: 'partner-signup-rules',
   [AdminTab.SignupDomainHolds]: 'signup-domain-holds',
   [AdminTab.SignupRiskReview]: ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
+  [AdminTab.HeldSignupGrants]: 'held-signup-grants',
   [AdminTab.EmbedKeys]: 'embed-keys',
   [AdminTab.ModelLifecycle]: 'model-lifecycle',
   [AdminTab.PrReport]: 'pr-report',

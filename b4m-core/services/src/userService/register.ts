@@ -287,6 +287,14 @@ export const registerUser = async (
     }
   }
 
+  // Open signups and refer-a-friend invitees trickle their grant; admin and unlimited codes keep the flat grant.
+  const isReferralInvite = Boolean(invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral);
+  const referralGrant = !hasInviteCode
+    ? await newSignupGrant(db.adminSettings)
+    : isReferralInvite && freeCredits > 0
+      ? await newSignupGrant(db.adminSettings, freeCredits)
+      : undefined;
+
   // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
   // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
   // minted before `source` existed are deliberately not attributed.
@@ -324,9 +332,9 @@ export const registerUser = async (
     planStorageLimit: null,
     currentStorageSize: 0,
     currentCredits: 0,
-    pendingCreditGrant: freeCredits > 0 ? freeCredits : null,
+    pendingCreditGrant: freeCredits > 0 && !referralGrant ? freeCredits : null,
     ...(signupMeta ? { signupMeta } : {}),
-    ...(!hasInviteCode ? { signupGrant: await newSignupGrant(db.adminSettings) } : {}),
+    ...(referralGrant ? { signupGrant: referralGrant } : {}),
     level: 'DemoUser',
     isBanned: false,
     isModerated: false,
