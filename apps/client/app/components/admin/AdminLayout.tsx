@@ -15,6 +15,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
 import { adminFocus, adminScrollGutter } from './shared/adminStyles';
+import { useNewSubscriptionsDot } from './Subscriptions/subscriptionsLastSeen';
 import { useAdminModal } from './useAdminModal';
 import { useAdminNotifications } from './useAdminNotifications';
 import { useAdminSidebarCollapsed } from './useAdminSidebarState';
@@ -49,6 +50,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const isAdmin = !!currentUser?.isAdmin;
   const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: isAdmin });
+  const newSubscriptions = useNewSubscriptionsDot(isAdmin);
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -76,6 +78,8 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     enableUserMigration,
     showLiveOpsTriageTab: liveOpsEnv?.showTab ?? false,
     waitingSubscribersCount: waitingSubscribers.data?.count,
+    // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
+    newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,
     hiddenNotifications,
     onTabSelect: selectTab,
     environmentLabel: environmentChipLabel[resolveCurrentEnvironment().environment],

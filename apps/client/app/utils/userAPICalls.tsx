@@ -100,6 +100,8 @@ export interface AnalyticsReport {
   endDate?: string;
   report: string;
   aiInsights?: string | null;
+  /** Daily mode only: generation failed for this date; `report` is empty. */
+  error?: string;
 }
 
 /** One rendered User Activity row: the server groups per day/counter/user/metadata. */

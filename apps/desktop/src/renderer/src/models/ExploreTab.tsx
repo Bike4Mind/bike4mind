@@ -27,6 +27,7 @@ import { ExternalLink } from '../chat/ExternalLink';
 import { SearchIcon } from '../chat/icons';
 import { readShowAbliterated, writeShowAbliterated } from './abliteratedSetting';
 import { AccessSteps } from './AccessSteps';
+import { FitBadge } from './FitBadge';
 import { HuggingFaceToken } from './HuggingFaceToken';
 import { PullDialog, type PullConsent } from './PullDialog';
 import { pullLabel, pullPercent } from './pullDisplay';
@@ -48,6 +49,34 @@ export function hubErrorText(error: ModelHubError): string {
     return `Hugging Face is rate limiting this computer. Try again ${seconds ? `in ${seconds} seconds` : 'in a minute'}.`;
   }
   return error.message;
+}
+
+/** Opens Explore on `repo` the next time the tab mounts. */
+export function rememberExploreRepo(repo: string): void {
+  remembered.query = repo;
+  remembered.selected = repo;
+}
+
+/** Starts a pull of a reviewed build; resolves to an error the screen should show, or null. */
+export async function startPull(
+  model: HubModelView,
+  build: HubBuildView,
+  consent: PullConsent,
+  onRecheck: () => void,
+  curated?: { entryId: string; buildId: string }
+): Promise<ModelHubError | null> {
+  const result = await window.b4m.models.pull({
+    repo: model.id,
+    buildId: build.id,
+    revision: model.revision,
+    sizeBytes: build.sizeBytes,
+    ...consent,
+    ...(curated ? { curated } : {}),
+  });
+  if (result.ok) return null;
+  if (result.error.kind === 'runtime-unavailable') onRecheck();
+  if (result.listed || result.error.kind === 'cancelled') return null;
+  return result.error;
 }
 
 function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selected: boolean; onSelect: () => void }) {
@@ -106,12 +135,13 @@ function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selecte
   );
 }
 
-function BuildRow({
+export function BuildRow({
   repo,
   build,
   pull,
   installed,
   runtimeReady,
+  preparing = false,
   onPull,
 }: {
   repo: string;
@@ -119,6 +149,8 @@ function BuildRow({
   pull: ModelPull | undefined;
   installed: boolean;
   runtimeReady: boolean;
+  /** The Download button waits on a check before the dialog opens. */
+  preparing?: boolean;
   onPull: () => void;
 }) {
   let action;
@@ -157,6 +189,7 @@ function BuildRow({
         size="sm"
         variant="soft"
         disabled={!runtimeReady}
+        loading={preparing}
         onClick={onPull}
         data-testid="models-build-pull-btn"
         data-build={build.id}
@@ -182,6 +215,7 @@ function BuildRow({
           {formatBytes(build.sizeBytes)}
         </Typography>
       </Box>
+      <FitBadge fit={build.fit} />
       {action}
     </Stack>
   );
@@ -242,18 +276,10 @@ function ModelDetail({
   const start = async (build: HubBuildView, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
-    const result = await window.b4m.models.pull({
-      repo: model.id,
-      buildId: build.id,
-      revision: model.revision,
-      sizeBytes: build.sizeBytes,
-      ...consent,
-    });
-    if (result.ok) return;
-    if (result.error.kind === 'runtime-unavailable') onRecheck();
-    if (result.listed || result.error.kind === 'cancelled') return;
-    setPullError(hubErrorText(result.error));
-    if (result.error.kind === 'changed') void load();
+    const error = await startPull(model, build, consent, onRecheck);
+    if (!error) return;
+    setPullError(hubErrorText(error));
+    if (error.kind === 'changed') void load();
   };
 
   return (

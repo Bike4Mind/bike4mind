@@ -78,6 +78,17 @@ export const DailyReportTab: React.FC = () => {
               />
               <Stack spacing={2}>
                 {currentItems.map((item, index) => {
+                  if (item.error) {
+                    return (
+                      <AnalyticsErrorCard
+                        key={item.date}
+                        error={new Error(item.error)}
+                        onRetry={handleRefresh}
+                        title={`Could not generate the report for ${item.date}`}
+                        testId={`daily-report-error-${item.date}`}
+                      />
+                    );
+                  }
                   const hasNoData = item.report.includes('No activity data found');
                   return (
                     <Card

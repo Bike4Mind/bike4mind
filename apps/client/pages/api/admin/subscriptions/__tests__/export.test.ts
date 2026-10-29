@@ -58,10 +58,12 @@ const makeRow = (index: number, overrides: Partial<AdminSubscriptionRow> = {}): 
     billingOwnerId: null,
   },
   plan: { priceId: 'price_team', name: 'Team', interval: 'monthly' },
+  billedInterval: { interval: 'month', intervalCount: 1 },
   status: 'active',
   source: 'stripe',
   quantity: 4,
   customCreditsPerCycle: -412,
+  mrr: { amount: 12000, currency: 'usd' },
   periodStartsAt: '2026-06-01T00:00:00.000Z',
   periodEndsAt: '2026-07-01T00:00:00.000Z',
   canceledAt: null,
@@ -116,6 +118,34 @@ describe('GET /api/admin/subscriptions/export', () => {
     expect(line).toContain(',4,,,-412,');
     expect(line).toContain('"Team"');
     expect(line.endsWith('"sub_1"')).toBe(true);
+  });
+
+  it('writes MRR in major units beside its currency, and leaves it blank where there is none', async () => {
+    mockPage.mockResolvedValueOnce([
+      makeRow(1),
+      makeRow(2, { source: 'admin_grant', mrr: null }),
+      makeRow(3, { mrr: { amount: 1900, currency: 'jpy' } }),
+    ]);
+    const lines = (await call({})).res._getData().split('\n');
+    expect(lines[0]).toContain('"Source","MRR","MRR currency","Quantity"');
+    expect(lines[1]).toContain('"stripe",120.00,"USD",4,');
+    expect(lines[2]).toContain('"admin_grant",,"",4,');
+    expect(lines[3]).toContain('"stripe",1900,"JPY",4,');
+  });
+
+  it('writes the interval Stripe bills, as the Plan column labels it, falling back to the catalog', async () => {
+    mockPage.mockResolvedValueOnce([
+      makeRow(1, { billedInterval: { interval: 'year', intervalCount: 1 } }),
+      makeRow(2, { billedInterval: { interval: 'month', intervalCount: 3 } }),
+      makeRow(3, { billedInterval: null }),
+      makeRow(4, { billedInterval: null, plan: { priceId: 'price_legacy', name: null, interval: null } }),
+    ]);
+    const lines = (await call({})).res._getData().split('\n');
+    expect(lines[0]).toContain('"Plan","Interval","Price id"');
+    expect(lines[1]).toContain('"Team","Yearly","price_team"');
+    expect(lines[2]).toContain('"Team","Every 3 months","price_team"');
+    expect(lines[3]).toContain('"Team","Monthly","price_team"');
+    expect(lines[4]).toContain('"Unknown plan","","price_legacy"');
   });
 
   it('writes seats and members for an organization owner', async () => {
