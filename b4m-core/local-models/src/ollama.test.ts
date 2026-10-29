@@ -471,6 +471,18 @@ describe('OllamaRuntime.pull', () => {
     expect(JSON.parse(server.requests[0]?.body ?? '').model).toBe('hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M');
   });
 
+  it('sends the requested manifest-list runner', async () => {
+    server = await startFakeServer({
+      'POST /api/pull': (_request, response) => response.end(ndjson([{ status: 'success' }])),
+    });
+    await runtimeFor(server).pull('qwen3.5:0.8b', { runner: 'llamacpp' });
+    expect(JSON.parse(server.requests[0]?.body ?? '')).toEqual({
+      model: 'qwen3.5:0.8b',
+      stream: true,
+      runner: 'llamacpp',
+    });
+  });
+
   it('rejects with the daemon message on an error line', async () => {
     const error = 'pull model manifest: realm host "huggingface.co" does not match original host "hf.co"';
     server = await startFakeServer({

@@ -273,6 +273,7 @@ describe('ModelHubService pulls', () => {
 
     expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
     expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
+    expect(pulls[0].options).not.toHaveProperty('runner');
     pulls[0].options?.onProgress?.({ status: 'pulling abc', completedBytes: 100, totalBytes: 491_400_032 });
     expect(service.pulls()[0]).toMatchObject({ phase: 'downloading', completedBytes: 100, quant: 'Q4_K_M' });
 
@@ -1199,7 +1200,7 @@ describe('ModelHubService curated library pulls', () => {
     const { service, runtime, libraryLayers, pulls, installedChanged, hub } = harness();
     const result = service.pull(libraryRequest);
     await vi.waitFor(() => expect(pulls).toHaveLength(1));
-    expect(runtime.pull).toHaveBeenCalledWith(REF, expect.anything());
+    expect(runtime.pull).toHaveBeenCalledWith(REF, expect.objectContaining({ runner: 'llamacpp' }));
     expect(libraryLayers).toHaveBeenCalledWith(REF, expect.anything());
     pulls[0].resolve();
 

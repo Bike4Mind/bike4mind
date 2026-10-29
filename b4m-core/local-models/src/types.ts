@@ -76,6 +76,8 @@ export interface PullOptions {
   onProgress?: (progress: PullProgress) => void;
   /** Fails the pull when the runtime sends nothing for this long (ms). Must be positive; Infinity disables the check. */
   idleTimeoutMs?: number;
+  /** Ollama only: the manifest-list variant to fetch, e.g. `llamacpp`. Ollama before 0.40 ignores it. */
+  runner?: string;
 }
 
 export interface LoadedModel {
