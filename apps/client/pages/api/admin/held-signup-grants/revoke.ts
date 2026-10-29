@@ -37,7 +37,12 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       }
       const result = await userService.revokeHeldGrantRelease(
         { batchId: parsed.data.batchId, actorId: req.user.id },
-        { batches: heldGrantBatches, users: userRepository, creditTransactions: creditTransactionRepository }
+        {
+          batches: heldGrantBatches,
+          users: userRepository,
+          creditTransactions: creditTransactionRepository,
+          logger: req.logger,
+        }
       );
       if (!result) throw new NotFoundError('Release batch not found');
       let policy: ReturnType<typeof loadCreditGrantPolicy> | undefined;

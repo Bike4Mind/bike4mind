@@ -177,7 +177,7 @@ describe('held signup grant release', () => {
     expect(await ledgerRows(held.id)).toBe(1);
     expect(await creditsOf(held.id)).toBe(12);
 
-    const revokeAdapters = { batches, users: userRepository, creditTransactions: txRepo };
+    const revokeAdapters = { batches, users: userRepository, creditTransactions: txRepo, logger: { error: vi.fn() } };
     const revoked = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
       revokeAdapters
@@ -201,14 +201,24 @@ describe('held signup grant release', () => {
     await User.updateOne({ _id: users[1].id }, { currentCredits: 5 });
     const revoked = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
-      { batches: signupGrantReleaseRepository, users: userRepository, creditTransactions: txRepo }
+      {
+        batches: signupGrantReleaseRepository,
+        users: userRepository,
+        creditTransactions: txRepo,
+        logger: { error: vi.fn() },
+      }
     );
     expect(revoked?.results[0].outcome).toBe('insufficient_balance');
     expect(await creditsOf(users[1].id)).toBe(5);
     expect(
       await userService.revokeHeldGrantRelease(
         { batchId: '0'.repeat(24), actorId: 'a' },
-        { batches: signupGrantReleaseRepository, users: userRepository, creditTransactions: txRepo }
+        {
+          batches: signupGrantReleaseRepository,
+          users: userRepository,
+          creditTransactions: txRepo,
+          logger: { error: vi.fn() },
+        }
       )
     ).toBeNull();
   });
@@ -265,7 +275,12 @@ describe('held signup grant release', () => {
     expect(out.results).toEqual([{ userId: user.id, outcome: 'released', credits: 0 }]);
     const revoked = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
-      { batches: signupGrantReleaseRepository, users: userRepository, creditTransactions: txRepo }
+      {
+        batches: signupGrantReleaseRepository,
+        users: userRepository,
+        creditTransactions: txRepo,
+        logger: { error: vi.fn() },
+      }
     );
     expect(revoked?.results).toEqual([]);
     expect(await creditsOf(user.id)).toBe(12);
@@ -280,7 +295,12 @@ describe('held signup grant release', () => {
     await User.updateOne({ _id: users[1].id }, { currentCredits: 5 });
     const revoked = await userService.revokeHeldGrantRelease(
       { batchId: out.batchId, actorId: 'admin-1' },
-      { batches: signupGrantReleaseRepository, users: userRepository, creditTransactions: txRepo }
+      {
+        batches: signupGrantReleaseRepository,
+        users: userRepository,
+        creditTransactions: txRepo,
+        logger: { error: vi.fn() },
+      }
     );
     expect(revoked?.results[0].outcome).toBe('insufficient_balance');
     expect(await creditsOf(users[1].id)).toBe(5);

@@ -37,6 +37,7 @@ const buildRevokeAdapters = (balance: number) => {
       }),
     },
     creditTransactions: { createTransaction: vi.fn().mockResolvedValue({}) },
+    logger: { error: vi.fn() },
   };
   // Test doubles: revoke only calls the repository methods stubbed above.
   return { state, adapters: adapters as unknown as Parameters<typeof revokeHeldGrantRelease>[1] & typeof adapters };
@@ -48,7 +49,6 @@ const revoke = (adapters: Parameters<typeof revokeHeldGrantRelease>[1]) =>
 describe('revokeHeldGrantRelease', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   it('debits the released credits, records the ledger row and keeps the entry claimed', async () => {
@@ -101,7 +101,7 @@ describe('revokeHeldGrantRelease', () => {
     expect(result?.results).toEqual([{ userId: 'user-1', outcome: 'failed', credits: 40 }]);
     expect(state).toEqual({ balance: 60, claimed: true });
     expect(adapters.batches.unclaimReversal).not.toHaveBeenCalled();
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('manual repair'), expect.any(Error));
+    expect(adapters.logger.error).toHaveBeenCalledWith(expect.stringContaining('manual repair'), expect.any(Error));
 
     expect((await revoke(adapters))?.results).toEqual([{ userId: 'user-1', outcome: 'already_reversed', credits: 40 }]);
     expect(adapters.users.decrementCreditsIfCovered).toHaveBeenCalledOnce();

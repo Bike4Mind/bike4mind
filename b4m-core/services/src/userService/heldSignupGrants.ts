@@ -93,6 +93,7 @@ export async function revokeHeldGrantRelease(
       decrementCreditsIfCovered: (userId: string, credits: number) => Promise<boolean>;
     };
     creditTransactions: ICreditTransactionRepository;
+    logger: { error: (message: string, ...args: unknown[]) => void };
   }
 ) {
   const batch = await adapters.batches.findBatch(input.batchId);
@@ -132,13 +133,13 @@ export async function revokeHeldGrantRelease(
     } catch (error) {
       // Unclaiming an uncompensated debit would let a retry debit the same grant twice.
       if (outstanding > 0) {
-        console.error(
-          `[held-signup-grants] Reversal for user ${entry.userId} debited ${outstanding} credits with no ledger row; entry left claimed for manual repair`,
+        adapters.logger.error(
+          `Reversal for user ${entry.userId} debited ${outstanding} credits with no ledger row; entry left claimed for manual repair`,
           error
         );
       } else {
         await adapters.batches.unclaimReversal(batch.id, entry.userId);
-        console.error(`[held-signup-grants] Reversal failed for user ${entry.userId}`, error);
+        adapters.logger.error(`Reversal failed for user ${entry.userId}`, error);
       }
       row('failed');
     }
