@@ -94,9 +94,7 @@ describe('LLMProvider default text model', () => {
     await waitFor(() => expect(useLLM.getState().model).toBe(CHEAP.id));
   });
 
-  // A free account sees paid-only models in the picker's locked group, but they are never in the accessible
-  // list (useModelInfo / useAccessibleModels never carry one), so neither a paid-only admin default nor a
-  // paid-only last-used pin can be resolved to.
+  // Locked models never reach useModelInfo / useAccessibleModels, which is what keeps them unresolvable.
   it('never lands on a locked (paid-only) model, even when the admin default is one', async () => {
     h.adminDefaultModel = PRICEY.id;
     h.accessibleIds = [PAINT.id, CHEAP.id];

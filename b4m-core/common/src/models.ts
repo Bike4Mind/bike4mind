@@ -772,10 +772,8 @@ export type ModelInfo = {
   /** Human-readable reason surfaced in the picker (tooltip) and the server-side rejection when `disabled` is true. */
   disabledReason?: string;
   /**
-   * Set only on the `lockedModels` entries of GET /api/models: a model this caller can see but not select
-   * until they upgrade. Unlike `disabled`, the model works for other accounts. Locked models never appear
-   * in `models`, so nothing that picks from that list can select one. Display only: call-time
-   * createModelAdmission (services/llm/modelAdmission.ts) is the gate.
+   * Set only on GET /api/models `lockedModels` entries, which never appear in `models` so nothing can select one.
+   * Display only: call-time createModelAdmission (services/llm/modelAdmission.ts) is the gate.
    */
   access?: ModelAccessLock;
   /**
