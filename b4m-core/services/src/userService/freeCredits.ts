@@ -98,9 +98,12 @@ export const grantFreeCredits = async (
   if (legacyGrant) return { creditsGranted: 0, currentCredits: null };
 
   const transactionId = `verify-grant:${user.id}`;
-  const budget = bypassBudget
-    ? { outcome: 'unmetered' as const, release: async () => {} }
-    : await reserveSignupGrantBudget(db, transactionId, amount);
+  // An invite-resolved amount is an explicit grant (admin/unlimited code, subscriber), not the open-signup budget.
+  const isExplicitGrant = user.pendingCreditGrant !== null && user.pendingCreditGrant !== undefined;
+  const budget =
+    bypassBudget || isExplicitGrant
+      ? { outcome: 'unmetered' as const, release: async () => {} }
+      : await reserveSignupGrantBudget(db, transactionId, amount);
   if (budget.outcome === 'exhausted') {
     await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     await db.users.update({ id: user.id, signupGrantHeldReason: 'budget_exhausted' });
