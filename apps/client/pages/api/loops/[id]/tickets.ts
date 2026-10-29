@@ -34,6 +34,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         dependencies: ticket.dependencies,
         executionId: ticket.executionId,
         ready: ticket.status === 'open' && ticket.dependencies.every(depId => !openDeps.has(depId)),
+        createdAt: ticket.createdAt,
         updatedAt: ticket.updatedAt,
       });
     }

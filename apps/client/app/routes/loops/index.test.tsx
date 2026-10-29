@@ -131,4 +131,13 @@ describe('LoopsPage', () => {
     fireEvent.click(screen.getByTestId('loops-row-l1'));
     expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' } });
   });
+
+  it('opens the loop with Enter on the row, but not with Enter on an action inside it', () => {
+    loopsState.data = [loop()];
+    renderPage();
+    fireEvent.keyDown(row().getByTestId('loop-set-live-btn'), { key: 'Enter' });
+    expect(navigate).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByTestId('loops-row-l1'), { key: 'Enter' });
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' } });
+  });
 });

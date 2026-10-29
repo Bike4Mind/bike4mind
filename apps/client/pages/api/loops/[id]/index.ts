@@ -58,9 +58,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
     const now = new Date();
     if (body.status !== undefined) Object.assign(patch, nextStatusPatch(existing, body.status, now));
-    // A new interval on a live loop moves its next run, not just the one after.
+    // A new interval on a live loop moves its next run, not just the one after. An unchanged one (the edit
+    // form always sends it) must not, or saving would push back a pending Run now.
     const intervalMinutes = patch.intervalMinutes as number | undefined;
-    if (intervalMinutes !== undefined && existing.status === 'live' && patch.nextRunAt === undefined) {
+    if (
+      intervalMinutes !== undefined &&
+      intervalMinutes !== existing.intervalMinutes &&
+      existing.status === 'live' &&
+      patch.nextRunAt === undefined
+    ) {
       patch.nextRunAt = nextRunAtFor({ lastRunAt: existing.lastRunAt, intervalMinutes }, now);
     }
 

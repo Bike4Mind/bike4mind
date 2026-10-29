@@ -3,7 +3,14 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { adminSettingsRepository, agentExecutionRepository, Loop, loopRepository, WorkItem } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentExecutionRepository,
+  Loop,
+  loopRepository,
+  WorkItem,
+  workItemRepository,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -246,6 +253,16 @@ describe('runLoopSchedulerTick', () => {
     await runLoopSchedulerTick(NOW, logger);
 
     expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect((await reload(loop.id)).leaseUntil).toBeUndefined();
+  });
+
+  it('releases the lease when claiming a ticket throws', async () => {
+    const loop = await createLoop();
+    vi.spyOn(workItemRepository, 'findNextReadyForLoop').mockRejectedValue(new Error('db down'));
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
     expect((await reload(loop.id)).leaseUntil).toBeUndefined();
   });
 

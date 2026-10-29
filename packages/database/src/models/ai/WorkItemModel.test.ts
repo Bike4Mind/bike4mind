@@ -304,6 +304,15 @@ describe('WorkItemRepository', () => {
       expect(updated?.description).toBe('the old detail');
     });
 
+    it('writes only while the item still has the expected status', async () => {
+      const itemId = (await create('Running', { status: 'in_progress' })).id;
+
+      expect(await workItemRepository.updateForUser(itemId, USER, { title: 'Stale' }, 'open')).toBeNull();
+      expect((await workItemRepository.updateForUser(itemId, USER, { title: 'Fresh' }, 'in_progress'))?.title).toBe(
+        'Fresh'
+      );
+    });
+
     it("refuses to update another user's item", async () => {
       const theirs = await create('Theirs', { userId: OTHER_USER });
 

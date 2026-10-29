@@ -8,6 +8,7 @@ import {
   IWorkItemRepository,
   WORK_ITEM_STATUSES,
   WorkItemPatch,
+  WorkItemStatus,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -186,12 +187,17 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return result.modifiedCount;
   }
 
-  async updateForUser(id: string, userId: string, patch: WorkItemPatch): Promise<IWorkItem | null> {
+  async updateForUser(
+    id: string,
+    userId: string,
+    patch: WorkItemPatch,
+    expectedStatus?: WorkItemStatus
+  ): Promise<IWorkItem | null> {
     if (!mongoose.isValidObjectId(id)) return null;
 
     const { set, unset } = splitPatch(patch);
     const result = await this.workItemModel.findOneAndUpdate(
-      { _id: id, userId, deletedAt: null },
+      { _id: id, userId, deletedAt: null, ...(expectedStatus && { status: expectedStatus }) },
       {
         ...(Object.keys(set).length > 0 && { $set: set }),
         ...(Object.keys(unset).length > 0 && { $unset: unset }),

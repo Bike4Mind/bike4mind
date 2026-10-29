@@ -18,6 +18,7 @@ import {
 import { loopRepository, workItemRepository } from '@bike4mind/database';
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { makeDueIfReady, ticketMovePatch } from '@server/utils/loopTickets';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import {
@@ -77,7 +78,9 @@ async function asToolResult(run: () => Promise<unknown>): Promise<string> {
   try {
     return JSON.stringify(await run());
   } catch (error) {
-    if (error instanceof BadRequestError || error instanceof NotFoundError) return `Error: ${error.message}`;
+    if (error instanceof BadRequestError || error instanceof NotFoundError || error instanceof ConflictError) {
+      return `Error: ${error.message}`;
+    }
     throw error;
   }
 }
@@ -229,8 +232,9 @@ export function buildLoopTicketTools({ userId, loopId }: LoopTicketScope): Recor
               }),
             }),
           };
-          const updated = await workItemRepository.updateForUser(existing.id, userId, patch);
-          if (!updated) throw new NotFoundError(TICKET_NOT_FOUND);
+          // Conditional on the status the patch was computed from, so a concurrent fold is not overwritten.
+          const updated = await workItemRepository.updateForUser(existing.id, userId, patch, existing.status);
+          if (!updated) throw new ConflictError('ticket changed while saving; list it again and retry');
           await makeDueIfReady(loop);
           return summarize(updated);
         }),

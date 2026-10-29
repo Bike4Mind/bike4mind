@@ -3,6 +3,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { ILoop, IWorkItem, WorkItemPatch } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import { assertLoopTicketAccess, makeDueIfReady, ticketMovePatch } from '@server/utils/loopTickets';
@@ -67,7 +68,17 @@ const handler = baseApi()
     const movesLoop = body.loopId !== undefined && body.loopId !== existing.loopId;
     let loop: ILoop | undefined;
     if (body.loopId === null) {
-      if (existing.loopId) Object.assign(patch, { loopId: null, stage: null, statusReason: null, executionId: null });
+      if (existing.loopId) {
+        await assertLoopTicketAccess(req, existing.loopId);
+        // A detached ticket leaves its loop's run behind, so it can't stay in_progress under it.
+        Object.assign(patch, {
+          loopId: null,
+          stage: null,
+          statusReason: null,
+          executionId: null,
+          ...(existing.status === 'in_progress' && status === undefined && { status: 'open' }),
+        });
+      }
     } else if (body.loopId !== undefined || existing.loopId) {
       loop = await assertLoopTicketAccess(req, body.loopId ?? existing.loopId);
     }
@@ -81,7 +92,7 @@ const handler = baseApi()
           ticketMovePatch(loop, movesLoop ? undefined : existing, { stage: body.stage, status, reason: body.reason })
         );
       }
-    } else if (body.stage !== undefined) {
+    } else if (body.stage !== undefined && body.stage !== null) {
       throw new BadRequestError('stage is only valid on a loop ticket');
     } else if (status !== undefined && status !== existing.status) {
       patch.status = status;
@@ -89,8 +100,12 @@ const handler = baseApi()
       patch.closedAt = status === 'closed' ? new Date() : null;
     }
 
-    const updated = await workItemRepository.updateForUser(id, req.user!.id, patch);
+    // A loop ticket can be folded by its loop between the read above and this write; the patch was
+    // computed from the old status, so it only lands if that status still holds.
+    const expectedStatus = existing.loopId ? existing.status : undefined;
+    const updated = await workItemRepository.updateForUser(id, req.user!.id, patch, expectedStatus);
     if (!updated) {
+      if (expectedStatus) throw new ConflictError('Ticket changed while saving; reload and try again');
       throw new NotFoundError('Work item not found for id: ' + id);
     }
 

@@ -26,6 +26,7 @@ const ticket = (id: string, overrides: Partial<ILoopTicket> = {}): ILoopTicket =
   status: 'open',
   dependencies: [],
   ready: false,
+  createdAt: '2026-10-29T10:00:00.000Z',
   updatedAt: '2026-10-29T10:00:00.000Z',
   ...overrides,
 });
@@ -37,8 +38,8 @@ const data: ILoopTicketsResponse = {
     {
       stage: 'todo',
       tickets: [
-        ticket('newer', { ready: true, updatedAt: '2026-10-29T12:00:00.000Z' }),
-        ticket('older', { ready: true, updatedAt: '2026-10-29T09:00:00.000Z' }),
+        ticket('newer', { ready: true, createdAt: '2026-10-29T12:00:00.000Z' }),
+        ticket('older', { ready: true, createdAt: '2026-10-29T09:00:00.000Z', updatedAt: '2026-10-29T13:00:00.000Z' }),
         ticket('blocked', { status: 'blocked', statusReason: 'Needs an API key', dependencies: ['x', 'y'] }),
       ],
     },
@@ -91,6 +92,17 @@ describe('LoopTicketBoard', () => {
     fireEvent.click(within(screen.getByTestId('loop-ticket-older')).getByRole('combobox'));
     fireEvent.click(screen.getByRole('option', { name: 'doing' }));
     expect(moveTicket.mutate).toHaveBeenCalledWith({ id: 'older', stage: 'doing' });
+  });
+
+  it('labels a ticket left in a removed stage instead of showing an empty select', () => {
+    const orphan: ILoopTicketsResponse = { stages: [{ stage: 'todo', tickets: [ticket('o', { stage: 'review' })] }] };
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopTicketBoard loop={loop} data={orphan} onViewRun={onViewRun} />
+      </CssVarsProvider>
+    );
+    fireEvent.click(within(screen.getByTestId('loop-ticket-o')).getByRole('combobox'));
+    expect(screen.getByRole('option', { name: 'review (removed)' })).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('adds a ticket in the first stage by default', () => {

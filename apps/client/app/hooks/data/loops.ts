@@ -17,6 +17,7 @@ export interface ILoopTicket {
   executionId?: string;
   /** Open with every dependency closed: the scheduler works the oldest of these next. */
   ready: boolean;
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -38,7 +39,7 @@ export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 
 const LIST_POLL_MS = 30_000;
 const DETAIL_POLL_MS = 15_000;
 
-/** A 409 means the loop moved under us (e.g. the scheduler errored it): show why and reload. */
+/** A 409 means the loop or ticket moved under us (e.g. a run claimed it): show why and reload. */
 function onLoopError(queryClient: QueryClient) {
   return (error: unknown) => {
     toast.error(getErrorMessage(error));
@@ -60,28 +61,26 @@ function useLoopMutation<TVars>(fn: (vars: TVars) => Promise<unknown>, onSuccess
   });
 }
 
-export const useLoops = (enabled: boolean) =>
+export const useLoops = () =>
   useQuery({
     queryKey: loopKeys.all,
     queryFn: async () => (await api.get<ILoopWithUsage[]>('/api/loops')).data,
-    enabled,
     refetchInterval: LIST_POLL_MS,
   });
 
-export const useLoop = (id: string, enabled: boolean) =>
+export const useLoop = (id: string) =>
   useQuery({
     queryKey: loopKeys.detail(id),
     queryFn: async () => (await api.get<ILoopWithUsage>(`/api/loops/${id}`)).data,
-    enabled: enabled && !!id,
+    enabled: !!id,
     refetchInterval: DETAIL_POLL_MS,
-    retry: (count, error) => !(isAxiosError(error) && error.response?.status === 404) && count < 3,
   });
 
-export const useLoopTickets = (id: string, enabled: boolean) =>
+export const useLoopTickets = (id: string) =>
   useQuery({
     queryKey: loopKeys.tickets(id),
     queryFn: async () => (await api.get<ILoopTicketsResponse>(`/api/loops/${id}/tickets`)).data,
-    enabled: enabled && !!id,
+    enabled: !!id,
     refetchInterval: DETAIL_POLL_MS,
   });
 

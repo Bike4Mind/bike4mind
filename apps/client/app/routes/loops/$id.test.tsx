@@ -4,10 +4,11 @@ import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { navigate, search, loopState } = vi.hoisted(() => ({
+const { navigate, search, loopState, actions } = vi.hoisted(() => ({
   navigate: vi.fn(),
   search: { run: undefined as string | undefined },
-  loopState: { data: undefined as unknown, isLoading: false },
+  loopState: { data: undefined as unknown, isLoading: false, error: null as unknown },
+  actions: { onDeleted: undefined as (() => void) | undefined },
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -19,7 +20,12 @@ vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => {
 vi.mock('@client/app/components/Agent/AgentPageHeader', () => ({
   default: ({ rightActions }: { rightActions?: React.ReactNode }) => <div>{rightActions}</div>,
 }));
-vi.mock('@client/app/components/Loops/LoopActions', () => ({ default: () => null }));
+vi.mock('@client/app/components/Loops/LoopActions', () => ({
+  default: ({ onDeleted }: { onDeleted?: () => void }) => {
+    actions.onDeleted = onDeleted;
+    return null;
+  },
+}));
 vi.mock('@client/app/components/Loops/LoopTicketBoard', () => ({
   default: ({ onViewRun }: { onViewRun: (id: string) => void }) => (
     <button data-testid="loop-ticket-view-run-link" onClick={() => onViewRun('ticket-run')} />
@@ -62,6 +68,31 @@ beforeEach(() => {
   vi.clearAllMocks();
   search.run = undefined;
   loopState.data = loop();
+  loopState.error = null;
+});
+
+describe('LoopDetailPage states', () => {
+  it('says not found on a 404 and links back to the list', () => {
+    loopState.data = undefined;
+    loopState.error = Object.assign(new Error('nope'), { isAxiosError: true, response: { status: 404 } });
+    renderPage();
+    expect(screen.getByTestId('loop-detail-not-found')).toHaveTextContent('Loop not found.');
+    fireEvent.click(screen.getByTestId('loop-detail-back-btn'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops' });
+  });
+
+  it('does not call a failed load "not found"', () => {
+    loopState.data = undefined;
+    loopState.error = Object.assign(new Error('boom'), { isAxiosError: true, response: { status: 500 } });
+    renderPage();
+    expect(screen.getByTestId('loop-detail-not-found')).toHaveTextContent("Couldn't load this loop.");
+  });
+
+  it('returns to the list after the loop is deleted', () => {
+    renderPage();
+    actions.onDeleted?.();
+    expect(navigate).toHaveBeenCalledWith({ to: '/loops' });
+  });
 });
 
 describe('LoopDetailPage run drawer', () => {

@@ -15,7 +15,7 @@ vi.mock('@client/app/hooks/data/loops', () => ({
 vi.mock('@client/app/hooks/data/mcpServers', () => ({
   useMcpServers: () => ({
     data: [
-      { name: 'github', enabled: true, tools: ['create_issue'] },
+      { name: 'GitHub', enabled: true, tools: ['create_issue'] },
       { name: 'off', enabled: false, tools: ['hidden'] },
     ],
   }),
@@ -116,9 +116,9 @@ describe('LoopFormModal', () => {
   it('lists enabled MCP tools under the executor name <server>__<tool>', () => {
     renderForm();
     fireEvent.click(screen.getByRole('combobox', { name: /tools/i }));
-    expect(screen.getByRole('option', { name: 'github: create_issue' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'GitHub: create_issue' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'off: hidden' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('option', { name: 'github: create_issue' }));
+    fireEvent.click(screen.getByRole('option', { name: 'GitHub: create_issue' }));
     fireEvent.change(screen.getByTestId('loop-form-name-input'), { target: { value: 'Digest' } });
     fireEvent.change(screen.getByTestId('loop-form-goal-input'), { target: { value: 'Summarize' } });
     fireEvent.click(screen.getByTestId('loop-form-submit-btn'));
