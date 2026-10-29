@@ -38,10 +38,12 @@ export function CuratedListSettings({
 }) {
   return (
     <Stack spacing={1.25}>
-      <Typography level="body-xs" textColor="text.tertiary">
-        Desktop checks catalog.bike4mind.com for an updated list when you open Models, at most every 6 hours. Nothing is
-        downloaded automatically.
-      </Typography>
+      {settings?.available && (
+        <Typography level="body-xs" textColor="text.tertiary">
+          Desktop checks online for an updated list when you open Models, at most every 6 hours. No models are
+          downloaded automatically.
+        </Typography>
+      )}
       <Switch
         size="sm"
         checked={settings?.available === true && settings.enabled}
