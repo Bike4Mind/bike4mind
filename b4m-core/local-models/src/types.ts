@@ -122,6 +122,8 @@ export interface ModelContents {
   projectorBlobs?: (string | null)[];
   /** DRAFT lines, kept as a list so duplicate or unreadable drafts cannot pass an integrity check. */
   draftBlobs?: (string | null)[];
+  /** ADAPTER lines; curated builds do not accept adapters, including unreadable paths. */
+  adapterBlobs?: (string | null)[];
 }
 
 export interface InspectOptions {

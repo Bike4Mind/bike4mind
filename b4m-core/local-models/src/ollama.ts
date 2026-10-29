@@ -163,9 +163,10 @@ function contextLengthOf(modelInfo: Record<string, unknown> | null | undefined):
 /** Blob paths in Ollama's generated Modelfile header, before any multiline template or license text. */
 function modelBlobsOf(
   modelfile: string | null | undefined
-): Pick<ModelContents, 'modelBlob' | 'projectorBlobs' | 'draftBlobs'> {
+): Pick<ModelContents, 'modelBlob' | 'projectorBlobs' | 'draftBlobs' | 'adapterBlobs'> {
   const models: (string | null)[] = [];
   const drafts: (string | null)[] = [];
+  const adapters: (string | null)[] = [];
   for (const line of (modelfile ?? '').split(/\r?\n/)) {
     const text = line.trim();
     if (!text || text.startsWith('#')) continue;
@@ -175,8 +176,9 @@ function modelBlobsOf(
     const digest = /^(?:.*[\\/])?sha256-([0-9a-f]{64})$/.exec(command[2])?.[1] ?? null;
     if (command[1] === 'FROM') models.push(digest);
     if (command[1] === 'DRAFT') drafts.push(digest);
+    if (command[1] === 'ADAPTER') adapters.push(digest);
   }
-  return { modelBlob: models[0] ?? null, projectorBlobs: models.slice(1), draftBlobs: drafts };
+  return { modelBlob: models[0] ?? null, projectorBlobs: models.slice(1), draftBlobs: drafts, adapterBlobs: adapters };
 }
 
 /**
