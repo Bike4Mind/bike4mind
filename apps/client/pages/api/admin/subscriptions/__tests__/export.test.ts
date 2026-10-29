@@ -58,6 +58,7 @@ const makeRow = (index: number, overrides: Partial<AdminSubscriptionRow> = {}): 
     billingOwnerId: null,
   },
   plan: { priceId: 'price_team', name: 'Team', interval: 'monthly' },
+  billedInterval: { interval: 'month', intervalCount: 1 },
   status: 'active',
   source: 'stripe',
   quantity: 4,

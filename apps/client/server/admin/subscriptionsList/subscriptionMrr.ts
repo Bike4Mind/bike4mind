@@ -1,10 +1,13 @@
 import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import {
+  BILLED_INTERVALS,
   MRR_CURRENCY,
   MRR_STATUSES,
   countsTowardMrr,
+  type AdminSubscriptionBilledInterval,
   type AdminSubscriptionMrr,
   type AdminSubscriptionsMrrTotal,
+  type BilledInterval,
 } from '@client/app/utils/adminSubscriptionsFilter';
 
 /**
@@ -15,16 +18,32 @@ import {
 type Condition = Record<string, unknown>;
 
 // Week and day periods convert through the average month, so 52 weeks and 365 days make 12 months.
-const MONTHS_PER_INTERVAL: Readonly<Record<string, number>> = { month: 1, year: 12, week: 12 / 52, day: 12 / 365 };
+const MONTHS_PER_INTERVAL: Readonly<Record<BilledInterval, number>> = {
+  month: 1,
+  year: 12,
+  week: 12 / 52,
+  day: 12 / 365,
+};
+
+const isBilledInterval = (interval: string): interval is BilledInterval =>
+  (BILLED_INTERVALS as readonly string[]).includes(interval);
+
+/** The mirrored billing interval, with a missing count read as 1; null when the interval is missing or unknown. */
+export function billedIntervalOf(
+  interval: string | null | undefined,
+  intervalCount: number | null | undefined
+): AdminSubscriptionBilledInterval | null {
+  if (!interval || !isBilledInterval(interval)) return null;
+  return { interval, intervalCount: intervalCount && intervalCount > 0 ? intervalCount : 1 };
+}
 
 /** Months one billing period covers (yearly is 12, every 3 months is 3), or null for an unknown interval. */
 export function monthsPerPeriod(
   interval: string | null | undefined,
   intervalCount: number | null | undefined
 ): number | null {
-  const months = interval ? MONTHS_PER_INTERVAL[interval] : undefined;
-  if (months === undefined) return null;
-  return months * (intervalCount && intervalCount > 0 ? intervalCount : 1);
+  const billed = billedIntervalOf(interval, intervalCount);
+  return billed ? MONTHS_PER_INTERVAL[billed.interval] * billed.intervalCount : null;
 }
 
 export type MrrFields = {

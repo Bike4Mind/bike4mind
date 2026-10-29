@@ -66,7 +66,7 @@ const toCsvLine = (row: AdminSubscriptionRow): string => {
     escapeCsvCell(row.ownerType),
     escapeCsvCell(row.ownerId),
     escapeCsvCell(owner?.stripeCustomerId ?? ''),
-    escapeCsvCell(row.plan.name ?? 'Unknown price'),
+    escapeCsvCell(row.plan.name ?? 'Unknown plan'),
     escapeCsvCell(row.plan.interval ?? ''),
     escapeCsvCell(row.plan.priceId ?? ''),
     escapeCsvCell(row.status),

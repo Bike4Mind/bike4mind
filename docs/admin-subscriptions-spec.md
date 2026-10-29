@@ -165,10 +165,10 @@ The anatomy matches the users list (`Users/index.tsx`, `Users/List/*`).
    Saved custom views work as in the users list (built on the saved-views PR).
 5. `FilterBar` filters, all server-side and in the URL through `useSubscriptionsTabParams` (`subscriptionsTabSearch.ts`), with keys registered in `adminTabParams.ts`:
    - Status
-   - Plan (from the checkout catalog, plus "Unknown price")
+   - Plan (from the checkout catalog, plus "Unknown plan")
    - Owner type (User / Organization)
    - Source (Stripe / Comped)
-   - Interval (Monthly / Yearly)
+   - Interval (Monthly / Yearly). Matches on the checkout catalog's price ids, not the mirrored `interval`, so a row whose price is not in the catalog never matches it, even though the Plan column labels that row from its billed interval.
    - Renews or ends (next 7 days / 30 days / overdue)
    - Cancellation (Scheduled / Last 30 days)
    - Mismatch (yes)
@@ -181,7 +181,7 @@ Comped rows show a neutral Comped chip and never a price, including ended comps.
 | Column | Content | Notes |
 |---|---|---|
 | Customer | Avatar and name, email underneath; org icon and org name for orgs | |
-| Plan | Plan name, then "Monthly" or "Yearly" | "Unknown price" with a `warn` chip if the price id is not in the catalog |
+| Plan | Plan name, then the interval Stripe bills, from the mirrored `interval` and `intervalCount` ("Monthly", "Yearly", "Every 3 months"; same vocabulary as MRR in 5.3). A row with no mirrored interval falls back to the catalog plan's Monthly or Yearly | "Unknown plan" `warn` chip, with the hover "Price ID not in the plan catalog", if the price id is not in the catalog; the billed interval still shows under it |
 | Status | `StatusChip`, tones in 5.4 | |
 | MRR | the row's MRR (5.3), numeric; header "MRR (USD)" | dash for comps (they are not revenue), including a comp that carries an amount, and for statuses MRR excludes. A counted row with no mirrored amount is a dash whose hover says "No billed amount from Stripe yet". A row billed in another currency shows its own currency ("CA$18.00"), muted, with a hover saying it is not in the total |
 | Seats | "8 / 10" (used / paid), with an `InlineBar` | orgs only; `warn` when used > paid |
@@ -297,7 +297,7 @@ Shared helper: `shared/formatMoney.ts`, so that every money cell goes through on
 | List API error | `ErrorState` with "Try again". |
 | Stripe unreachable or rate-limited on the detail page | Mongo sections still render. Stripe sections show the inline ErrorState "Couldn't reach Stripe. The rest of this page is from our records.", with Try again. Stripe-write actions are disabled, with the in-place reason "Stripe is unreachable". |
 | Stripe not configured (self-host) | Revenue and the Stripe sections show "Stripe isn't configured on this deployment" with a link to the self-host docs. Comps still fully work. |
-| Unknown price id | The row still renders: Plan "Unknown price" (warn), MRR a dash, and it shows in the Mismatched view. |
+| Unknown price id | The row still renders: Plan "Unknown plan" (warn, hover "Price ID not in the plan catalog") with the billed interval under it, MRR from the mirrored billed amount (MRR never reads the catalog), and it shows in the Mismatched view. The CSV export writes "Unknown plan" in its Plan column. |
 
 ### 5.7 Charts
 
@@ -417,6 +417,7 @@ MRR on the list and summary routes (5.3 definition):
 | Where | Field | Meaning |
 |---|---|---|
 | list row | `mrr: { amount, currency } \| null` | The row's MRR in minor units of its own billed currency. `null` for a row that does not count (comps, statuses outside MRR) and for one with no mirrored amount. |
+| list row | `billedInterval: { interval, intervalCount } \| null` | The mirrored Stripe interval (`day`, `week`, `month`, `year`) and count, a missing count read as 1. `null` on comps and rows not synced yet; the Plan column then falls back to the catalog. |
 | summary | `mrr: { currency, amount, unpriced, otherCurrency }` | MRR of the rows matching the filters: `amount` per month in minor units of `currency` (`usd`); `unpriced` counts rows that count but have no mirrored amount; `otherCurrency` counts rows billed in another currency. Neither is in `amount`. |
 | summary | `pastDueMrr` (same shape) | The part of `mrr` from rows the Past due view counts: the Past due tile's "MRR at risk". |
 
