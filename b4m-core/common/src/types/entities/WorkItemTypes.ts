@@ -146,7 +146,7 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   findNextReadyForLoop(userId: string, loopId: string, lastStage: string): Promise<IWorkItem | null>;
 
   /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
-  claimForRun(id: string): Promise<IWorkItem | null>;
+  claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;
 
   setExecution(id: string, executionId: string): Promise<void>;
 

@@ -15,7 +15,7 @@ import {
   WORK_ITEM_RATE_WINDOW_MS,
 } from '@server/utils/workItemValidation';
 
-/** Loop tickets are session-only: to an API key (the CLI) they do not exist. */
+/** Loop tickets are session-only: an API key (the CLI) cannot read or write one (it still sees them in /graph). */
 async function findVisible(req: { user?: { id: string }; apiKeyInfo?: unknown }, id: string) {
   const item = await workItemRepository.findByIdForUser(id, req.user!.id);
   return item && !(item.loopId && req.apiKeyInfo) ? item : null;

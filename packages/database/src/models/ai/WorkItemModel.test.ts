@@ -398,8 +398,9 @@ describe('WorkItemRepository', () => {
 
     it('claimForRun wins once; releaseClaim reopens and unlinks', async () => {
       const t = await ticket('T');
-      expect(await workItemRepository.claimForRun(t.id)).toMatchObject({ status: 'in_progress' });
-      expect(await workItemRepository.claimForRun(t.id)).toBeNull();
+      expect(await workItemRepository.claimForRun(t.id, 'other-loop')).toBeNull();
+      expect(await workItemRepository.claimForRun(t.id, t.loopId!)).toMatchObject({ status: 'in_progress' });
+      expect(await workItemRepository.claimForRun(t.id, t.loopId!)).toBeNull();
 
       await workItemRepository.setExecution(t.id, 'exec-1');
       expect((await workItemRepository.findByExecutionId('exec-1'))?.id).toBe(t.id);

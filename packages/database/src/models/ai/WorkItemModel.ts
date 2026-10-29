@@ -75,7 +75,9 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   }
 
   async listReadyForUser(userId: string): Promise<IWorkItemReadyResult> {
-    const { items, truncated } = await this.loadAllForUser(userId);
+    // Closed loop tickets pile up; leaving them out keeps them from crowding plain items out of the
+    // window, and a missing dependency already counts as satisfied below.
+    const { items, truncated } = await this.loadAllForUser(userId, { skipClosedLoopTickets: true });
     const statusById = new Map(items.map(item => [item.id, item.status]));
 
     // Readiness is computed over every item so a dependency on a loop ticket is honoured, but loop
@@ -127,9 +129,9 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return candidates.find(item => item.dependencies.every(depId => !open.has(depId))) ?? null;
   }
 
-  async claimForRun(id: string): Promise<IWorkItem | null> {
+  async claimForRun(id: string, loopId: string): Promise<IWorkItem | null> {
     const result = await this.workItemModel.findOneAndUpdate(
-      { _id: id, deletedAt: null, status: 'open' },
+      { _id: id, loopId, deletedAt: null, status: 'open' },
       { $set: { status: 'in_progress' } },
       { new: true }
     );
@@ -245,9 +247,18 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return conditions;
   }
 
-  private async loadAllForUser(userId: string): Promise<{ items: IWorkItem[]; truncated: boolean }> {
+  // ponytail: /graph and the cycle check still count closed loop tickets toward MAX_GRAPH_ITEMS; they need
+  // them to see every edge. Page the graph if a user's loops ever fill the window.
+  private async loadAllForUser(
+    userId: string,
+    { skipClosedLoopTickets = false } = {}
+  ): Promise<{ items: IWorkItem[]; truncated: boolean }> {
     const results = await this.workItemModel
-      .find({ userId, deletedAt: null })
+      .find({
+        userId,
+        deletedAt: null,
+        ...(skipClosedLoopTickets && { $or: [{ loopId: null }, { status: { $ne: 'closed' } }] }),
+      })
       .sort({ createdAt: 1 })
       .limit(MAX_GRAPH_ITEMS);
     return { items: results.map(doc => doc.toJSON()), truncated: results.length === MAX_GRAPH_ITEMS };
@@ -346,7 +357,10 @@ WorkItemSchema.plugin(softDeletePlugin);
 // the bottom, never as `index: true` on field definitions.
 WorkItemSchema.index({ userId: 1, deletedAt: 1, status: 1 });
 WorkItemSchema.index({ userId: 1, deletedAt: 1, updatedAt: -1 });
-WorkItemSchema.index({ loopId: 1, deletedAt: 1, status: 1, stage: 1 });
+WorkItemSchema.index(
+  { loopId: 1, deletedAt: 1, status: 1, stage: 1 },
+  { partialFilterExpression: { loopId: { $exists: true } } }
+);
 WorkItemSchema.index({ executionId: 1 }, { partialFilterExpression: { executionId: { $exists: true } } });
 
 export const WorkItem: IWorkItemModel =
