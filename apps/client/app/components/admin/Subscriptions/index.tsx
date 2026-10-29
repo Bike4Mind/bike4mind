@@ -14,6 +14,7 @@ import {
   StatStrip,
   StatTile,
   ViewTabs,
+  formatMoney,
   type DataTableSort,
   type ViewTab,
 } from '../shared';
@@ -21,6 +22,7 @@ import { adminFocus } from '../shared/adminStyles';
 import { useAdminModal } from '../useAdminModal';
 import { SUBSCRIPTIONS_SORT_COLUMNS, subscriptionsColumns } from './subscriptionsColumns';
 import { useSubscriptionsSeenOnOpen } from './subscriptionsLastSeen';
+import { MrrDefinitionHelp, atRiskNote, mrrExclusionNote } from './subscriptionsMrr';
 import {
   SUBSCRIPTIONS_BUILT_IN_VIEWS,
   activeSubscriptionsView,
@@ -84,7 +86,7 @@ function SubscriptionRowActions({ row, onOpen }: { row: AdminSubscriptionRow; on
   );
 }
 
-const tileValue = (value: number | undefined) =>
+const tileValue = (value: number | string | undefined) =>
   value === undefined ? <Skeleton variant="text" level="h3" width="3ch" data-testid="admin-stat-skeleton" /> : value;
 
 const AdminSubscriptions: React.FC = () => {
@@ -205,6 +207,7 @@ const AdminSubscriptions: React.FC = () => {
 
   const summary = summaryQuery.data;
   const pastDue = summary?.views.pastDue;
+  const mrr = summary?.mrr;
 
   return (
     <Stack
@@ -231,12 +234,19 @@ const AdminSubscriptions: React.FC = () => {
         }
       />
 
-      <StatStrip aria-label="Subscription counts for the current filters">
+      <StatStrip aria-label="Subscription totals for the current filters">
         <StatTile label="Paying" value={tileValue(summary?.views.paying)} />
+        <StatTile
+          label="MRR"
+          help={<MrrDefinitionHelp />}
+          value={tileValue(mrr && formatMoney(mrr.amount, mrr.currency, { compact: true }))}
+          comparison={mrr && mrrExclusionNote(mrr)}
+        />
         <StatTile
           label="Past due"
           value={tileValue(pastDue)}
           valueColor={pastDue ? 'admin.status.warn.foreground' : undefined}
+          comparison={pastDue && summary ? atRiskNote(summary.pastDueMrr) : undefined}
         />
         <StatTile
           label="Canceling"

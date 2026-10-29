@@ -58,6 +58,11 @@ type SubscriptionOverrides = Partial<{
   canceledAt: Date | null;
   periodEndsAt: Date;
   createdAt: Date;
+  quantity: number;
+  unitAmount: number | null;
+  currency: string;
+  interval: string;
+  intervalCount: number;
 }>;
 
 const seedSubscription = (ownerId: string, overrides: SubscriptionOverrides = {}) =>
@@ -300,9 +305,12 @@ describe('adminSubscriptionsSummary', () => {
 
     const summary = await adminSubscriptionsSummary({}, NOW);
 
+    // None of these rows carries a mirrored amount, so every paying one is counted as unpriced.
     expect(summary).toEqual({
       total: 7,
       views: { paying: 3, pastDue: 1, comped: 1, churned: 1 },
+      mrr: { currency: 'usd', amount: 0, unpriced: 3, otherCurrency: 0 },
+      pastDueMrr: { currency: 'usd', amount: 0, unpriced: 1, otherCurrency: 0 },
       searchTruncated: false,
     });
   });
@@ -315,7 +323,98 @@ describe('adminSubscriptionsSummary', () => {
     expect(summary).toEqual({
       total: 1,
       views: { paying: 1, pastDue: 0, comped: 0, churned: 0 },
+      mrr: { currency: 'usd', amount: 0, unpriced: 1, otherCurrency: 0 },
+      pastDueMrr: { currency: 'usd', amount: 0, unpriced: 0, otherCurrency: 0 },
       searchTruncated: false,
+    });
+  });
+});
+
+describe('MRR', () => {
+  // A Professional plan at $19.00 a month, as mirrored from Stripe.
+  const professional = { unitAmount: 1900, currency: 'usd', interval: 'month', intervalCount: 1 };
+
+  const seedBilling = async () => {
+    const user = await seedUser('jane');
+    const organization = await seedOrganization('Team org', String(user._id));
+    const userId = String(user._id);
+    await seedSubscription(userId, { subscriptionId: 'sub_monthly', ...professional });
+    await seedSubscription(userId, {
+      subscriptionId: 'sub_yearly',
+      ...professional,
+      unitAmount: 19900,
+      interval: 'year',
+    });
+    await seedSubscription(String(organization._id), {
+      subscriptionId: 'sub_team',
+      ownerType: 'Organization',
+      ...professional,
+      unitAmount: 3000,
+      quantity: 8,
+    });
+    await seedSubscription(userId, { subscriptionId: 'sub_past_due', status: 'past_due', ...professional });
+    await seedSubscription(userId, { subscriptionId: 'sub_unpaid', status: 'unpaid', ...professional });
+    await seedSubscription(userId, { subscriptionId: 'sub_trial', status: 'trialing', ...professional });
+    await seedSubscription(userId, { subscriptionId: 'sub_canceled', status: 'canceled', ...professional });
+    await seedSubscription(userId, { subscriptionId: 'admin_grant_c', source: 'admin_grant', ...professional });
+    // Written before the mirror existed: no amount, currency or interval at all.
+    await seedSubscription(userId, { subscriptionId: 'sub_unsynced' });
+    await seedSubscription(userId, { subscriptionId: 'sub_tiered', ...professional, unitAmount: null });
+    await seedSubscription(userId, { subscriptionId: 'sub_eur', ...professional, currency: 'eur', unitAmount: 1800 });
+  };
+
+  it('sums active and past due Stripe rows per month, counting what it leaves out', async () => {
+    await seedBilling();
+
+    const summary = await adminSubscriptionsSummary({}, NOW);
+
+    // 1900 + 19900 / 12 + 3000 x 8 + 1900 (past due)
+    expect(summary.mrr).toEqual({ currency: 'usd', amount: 29458, unpriced: 2, otherCurrency: 1 });
+    expect(summary.pastDueMrr).toEqual({ currency: 'usd', amount: 1900, unpriced: 0, otherCurrency: 0 });
+    expect(summary.views.pastDue).toBe(2);
+  });
+
+  it('intersects MRR with the current filter', async () => {
+    await seedBilling();
+
+    const organizations = await adminSubscriptionsSummary({ ownerType: 'Organization' }, NOW);
+    const comps = await adminSubscriptionsSummary({ source: 'admin_grant' }, NOW);
+
+    expect(organizations.mrr).toEqual({ currency: 'usd', amount: 24000, unpriced: 0, otherCurrency: 0 });
+    expect(comps.mrr).toEqual({ currency: 'usd', amount: 0, unpriced: 0, otherCurrency: 0 });
+  });
+
+  it('gives the same totals when facets run as separate queries for DocumentDB', async () => {
+    await seedBilling();
+    const native = await adminSubscriptionsSummary({}, NOW);
+
+    vi.stubEnv('USE_DOCUMENTDB_COMPATIBILITY', 'true');
+    try {
+      const split = await adminSubscriptionsSummary({}, NOW);
+      expect(split).toEqual(native);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("puts each row's own MRR on the list, and none on comps or rows without an amount", async () => {
+    await seedBilling();
+
+    const result = await listAdminSubscriptions(params, NOW);
+    const mrrOf = Object.fromEntries(result.subscriptions.map(row => [row.subscriptionId, row.mrr]));
+
+    expect(mrrOf).toEqual({
+      sub_monthly: { amount: 1900, currency: 'usd' },
+      sub_yearly: { amount: 1658, currency: 'usd' },
+      sub_team: { amount: 24000, currency: 'usd' },
+      sub_past_due: { amount: 1900, currency: 'usd' },
+      sub_unpaid: null,
+      sub_trial: null,
+      sub_canceled: null,
+      admin_grant_c: null,
+      sub_unsynced: null,
+      sub_tiered: null,
+      sub_eur: { amount: 1800, currency: 'eur' },
     });
   });
 });

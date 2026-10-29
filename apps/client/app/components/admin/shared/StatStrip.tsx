@@ -4,6 +4,8 @@ import { adminSurface } from './adminStyles';
 
 export type StatTileProps = {
   label: string;
+  /** A help control beside the label, such as the definition of the term. */
+  help?: ReactNode;
   value: ReactNode;
   comparison?: ReactNode;
   sparkline?: ReactNode;
@@ -11,12 +13,23 @@ export type StatTileProps = {
   valueColor?: string;
 };
 
-export function StatTile({ label, value, comparison, sparkline, valueColor }: StatTileProps) {
+export function StatTile({ label, help, value, comparison, sparkline, valueColor }: StatTileProps) {
+  const labelText = (
+    <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+      {label}
+    </Typography>
+  );
   return (
     <Stack data-testid="admin-stat-tile" gap={0.5} sx={{ px: 2, py: 1.75, minWidth: 0 }}>
-      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
-        {label}
-      </Typography>
+      {help ? (
+        <Stack direction="row" alignItems="center" gap={0.25}>
+          {labelText}
+          {/* The negative margin keeps the label row's height; the guide caps help icons at 16 px. */}
+          <Box sx={{ display: 'flex', my: -1, '& svg': { fontSize: 16 } }}>{help}</Box>
+        </Stack>
+      ) : (
+        labelText
+      )}
       <Stack direction="row" alignItems="flex-end" gap={1.5} sx={{ minWidth: 0 }}>
         <Typography
           component="span"

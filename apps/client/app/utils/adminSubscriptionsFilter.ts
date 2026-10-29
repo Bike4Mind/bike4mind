@@ -55,6 +55,21 @@ export const RENEWS_WINDOW_MS: Record<'next7' | 'next30', number> = {
 /** The Churned view's look-back, ms. */
 export const CHURNED_WINDOW_MS = 30 * 86_400_000;
 
+/**
+ * MRR totals are in this currency (Stripe's lowercase code); checkout bills USD only. A row billed in
+ * another currency keeps its own amount on the row and is counted, not summed, in the totals.
+ */
+export const MRR_CURRENCY = 'usd';
+
+/** Stripe-billed rows in these statuses count toward MRR (docs/admin-subscriptions-spec.md section 5.3). */
+export const MRR_STATUSES = ['active', 'past_due'] as const satisfies readonly SubscriptionStatusFilter[];
+
+const MRR_STATUS_SET: ReadonlySet<string> = new Set(MRR_STATUSES);
+
+/** Whether a row counts toward MRR. The summary's MRR aggregation selects the same rows. */
+export const countsTowardMrr = (row: { source?: string | null; status: string }): boolean =>
+  row.source === 'stripe' && MRR_STATUS_SET.has(row.status);
+
 // A query string carries a one-item list as a bare string.
 const listOf = <T extends readonly [string, ...string[]]>(values: T) =>
   z.preprocess(
@@ -124,6 +139,9 @@ export type AdminSubscriptionOwner =
       billingOwnerId: string | null;
     };
 
+/** A row's contribution to MRR: the billed amount per month, in minor units of `currency`, rounded. */
+export type AdminSubscriptionMrr = { amount: number; currency: string };
+
 export type AdminSubscriptionRow = {
   id: string;
   subscriptionId: string;
@@ -136,6 +154,11 @@ export type AdminSubscriptionRow = {
   source: (typeof SUBSCRIPTION_SOURCE_FILTERS)[number];
   quantity: number;
   customCreditsPerCycle: number | null;
+  /**
+   * `null` for a row that does not count toward MRR (comps, statuses outside MRR_STATUSES) and for one
+   * with no billed amount mirrored from Stripe yet.
+   */
+  mrr: AdminSubscriptionMrr | null;
   periodStartsAt: string;
   periodEndsAt: string;
   canceledAt: string | null;
@@ -151,13 +174,27 @@ export type AdminSubscriptionsListResponse = {
   searchTruncated: boolean;
 };
 
+export type AdminSubscriptionsMrrTotal = {
+  currency: typeof MRR_CURRENCY;
+  /** Per month, in minor units, rounded once after summing. */
+  amount: number;
+  /** Rows that count but have no billed amount mirrored yet, left out of `amount`. */
+  unpriced: number;
+  /** Rows billed in another currency, left out of `amount`. */
+  otherCurrency: number;
+};
+
 /**
- * Counts for the built-in views, each intersected with the current filters. Canceling is counted by
- * the summary route with cancel=scheduled, not a views field. Mismatched arrives with reconciliation.
+ * Counts for the built-in views and the MRR totals, each intersected with the current filters. Canceling is
+ * counted by the summary route with cancel=scheduled, not a views field. Mismatched arrives with reconciliation.
  */
 export type AdminSubscriptionsSummary = {
   total: number;
   views: { paying: number; pastDue: number; comped: number; churned: number };
+  /** MRR of the matching rows, by the same definition as the row `mrr`. */
+  mrr: AdminSubscriptionsMrrTotal;
+  /** The part of `mrr` from rows the Past due view counts: MRR at risk. */
+  pastDueMrr: AdminSubscriptionsMrrTotal;
   /** Same meaning as on the list response: the counts cover only the owners the search resolved. */
   searchTruncated: boolean;
 };
