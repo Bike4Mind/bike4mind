@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseAlarmThreshold, parseSignupCodeSendAlarmThreshold } from '../signupAlarmThreshold';
+import { SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE } from '../../b4m-core/common/src/signupGrant';
 
 const resources = vi.hoisted(() => {
   function output<T>(value: T) {
@@ -224,7 +225,11 @@ describe('signup code send alarm wiring', () => {
     vi.stubEnv('SIGNUP_CODE_SEND_ALARM_PER_HOUR', threshold);
     await loadAlarms();
     expect(callFor(resources.filter, 'signupCodeSendsFilter')).toBeDefined();
-    expect(resources.alarm.mock.calls.map(([name]) => name)).toEqual(['signupCodeSendBurst', 'apiKeyCreateBurst']);
+    expect(resources.alarm.mock.calls.map(([name]) => name)).toEqual([
+      'signupCodeSendBurst',
+      'apiKeyCreateBurst',
+      'signupGrantProtectionGap',
+    ]);
   });
   it('creates no resources on an unmonitored stage', async () => {
     await loadAlarms('preview');
@@ -270,5 +275,50 @@ describe('signup code send alarm wiring', () => {
       expect(contract.deployEnv).toContain(name);
     }
     expect(readFileSync(new URL('../index.ts', import.meta.url), 'utf8')).toContain("export * from './signupAlarms';");
+  });
+});
+
+describe('signup grant protection gap alarm wiring', () => {
+  it('counts the message the grant path logs and nothing spoofed through other fields', async () => {
+    await loadAlarms();
+    const filter = callFor(resources.filter, 'signupGrantProtectionGapFilter');
+    expect(filter).toMatchObject({
+      name: 'test-app-production-signup-grant-protection-gap',
+      metricTransformation: {
+        name: 'SignupGrantProtectionGaps',
+        namespace: 'test-app/production/Signup',
+        value: '1',
+        unit: 'Count',
+      },
+    });
+    const pattern = filter?.pattern;
+    if (typeof pattern !== 'string') throw new Error('Missing metric filter pattern');
+    const expression = new RegExp(pattern.slice(1, -1));
+    const prefix = '2026-10-23T00:00:00.000Z request-id WARN ';
+    expect(expression.test(prefix + JSON.stringify({ message: SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE }))).toBe(true);
+    expect(
+      expression.test(
+        prefix + JSON.stringify({ requestId: SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE, message: 'req-timing' })
+      )
+    ).toBe(false);
+  });
+
+  it('alarms on a single occurrence and routes ALARM and OK to Slack and email', async () => {
+    await loadAlarms();
+    expect(resources.alarm).toHaveBeenCalledWith('signupGrantProtectionGap', {
+      name: 'test-app-production-signup-grant-protection-gap',
+      alarmDescription: expect.any(String),
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'SignupGrantProtectionGaps',
+      namespace: 'test-app/production/Signup',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic', 'email-topic'],
+      okActions: ['alarm-topic', 'email-topic'],
+      tags: { Application: 'Signup', Severity: 'High' },
+    });
   });
 });
