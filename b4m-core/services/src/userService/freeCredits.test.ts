@@ -1,15 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG, SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE } from '@bike4mind/common';
 import * as creditService from '../creditService';
 import * as stagedSignupGrant from './stagedSignupGrant';
 import { grantFreeCredits, releasePendingFreeCredits, resolveFreeCreditAmount } from './freeCredits';
 import * as signupProtection from './signupProtection';
 
 const buildAdapters = (defaultFreeCredits: string | null = '100') => {
-  const logger = { error: vi.fn() };
+  const logger = { error: vi.fn(), warn: vi.fn() };
   const adapters = {
     db: {
       adminSettings: {
+        findBySettingNames: vi.fn().mockResolvedValue([]),
         findBySettingName: vi
           .fn()
           .mockResolvedValue(defaultFreeCredits === null ? null : { settingValue: defaultFreeCredits }),
@@ -209,6 +210,51 @@ describe('free credits service', () => {
       expect(adapters.db.adminSettings.findBySettingName).not.toHaveBeenCalled();
       expect(adapters.db.creditTransactions.findOne).not.toHaveBeenCalled();
       expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
+    it('raises the signup alarm message when a large grant is released with protections off', async () => {
+      const adapters = buildAdapters('500');
+      adapters.db.adminSettings.findBySettingNames.mockResolvedValue([
+        { settingName: 'defaultFreeCredits', settingValue: 500 },
+      ]);
+      const user = { id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG], pendingCreditGrant: null };
+
+      await releasePendingFreeCredits(user, adapters);
+
+      expect(adapters.logger.warn).toHaveBeenCalledExactlyOnceWith(
+        SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE,
+        expect.objectContaining({ largestGrant: 500, unset: expect.arrayContaining(['signupGrantRiskPolicy']) })
+      );
+    });
+
+    it('stays quiet when the grant is small or every protection is on', async () => {
+      const small = buildAdapters('50');
+      small.db.adminSettings.findBySettingNames.mockResolvedValue([
+        { settingName: 'defaultFreeCredits', settingValue: 50 },
+      ]);
+      await releasePendingFreeCredits({ id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] }, small);
+      expect(small.logger.warn).not.toHaveBeenCalled();
+
+      const protectedAdapters = buildAdapters('500');
+      protectedAdapters.db.adminSettings.findBySettingNames.mockResolvedValue([
+        { settingName: 'defaultFreeCredits', settingValue: 500 },
+        { settingName: 'signupGrantRiskPolicy', settingValue: { enabled: true } },
+        { settingName: 'maxSignupsPerIpPerDay', settingValue: 5 },
+        { settingName: 'maxSignupsPerAsnPerHour', settingValue: 20 },
+        { settingName: 'signupBurstAutoHold', settingValue: true },
+      ]);
+      await releasePendingFreeCredits({ id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] }, protectedAdapters);
+      expect(protectedAdapters.logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('still releases the grant when the protection check cannot read settings', async () => {
+      const adapters = buildAdapters('100');
+      adapters.db.adminSettings.findBySettingNames.mockRejectedValue(new Error('settings unavailable'));
+
+      const result = await releasePendingFreeCredits({ id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] }, adapters);
+
+      expect(result.released).toBe(true);
+      expect(adapters.logger.error).toHaveBeenCalledWith('signup-grant-protection-check-failed', expect.anything());
     });
 
     it('does nothing for a user without the pending tag', async () => {
