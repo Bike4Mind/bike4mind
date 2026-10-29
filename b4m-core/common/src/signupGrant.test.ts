@@ -73,6 +73,16 @@ describe('signup grant protections', () => {
     expect(findUnsetSignupProtections({ ...allOn, signupBurstAutoHold: true })).toEqual([]);
   });
 
+  it('reads the policy stored as a JSON string, as the seed migration writes it', () => {
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: '{"enabled":true}' })).toEqual([]);
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: '{"enabled":false}' })).toEqual([
+      'signupGrantRiskPolicy',
+    ]);
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: 'not json' })).toEqual([
+      'signupGrantRiskPolicy',
+    ]);
+  });
+
   it('reports only the protections still off', () => {
     expect(findUnsetSignupProtections({ ...allOn, maxSignupsPerAsnPerHour: 0 })).toEqual(['maxSignupsPerAsnPerHour']);
     expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: 'on' })).toEqual(['signupGrantRiskPolicy']);
