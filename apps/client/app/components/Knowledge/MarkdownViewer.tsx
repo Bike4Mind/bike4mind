@@ -64,6 +64,7 @@ const CopyButton = ({ text }: { text: string }) => {
   return (
     <Tooltip title={copied ? 'Copied!' : 'Copy code'} variant="solid" size="sm">
       <IconButton
+        data-testid="markdown-code-copy-btn"
         size="sm"
         variant="plain"
         color="neutral"
@@ -284,20 +285,24 @@ const MarkdownViewer: React.FC<Props> = ({
               node?.position?.start.line === node?.position?.end.line &&
               node?.position?.start.column !== node?.position?.end.column;
 
+            // An empty fence has no children at all.
+            const codeText = String(children ?? '').replace(/\n$/, '');
+
             if (language === 'mermaid') {
-              const chartContent = String(children).replace(/\n$/, '').trim();
+              const chartContent = codeText.trim();
               return <MermaidChart className="markdown-viewer-mermaid" chartDefinition={chartContent} />;
             }
 
             return !inline && match ? (
               <Box
                 className="markdown-viewer-code-block"
+                data-testid="markdown-code-block"
                 sx={{ maxWidth: '100%', overflowX: 'auto', position: 'relative' }}
                 {...citedBlockProps(node, citedRange)}
               >
-                <CopyButton text={String(children).replace(/\n$/, '')} />
+                <CopyButton text={codeText} />
                 <HighlightedCode
-                  code={String(children).replace(/\n$/, '')}
+                  code={codeText}
                   language={language}
                   customStyle={{ maxWidth: '100%', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                 />
