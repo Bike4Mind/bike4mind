@@ -34,6 +34,22 @@ To keep a combination of filters, sort, page size and grouping, click **Save vie
 
 Each saved tab you own has a **...** menu with **Rename**, **Share with all admins** (or **Make personal**) and **Delete**. Opening a saved view always starts at page 1. You can keep up to 50 views.
 
+## Signup risk review
+
+Open **Risk review** in the admin sidebar to review accounts flagged by signup risk scoring.
+AI access is automatically held while a review is pending, including free models and AI requests
+through API keys. These users can still sign in and access their existing data. The AI refusal
+message directs them to contact support to request a review.
+
+Choose **Approve** for a legitimate account to lift its signup review hold. Approval does not
+remove a separate manual AI restriction or suspension. **Undo**, available for 30 seconds,
+restores the review hold. Later rescores update the evidence but never clear a pending hold or
+overturn an approval. Choose **Suspend** for an abusive account to block account access.
+
+Existing pending reviews also hold AI access. If an approved user still cannot use AI, check for
+separate restrictions, suspension, and normal plan or credit limits. Signup-domain credit holds
+are independent of account risk reviews.
+
 ## Columns
 
 | Column | Details |

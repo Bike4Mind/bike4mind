@@ -1,6 +1,6 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
-import { Quest, Session, sessionRepository } from '@bike4mind/database';
+import { Quest, Session, sessionRepository, userRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { ChatModelName, IMessage, MessageContentObject } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
@@ -8,6 +8,7 @@ import { recordSessionOperationalUsage } from '@workers/events/recordSessionOper
 import mongoose from 'mongoose';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { isStoppedBeforeReply } from '@bike4mind/utils';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.ContextSummarize.schema.parse(event.properties);
@@ -50,6 +51,12 @@ export const handler = withEventContext(async (event, logger) => {
     // Advance over cancelled turns without inventing working memory or billing a model call.
     await sessionRepository.update({ id: session.id, contextSummaryUpToQuestId: newBoundaryQuestId });
     logger.debug(`Skipped stopped turns in context summary for session ${sessionId}`);
+    return;
+  }
+
+  const user = await userRepository.findById(session.userId);
+  if (!user || aiAccessDeniedMessage(user)) {
+    logger.warn(`Skipping context summarization for session ${sessionId}: user missing or AI access held`);
     return;
   }
 
@@ -131,7 +138,7 @@ Format: Dense bullet points. Preserve all technical specifics. No word limit.`,
 
   // The context-summarize event carries no userId; attribute to the session's owner.
   await recordSessionOperationalUsage({
-    userId: session.userId,
+    user,
     sessionId,
     modelId,
     modelInfo,

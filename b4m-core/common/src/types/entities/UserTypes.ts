@@ -65,8 +65,8 @@ export interface ISignupMeta extends INetworkMeta {
 }
 
 /**
- * none and pending follow the score on every recompute; approved and banned are an admin's ruling
- * and a recompute never changes them.
+ * Scoring can move none to pending. Pending holds AI access until an admin decides;
+ * recomputing never clears pending or changes an approved/banned ruling.
  */
 export const SIGNUP_RISK_REVIEW_STATES = ['none', 'pending', 'approved', 'banned'] as const;
 export type SignupRiskReviewState = (typeof SIGNUP_RISK_REVIEW_STATES)[number];
@@ -902,9 +902,8 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
     options?: { throttledUntil?: Date | null }
   ) => Promise<IUserDocument | null>;
   /**
-   * Store a recomputed risk score. `riskScore.reviewState` is only the proposal: an approved or
-   * banned state already stored is kept, in the same write, so an admin ruling made since the
-   * caller read the user is never undone.
+   * Store a recomputed risk score. Preserve pending holds and approved/banned rulings in the
+   * same write, so rescoring cannot clear a hold or undo a concurrent admin decision.
    */
   setRiskScore: (userId: string, riskScore: ISignupRiskScore) => Promise<void>;
   /**
@@ -916,7 +915,7 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
   /**
    * Move a user's review from `from` to `to`, only if it is still `from`; false when it was not
-   * (already decided, rescored out of pending, or no score). Used for admin approve and its undo.
+   * (already decided or no score). Used for admin approve and its undo.
    */
   setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
   /**

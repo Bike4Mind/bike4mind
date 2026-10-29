@@ -863,7 +863,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
-    const settled = ['approved', 'banned'];
+    const preservedStates = ['pending', 'approved', 'banned'];
     await this.model.updateOne({ _id: userId }, [
       {
         $set: {
@@ -874,7 +874,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
             computedAt: riskScore.computedAt,
             reviewState: {
               $cond: [
-                { $in: [{ $ifNull: ['$riskScore.reviewState', 'none'] }, settled] },
+                { $in: [{ $ifNull: ['$riskScore.reviewState', 'none'] }, preservedStates] },
                 '$riskScore.reviewState',
                 riskScore.reviewState,
               ],
