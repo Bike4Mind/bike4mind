@@ -372,6 +372,17 @@ describe('ResearchModeService timeout', () => {
     expect(results[0]).toMatchObject({ success: false, error: 'Timeout after 545 seconds' });
   });
 
+  it('rounds the timeout in its error message to whole seconds', async () => {
+    useBackend(hangingComplete());
+    const service = new ResearchModeService({}, timedModels, logger);
+
+    const pending = service.processResearchMode(budgeted({ a: 1 }), [], baseOptions, onStream);
+    await vi.advanceTimersByTimeAsync(130_025);
+    const results = await pending;
+
+    expect(results[0]).toMatchObject({ success: false, error: 'Timeout after 120 seconds' });
+  });
+
   it('reports a Stop before the timeout as cancelled, without draining', async () => {
     useBackend(hangingComplete());
     const quest = new AbortController();

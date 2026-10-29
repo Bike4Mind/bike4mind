@@ -199,7 +199,7 @@ export class ResearchModeService {
       const stopped = new Promise<never>((_, reject) => {
         configAbort.signal.addEventListener(
           'abort',
-          () => reject(new Error(timedOut ? `Timeout after ${timeoutMs / 1000} seconds` : 'Cancelled')),
+          () => reject(new Error(timedOut ? `Timeout after ${Math.round(timeoutMs / 1000)} seconds` : 'Cancelled')),
           { once: true }
         );
       });
