@@ -114,6 +114,14 @@ Common issues you may encounter when using the CLI sandbox, with symptoms, cause
 The violation log shows the exact domain that was blocked, including the method (`CONNECT` for HTTPS, `GET`/`POST` for HTTP). Use this to determine the correct domain to trust.
 :::
 
+## Linux: "Sandbox network on Linux requires socat"
+
+**Symptoms:** With network filtering enabled on Linux, every sandboxed command fails with this error.
+
+**Cause:** Sandboxed commands on Linux have no direct network access and reach the proxy through `socat`, which is not installed.
+
+**Solution:** Install `socat` with your package manager (`sudo apt install socat`, `sudo dnf install socat` or `sudo pacman -S socat`), or turn sandbox network filtering off.
+
 ## Proxy won't start
 
 **Symptoms:** `/sandbox:enable` succeeds but reports no proxy. Network filtering not active.

@@ -120,9 +120,14 @@ On macOS (Seatbelt), access to denied paths is rejected. On Linux (Bubblewrap), 
 
 **Type:** `boolean` | **Default:** `false`
 
-Must be `true` for the network proxy to start. When disabled, sandboxed commands have unrestricted network access.
+Must be `true` for the network proxy to start. When disabled, sandboxed commands have no network access.
 
-On macOS the sandbox profile permits only loopback traffic, so direct connections to other hosts are blocked and outbound traffic to them has to go through the proxy. On Linux the proxy is advisory: it is applied through proxy environment variables, and a process that ignores them can still connect directly. Node's built-in `fetch` honors the proxy only on recent Node releases (24.3 and newer are known to work); on older versions it connects directly and fails inside the sandbox.
+When enabled, the only connection a sandboxed command can open is to the proxy, which it finds through the `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` environment variables. Direct connections to other hosts, and to other loopback ports on your machine, are blocked, and hostnames resolve only through the proxy. A tool that ignores the proxy variables fails to connect rather than bypassing the allowlist.
+
+- **macOS:** the Seatbelt profile allows outbound loopback traffic to the proxy port only.
+- **Linux:** the command runs in its own network namespace with no route to the host network. The proxy is exposed to it through a unix socket, and `socat` inside the sandbox relays the proxy port on the sandbox's loopback to that socket. `socat` must be installed; without it, sandboxed commands fail with an error instead of running with network access.
+
+Node's built-in `fetch` honors the proxy only on recent Node releases (24.3 and newer are known to work); on older versions it connects directly and fails inside the sandbox.
 
 ### `allowedDomains`
 
@@ -183,7 +188,7 @@ Sandboxed commands cannot connect to container engine API sockets. The blocked l
 - `docker.sock` and `podman` under `$XDG_RUNTIME_DIR`
 - the `unix://` socket named by `$DOCKER_HOST` or `$CONTAINER_HOST`
 
-On macOS the Seatbelt profile denies connecting to them; on Linux Bubblewrap hides the ones that exist behind an empty mount. This applies to unix sockets only: an engine that listens on a loopback TCP port is reachable when sandbox networking is on.
+On macOS the Seatbelt profile denies connecting to them; on Linux Bubblewrap hides the ones that exist behind an empty mount. An engine that listens on a loopback TCP port is not reachable either, since sandboxed commands can connect only to the network proxy.
 
 On macOS the profile also denies writes inside the listed directories, even with `writeOnlyToWorkingDir: false`, so sandboxed tools cannot write `~/.docker/config.json` or Podman and buildah storage under `~/.local/share/containers`. It also denies renaming, chmod-ing or changing the timestamps of each parent directory of a listed path (such as `$HOME` or `$TMPDIR`), which stops a socket from being moved out from under the deny. Creating and deleting files inside those parent directories still works.
 
@@ -198,7 +203,7 @@ Set to `true` only if a sandboxed tool genuinely needs to talk to the container 
 
 ### `platform.linux`
 
-- `runtime`: `"bubblewrap"` — Uses `bwrap` with namespace isolation
+- `runtime`: `"bubblewrap"` — Uses `bwrap` with namespace isolation; network filtering also needs `socat`
 
 Platform config is rarely changed. The sandbox auto-detects your platform and uses the appropriate runtime.
 

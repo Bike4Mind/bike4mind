@@ -10,6 +10,7 @@ import os from 'os';
 import type { SandboxPlatform, WrappedCommand } from '../types.js';
 import { logger } from '../../utils/Logger.js';
 import {
+  assertProxyPort,
   resolveSandboxPath,
   getContainerSocketPaths,
   getProtectedWorkspacePaths,
@@ -44,12 +45,6 @@ const DEVICE_WRITE_ALLOWS = [
   '(allow file-write-data (literal "/dev/dtracehelper"))',
   '(allow file-write-data (subpath "/dev/fd"))',
 ];
-
-function assertPort(port: number): void {
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid sandbox proxy port: ${port}`);
-  }
-}
 
 /** Unresolvable paths keep their rule at the unresolved location instead of failing profile generation. */
 function resolveProfilePath(p: string): string {
@@ -134,12 +129,13 @@ export class SeatbeltRuntime implements SandboxRuntime {
     lines.push('(allow network-inbound (local unix-socket))');
     lines.push('(allow network-bind (local unix-socket))');
     if (options.networkEnabled && options.proxyPort !== undefined) {
-      assertPort(options.proxyPort);
-      // The proxy resolves hostnames, so clients need no local DNS.
-      lines.push('; Allow loopback only (reaches the filtering proxy); no local DNS resolution');
+      assertProxyPort(options.proxyPort);
+      // The proxy resolves hostnames, so clients need no local DNS. Outbound loopback is limited to the
+      // proxy port so other local services (databases, dev servers, engine APIs) stay unreachable.
+      lines.push('; Allow outbound loopback to the filtering proxy only; no local DNS resolution');
       lines.push('(allow network-bind (local ip "localhost:*"))');
       lines.push('(allow network-inbound (local ip "localhost:*"))');
-      lines.push('(allow network-outbound (remote ip "localhost:*"))');
+      lines.push(`(allow network-outbound (remote ip "localhost:${options.proxyPort}"))`);
       lines.push(`(deny network-outbound (remote unix-socket (path-literal "${MDNS_RESPONDER_SOCKET}")))`);
     }
     if (containerDenies) {
