@@ -76,10 +76,46 @@ describe('HuggingFaceTokenStore', () => {
     expect(JSON.stringify([log.warn.mock.calls, log.debug.mock.calls])).not.toContain(TOKEN);
   });
 
-  it('reads an unreadable or garbled file as no token', async () => {
+  it('reports unreadable files and retries the read without logging credentials', async () => {
     const missing = disk();
     missing.read.mockRejectedValueOnce(new Error('EACCES'));
-    expect(await new HuggingFaceTokenStore(cipher(), missing, logger()).get()).toBeNull();
+    const log = logger();
+    const store = new HuggingFaceTokenStore(cipher(), missing, log);
+    await expect(store.get()).rejects.toThrow('Could not read');
+    expect(log.warn).toHaveBeenCalledOnce();
+    expect(await store.get()).toBeNull();
+    expect(missing.read).toHaveBeenCalledTimes(2);
     expect(await new HuggingFaceTokenStore(cipher(), disk('{not json'), logger()).get()).toBeNull();
   });
+
+  it('never persists a token with the Linux basic_text backend', async () => {
+    const encryption = { ...cipher(), getSelectedStorageBackend: () => 'basic_text' };
+    const file = disk();
+    const store = new HuggingFaceTokenStore(encryption, file, logger());
+    await store.set(TOKEN);
+    expect(store.persisted()).toBe(false);
+    expect(encryption.encryptString).not.toHaveBeenCalled();
+    expect(file.contents).toBe('{"version":1}');
+    expect(await store.get()).toBe(TOKEN);
+    expect(await new HuggingFaceTokenStore(encryption, file, logger()).get()).toBeNull();
+  });
+
+  it('keeps the previous token when saving a replacement fails', async () => {
+    const file = disk();
+    const store = new HuggingFaceTokenStore(cipher(), file, logger());
+    await store.set(TOKEN);
+    file.write.mockRejectedValueOnce(new Error('EACCES'));
+    await expect(store.set('hf_replacement')).rejects.toThrow('EACCES');
+    expect(await store.get()).toBe(TOKEN);
+    expect(await new HuggingFaceTokenStore(cipher(), file, logger()).get()).toBe(TOKEN);
+  });
+
+  it('does not activate a token when encryption fails', async () => {
+    const encryption = cipher();
+    encryption.encryptString.mockImplementationOnce(() => { throw new Error('locked'); });
+    const store = new HuggingFaceTokenStore(encryption, disk(), logger());
+    await expect(store.set(TOKEN)).rejects.toThrow('locked');
+    expect(await store.get()).toBeNull();
+  });
+
 });

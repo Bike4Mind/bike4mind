@@ -85,7 +85,6 @@ function memoryTokens(initial: string | null = null, persisted = true) {
 function harness(
   options: { detail?: HubModelDetail; verified?: string | null; healthy?: boolean; token?: string | null } = {}
 ) {
-
   const pulls: Deferred[] = [];
   const runtime = {
     baseUrl: 'http://127.0.0.1:11434',
@@ -785,4 +784,56 @@ describe('removing the token with the real store', () => {
     expect(await first.clearToken()).toMatchObject({ ok: true, status: { set: false } });
     expect(await launch().tokenStatus()).toEqual({ set: false, persisted: true });
   });
+});
+
+describe('token operation failures and ordering', () => {
+  it('finishes a later removal after an earlier token validation', async () => {
+    const { service, hub, tokens } = harness();
+    let finishCheck: (valid: boolean) => void = () => {};
+    hub.checkToken.mockImplementationOnce(
+      () =>
+        new Promise<boolean>(resolve => {
+          finishCheck = resolve;
+        })
+    );
+    const saving = service.setToken('hf_pending_token');
+    await vi.waitFor(() => expect(hub.checkToken).toHaveBeenCalledOnce());
+    const removing = service.clearToken();
+    expect(tokens.clear).not.toHaveBeenCalled();
+    finishCheck(true);
+    expect(await saving).toMatchObject({ ok: true });
+    expect(await removing).toMatchObject({ ok: true, status: { set: false } });
+    expect(await tokens.get()).toBeNull();
+    expect(await service.tokenStatus()).toMatchObject({ set: false });
+  });
+
+  it('continues with later mutations when an earlier validation fails', async () => {
+    const { service, hub, tokens } = harness();
+    hub.checkToken.mockRejectedValueOnce(new Error('offline'));
+    const saving = service.setToken('hf_pending_token');
+    const removing = service.clearToken();
+    expect(await saving).toMatchObject({ ok: false });
+    expect(await removing).toMatchObject({ ok: true });
+    expect(tokens.clear).toHaveBeenCalledOnce();
+  });
+
+  it.each(['search', 'detail', 'pull'] as const)(
+    'reports a failed token read on %s and retries it next time',
+    async operation => {
+      const { service, tokens, hub } = harness({ token: 'hf_saved_token' });
+      tokens.get.mockRejectedValueOnce(new Error('EACCES'));
+      const result =
+        operation === 'search'
+          ? await service.search({ query: 'qwen' })
+          : operation === 'detail'
+            ? await service.detail(REPO)
+            : await service.pull(request);
+      expect(result).toMatchObject({ ok: false, error: { kind: 'failed' } });
+      expect(hub.search).not.toHaveBeenCalled();
+      expect(hub.getModel).not.toHaveBeenCalled();
+      expect(service.pulls().every(entry => entry.phase === 'failed')).toBe(true);
+      expect(await service.tokenStatus()).toMatchObject({ set: true });
+      expect(tokens.get).toHaveBeenCalledTimes(2);
+    }
+  );
 });

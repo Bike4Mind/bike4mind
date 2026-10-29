@@ -256,6 +256,7 @@ export class ModelHubService {
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #session: Promise<HubSession> | null = null;
+  #tokenMutation: Promise<unknown> = Promise.resolve();
 
   constructor(deps: ModelHubServiceDeps) {
     this.#deps = deps;
@@ -263,10 +264,22 @@ export class ModelHubService {
   }
 
   #hub(): Promise<HubSession> {
-    return (this.#session ??= this.#deps.tokens
-      .get()
-      .catch(() => null)
-      .then(token => ({ hub: this.#deps.createHub(token), token: token !== null })));
+    if (!this.#session) {
+      const session = this.#deps.tokens
+        .get()
+        .then(token => ({ hub: this.#deps.createHub(token), token: token !== null }));
+      this.#session = session;
+      void session.catch(() => {
+        if (this.#session === session) this.#session = null;
+      });
+    }
+    return this.#session;
+  }
+
+  #mutateToken(operation: () => Promise<HfTokenResult>): Promise<HfTokenResult> {
+    const result = this.#tokenMutation.then(operation);
+    this.#tokenMutation = result.catch(() => undefined);
+    return result;
   }
 
   async tokenStatus(): Promise<HfTokenStatus> {
@@ -274,7 +287,11 @@ export class ModelHubService {
   }
 
   /** Keeps `raw` only once Hugging Face has accepted it; searches and reads after that send it. */
-  async setToken(raw: string): Promise<HfTokenResult> {
+  setToken(raw: string): Promise<HfTokenResult> {
+    return this.#mutateToken(() => this.#setToken(raw));
+  }
+
+  async #setToken(raw: string): Promise<HfTokenResult> {
     const token = raw.trim();
     const malformed = hubError(
       'token-rejected',
@@ -309,7 +326,11 @@ export class ModelHubService {
   }
 
   /** The session only forgets the token once the stored one is gone, so a failed removal still shows it as set. */
-  async clearToken(): Promise<HfTokenResult> {
+  clearToken(): Promise<HfTokenResult> {
+    return this.#mutateToken(() => this.#clearToken());
+  }
+
+  async #clearToken(): Promise<HfTokenResult> {
     try {
       await this.#deps.tokens.clear();
     } catch {
@@ -343,8 +364,11 @@ export class ModelHubService {
   }
 
   async search(request: HubSearchRequest): Promise<HubSearchResult> {
-    const { hub, token } = await this.#hub();
+    let token = false;
     try {
+      const session = await this.#hub();
+      token = session.token;
+      const { hub } = session;
       const page = await hub.search({
         query: request.query,
         cursor: request.cursor ?? undefined,
@@ -358,8 +382,11 @@ export class ModelHubService {
   }
 
   async detail(repo: string): Promise<HubDetailResult> {
-    const { hub, token } = await this.#hub();
+    let token = false;
     try {
+      const session = await this.#hub();
+      token = session.token;
+      const { hub } = session;
       return { ok: true, model: toView(hub.endpoint, await hub.getModel(repo), token) };
     } catch (error) {
       return { ok: false, error: toModelHubError(error, token) };
@@ -401,9 +428,12 @@ export class ModelHubService {
       return { ok: false, error, listed: false };
     };
 
-    const { hub, token } = await this.#hub();
+    let token = false;
     let ref: string | null;
     try {
+      const session = await this.#hub();
+      token = session.token;
+      const { hub } = session;
       // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
       const detail = await hub.getModel(request.repo);
       const build = detail.builds.find((candidate: HubGgufBuild) => candidate.id === request.buildId);

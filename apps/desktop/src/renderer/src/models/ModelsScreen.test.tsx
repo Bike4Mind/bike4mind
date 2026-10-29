@@ -88,6 +88,7 @@ interface Bridge {
 }
 
 let bridge: Bridge;
+let pushToken: ((status: HfTokenStatus) => void) | null = null;
 let pushPulls: (pulls: ModelPull[]) => void = () => {};
 const calls = {
   pull: vi.fn(),
@@ -96,11 +97,13 @@ const calls = {
   search: vi.fn(),
   getDetail: vi.fn(),
   getStatus: vi.fn(),
+  getHfToken: vi.fn(),
   setHfToken: vi.fn(),
   clearHfToken: vi.fn(),
 };
 
 beforeEach(() => {
+  pushToken = null;
   bridge = {
     status: RUNNING,
     installed: { ok: true, models: [] },
@@ -111,6 +114,7 @@ beforeEach(() => {
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   window.localStorage.clear();
+  calls.getHfToken.mockImplementation(async () => bridge.token);
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.remove.mockResolvedValue({ ok: true });
   calls.setHfToken.mockImplementation(async () => {
@@ -142,12 +146,18 @@ beforeEach(() => {
       cancelPull: calls.cancelPull,
       dismissPull: vi.fn(),
       remove: calls.remove,
-      getHfToken: async () => bridge.token,
+      getHfToken: calls.getHfToken,
       setHfToken: calls.setHfToken,
       clearHfToken: calls.clearHfToken,
       onPullsChanged: (listener: (pulls: ModelPull[]) => void) => {
         pushPulls = listener;
         return () => {};
+      },
+      onHfTokenChanged: (listener: (status: HfTokenStatus) => void) => {
+        pushToken = listener;
+        return () => {
+          pushToken = null;
+        };
       },
       onInstalledChanged: () => () => {},
     },
@@ -712,5 +722,80 @@ describe('ModelsScreen explore', () => {
     await click(q('models-explore-search-btn'));
     expect(calls.search).toHaveBeenLastCalledWith({ query: 'nothing-here' });
     expect(q('models-explore-empty')?.textContent).toBe('No GGUF models match "nothing-here".');
+  });
+});
+
+describe('Hugging Face token transport failures', () => {
+  it('shows a failed status read and lets the user retry', async () => {
+    await mount();
+    calls.getHfToken.mockRejectedValueOnce(new Error('IPC failed'));
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    const error = q('models-hf-token-read-error');
+    expect(error?.textContent).toContain('Could not read');
+    const searches = calls.search.mock.calls.length;
+    const details = calls.getDetail.mock.calls.length;
+    await click(error?.querySelector('button') ?? null);
+    expect(calls.search).toHaveBeenCalledTimes(searches + 1);
+    expect(calls.getDetail.mock.calls.length).toBeGreaterThan(details);
+    expect(q('models-hf-token-read-error')).toBeNull();
+    expect(q('models-hf-token')).not.toBeNull();
+  });
+
+  it('keeps a pending save open and shows rejected IPC as a visible error', async () => {
+    let rejectSave: (error: Error) => void = () => {};
+    calls.setHfToken.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        })
+    );
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-edit-btn'));
+    type(q('models-hf-token-input') as HTMLInputElement, 'hf_pending_token');
+    await click(q('models-hf-token-save-btn'));
+    expect((q('models-hf-token-cancel-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect((q('models-hf-token-input') as HTMLInputElement).disabled).toBe(true);
+    await click(q('models-hf-token-cancel-btn'));
+    expect(q('models-hf-token-dialog')).not.toBeNull();
+    await act(async () => {
+      rejectSave(new Error('IPC failed'));
+    });
+    expect(q('models-hf-token-error')?.textContent).toContain('Could not save');
+    expect((q('models-hf-token-cancel-btn') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('shows a rejected removal and keeps the saved state', async () => {
+    bridge.token = { set: true, persisted: true };
+    calls.clearHfToken.mockRejectedValueOnce(new Error('IPC failed'));
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-remove-btn'));
+    expect(q('models-hf-token-remove-error')?.textContent).toContain('Could not remove');
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+  });
+});
+
+describe('Hugging Face token changes across windows', () => {
+  it('refreshes cached private results and details on a token event and unsubscribes on exit', async () => {
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    const searches = calls.search.mock.calls.length;
+    const details = calls.getDetail.mock.calls.length;
+    bridge.search = { ok: true, models: [], nextCursor: null };
+    bridge.detail = { ok: false, error: { kind: 'not-found', message: 'No public repo.' } };
+    await act(async () => {
+      pushToken?.({ set: false, persisted: true });
+    });
+    await flush();
+    expect(calls.search).toHaveBeenCalledTimes(searches + 1);
+    expect(calls.getDetail).toHaveBeenCalledTimes(details + 1);
+    expect(q('models-explore-result-row')).toBeNull();
+    expect(q('models-detail-error')?.textContent).toContain('No public repo.');
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+    await click(q('models-installed-tab'));
+    expect(pushToken).toBeNull();
   });
 });

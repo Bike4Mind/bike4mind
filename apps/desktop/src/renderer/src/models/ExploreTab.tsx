@@ -382,9 +382,12 @@ export function ExploreTab({
   const [selected, setSelected] = useState<string | null>(remembered.selected);
   const [showAbliterated, setShowAbliterated] = useState(readShowAbliterated);
   const [token, setToken] = useState<HfTokenStatus | null>(null);
+  const [tokenReadError, setTokenReadError] = useState(false);
+  const [tokenReadVersion, setTokenReadVersion] = useState(0);
   // Bumped when the token changes, so the open repo is read again with what the new token can see.
   const [tokenVersion, setTokenVersion] = useState(0);
   const generation = useRef(0);
+  const tokenGeneration = useRef(0);
 
   const run = useCallback(async (text: string) => {
     const mine = ++generation.current;
@@ -417,17 +420,38 @@ export function ExploreTab({
 
   useEffect(() => {
     let live = true;
-    void window.b4m.models.getHfToken().then(status => live && setToken(status));
+    const mine = tokenGeneration.current;
+    setTokenReadError(false);
+    void window.b4m.models.getHfToken().then(
+      status => {
+        if (!live || mine !== tokenGeneration.current) return;
+        setToken(status);
+        if (tokenReadVersion > 0) {
+          setTokenVersion(version => version + 1);
+          void run(remembered.query);
+        }
+      },
+      () => {
+        if (live && mine === tokenGeneration.current) setTokenReadError(true);
+      }
+    );
     return () => {
       live = false;
     };
-  }, []);
+  }, [run, tokenReadVersion]);
 
-  const tokenChanged = (status: HfTokenStatus) => {
-    setToken(status);
-    setTokenVersion(version => version + 1);
-    void run(remembered.query);
-  };
+  const tokenChanged = useCallback(
+    (status: HfTokenStatus) => {
+      tokenGeneration.current += 1;
+      setTokenReadError(false);
+      setToken(status);
+      setTokenVersion(version => version + 1);
+      void run(remembered.query);
+    },
+    [run]
+  );
+
+  useEffect(() => window.b4m.models.onHfTokenChanged(tokenChanged), [tokenChanged]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -493,6 +517,19 @@ export function ExploreTab({
           </Typography>
         </Stack>
         <HuggingFaceToken status={token} onChanged={tokenChanged} />
+        {tokenReadError && (
+          <Alert
+            color="danger"
+            data-testid="models-hf-token-read-error"
+            endDecorator={
+              <Button size="sm" variant="plain" onClick={() => setTokenReadVersion(version => version + 1)}>
+                Retry
+              </Button>
+            }
+          >
+            Could not read the saved Hugging Face token. Try again.
+          </Alert>
+        )}
 
         {search.state === 'loading' && (
           <Box sx={{ display: 'grid', placeItems: 'center', py: 6 }} data-testid="models-explore-loading">

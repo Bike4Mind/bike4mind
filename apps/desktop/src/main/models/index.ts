@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { app, ipcMain, safeStorage } from 'electron';
 import { HuggingFaceHub, OllamaRuntime } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { ModelPull } from '@shared/models';
+import type { HfTokenResult, ModelPull } from '@shared/models';
 import { createMainLogger } from '../logger';
 import { privateFile } from '../privateFile';
 import { appWindows } from '../windows';
@@ -86,11 +86,22 @@ export function registerModels(): ModelHubService {
     return id ? service.remove(id) : invalid;
   });
   ipcMain.handle(IPC_CHANNELS.modelsGetHfAccess, () => service.tokenStatus());
-  ipcMain.handle(IPC_CHANNELS.modelsSaveHfAccess, (_event, token: unknown) => {
+  const publishTokenResult = (result: HfTokenResult, senderId: number): HfTokenResult => {
+    if (result.ok) {
+      for (const window of appWindows()) {
+        if (window.webContents.id !== senderId)
+          window.webContents.send(IPC_CHANNELS.modelsHfAccessChanged, result.status);
+      }
+    }
+    return result;
+  };
+  ipcMain.handle(IPC_CHANNELS.modelsSaveHfAccess, async (event, token: unknown) => {
     const value = text(token);
-    return value ? service.setToken(value) : invalid;
+    return value ? publishTokenResult(await service.setToken(value), event.sender.id) : invalid;
   });
-  ipcMain.handle(IPC_CHANNELS.modelsClearHfAccess, () => service.clearToken());
+  ipcMain.handle(IPC_CHANNELS.modelsClearHfAccess, async event =>
+    publishTokenResult(await service.clearToken(), event.sender.id)
+  );
 
   return service;
 }

@@ -1,38 +1,42 @@
+import { z } from 'zod';
 import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
 
-interface TokenDocument {
-  version: 1;
-  /** base64 safeStorage ciphertext of the token. */
-  token?: string;
-}
+const tokenDocumentSchema = z.object({ version: z.literal(1), token: z.string().optional() });
+type TokenCipher = SecretCipher & { getSelectedStorageBackend?: () => string };
 
-/**
- * The user's Hugging Face access token, in the OS keychain through safeStorage, the same way
- * McpServerStore keeps MCP secrets. With no keyring (Linux without a secret service) it is held in
- * memory for this run and nothing is written, never plaintext; {@link persisted} says which.
- */
+/** The token stays in memory when the OS has no secure secret store. */
 export class HuggingFaceTokenStore {
   #ready: Promise<void> | null = null;
   #token: string | null = null;
 
   constructor(
-    private readonly cipher: SecretCipher,
+    private readonly cipher: TokenCipher,
     private readonly file: StoreFile,
     private readonly logger: StoreLogger
   ) {}
 
   persisted(): boolean {
-    return this.cipher.isEncryptionAvailable();
+    // Linux's basic_text backend encrypts with a hardcoded password, not an OS secret.
+    return this.cipher.isEncryptionAvailable() && this.cipher.getSelectedStorageBackend?.() !== 'basic_text';
+  }
+
+  async #ensureLoaded(): Promise<void> {
+    try {
+      await (this.#ready ??= this.#load());
+    } catch (error) {
+      this.#ready = null;
+      throw error;
+    }
   }
 
   async get(): Promise<string | null> {
-    await (this.#ready ??= this.#load());
+    await this.#ensureLoaded();
     return this.#token;
   }
 
   async set(token: string): Promise<void> {
-    await (this.#ready ??= this.#load());
-    const document: TokenDocument = this.persisted()
+    await this.#ensureLoaded();
+    const document = this.persisted()
       ? { version: 1, token: this.cipher.encryptString(token).toString('base64') }
       : { version: 1 };
     await this.file.write(JSON.stringify(document));
@@ -40,21 +44,26 @@ export class HuggingFaceTokenStore {
   }
 
   async clear(): Promise<void> {
-    await (this.#ready ??= this.#load());
-    await this.file.write(JSON.stringify({ version: 1 } satisfies TokenDocument));
+    await this.#ensureLoaded();
+    await this.file.write(JSON.stringify({ version: 1 }));
     this.#token = null;
   }
 
   async #load(): Promise<void> {
-    const raw = await this.file.read().catch(() => null);
+    let raw: string | null;
+    try {
+      raw = await this.file.read();
+    } catch {
+      this.logger.warn('Models: could not read the Hugging Face token file');
+      throw new Error('Could not read the saved Hugging Face token. Try again.');
+    }
     if (!raw || !this.persisted()) return;
     try {
-      const stored = (JSON.parse(raw) as Partial<TokenDocument>).token;
-      if (typeof stored !== 'string' || !stored) return;
-      const token = this.cipher.decryptString(Buffer.from(stored, 'base64')).trim();
+      const stored = tokenDocumentSchema.parse(JSON.parse(raw));
+      if (!stored.token) return;
+      const token = this.cipher.decryptString(Buffer.from(stored.token, 'base64')).trim();
       if (token) this.#token = token;
     } catch (err) {
-      // A blob from another OS user or a rotated keychain entry: dropped, and the screen shows "not set".
       this.logger.warn('Models: could not read the stored Hugging Face token');
       this.logger.debug(`Models: token read failed: ${err instanceof Error ? err.name : 'unknown'}`);
     }

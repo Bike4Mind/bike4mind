@@ -33,13 +33,15 @@ function TokenDialog({
       const result = await window.b4m.models.setHfToken(token);
       if (result.ok) onSaved(result.status);
       else setError(result.error.message);
+    } catch {
+      setError('Could not save the token. Try again.');
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Modal open onClose={onClose}>
+    <Modal open onClose={busy ? undefined : onClose}>
       <ModalDialog size="md" sx={{ maxWidth: 520 }} data-testid="models-hf-token-dialog">
         <DialogTitle>Hugging Face token</DialogTitle>
         <form onSubmit={save}>
@@ -71,6 +73,7 @@ function TokenDialog({
                 type="password"
                 autoFocus
                 value={token}
+                disabled={busy}
                 onChange={event => setToken(event.target.value)}
                 placeholder="hf_..."
                 slotProps={{
@@ -92,7 +95,13 @@ function TokenDialog({
             <Button type="submit" loading={busy} disabled={!token.trim()} data-testid="models-hf-token-save-btn">
               Check and save
             </Button>
-            <Button variant="plain" color="neutral" onClick={onClose} data-testid="models-hf-token-cancel-btn">
+            <Button
+              disabled={busy}
+              variant="plain"
+              color="neutral"
+              onClick={onClose}
+              data-testid="models-hf-token-cancel-btn"
+            >
               Cancel
             </Button>
           </DialogActions>
@@ -112,12 +121,21 @@ export function HuggingFaceToken({
 }) {
   const [editing, setEditing] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
   if (!status) return null;
 
   const remove = async () => {
-    const result = await window.b4m.models.clearHfToken();
-    setRemoveError(result.ok ? null : result.error.message);
-    if (result.ok) onChanged(result.status);
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      const result = await window.b4m.models.clearHfToken();
+      setRemoveError(result.ok ? null : result.error.message);
+      if (result.ok) onChanged(result.status);
+    } catch {
+      setRemoveError('Could not remove the token. Try again.');
+    } finally {
+      setRemoving(false);
+    }
   };
 
   const label = !status.set
@@ -146,6 +164,7 @@ export function HuggingFaceToken({
         size="sm"
         variant="plain"
         color="neutral"
+        disabled={removing}
         onClick={() => setEditing(true)}
         data-testid="models-hf-token-edit-btn"
       >
@@ -156,6 +175,7 @@ export function HuggingFaceToken({
           size="sm"
           variant="plain"
           color="neutral"
+          loading={removing}
           onClick={() => void remove()}
           data-testid="models-hf-token-remove-btn"
         >

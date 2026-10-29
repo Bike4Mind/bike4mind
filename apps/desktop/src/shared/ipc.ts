@@ -317,6 +317,7 @@ export const IPC_CHANNELS = {
   modelsGetHfAccess: 'models:get-hf-access',
   modelsSaveHfAccess: 'models:save-hf-access',
   modelsClearHfAccess: 'models:clear-hf-access',
+  modelsHfAccessChanged: 'models:hf-access-changed',
   /** main -> renderer push of every pull in flight or failed. */
   modelsPullsChanged: 'models:pulls-changed',
   /** main -> renderer push: a pull finished or a model was removed. */
@@ -581,6 +582,7 @@ export interface DesktopApi {
     /** Saves the token once Hugging Face accepts it. */
     setHfToken(token: string): Promise<HfTokenResult>;
     clearHfToken(): Promise<HfTokenResult>;
+    onHfTokenChanged(listener: (status: HfTokenStatus) => void): () => void;
     onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
     onInstalledChanged(listener: () => void): () => void;
   };

@@ -12,7 +12,14 @@ export interface PrivateFile {
  */
 export function privateFile(path: string): PrivateFile {
   return {
-    read: () => readFile(path, 'utf8').catch(() => null),
+    read: async () => {
+      try {
+        return await readFile(path, 'utf8');
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+        throw error;
+      }
+    },
     write: async contents => {
       await mkdir(dirname(path), { recursive: true });
       const temporary = `${path}.tmp`;
