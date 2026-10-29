@@ -164,8 +164,11 @@ const handler = baseApi()
     // artifact leaves `visibility` alone but must still purge the CDN, so track
     // the gate in the before/after comparison, not just the visibility level.
     const wasOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
+    const wasPublic = artifact.visibility === 'public';
+    const gateKindBefore = artifact.accessGate?.kind ?? null;
+    const domainsBefore = artifact.accessGate?.kind === 'domain' ? [...(artifact.accessGate.allowedDomains ?? [])] : [];
+    const embedOriginsBefore = [...(artifact.embedOrigins ?? [])];
     if (parsed.data.visibility !== undefined) {
-      if (parsed.data.visibility === 'public') await assertOutboundActionAllowed(req.user, req);
       // Validate the requested visibility against the artifact's scope-tier policy
       // (same rules as publish) so PATCH can't set a tier-invalid visibility.
       const viz = resolveVisibility(artifact.tier, parsed.data.visibility);
@@ -274,6 +277,23 @@ const handler = baseApi()
       // Absent (undefined) when empty so the field stays off the document.
       artifact.embedOrigins = check.value.length > 0 ? check.value : undefined;
     }
+    // Checked on the resulting state, before save, so a restricted owner can still narrow a page
+    // (add a gate, go private, rename) but cannot widen who sees it. Gate changes count at any
+    // visibility because share links enforce the gate too; only adding a gate, rotating a
+    // passphrase or dropping domains is a pure narrowing.
+    const gateKindAfter = artifact.accessGate?.kind ?? null;
+    const gateLoosened =
+      parsed.data.accessGate !== undefined &&
+      gateKindBefore !== null &&
+      (gateKindAfter !== gateKindBefore ||
+        (gateKindAfter === 'domain' &&
+          (artifact.accessGate?.allowedDomains ?? []).some(domain => !domainsBefore.includes(domain))));
+    const widensExposure =
+      (artifact.visibility === 'public' && !wasPublic) ||
+      gateLoosened ||
+      (!!artifact.discoverable && !discoverableBefore) ||
+      (artifact.embedOrigins ?? []).some(origin => !embedOriginsBefore.includes(origin));
+    if (widensExposure) await assertOutboundActionAllowed(req.user, req);
     await artifact.save();
 
     // Any change that alters the CACHED public response must purge the CDN, or the

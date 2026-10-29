@@ -714,7 +714,7 @@ describe('PATCH /api/publish/artifacts/[id] - title/description purge the cached
   });
 });
 
-describe('PATCH /api/publish/artifacts/[id] - outbound gate on going public', () => {
+describe('PATCH /api/publish/artifacts/[id] - outbound gate on widening exposure', () => {
   async function patch(
     body: Record<string, unknown>,
     artifact = Object.assign(makeArtifact(), { visibility: 'private' })
@@ -739,6 +739,89 @@ describe('PATCH /api/publish/artifacts/[id] - outbound gate on going public', ()
 
   it('does not consult the gate for a title-only edit', async () => {
     const { res } = await patch({ title: 'Renamed' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(assertOutbound).not.toHaveBeenCalled();
+  });
+
+  const passphraseGated = () =>
+    Object.assign(makeArtifact(), { accessGate: { kind: 'passphrase', passphraseHash: 'x' } as unknown });
+  const domainGated = (allowedDomains: string[]) =>
+    Object.assign(makeArtifact(), { accessGate: { kind: 'domain', allowedDomains } as unknown });
+
+  it.each([
+    [
+      'making a private page public',
+      { visibility: 'public' },
+      () => Object.assign(makeArtifact(), { visibility: 'private' }),
+    ],
+    ['clearing the gate on a public page', { accessGate: null }, passphraseGated],
+    ['turning on search indexing', { discoverable: true }, makeArtifact],
+    [
+      'adding an allowed domain',
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com', 'other.com'] } },
+      () => domainGated(['acme.com']),
+    ],
+    [
+      'swapping a passphrase for a domain gate',
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } },
+      passphraseGated,
+    ],
+    [
+      'swapping a domain gate for a passphrase',
+      { accessGate: { kind: 'passphrase', passphrase: 'long-enough-pass' } },
+      () => domainGated(['acme.com']),
+    ],
+    [
+      'clearing the gate on a private page reachable by share link',
+      { accessGate: null },
+      () =>
+        Object.assign(passphraseGated(), {
+          visibility: 'private',
+          shareTokens: [{ token: 'tok', revokedAt: null }],
+        }),
+    ],
+  ])('rejects %s when the gate refuses, without saving', async (_label, body, build) => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+    assertOutbound.mockRejectedValueOnce(new ForbiddenError('restricted'));
+    const artifact = build();
+    await expect(patch(body, artifact)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects adding an embed origin when the gate refuses, without saving', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+    const { validateEmbedOrigins } = await import('@server/services/publish');
+    vi.mocked(validateEmbedOrigins).mockReturnValueOnce({ ok: true, value: ['https://example.com'] });
+    assertOutbound.mockRejectedValueOnce(new ForbiddenError('restricted'));
+    const artifact = makeArtifact();
+    await expect(patch({ embedOrigins: ['https://example.com'] }, artifact)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'adding a passphrase to an open public page',
+      { accessGate: { kind: 'passphrase', passphrase: 'long-enough-pass' } },
+      makeArtifact,
+    ],
+    ['making a public page private', { visibility: 'private' }, makeArtifact],
+    [
+      'rotating the passphrase',
+      { accessGate: { kind: 'passphrase', passphrase: 'another-long-pass' } },
+      passphraseGated,
+    ],
+    [
+      'removing an allowed domain',
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } },
+      () => domainGated(['acme.com', 'other.com']),
+    ],
+    [
+      'turning off search indexing',
+      { discoverable: false },
+      () => Object.assign(makeArtifact(), { discoverable: true }),
+    ],
+  ])('does not consult the gate for %s', async (_label, body, build) => {
+    const { res } = await patch(body, build());
     expect(res._getStatusCode()).toBe(200);
     expect(assertOutbound).not.toHaveBeenCalled();
   });
