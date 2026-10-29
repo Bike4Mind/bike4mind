@@ -11,6 +11,8 @@ const cliSkills = resolve(__dirname, '../../packages/cli/src/skills/index.ts');
 // See the shim's own header: @bike4mind/common's barrel statically imports node:crypto,
 // which a sandboxed renderer cannot resolve.
 const nodeCryptoShim = resolve(__dirname, 'src/renderer/src/shims/nodeCrypto.ts');
+// Used when no B4M_DEFAULT_API_URL is supplied; a fork overrides it by setting that variable.
+const PRODUCTION_API_URL = 'https://app.bike4mind.com';
 
 /**
  * Puts the tree-sitter wasm binaries beside the main bundle, in `wasm/`. The shell parser reads
@@ -35,7 +37,7 @@ function copyTreeSitterWasm(): Plugin {
  * shell environment first - that is how CI injects them for the CLI today, and how a
  * packaging run injects them here - then a gitignored `.env`/`.env.local` in this
  * directory, which only exists so a local packaging run is one command rather than a long
- * prefix. Absent both, the value is empty and the feature it gates is off.
+ * prefix. Absent both, the value is empty.
  *
  * An empty shell value counts as unset for the backend, because CI passes an unset repository
  * variable through as ''. It does not for the feed: an explicit '' is how the ad-hoc macOS
@@ -62,13 +64,12 @@ export default defineConfig(({ mode }) => {
       // The brand's default backend, baked in at build time exactly as the CLI bakes it via
       // tsdown. A packaged app inherits no shell environment, so reading it at runtime would
       // always be empty; substituting only this one expression leaves every other
-      // `process.env` lookup in main working normally. Empty for an unbranded fork, which
-      // then has no hosted option in the environment picker.
+      // `process.env` lookup in main working normally.
       // The release feed is baked in the same way and for the same reasons, plus one more:
       // this repo is public, and a feed url is a host or a bucket behind one. Empty for a fork,
       // which then builds an app with updates switched off rather than one pointed at ours.
       define: {
-        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(baked(mode, 'B4M_DEFAULT_API_URL')),
+        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(baked(mode, 'B4M_DEFAULT_API_URL') || PRODUCTION_API_URL),
         'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
       },
       // `@bike4mind/utils` is bundled rather than left external, and only main does this.

@@ -265,9 +265,8 @@ Desktop updates use only the dedicated repository's Latest release. Production r
 automation is unchanged. Keep source desktop release tags intact;
 changing the package version does not override existing release history.
 
-Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend. In the
-canonical repository the build job fails without it, so a release cannot ship with no
-Production server; a fork still builds, and its users select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+The hosted backend defaults to `https://app.bike4mind.com`; the repository variable
+`B4M_DEFAULT_API_URL` overrides it. `DESKTOP_RELEASE_REPOSITORY` supplies the
 dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
 `https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
 destinations fail closed. PR builds have no signing credentials and are not published.
@@ -362,18 +361,13 @@ GitHub Releases, then rerun the workflow on corrected `main` to publish a new ve
 
 ### Baking the backend URL
 
-`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is what makes
-**Production** selectable in the environment picker - `hostedAvailable()` in
-`src/main/auth/environment.ts` is false whenever it is empty, and the picker then reads
-"Production (not set in this build)". A packaged app inherits no shell environment, so
-there is nothing to read at runtime.
+`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is the
+**Production** entry in the environment picker. A packaged app inherits no shell
+environment, so there is nothing to read at runtime.
 
-**There is deliberately no fallback URL in source.** This repo is public and open-core;
-committing a hostname here would put it in every fork's bundle. The CLI has the same rule
-and the same shape (`packages/cli/tsdown.config.ts`, injected in `release.yaml` from a repo
-variable), so the two clients are branded the same way.
-
-Supply it per build, highest precedence first:
+When nothing supplies it, the build uses `https://app.bike4mind.com` (`PRODUCTION_API_URL` in
+`electron.vite.config.ts`), so every build signs in to production with nothing to type. A
+fork that runs its own backend overrides it, highest precedence first:
 
 ```bash
 B4M_DEFAULT_API_URL=https://your-backend.example pnpm package:mac
@@ -386,8 +380,7 @@ covers, at the root, for `.env` and `.env*.local` alike:
 B4M_DEFAULT_API_URL=https://your-backend.example
 ```
 
-Build with neither and the app ships with no hosted option at all, which is the correct
-state for an unbranded fork: Local Dev and a self-hosted URL still work.
+Local Dev and a self-hosted URL stay available from "Change server" on the sign-in card.
 
 ### Signing
 
@@ -678,8 +671,8 @@ token.
   HTTP client debug-logs request bodies.
 
 `B4M_DEFAULT_API_URL` is baked into the main bundle at build time (see the `define` block in
-`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown. Empty for an unbranded
-fork, which then has no Production option and must pick Local Dev or a custom URL.
+`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown, and falls back to
+`https://app.bike4mind.com` when no build supplies it.
 
 Routing uses hash history. A packaged build loads the renderer over `file://`, which has no
 origin for the History API to push against, so hash history is the one mode that behaves
