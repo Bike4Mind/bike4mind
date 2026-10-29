@@ -8,6 +8,7 @@
 import { dlqAlarmTopic } from './dlqAlarms';
 import { web } from './web';
 import { oauthSignupsRefusedMetricName } from './authAbuseMetric';
+import { messageFilterPattern } from './logMessageFilterPattern';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -34,9 +35,8 @@ export const oauthSignupsRefusedAlarm =
             return lg.name;
           }),
           // The server Lambda keeps the default text format (`ts\treqId\tLEVEL\t{json}`), so a JSON `{ $.field = ... }`
-          // selector never matches. Match the quoted key and value: a caller-controlled field (requestId, path)
-          // is JSON-escaped, so it cannot contain this sequence unescaped.
-          pattern: '"\\"message\\":\\"oauth-signup-refused\\""',
+          // selector never matches; match the message key and value inside the line instead.
+          pattern: messageFilterPattern('oauth-signup-refused'),
           metricTransformation: {
             name: METRIC_NAME,
             namespace: NAMESPACE,

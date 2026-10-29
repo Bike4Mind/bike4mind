@@ -11,6 +11,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { oauthSignupsRefusedMetricName } from '../authAbuseMetric';
+import { messageFilterPattern } from '../logMessageFilterPattern';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (p: string) => readFileSync(path.join(REPO_ROOT, p), 'utf8');
@@ -21,14 +22,10 @@ describe('oauth signups refused alarm', () => {
     expect(read('apps/client/pages/api/auth/[strategy]/callback.ts')).toContain(
       "req.logger?.info('oauth-signup-refused')"
     );
-    const pattern = /pattern: '([^']*)'/.exec(ALARMS)?.[1] ?? '';
-    // A JSON selector only evaluates lines that are JSON as a whole; the Lambda prefixes every line.
-    expect(pattern).not.toMatch(/^\s*\{/);
-    // Model of a CloudWatch quoted term: a substring match after unescaping \" to ".
-    // `pattern` is TS source for a string literal; evaluate it, then strip the quotes and unescape \".
-    const term = /^"(.*)"$/.exec(new Function(`return '${pattern}'`)())?.[1]?.replace(/\\"/g, '"');
-    expect(term).toBeDefined();
-    const matches = (line: string) => line.includes(term as string);
+    expect(ALARMS).toContain("pattern: messageFilterPattern('oauth-signup-refused')");
+    // A `%...%` pattern is a CloudWatch regex; JS reads \x22 the same way.
+    const expression = new RegExp(messageFilterPattern('oauth-signup-refused').slice(1, -1));
+    const matches = (line: string) => expression.test(line);
     const line = (fields: Record<string, string>) =>
       `2026-01-01T00:00:00.000Z\tc0ffee\tINFO\t${JSON.stringify({ severity: 'info', message: 'oauth-ip-rate-limited', ...fields })}`;
 
