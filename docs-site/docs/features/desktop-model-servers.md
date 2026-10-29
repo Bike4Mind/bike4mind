@@ -14,7 +14,7 @@ Desktop supports two kinds of server:
 - Ollama.
 - OpenAI-compatible servers such as llama-server, LM Studio and vLLM.
 
-Each server has an Access setting. Chat only lets Desktop use the server's models for chat. Chat and manage marks the server as one you administer, which is what Desktop needs before it can offer model management on it. Chat only is the default, and the setting applies to this device only.
+Each server has an Access setting. Chat only lets Desktop use the server's models for chat. Chat and manage marks the server as one you administer. Desktop does not pull or remove models on a remote server with either setting. Chat only is the default, and the setting applies to this device only.
 
 ## When to use this
 
@@ -28,8 +28,9 @@ A server can need a bearer token or a custom header (for example `X-Api-Key`). D
 - Credentials are sent only to the address you saved, never to any other host.
 - Desktop does not follow redirects. A server that redirects, including `http` to `https`, shows an error and no credentials are sent on. Enter the final address instead.
 - Credentials travel only over `https`, or over plain `http` to this computer (loopback) or a Tailscale IPv6 address (`fd7a:115c:a1e0::/48`).
-- Plain `http` to a private network address (`192.168.x.x`, `10.x.x.x`, `172.16.x.x` to `172.31.x.x`, and Tailscale IPv4 `100.64.0.0/10`, which covers `100.64.x.x` to `100.127.x.x`) works only without credentials. Desktop marks these servers Unencrypted.
-- A public address needs `https` with a valid certificate. Plain `http` to a public address is refused.
+- Plain `http` to a private network address (`192.168.x.x`, `10.x.x.x`, `172.16.x.x` to `172.31.x.x`, Tailscale IPv4 `100.64.0.0/10`, which covers `100.64.x.x` to `100.127.x.x`, and IPv6 unique local addresses in `fc00::/7`) works only without credentials. Desktop marks these servers Unencrypted.
+- A public address needs `https` with a valid certificate. Plain `http` to a public address is refused. Link-local addresses (`169.254.x.x`, `fe80::/10`) count as public.
+- A host name is judged by the addresses it resolves to, and the least trusted one decides. `localhost` counts as this computer.
 
 If your computer has no secure storage available, Desktop keeps the credential only until you quit and marks the server Credentials kept until Desktop quits.
 
@@ -132,7 +133,7 @@ Desktop marks the server Unencrypted. Anyone on that network can read your conve
 2. Under Add a server, enter the address. A bare `host:port` is treated as `http`.
 3. Set Credentials to None, Bearer token or Custom header, and fill in the token, or the header name and value.
 4. Select Test. Desktop reports the kind, version, model count and latency, or the reason it could not connect.
-5. Check the Name, Kind (Ollama or OpenAI-compatible) and Access (Chat only or Chat and manage), then select Save server.
+5. After a successful Test, Desktop shows the Name, Kind and Access fields. Kind (Ollama or OpenAI-compatible) is filled in from the Test result. Check the fields, set Access (Chat only or Chat and manage), then select Save server.
 
 The address must not include a username, password, query string or fragment. If the server sits behind a proxy path, include the path.
 
@@ -143,5 +144,5 @@ If Test warns that a public address answered without credentials, put a proxy wi
 - Needs credentials: the server returned 401 or 403, or Desktop no longer has the saved credential. Check the token, or the header name and value. If the message says the saved credential could not be read, the secure storage lost it, for example after a keyring reset. If it says the credential was kept only until Desktop quit, it was session-only and Desktop restarted. In both cases open the server's credentials and enter the value again.
 - Needs credentials with a correct token, behind a proxy: Ollama may be answering 403 because the `Host` header was not rewritten. Check the Caddy setup above, and test with `curl -i` against the address.
 - Unreachable: the address, port or firewall is wrong, or the SSH forward is closed.
-- Refused: the server redirected, or the address is not allowed. Read the message under Test, and enter the final `https` address if you were redirected.
-- The certificate is not trusted: Test shows this message when the certificate fails verification. Use a certificate from a trusted authority or a local CA your computer already trusts. Tailscale certificates also work.
+- Refused: the server redirected, its certificate is not trusted, or the address is not allowed. Read the message under Test. If you were redirected to another address, enter the final `https` address. If the redirect stayed on the same address, check the path you entered.
+- The certificate is not trusted: Test shows this message, and the server shows Refused, when the certificate fails verification. Use a certificate from a trusted authority or a local CA your computer already trusts. Tailscale certificates also work.
