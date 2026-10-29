@@ -133,8 +133,13 @@ SubscriptionSchema.index({ priceId: 1, ownerType: 1, ownerId: 1, status: 1 }); /
 SubscriptionSchema.index({ periodEndsAt: 1, status: 1 }); // For subscription expiry queries
 // Admin grants listing in /api/admin/organizations/grants - small cardinality query
 SubscriptionSchema.index({ ownerType: 1, source: 1, status: 1 });
+// Admin subscriptions list sorts, each with an _id tiebreak (server/admin/subscriptionsList). Keep in sync
+// with SUBSCRIPTION_ADMIN_LIST_INDEXES in packages/scripts/migrate/migrations/20260921236200_*.
+SubscriptionSchema.index({ createdAt: -1, _id: -1 });
+SubscriptionSchema.index({ periodEndsAt: 1, _id: 1 });
+SubscriptionSchema.index({ status: 1, createdAt: -1, _id: -1 });
 // Admin subscriptions list views (renewing soon, canceling). Built in deployed stages by the
-// 20260921236200_ensure-subscription-mirror-indexes migration; keep the two in sync.
+// 20260921236300_ensure-subscription-mirror-indexes migration; keep the two in sync.
 SubscriptionSchema.index({ source: 1, status: 1, periodEndsAt: 1 });
 SubscriptionSchema.index({ cancelAtPeriodEnd: 1, status: 1 });
 

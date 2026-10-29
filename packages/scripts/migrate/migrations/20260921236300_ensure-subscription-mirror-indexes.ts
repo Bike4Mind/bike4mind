@@ -16,7 +16,7 @@ import { type MigrationFile } from './index';
  * Idempotent: createIndex is a no-op for an index that already matches.
  */
 const migration: MigrationFile = {
-  id: 20260921236200,
+  id: 20260921236300,
   name: 'ensure subscription mirror indexes',
 
   up: async () => {

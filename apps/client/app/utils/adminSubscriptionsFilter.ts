@@ -1,0 +1,157 @@
+import { z } from 'zod';
+
+/**
+ * The admin subscriptions list's filter contract, shared by the list page and GET /api/admin/subscriptions
+ * (plus its summary and export), so every surface selects the same rows. Pure and React-free: the server
+ * imports it. See docs/admin-subscriptions-spec.md sections 5.1 and 6.5.
+ */
+
+/** Stripe's subscription statuses as stored on a Subscription row. */
+export const SUBSCRIPTION_STATUS_FILTERS = [
+  'active',
+  'trialing',
+  'past_due',
+  'unpaid',
+  'incomplete',
+  'incomplete_expired',
+  'canceled',
+  'paused',
+] as const;
+export type SubscriptionStatusFilter = (typeof SUBSCRIPTION_STATUS_FILTERS)[number];
+
+// Must stay in sync with SubscriptionOwnerType and SubscriptionSource in
+// packages/server-utils/src/lib/subscriptions/types.ts, which the client bundle cannot import.
+export const SUBSCRIPTION_OWNER_TYPE_FILTERS = ['User', 'Organization'] as const;
+export const SUBSCRIPTION_SOURCE_FILTERS = ['stripe', 'admin_grant'] as const;
+export const SUBSCRIPTION_INTERVAL_FILTERS = ['monthly', 'yearly'] as const;
+/** `overdue` is a non-terminal row whose period already ended: a renewal that never landed. */
+export const SUBSCRIPTION_RENEWS_FILTERS = ['next7', 'next30', 'overdue'] as const;
+
+/** Plan filter value for rows whose price id is not in the checkout catalog. */
+export const UNKNOWN_PLAN_FILTER = 'unknown';
+
+export const ADMIN_SUBSCRIPTIONS_SORT_FIELDS = ['createdAt', 'periodEndsAt'] as const;
+export type AdminSubscriptionsSortField = (typeof ADMIN_SUBSCRIPTIONS_SORT_FIELDS)[number];
+
+export const ADMIN_SUBSCRIPTIONS_PAGE_SIZES = [25, 50, 100] as const;
+
+// Routes pass this as qs's arrayLimit too: past qs's default of 20, a list parses as an object.
+export const ADMIN_SUBSCRIPTIONS_LIST_MAX = 50;
+
+/** Rows one CSV export may hold; past this the file ends with a truncation line. */
+export const ADMIN_SUBSCRIPTIONS_EXPORT_MAX_ROWS = 10_000;
+
+/** ms per `renews` window. */
+export const RENEWS_WINDOW_MS: Record<'next7' | 'next30', number> = {
+  next7: 7 * 86_400_000,
+  next30: 30 * 86_400_000,
+};
+
+/** The Churned view's look-back, ms. */
+export const CHURNED_WINDOW_MS = 30 * 86_400_000;
+
+// A query string carries a one-item list as a bare string.
+const listOf = <T extends readonly [string, ...string[]]>(values: T) =>
+  z.preprocess(
+    value => (typeof value === 'string' ? [value] : value),
+    z.array(z.enum(values)).max(ADMIN_SUBSCRIPTIONS_LIST_MAX)
+  );
+
+const stringList = z.preprocess(
+  value => (typeof value === 'string' ? [value] : value),
+  z.array(z.string().trim().min(1).max(200)).max(ADMIN_SUBSCRIPTIONS_LIST_MAX)
+);
+
+export const AdminSubscriptionsFilterSchema = z.object({
+  search: z.string().trim().max(200).optional(),
+  status: listOf(SUBSCRIPTION_STATUS_FILTERS).optional(),
+  /** Price ids, or `unknown` for prices the catalog does not list. */
+  plan: stringList.optional(),
+  ownerType: z.enum(SUBSCRIPTION_OWNER_TYPE_FILTERS).optional(),
+  source: z.enum(SUBSCRIPTION_SOURCE_FILTERS).optional(),
+  interval: z.enum(SUBSCRIPTION_INTERVAL_FILTERS).optional(),
+  renews: z.enum(SUBSCRIPTION_RENEWS_FILTERS).optional(),
+});
+export type AdminSubscriptionsFilter = z.infer<typeof AdminSubscriptionsFilterSchema>;
+
+const pageSize = z.coerce
+  .number()
+  .int()
+  .refine(
+    value => (ADMIN_SUBSCRIPTIONS_PAGE_SIZES as readonly number[]).includes(value),
+    'Page size must be 25, 50 or 100'
+  );
+
+/** GET /api/admin/subscriptions. */
+export const AdminSubscriptionsQuerySchema = AdminSubscriptionsFilterSchema.extend({
+  page: z.coerce.number().int().min(1).max(100_000).default(1),
+  limit: pageSize.default(25),
+  sortField: z.enum(ADMIN_SUBSCRIPTIONS_SORT_FIELDS).default('createdAt'),
+  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+});
+export type AdminSubscriptionsListParams = z.infer<typeof AdminSubscriptionsQuerySchema>;
+
+export type AdminSubscriptionPlan = {
+  priceId: string | null;
+  /** `null` when the price id is not in the checkout catalog. */
+  name: string | null;
+  interval: (typeof SUBSCRIPTION_INTERVAL_FILTERS)[number] | null;
+};
+
+export type AdminSubscriptionOwner =
+  | {
+      kind: 'User';
+      id: string;
+      name: string | null;
+      username: string | null;
+      email: string | null;
+      stripeCustomerId: string | null;
+    }
+  | {
+      kind: 'Organization';
+      id: string;
+      name: string | null;
+      stripeCustomerId: string | null;
+      seats: number | null;
+      /** Members plus the owner, the same count seat validation uses. */
+      memberCount: number | null;
+      billingOwnerId: string | null;
+    };
+
+export type AdminSubscriptionRow = {
+  id: string;
+  subscriptionId: string;
+  ownerType: (typeof SUBSCRIPTION_OWNER_TYPE_FILTERS)[number];
+  ownerId: string;
+  /** `null` when the owner record is gone. */
+  owner: AdminSubscriptionOwner | null;
+  plan: AdminSubscriptionPlan;
+  status: string;
+  source: (typeof SUBSCRIPTION_SOURCE_FILTERS)[number];
+  quantity: number;
+  customCreditsPerCycle: number | null;
+  periodStartsAt: string;
+  periodEndsAt: string;
+  canceledAt: string | null;
+  createdAt: string;
+};
+
+export type AdminSubscriptionsListResponse = {
+  subscriptions: AdminSubscriptionRow[];
+  total: number;
+  page: number;
+  totalPages: number;
+  /** True when a free-text search matched more owners than it could resolve; narrow the search. */
+  searchTruncated: boolean;
+};
+
+/**
+ * Counts for the built-in views, each intersected with the current filters. Canceling and Mismatched
+ * arrive with the mirrored cancel flag and the reconciliation findings.
+ */
+export type AdminSubscriptionsSummary = {
+  total: number;
+  views: { paying: number; pastDue: number; comped: number; churned: number };
+  /** Same meaning as on the list response: the counts cover only the owners the search resolved. */
+  searchTruncated: boolean;
+};
