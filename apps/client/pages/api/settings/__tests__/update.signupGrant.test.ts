@@ -1,6 +1,18 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const VALID_POLICY = {
+  enabled: true,
+  version: 'v1',
+  rules: [
+    { signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 2, missing: 'score', missingWeight: 0 },
+    { signal: 'ipSignups', comparison: 'gte', threshold: 3, weight: 2, missing: 'score', missingWeight: 0 },
+  ],
+  reducedAt: 3,
+  reviewAt: 6,
+  reducedFraction: 0.5,
+};
+
 let rows: Array<{ settingName: string; settingValue: unknown }> = [];
 const findOneAndUpdate = vi.fn();
 
@@ -38,7 +50,7 @@ import handler from '../update';
 import { LARGE_SIGNUP_GRANT_CREDITS } from '@bike4mind/common';
 
 const PROTECTIONS = [
-  { settingName: 'signupGrantRiskPolicy', settingValue: { enabled: true } },
+  { settingName: 'signupGrantRiskPolicy', settingValue: VALID_POLICY },
   { settingName: 'maxSignupsPerIpPerDay', settingValue: 5 },
   { settingName: 'maxSignupsPerAsnPerHour', settingValue: 20 },
   { settingName: 'signupBurstAutoHold', settingValue: true },
@@ -111,9 +123,16 @@ describe('settings/update large signup grant guard', () => {
     expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it('treats a policy stored as a JSON string as enabled', async () => {
+  it('refuses when the policy is a bare enabled flag the runtime would ignore', async () => {
     rows = PROTECTIONS.map(row =>
       row.settingName === 'signupGrantRiskPolicy' ? { ...row, settingValue: '{"enabled":true}' } : row
+    );
+    await expectRefusal(runHandler('defaultFreeCredits', LARGE), /signupGrantRiskPolicy/);
+  });
+
+  it('treats a policy stored as a JSON string as enabled', async () => {
+    rows = PROTECTIONS.map(row =>
+      row.settingName === 'signupGrantRiskPolicy' ? { ...row, settingValue: JSON.stringify(VALID_POLICY) } : row
     );
     await runHandler('defaultFreeCredits', LARGE);
     expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
