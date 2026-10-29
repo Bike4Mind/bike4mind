@@ -3,6 +3,7 @@ import type { MessageContentObject } from '../types/entities/MessageTypes';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
 import { REPLY_CHOICES_INVALID_REASONS } from '../utils/replyChoices';
+import { PROMPT_CACHE_TTLS } from '../promptCache';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -75,6 +76,10 @@ const PromptMetaTokenUsageSchema = z.object({
   // because a write is the single most expensive component of a cold turn, and without
   // it the cache-write rate can only be inferred from cacheReadInputTokens being absent.
   cacheCreationInputTokens: z.number().optional(),
+  // The part of cacheCreationInputTokens written with the 1-hour TTL, billed at 2x input.
+  cacheWrite1hInputTokens: z.number().optional(),
+  // TTL the turn's cache_control markers asked for; the composer's cache-expiry note reads it.
+  promptCacheTtl: z.enum(PROMPT_CACHE_TTLS).optional(),
   // Which basis priced estimatedCost/creditsUsed: provider-reported usage or
   // the local tokenizer estimate (fallback when the provider omits usage).
   settledBasis: z.enum(['provider', 'local']).optional(),

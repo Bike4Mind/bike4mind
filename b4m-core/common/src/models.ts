@@ -800,6 +800,8 @@ type PricingInfo = {
 /** Anthropic-published default multipliers for prompt cache pricing. */
 export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
+/** A write with the 1-hour TTL costs 2x base input on Anthropic and Bedrock. */
+export const CACHE_WRITE_1H_MULTIPLIER = 2;
 
 /** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
 export const pricingTierForTokens = (model: Pick<ModelInfo, 'pricing'>, tokens: number): number | null => {
@@ -823,7 +825,13 @@ export type TurnUsage = {
   outputTokens: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /** The part of cacheCreationInputTokens written with the 1-hour TTL, billed at CACHE_WRITE_1H_MULTIPLIER. */
+  cacheWrite1hInputTokens?: number;
 };
+
+/** Total 1-hour cache writes across `turns`. */
+export const sumOneHourCacheWrites = (turns: readonly TurnUsage[] | undefined): number =>
+  (turns ?? []).reduce((sum, turn) => sum + (turn.cacheWrite1hInputTokens ?? 0), 0);
 
 // $0 for real usage on a model not marked freeToRun means a missing or
 // zero-rate pricing map: the call settles free (stochastic rounding has no
@@ -860,7 +868,7 @@ export type AppliedRates = IUsageEventRates;
 export const resolveAppliedRates = (
   model: Pick<ModelInfo, 'pricing' | 'backend'>,
   tierBasisTokens: number
-): Required<AppliedRates> | null => {
+): Required<Omit<AppliedRates, 'cacheWrite1h'>> | null => {
   const tier = pricingTierForTokens(model, tierBasisTokens);
   // Guard against a malformed or non-tiered pricing map (e.g. a flat
   // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
@@ -881,22 +889,30 @@ export const resolveAppliedRates = (
   };
 };
 
+/** The per-token rate of a 1-hour cache write in a tier resolved by resolveAppliedRates. */
+export const oneHourCacheWriteRate = (rates: Pick<AppliedRates, 'input'>): number =>
+  rates.input * CACHE_WRITE_1H_MULTIPLIER;
+
+// `cacheWrite1hTokens` is the part of `cacheCreationTokens` written with the 1-hour TTL.
 const costAtTier = (
   model: ModelInfo,
   tierBasisTokens: number,
   inputTokens: number,
   outputTokens: number,
   cacheReadTokens: number,
-  cacheCreationTokens: number
+  cacheCreationTokens: number,
+  cacheWrite1hTokens = 0
 ): number => {
   const rates = resolveAppliedRates(model, tierBasisTokens);
   if (!rates) return 0;
 
+  const oneHourWrites = Math.min(Math.max(cacheWrite1hTokens, 0), cacheCreationTokens);
   return (
     rates.input * inputTokens +
     rates.output * outputTokens +
     rates.cacheRead * cacheReadTokens +
-    rates.cacheWrite * cacheCreationTokens
+    rates.cacheWrite * (cacheCreationTokens - oneHourWrites) +
+    oneHourCacheWriteRate(rates) * oneHourWrites
   );
 };
 
@@ -919,11 +935,20 @@ export const getTextModelCost = (
   outputTokens: number,
   cacheReadTokens: number = 0,
   cacheCreationTokens: number = 0,
-  tierBasisTokens: number = inputTokens
+  tierBasisTokens: number = inputTokens,
+  cacheWrite1hTokens: number = 0
 ): number =>
   alarmIfUnpriced(
     model,
-    costAtTier(model, tierBasisTokens, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens),
+    costAtTier(
+      model,
+      tierBasisTokens,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheCreationTokens,
+      cacheWrite1hTokens
+    ),
     inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
   );
 
@@ -944,7 +969,8 @@ export const getTurnsCost = (model: ModelInfo, turns: readonly TurnUsage[]): num
       turn.inputTokens,
       turn.outputTokens,
       cacheRead,
-      cacheCreation
+      cacheCreation,
+      turn.cacheWrite1hInputTokens ?? 0
     );
     if (turnCost === 0) unpricedUsage += turn.inputTokens + turn.outputTokens + cacheRead + cacheCreation;
     cost += turnCost;

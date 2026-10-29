@@ -10966,6 +10966,47 @@ describe('ChatCompletionProcess', () => {
         expect(options.cacheStrategy).not.toHaveProperty('historyCacheExcludeTrailingCount');
       });
 
+      describe('cache TTL', () => {
+        const onClaude = (session: Record<string, unknown>, preferences?: Record<string, unknown>) => {
+          const turn = wireTurn({ builderReturnsContext: true });
+          const body = { ...turn, params: { ...turn.params, model: ChatModels.CLAUDE_4_8_OPUS } };
+          mockedGetAvailableModels.mockResolvedValue([
+            {
+              id: ChatModels.CLAUDE_4_8_OPUS,
+              type: 'text',
+              name: 'Opus',
+              backend: ModelBackend.Anthropic,
+              max_tokens: 100,
+              contextWindow: 200_000,
+              can_stream: false,
+              pricing: { 200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 } },
+              supportsImageVariation: false,
+            },
+          ] as any);
+          Object.assign(mockSession, session);
+          (service as any).user = { ...mockUser, preferences };
+          return body;
+        };
+
+        afterEach(() => {
+          delete (mockSession as any).promptCacheTtl;
+          (service as any).user = mockUser;
+        });
+
+        it.each([
+          ['the chat choice', { promptCacheTtl: '1h' }, undefined, '1h'],
+          ['the user default', {}, { promptCacheTtl: '1h' }, '1h'],
+          ['the chat over the default', { promptCacheTtl: '5m' }, { promptCacheTtl: '1h' }, '5m'],
+          ['5 minutes with neither', {}, undefined, '5m'],
+        ])('uses %s for every breakpoint and records it', async (_name, session, preferences, expected) => {
+          const body = onClaude(session, preferences);
+          await service.process({ body, logger: mockLogger });
+
+          expect(lastComplete()[2].cacheStrategy.cacheTTL).toBe(expected);
+          expect(mockQuest.promptMeta?.tokenUsage?.promptCacheTtl).toBe(expected);
+        });
+      });
+
       it('leaves the adapter its own anchor when the message before the turn cannot carry the flag', async () => {
         const body = wireTurn({ builderReturnsContext: true });
         // An unanswered question: flagging it would stop the adapter merging it with the prompt.

@@ -81,6 +81,14 @@ export const SessionUpdateRequestSchema = z.object({
         'While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value ' +
         'applies again once it is turned back on.'
     ),
+  promptCacheTtl: z
+    .enum(['5m', '1h'])
+    .optional()
+    .describe(
+      'How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. ' +
+        'A 1-hour cache costs more to write and the same to read; it applies only on models that ' +
+        'support it, and other models keep the 5-minute cache. Omit to leave it unchanged.'
+    ),
   // Defaults to true, matching what every caller did before this flag existed. Pass
   // false when the session gained a file WITHOUT the user asking for it to travel -
   // an upload that lands in notebook context by default has consented to this
@@ -132,6 +140,10 @@ export const SessionResponseSchema = z.object({
     .boolean()
     .optional()
     .describe('Whether the session grounds on your own library alongside its lakes. Absent when never set.'),
+  promptCacheTtl: z
+    .enum(['5m', '1h'])
+    .optional()
+    .describe("The chat's prompt-cache lifetime. Absent when never set, which follows your default."),
   lastUsedModel: z.string().nullish(),
   // Plain z.date(), not z.coerce.date(): these are always set on a session (ISession has
   // them as required Date fields), and coerce accepts null (Date(null) -> epoch) which

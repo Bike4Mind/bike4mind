@@ -131,6 +131,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     lakeScopeExplicit: { type: Boolean, required: false },
     // No default: unset falls back to the lake selection (see effectiveIncludeLibraryFiles).
     includeLibraryFiles: { type: Boolean, required: false },
+    promptCacheTtl: { type: String, enum: ['5m', '1h'], required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
     // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
