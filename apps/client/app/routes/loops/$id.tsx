@@ -1,4 +1,5 @@
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
+import { isAxiosError } from 'axios';
 import {
   Accordion,
   AccordionDetails,
@@ -36,16 +37,19 @@ export default function LoopDetailPage() {
   const setRun = (executionId?: string) =>
     navigate({ to: '/loops/$id', params: { id }, search: executionId ? { run: executionId } : {} });
   // Only mounted inside LoopsGate, so the loops API is never called while EnableLoops is off.
-  const { data: loop, isLoading } = useLoop(id);
+  const { data: loop, isLoading, error } = useLoop(id);
   const { data: tickets } = useLoopTickets(id);
   useDocumentTitle(loop?.name ?? 'Loop');
 
   if (isLoading) return <CircularProgress size="sm" sx={{ m: 2 }} />;
   if (!loop) {
+    const notFound = !error || (isAxiosError(error) && error.response?.status === 404);
     return (
       <Box sx={{ p: 2 }} data-testid="loop-detail-not-found">
-        <Typography>Loop not found.</Typography>
-        <Link onClick={() => navigate({ to: '/loops' })}>Back to loops</Link>
+        <Typography>{notFound ? 'Loop not found.' : "Couldn't load this loop. Try again shortly."}</Typography>
+        <Link component="button" onClick={() => navigate({ to: '/loops' })} data-testid="loop-detail-back-btn">
+          Back to loops
+        </Link>
       </Box>
     );
   }

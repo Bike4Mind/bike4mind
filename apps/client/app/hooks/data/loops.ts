@@ -39,7 +39,7 @@ export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 
 const LIST_POLL_MS = 30_000;
 const DETAIL_POLL_MS = 15_000;
 
-/** A 409 means the loop moved under us (e.g. the scheduler errored it): show why and reload. */
+/** A 409 means the loop or ticket moved under us (e.g. a run claimed it): show why and reload. */
 function onLoopError(queryClient: QueryClient) {
   return (error: unknown) => {
     toast.error(getErrorMessage(error));

@@ -90,6 +90,12 @@ function TicketCard({
         onChange={(_, stage) => stage && stage !== ticket.stage && moveTicket.mutate({ id: ticket.id, stage })}
         data-testid="loop-ticket-stage-select"
       >
+        {/* A stage removed from the loop still labels its tickets; the API groups them under the first stage. */}
+        {ticket.stage && !stages.includes(ticket.stage) && (
+          <Option value={ticket.stage} disabled>
+            {ticket.stage} (removed)
+          </Option>
+        )}
         {stages.map(stage => (
           <Option key={stage} value={stage}>
             {stage}

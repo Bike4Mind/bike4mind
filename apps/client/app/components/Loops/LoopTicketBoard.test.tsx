@@ -94,6 +94,17 @@ describe('LoopTicketBoard', () => {
     expect(moveTicket.mutate).toHaveBeenCalledWith({ id: 'older', stage: 'doing' });
   });
 
+  it('labels a ticket left in a removed stage instead of showing an empty select', () => {
+    const orphan: ILoopTicketsResponse = { stages: [{ stage: 'todo', tickets: [ticket('o', { stage: 'review' })] }] };
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopTicketBoard loop={loop} data={orphan} onViewRun={onViewRun} />
+      </CssVarsProvider>
+    );
+    fireEvent.click(within(screen.getByTestId('loop-ticket-o')).getByRole('combobox'));
+    expect(screen.getByRole('option', { name: 'review (removed)' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
   it('adds a ticket in the first stage by default', () => {
     renderBoard();
     fireEvent.click(screen.getByTestId('loop-ticket-add-btn'));

@@ -66,7 +66,14 @@ export default function LoopsPage() {
               {loops.map(loop => (
                 <tr
                   key={loop.id}
+                  tabIndex={0}
                   onClick={() => navigate({ to: '/loops/$id', params: { id: loop.id } })}
+                  onKeyDown={e => {
+                    // Only the row itself: Enter on an action button inside it must not also open the loop.
+                    if (e.key === 'Enter' && e.target === e.currentTarget) {
+                      navigate({ to: '/loops/$id', params: { id: loop.id } });
+                    }
+                  }}
                   data-testid={`loops-row-${loop.id}`}
                 >
                   <td>

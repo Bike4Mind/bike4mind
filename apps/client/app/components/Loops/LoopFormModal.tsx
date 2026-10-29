@@ -32,7 +32,7 @@ const STAGES_MAX = 20;
 const STAGE_NAME_MAX = 60;
 const INTERVAL_MIN = 5;
 const INTERVAL_MAX = 10_080;
-// The tickets API (apps/client/server/utils/loopTickets.ts) refuses tickets on a loop with fewer stages.
+// Mirrors validateLoopStages (apps/client/server/utils/loopValidation.ts): the last stage means closed.
 const STAGES_MIN = 2;
 
 const UNIT_MINUTES = { minutes: 1, hours: 60, days: 1440 } as const;
