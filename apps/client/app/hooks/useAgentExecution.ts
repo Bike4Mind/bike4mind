@@ -612,6 +612,9 @@ export function useAgentExecutionSubscriptions(): void {
           iterationCount: msg.iterationCount ?? 0,
           iterations: buildIterations(msg.steps),
           childExecutions: buildChildren(msg.children),
+          answer: msg.answer,
+          failureReason: msg.failureReason,
+          errorMessage: msg.errorMessage,
           pendingPermission: msg.pendingPermission
             ? {
                 toolName: msg.pendingPermission.toolName,
@@ -657,8 +660,13 @@ export function useAgentExecutionSubscriptions(): void {
           // it captures) past tab close.
           fetch(`/api/agent-executions/${executionId}`, { signal: AbortSignal.timeout(10_000) })
             .then(r => (r.ok ? r.json() : null))
-            .then((data: { steps?: IAgentStep[]; children?: (typeof msg)['children'] } | null) => {
+            .then((data: { answer?: string; steps?: IAgentStep[]; children?: (typeof msg)['children'] } | null) => {
               if (!data) return;
+              // A viewer's answer is dropped from the frame with the steps (see `sendExecutionSnapshot`).
+              const exec = store().executions[executionId];
+              if (msg.stepsTruncated && isViewed(executionId) && exec?.status === 'completed' && !exec.answer) {
+                if (data.answer) store().markCompleted(executionId, data.answer, exec.totalCreditsUsed);
+              }
               // Iteration merge.
               if (msg.stepsTruncated && data.steps) {
                 const replayed = buildIterations(data.steps);

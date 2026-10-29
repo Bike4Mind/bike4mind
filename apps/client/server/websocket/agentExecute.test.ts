@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 
 /**
  * Pins the "Allow/Deny for Session" write path in `handlePermissionResponse`: the
@@ -995,6 +996,62 @@ describe('subscribe / unsubscribe commands', () => {
     mockAddViewer.mockRejectedValueOnce(new Error('db down'));
     await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-4' }), {}, noopLogger);
     expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-4', found: false }]);
+  });
+
+  it("sends a finished run's answer, which a headless run has nowhere else to show", async () => {
+    const completed = {
+      ...baseExecution,
+      status: 'completed',
+      result: { answer: 'All done' },
+      checkpoint: { iteration: 1, steps: [{ type: 'final_answer', content: 'All done' }] },
+    };
+    for (let i = 0; i < 3; i++) mockFindById.mockResolvedValueOnce(completed);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+    await invoke(wsEvent({ command: 'reconnect', executionId: 'exec-1' }), {}, noopLogger);
+
+    const [subscribed, reconnected] = sentPayloads();
+    expect(subscribed).toMatchObject({ found: true, status: 'completed', answer: 'All done' });
+    // A chat reconnect keeps today's payload: the reply bubble already holds the answer.
+    expect(reconnected).toMatchObject({ found: true, status: 'completed' });
+    expect(reconnected).not.toHaveProperty('answer');
+  });
+
+  it('drops the answer with the steps when they do not fit the frame', async () => {
+    const run = {
+      ...baseExecution,
+      status: 'completed',
+      result: { answer: 'x'.repeat(101 * 1024) },
+      checkpoint: { iteration: 1, steps: [] },
+    };
+    mockFindById.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+    vi.mocked(decideInlineBudgets).mockReturnValueOnce({ includeStepsInline: false, includeChildrenInline: true });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    // The answer counts toward the steps budget.
+    expect(decideInlineBudgets).toHaveBeenCalledWith(101 * 1024, 0);
+    expect(sentPayloads()[0]).toMatchObject({ found: true, stepsTruncated: true });
+    expect(sentPayloads()[0]).not.toHaveProperty('answer');
+  });
+
+  it("sends a failed run's reason and a caller-safe message", async () => {
+    const run = {
+      ...baseExecution,
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      error: { message: 'Out of credits', callerSafe: true },
+    };
+    mockFindById.mockResolvedValueOnce(run).mockResolvedValueOnce(run);
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({
+      found: true,
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      errorMessage: 'Out of credits',
+    });
   });
 
   it('removes this connection on unsubscribe', async () => {

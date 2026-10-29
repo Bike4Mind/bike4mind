@@ -1595,6 +1595,12 @@ export const ReconnectResultAction = z.object({
   // client falls back to fetching them via GET /api/agent-executions/[id].
   children: z.array(ChildExecutionSnapshotSchema).optional(),
   childrenTruncated: z.boolean().optional(),
+  // Outcome of a finished run, sent to `subscribe` viewers only (a chat reconnect
+  // already shows it in the reply bubble). `answer` shares the steps budget, so it
+  // is omitted with `stepsTruncated: true` and comes from the REST trace instead.
+  answer: z.string().optional(),
+  failureReason: z.string().optional(),
+  errorMessage: z.string().optional(),
 });
 
 // Union

@@ -274,6 +274,10 @@ interface AgentExecutionState {
      * are excluded; they render via the header badge, not the nest.
      */
     childExecutions?: Record<string, ChildExecution>;
+    /** Outcome of a finished run; only `subscribe` snapshots carry it. Absent keeps the store's. */
+    answer?: string;
+    failureReason?: string;
+    errorMessage?: string;
   }) => void;
   /** Replace just `exec.iterations` without touching status/credits/permission.
    * Used by the REST-fallback path in `useAgentExecution` after the WS
@@ -730,6 +734,9 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
           // (no children, or `childrenTruncated: true` - REST fallback path
           // handles the latter via `mergeChildExecutions`).
           childExecutions: snapshot.childExecutions ?? exec.childExecutions,
+          answer: snapshot.answer ?? exec.answer,
+          failureReason: snapshot.failureReason ?? exec.failureReason,
+          errorMessage: snapshot.errorMessage ?? exec.errorMessage,
         };
       }),
     })),

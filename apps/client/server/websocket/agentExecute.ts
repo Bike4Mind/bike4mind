@@ -23,7 +23,7 @@ import {
   sessionToolApprovalRepository,
   type IAgentExecution,
 } from '@bike4mind/database';
-import { canReadAgentExecution } from '@server/utils/loadAgentExecutionTrace';
+import { canReadAgentExecution, toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
@@ -939,7 +939,9 @@ async function handleSubscribe(
   // Snapshot from a read taken after `addViewer`, so a step persisted in between is not lost;
   // the client drops the overlap with live frames.
   const current = (await agentExecutionRepository.findById(execution.id)) ?? execution;
-  await sendExecutionSnapshot(current, cmd.requestId, connectionId, endpoint, logger, '[Subscribe] Viewer subscribed');
+  await sendExecutionSnapshot(current, cmd.requestId, connectionId, endpoint, logger, '[Subscribe] Viewer subscribed', {
+    withOutcome: true,
+  });
 }
 
 /** The `reconnect_result` snapshot shared by `reconnect` and `subscribe`; callers authorize first. */
@@ -949,7 +951,8 @@ async function sendExecutionSnapshot(
   connectionId: string,
   endpoint: string,
   logger: Logger,
-  logLabel: string
+  logLabel: string,
+  { withOutcome = false }: { withOutcome?: boolean } = {}
 ): Promise<void> {
   // Persisted iteration trace for step replay. The checkpoint
   // carries the full step history; we include it inline when it fits in
@@ -963,7 +966,15 @@ async function sendExecutionSnapshot(
   // to measure the full payload before deciding to truncate.
   const checkpoint = execution.checkpoint as AgentCheckpoint | undefined;
   const persistedSteps: AgentStep[] = checkpoint?.steps ?? [];
-  const stepsJsonSize = persistedSteps.length > 0 ? Buffer.byteLength(JSON.stringify(persistedSteps), 'utf8') : 0;
+  // A viewer has no chat bubble holding the answer, so it rides with the steps and shares
+  // their budget; the client's REST fallback fills it in when the steps are truncated.
+  const answer =
+    withOutcome && execution.status === 'completed'
+      ? (execution.result as { answer?: string } | null | undefined)?.answer
+      : undefined;
+  const stepsJsonSize =
+    (persistedSteps.length > 0 ? Buffer.byteLength(JSON.stringify(persistedSteps), 'utf8') : 0) +
+    (answer ? Buffer.byteLength(answer, 'utf8') : 0);
 
   // Child subagent snapshots. Sized independently of the parent's
   // steps so a giant parent trace doesn't drop child context, and vice-versa.
@@ -1002,7 +1013,13 @@ async function sendExecutionSnapshot(
     pendingGate: execution.pendingGate,
     totalCreditsUsed: execution.totalCreditsUsed,
     iterationCount: checkpoint?.iteration ?? 0,
-    ...(includeStepsInline ? { steps: persistedSteps } : { stepsTruncated: true }),
+    ...(includeStepsInline ? { steps: persistedSteps, answer } : { stepsTruncated: true }),
+    ...(withOutcome && execution.status === 'failed'
+      ? {
+          failureReason: execution.failureReason,
+          errorMessage: toCallerSafeError(execution.error) ?? undefined,
+        }
+      : {}),
     ...(childSnapshots.length === 0
       ? {}
       : includeChildrenInline

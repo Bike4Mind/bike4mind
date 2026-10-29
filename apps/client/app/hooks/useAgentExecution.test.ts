@@ -1375,6 +1375,62 @@ describe('useAgentExecutionDispatch -- watching a run by id (subscribe)', () => 
     expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('closed');
   });
 
+  it("keeps a finished run's outcome from the snapshot", async () => {
+    mountSubscriptions();
+    const dispatch = mountDispatch();
+    dispatch.subscribe('run-1');
+    dispatch.subscribe('run-2');
+    const [done, broke] = sent();
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      requestId: done.requestId,
+      found: true,
+      executionId: 'run-1',
+      status: 'completed',
+      steps: [{ type: 'final_answer', content: 'All done', metadata: { timestamp: 1, iteration: 0 } }],
+      answer: 'All done',
+    });
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      requestId: broke.requestId,
+      found: true,
+      executionId: 'run-2',
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      errorMessage: 'Out of credits',
+    });
+
+    const { executions } = useAgentExecutionStore.getState();
+    expect(executions['run-1']).toMatchObject({ status: 'completed', answer: 'All done' });
+    expect(executions['run-2']).toMatchObject({
+      status: 'failed',
+      failureReason: 'insufficient_credits',
+      errorMessage: 'Out of credits',
+    });
+  });
+
+  it('takes the answer from the REST trace when the snapshot was truncated', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ answer: 'Big answer', steps: [] }) });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      mountSubscriptions();
+      mountDispatch().subscribe('run-1');
+      await handlers['reconnect_result']({
+        action: 'reconnect_result',
+        requestId: sent()[0].requestId,
+        found: true,
+        executionId: 'run-1',
+        status: 'completed',
+        stepsTruncated: true,
+      });
+
+      await vi.waitFor(() => expect(useAgentExecutionStore.getState().executions['run-1']?.answer).toBe('Big answer'));
+      expect(fetchMock).toHaveBeenCalledWith('/api/agent-executions/run-1', expect.anything());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('drops frames that arrive after unsubscribe, so the run is never taken over on socket-up', async () => {
     mountSubscriptions();
     const dispatch = mountDispatch();
