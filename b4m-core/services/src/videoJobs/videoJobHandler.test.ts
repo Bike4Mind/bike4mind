@@ -583,6 +583,75 @@ describe('video job end to end with the test provider', () => {
     expect(settleCreditHold).not.toHaveBeenCalled();
   });
 
+  it('fails a job queued before its model was retired without submitting it', async () => {
+    const submit = vi.fn<VideoProvider['submit']>();
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const queued = t.jobOf(created);
+    queued.payload.request = { ...queued.payload.request, model: 'veo-3.1-fast-generate-preview' };
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({
+      state: 'failed',
+      attempts: 0,
+      error: { code: 'provider_error', message: expect.stringMatching(/retired.*gemini-omni-1\.1-flash/) },
+    });
+    expect(submit).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishes an already-submitted retired-model job and settles at its original price', async () => {
+    const output = {
+      kind: 'url' as const,
+      url: 'https://example.com/historical-video.mp4',
+      requiresAuth: true,
+      contentType: 'video/mp4',
+    };
+    const poll = vi.fn<VideoProvider['poll']>(async () => ({ status: 'succeeded', output }));
+    const fetchOutput = vi.fn<VideoProvider['fetchOutput']>(async () => Buffer.from('video'));
+    const submit = vi.fn<VideoProvider['submit']>();
+    const historicalProvider: VideoProvider = {
+      mode: 'async',
+      id: 'veo',
+      models: ['veo-3.1-fast-generate-preview'],
+      submit,
+      poll,
+      fetchOutput,
+    };
+    const t = setup({ providers: createVideoProviderRegistry([new TestVideoProvider(), historicalProvider]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.engine.step(t.jobOf(created).id);
+    const running = t.jobOf(created);
+    expect(running.state).toBe('running');
+    if (!running.creditHold) throw new Error('expected a hold');
+    // Restore the persisted shape of a 4s Veo job submitted before retirement, including its original hold.
+    running.payload.request.model = 'veo-3.1-fast-generate-preview';
+    running.payload.providerId = 'veo';
+    const providerHandle = {
+      provider: 'veo' as const,
+      data: { operationName: 'models/veo-3.1-fast-generate-preview/operations/historical-job' },
+    };
+    running.payload.providerHandle = providerHandle;
+    const expectedCredits = 0.4 * CREDITS_PER_USD_COST;
+    running.creditHold.reservedCredits = expectedCredits;
+
+    await t.runToCompletion();
+
+    const finished = t.jobOf(created);
+    expect(finished).toMatchObject({ state: 'succeeded', settledCredits: expectedCredits });
+    expect(submit).not.toHaveBeenCalled();
+    expect(poll).toHaveBeenCalledWith(providerHandle, expect.objectContaining({ apiKey: 'key' }));
+    expect(fetchOutput).toHaveBeenCalledWith(output, expect.objectContaining({ apiKey: 'key' }));
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: expect.objectContaining({ modelId: 'veo-3.1-fast-generate-preview' }) })
+    );
+    expect(settleCreditHold).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(settleCreditHold).mock.calls[0][1]).toBe(expectedCredits);
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ costUsd: 0.4, creditsCharged: expectedCredits, durationSeconds: 4, status: 'ok' })
+    );
+    expect(releaseCreditHold).not.toHaveBeenCalled();
+  });
+
   it('a non-definitive submit error is an unknown outcome: orphaned_submit', async () => {
     const t = setup({
       providers: createVideoProviderRegistry([

@@ -174,6 +174,7 @@ describe('OllamaLocal', () => {
         label: runtimeId,
         fetch,
         hasCredentials: () => false,
+        redact: text => text,
       });
     const one = remote('srv-aaa111', 'https://one.example.test', oneFetch);
     const two = remote('srv-bbb222', 'http://127.0.0.2:11434', twoFetch);
@@ -207,6 +208,7 @@ describe('OllamaLocal', () => {
       label: 'gpu box',
       fetch,
       hasCredentials: () => true,
+      redact: text => text,
     });
     const error = await server.listModels().catch((err: unknown) => err);
     expect(error).toBeInstanceOf(ServerCredentialsError);
