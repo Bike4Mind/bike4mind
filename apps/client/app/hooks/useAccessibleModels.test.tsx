@@ -88,4 +88,9 @@ describe('useAccessibleModels lockedModels', () => {
     h.saved = [config('paid-a', { allowedEntitlements: [PAID_PLAN_ENTITLEMENT_KEY] })];
     expect(lockedIds()).toEqual(['paid-a']);
   });
+
+  it('drops a locked model gated on an entitlement the paid plan does not grant', () => {
+    h.saved = [config('paid-a', { allowedEntitlements: ['plan:enterprise'] })];
+    expect(lockedIds()).toEqual([]);
+  });
 });

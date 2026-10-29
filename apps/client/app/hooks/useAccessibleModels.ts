@@ -52,8 +52,8 @@ export function useAccessibleModels() {
   }, [modelConfigs, userTags, isAdmin, entitlementKeys]);
 
   // Locked (paid-only) models honor the same admin config, evaluated as if the user held the paid
-  // plan, so a model an admin disabled or tag-restricted is not advertised behind an Upgrade CTA.
-  // Returns the original ModelInfo entries (with their `access` stamp), not the merged configs.
+  // plan, so a model an admin disabled, tag-restricted or gated on another entitlement is not
+  // advertised behind an Upgrade CTA that would not unlock it. Returns the original ModelInfo entries.
   const lockedModels = useMemo(() => {
     if (!lockedInfos || lockedConfigs.length === 0) return [];
     const paidKeys = [...entitlementKeys, PAID_PLAN_ENTITLEMENT_KEY];
