@@ -15,6 +15,7 @@ import { type NetworkRequest, readNetworkMeta } from '@server/auth/networkMeta';
 import { isSignupNetworkOverLimit } from '@server/auth/signupNetworkLimits';
 import { signupProtection } from '@server/auth/signupProtection';
 import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
+import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -49,7 +50,8 @@ const authenticateUser = async (
   profile: any,
   done: any,
   authProvider?: Partial<IAuthProviders>,
-  signupNetwork?: INetworkMeta
+  signupNetwork?: INetworkMeta,
+  challengeVerified?: true | null
 ) => {
   const selectedEmail = selectProviderEmail(profile)?.value;
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
@@ -276,6 +278,7 @@ const authenticateUser = async (
         email: emailForNewAccount,
         oauthCredentials,
         pendingFreeCredits,
+        ...(signupNetwork ? { signupMeta: { ...signupNetwork, capturedAt: new Date(), challengeVerified } } : {}),
       });
       const newUserId = String(user._id);
       let creditsGranted = 0;
@@ -355,4 +358,13 @@ export const selfServeVerifyCallback =
   (strategy: AuthStrategy) =>
   // any: passport's untyped verify callback, as in verifyCallback above
   (req: NetworkRequest, accessToken: string, refreshToken: string, profile: unknown, done: any) =>
-    authenticateUser(strategy, accessToken, refreshToken, profile, done, undefined, readNetworkMeta(req));
+    authenticateUser(
+      strategy,
+      accessToken,
+      refreshToken,
+      profile,
+      done,
+      undefined,
+      readNetworkMeta(req),
+      wasTurnstileVerified(req)
+    );

@@ -24,6 +24,7 @@ import type { HubBuild, HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
 import { describe, expect, it, vi } from 'vitest';
+import { ServerUnreachableError } from '../modelServers/errors';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import {
   ModelHubService,
@@ -556,6 +557,29 @@ describe('ModelHubService pulls', () => {
     expect(runtime.pull).not.toHaveBeenCalled();
   });
 
+  it('pulls a gated repo by its huggingface.co name, which Ollama can sign for', async () => {
+    const { service, runtime, pulls } = harness({ detail: detail({ gated: 'auto', ollamaNeedsSshKey: true }) });
+    const view = await service.detail(REPO);
+    expect(view.ok && view.model.builds[0].ollamaRef).toBe(`huggingface.co/${REPO}:Q4_K_M`);
+
+    const result = service.pull({ ...request, confirmAccess: true });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    expect(runtime.pull).toHaveBeenCalledWith(`huggingface.co/${REPO}:Q4_K_M`, expect.anything());
+    pulls[0].resolve();
+    await expect(result).resolves.toEqual({ ok: true, ref: `huggingface.co/${REPO}:Q4_K_M` });
+  });
+
+  it('names the computer that ran out of disk space', async () => {
+    const { service, pulls } = harness();
+    const result = service.pull(request);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls[0].reject(new LocalRuntimeError('ollama could not pull x: write blob: no space left on device', 'ollama'));
+    await expect(result).resolves.toMatchObject({
+      ok: false,
+      error: { kind: 'failed', message: expect.stringContaining('This computer ran out of disk space') },
+    });
+  });
+
   it('does not start when Ollama is not running, and keeps the failure in the list', async () => {
     const { service, hub, runtime } = harness({ healthy: false });
     const result = await service.pull(request);
@@ -741,6 +765,90 @@ describe('ModelHubService reads', () => {
     expect(runtime.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
     expect(installedChanged).toHaveBeenCalledTimes(1);
   });
+});
+
+/**
+ * Servers `a` and `b`, each set to Chat and manage and backed by its own deferred runtime; `remote` holds each
+ * one's harness, so a test can settle its pulls. The service's own Hugging Face client and list come from `local`.
+ */
+function servers(options: Parameters<typeof harness>[0] = {}) {
+  const local = harness(options);
+  const remote = { a: harness(options), b: harness(options) };
+  const runtimes = { a: remote.a.runtime, b: remote.b.runtime };
+  const saved = new Set(['a', 'b']);
+  const chatOnly = new Set<string>();
+  for (const [id, runtime] of Object.entries(runtimes)) {
+    runtime.health.mockImplementation(async () =>
+      saved.has(id)
+        ? { ok: true, version: options.version === undefined ? '0.40.11' : options.version, error: null }
+        : { ok: false, version: null, error: `${id} did not answer.` }
+    );
+  }
+  const keepAwake = vi.fn();
+  const installedChanged = vi.fn();
+  const service = new ModelHubService({
+    runtime: local.runtime,
+    server: id =>
+      saved.has(id) && (id === 'a' || id === 'b')
+        ? { name: `box ${id}`, management: chatOnly.has(id) ? 'chat-only' : 'allowed', runtime: runtimes[id] }
+        : null,
+    createHub: local.createHub,
+    tokens: local.tokens,
+    libraryLayers: local.libraryLayers,
+    hardware: local.hardware,
+    localContext: async () => AUTO_LOCAL_CONTEXT,
+    curated: () => CURATED,
+    onPullsChanged: () => {},
+    onInstalledChanged: installedChanged,
+    keepAwake,
+    warn: local.warn,
+    progressIntervalMs: 0,
+    checkBackoffMs: [0, 0],
+  });
+  return { service, runtimes, remote, saved, chatOnly, keepAwake, installedChanged, local, hub: local.hub };
+}
+
+describe('ModelHubService saved servers', () => {
+  it('does not wake the computer again while dispose stops several server pulls', async () => {
+    const { service, runtimes, keepAwake } = servers();
+    const first = service.pull({ ...request, serverId: 'a' });
+    const second = service.pull({ ...request, serverId: 'b' });
+    await vi.waitFor(() => expect(runtimes.b.pull).toHaveBeenCalled());
+    await vi.waitFor(() => expect(runtimes.a.pull).toHaveBeenCalled());
+
+    service.dispose();
+    await Promise.all([first, second]);
+
+    expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it.each([
+    ['removed', 'not-found'],
+    ['set to Chat only', 'not-allowed'],
+    ['cancelled', 'cancelled'],
+  ] as const)(
+    'stops without contacting the server when the pull is %s while the repo is still being read',
+    async (cause, kind) => {
+      const { service, saved, chatOnly, runtimes, hub } = servers();
+      let release = () => {};
+      hub.getModel.mockImplementationOnce(() => new Promise(resolve => (release = () => resolve(detail()))));
+      const result = service.pull({ ...request, serverId: 'a' });
+      await vi.waitFor(() => expect(hub.getModel).toHaveBeenCalled());
+      expect(service.pulls()).toHaveLength(1);
+      runtimes.a.health.mockClear();
+
+      if (cause === 'removed') saved.delete('a');
+      if (cause === 'set to Chat only') chatOnly.add('a');
+      if (cause === 'cancelled') service.cancel(service.pulls()[0].key);
+      else service.serverChanged('a');
+      release();
+
+      expect(await result).toMatchObject({ ok: false, error: { kind }, listed: false });
+      expect(service.pulls()).toEqual([]);
+      expect(runtimes.a.health).not.toHaveBeenCalled();
+      expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+    }
+  );
 });
 
 const GSQ_REPO = 'ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF';
@@ -1973,6 +2081,161 @@ describe('ModelHubService curated Hugging Face pulls', () => {
     expect(await service.curatedPull(GSQ.id, IQ3.id)).toMatchObject({ ok: false, error: { kind: 'hub-unreachable' } });
   });
 });
+
+describe('ModelHubService curated pulls to a saved server', () => {
+  const gsqRequest = {
+    repo: GSQ_REPO,
+    buildId: 'Qwen3.8-27B-GSQ-RCO-IQ3_S',
+    revision: 'b'.repeat(40),
+    sizeBytes: IQ3_FILE.sizeBytes,
+    acceptLicense: false,
+    confirmAccess: false,
+    curated: { entryId: GSQ.id, buildId: IQ3.id },
+    serverId: 'a',
+  };
+  const gsqServers = (options: Parameters<typeof harness>[0] = {}) => {
+    const setup = servers({ detail: gsqDetail(), verified: IQ3_REF, ...options });
+    setup.hub.getModel.mockImplementation(async (id: string) =>
+      id === GSQ.lineage.base ? detail({ id, builds: [] }) : gsqDetail()
+    );
+    return setup;
+  };
+  const LIBRARY = CURATED.entries.find(entry => entry.id === 'gemma-4-e4b');
+  const E4B = LIBRARY?.builds[0];
+  const E4B_LIBRARY = E4B && libraryOf(E4B);
+  if (!LIBRARY || !E4B || !E4B_LIBRARY) throw new Error('the bundled list lost its Gemma 4 E4B pick');
+  const libraryRequest = {
+    repo: E4B_LIBRARY.ref,
+    buildId: E4B.id,
+    revision: E4B_LIBRARY.digest,
+    sizeBytes: E4B_LIBRARY.sizeBytes,
+    acceptLicense: false,
+    confirmAccess: false,
+    curated: { entryId: LIBRARY.id, buildId: E4B.id },
+    serverId: 'a',
+  };
+
+  it('checks the registry layers, pulls on the server, and checks what that server installed', async () => {
+    const { service, hub, local, remote, installedChanged } = gsqServers();
+    const result = service.pull(gsqRequest);
+    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    expect(hub.ollamaLayers).toHaveBeenCalledWith(GSQ_REPO, 'IQ3_S', expect.anything());
+    expect(service.pulls()[0].key).toBe(pullKey(GSQ_REPO, gsqRequest.buildId, 'a'));
+    remote.a.pulls[0].resolve();
+
+    await expect(result).resolves.toEqual({ ok: true, ref: IQ3_REF });
+    expect(remote.a.runtime.list).toHaveBeenCalled();
+    expect(remote.a.runtime.inspect).toHaveBeenCalledWith(IQ3_REF, expect.objectContaining({ tags: false }));
+    expect(remote.a.runtime.remove).not.toHaveBeenCalled();
+    expect(installedChanged).toHaveBeenCalledWith('a');
+    for (const call of ['health', 'list', 'inspect', 'pull', 'remove'] as const)
+      expect(local.runtime[call]).not.toHaveBeenCalled();
+    expect(remote.b.runtime.inspect).not.toHaveBeenCalled();
+  });
+
+  it('removes an unreviewed install from the server it landed on, never from this computer', async () => {
+    const { service, local, remote } = gsqServers();
+    const installed = await remote.a.runtime.inspect(IQ3_REF);
+    remote.a.runtime.inspect.mockClear();
+    remote.a.runtime.inspect.mockResolvedValueOnce({
+      ...installed,
+      contents: installed.contents && { ...installed.contents, template: 'a different template' },
+    });
+    const result = service.pull(gsqRequest);
+    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    remote.a.pulls[0].resolve();
+
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'upstream-changed' } });
+    expect(remote.a.runtime.remove).toHaveBeenCalledWith(IQ3_REF);
+    expect(local.runtime.remove).not.toHaveBeenCalled();
+  });
+
+  it('pins the llama.cpp runner on a library pull to the server and checks it there', async () => {
+    const { service, local, remote } = servers();
+    const result = service.pull(libraryRequest);
+    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    expect(remote.a.runtime.pull).toHaveBeenCalledWith(
+      E4B_LIBRARY.ref,
+      expect.objectContaining({ runner: 'llamacpp' })
+    );
+    expect(local.libraryLayers).toHaveBeenCalledWith(E4B_LIBRARY.ref, expect.anything());
+    remote.a.pulls[0].resolve();
+
+    await expect(result).resolves.toEqual({ ok: true, ref: E4B_LIBRARY.ref });
+    expect(remote.a.runtime.inspect).toHaveBeenCalledWith(E4B_LIBRARY.ref, expect.anything());
+    expect(local.runtime.pull).not.toHaveBeenCalled();
+    expect(local.runtime.inspect).not.toHaveBeenCalled();
+  });
+
+  it('runs the check after a paused download to the server resumes and finishes', async () => {
+    const { service, remote } = gsqServers();
+    const first = service.pull(gsqRequest);
+    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    remote.a.pulls[0].reject(new ServerUnreachableError('box a', 'connection reset'));
+    await expect(first).resolves.toMatchObject({ ok: false, error: { kind: 'connection-lost' }, listed: true });
+    expect(remote.a.runtime.inspect).not.toHaveBeenCalled();
+
+    const resumed = service.resume(service.pulls()[0].key);
+    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(2));
+    remote.a.pulls[1].resolve();
+
+    await expect(resumed).resolves.toEqual({ ok: true, ref: IQ3_REF });
+    expect(remote.a.runtime.inspect).toHaveBeenCalledWith(IQ3_REF, expect.objectContaining({ tags: false }));
+    expect(service.pulls()).toEqual([]);
+  });
+
+  it('keeps an unverified install per server and checks it again on that server', async () => {
+    const { service, local, remote } = servers();
+    remote.a.runtime.inspect.mockRejectedValue(new LocalRuntimeError('show timed out', 'ollama'));
+    const result = service.pull(libraryRequest);
+    await vi.waitFor(() => expect(remote.a.pulls).toHaveLength(1));
+    remote.a.pulls[0].resolve();
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    expect(service.pulls()[0]).toMatchObject({ serverId: 'a', phase: 'failed' });
+
+    const reviewed = await local.runtime.inspect(E4B_LIBRARY.ref);
+    local.runtime.inspect.mockClear();
+    remote.a.runtime.inspect.mockReset().mockResolvedValue(reviewed);
+    expect(await service.checkCurated(LIBRARY.id, E4B.id, 'a')).toEqual({ ok: true });
+    expect(remote.a.runtime.inspect).toHaveBeenCalledWith(E4B_LIBRARY.ref, expect.anything());
+    expect(local.runtime.inspect).not.toHaveBeenCalled();
+    expect(service.pulls()).toEqual([]);
+  });
+
+  it("refuses the dialog for a Chat only server and rates the build against that server's Ollama", async () => {
+    const { service, chatOnly } = gsqServers({ version: '0.32.11' });
+    expect(await service.curatedPull(GSQ.id, IQ3.id, 'a')).toMatchObject({
+      ok: false,
+      error: { kind: 'cannot-pull', message: expect.stringContaining('Update Ollama on box a') },
+    });
+    expect(await service.pull(gsqRequest)).toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
+    chatOnly.add('a');
+    expect(await service.curatedPull(GSQ.id, IQ3.id, 'a')).toMatchObject({ ok: false, error: { kind: 'not-allowed' } });
+    expect(await service.checkCurated(GSQ.id, IQ3.id, 'a')).toMatchObject({
+      ok: false,
+      error: { kind: 'not-allowed' },
+    });
+  });
+
+  it('leaves fit off the installed models of a saved server', async () => {
+    const { service, remote } = servers();
+    remote.a.runtime.list.mockResolvedValue([
+      {
+        name: 'small:latest',
+        sizeBytes: 397_821_319,
+        quantization: 'Q4_K_M',
+        family: 'llama',
+        parameterSize: '494M',
+        modifiedAt: null,
+        capabilities: { tools: false, vision: false, thinking: false, embeddings: false, completion: true },
+      },
+    ]);
+    const result = await service.installed('a');
+    expect(result.ok && result.models.map(model => model.fit)).toEqual([null]);
+    expect(remote.a.runtime.inspect).not.toHaveBeenCalled();
+  });
+});
+
 describe('ModelHubService Hugging Face token', () => {
   const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
   const hidden = build({ files: [{ ...build().files[0], sha256: null }] });

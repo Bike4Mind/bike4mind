@@ -128,6 +128,7 @@ export * from './utils/syntheticIdentity';
 export * from './utils/countCodePoints';
 export * from './utils/citationMarkers';
 export * from './utils/releaseNoteText';
+export * from './utils/slackText';
 export * from './utils/capForParse';
 export * from './utils/toolArtifactEmitters';
 export * from './utils/artifactOpenTag';

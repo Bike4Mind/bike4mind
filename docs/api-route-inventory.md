@@ -1422,7 +1422,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/subscribers` | GET | jwt+key | - | no | - | 1: `utils/subscriberAPICalls.ts` |
 | `/api/subscribers/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `utils/subscriberAPICalls.ts` |
 | `/api/subscribers/create` | POST | handler | - | no | - | 1: `utils/subscriberAPICalls.ts` |
-| `/api/subscribers/generate-invite` | POST | jwt+key | - | no | - | 1: `components/admin/SubscribersTab.tsx` |
+| `/api/subscribers/generate-invite` | POST | jwt+key | - | no | - | 1: `components/admin/WaitlistTab.tsx` |
 | `/api/subscribers/waiting-count` | GET | jwt+key | - | no | - | 1: `utils/subscriberAPICalls.ts` |
 
 ### subscriptions

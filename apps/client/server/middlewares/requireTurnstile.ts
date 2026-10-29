@@ -4,6 +4,7 @@ import { isDeployedStage, isDevelopment, isE2EEnabled, isProduction } from '@bik
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { isTurnstileTestSecret, verifyTurnstile } from '@bike4mind/server-utils/utils/turnstile';
 import { getTurnstilePolicy, turnstileAllowedHostnames } from '@server/utils/auth/turnstile';
+import { recordTurnstileVerification } from '@server/auth/signupChallenge';
 
 export type TurnstileFailure = {
   code: 'challenge_failed' | 'challenge_unavailable';
@@ -45,6 +46,7 @@ export const requireTurnstile = (action: string, options: RequireTurnstileOption
     res.status(failure.status).json({ error: failure.error, code: failure.code, request_id: req.requestId });
   };
   return async (req, res, next) => {
+    recordTurnstileVerification(req, false);
     if (options.exempt?.(req)) return next();
     const policy = await getTurnstilePolicy().catch(error => {
       req.logger?.warn('turnstile-policy-unreadable', error);
@@ -74,7 +76,10 @@ export const requireTurnstile = (action: string, options: RequireTurnstileOption
       requireAllowedHostnames: isDeployedStage(),
       allowTestSecret: !production,
     });
-    if (result.ok) return next();
+    if (result.ok) {
+      recordTurnstileVerification(req, !testSecret);
+      return next();
+    }
 
     if (result.reason === 'misconfigured') {
       // A lone bad-request may come from a malformed client token, so it stays out of the

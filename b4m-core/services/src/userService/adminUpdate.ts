@@ -75,6 +75,8 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // (the only writer of `throttle`) and audits them, so they are stripped from the doc write here.
   throttleTier: z.enum(THROTTLE_TIERS).optional(),
   throttleReason: z.string().max(500).optional(),
+  // Why `isBanned` or `isModerated` is changing. Like `roleChangeReason`, audit-only and stripped here.
+  statusChangeReason: z.string().max(500).optional(),
 });
 
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
@@ -171,9 +173,9 @@ export async function adminUpdateUser(
   //   membership move, the doc write, the moderation transition, and the API-key
   //   deactivation.
   //
-  // `moderationStatus`/`creditReason`/`creditDelta`/`roleChangeReason` are handled out-of-band (a
-  // dedicated repo call, the CreditTransaction record, the ledger, and the route's audit entry) - pull them out
-  // so they never land as stray top-level fields on the user doc.
+  // `moderationStatus`/`creditReason`/`creditDelta`/`roleChangeReason`/`statusChangeReason` are handled
+  // out-of-band (a dedicated repo call, the CreditTransaction record, the ledger, and the route's audit
+  // entries) - pull them out so they never land as stray top-level fields on the user doc.
   const previousBalance = user.currentCredits ?? 0;
   const {
     moderationStatus,
@@ -182,6 +184,7 @@ export async function adminUpdateUser(
     roleChangeReason,
     throttleTier: _throttleTier,
     throttleReason: _throttleReason,
+    statusChangeReason,
     ...baseParams
   } = params;
   // Which moderation statuses block (only `suspended`) lives in accountState.ts, shared with the

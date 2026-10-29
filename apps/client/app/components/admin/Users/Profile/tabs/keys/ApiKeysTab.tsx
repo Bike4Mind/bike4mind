@@ -3,7 +3,12 @@ import { Box, Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import AutorenewRoundedIcon from '@mui/icons-material/AutorenewRounded';
 import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
 import { toast } from 'sonner';
-import { ApiKeyStatus, type AdminApiKeyRequestCounts, type IUserApiKeyDocument } from '@bike4mind/common';
+import {
+  ApiKeyStatus,
+  type AdminApiKeyRequestCounts,
+  type ApiKeyRateLimitUsage,
+  type IUserApiKeyDocument,
+} from '@bike4mind/common';
 import { useAdminGetUserApiKeys } from '@client/app/hooks/data/userApiKeys';
 import {
   useAdminRestoreApiKey,
@@ -32,6 +37,7 @@ import {
   UNDO_REVOKE_REASON,
   apiErrorMessage,
   describeKeyAccess,
+  describeLiveLimit,
   maxWeeklyRequests,
   requestCounts,
 } from './apiKeysModel';
@@ -125,6 +131,7 @@ const RowActions: React.FC<{ apiKey: IUserApiKeyDocument } & KeyRowActions> = ({
 
 const buildColumns = (
   requests: Readonly<Record<string, AdminApiKeyRequestCounts>> | undefined,
+  liveUsage: Readonly<Record<string, ApiKeyRateLimitUsage>> | undefined,
   actions: KeyRowActions
 ): DataColumn<IUserApiKeyDocument>[] => {
   const weeklyMax = maxWeeklyRequests(requests);
@@ -180,6 +187,16 @@ const buildColumns = (
       id: 'status',
       label: 'Status',
       render: key => {
+        const liveLimit = describeLiveLimit(key, liveUsage?.[key.id]);
+        if (liveLimit) {
+          return (
+            <Tooltip title={liveLimit}>
+              <span tabIndex={0} data-testid="user-keys-live-limit">
+                <StatusChip tone="warn" label="At limit" />
+              </span>
+            </Tooltip>
+          );
+        }
         const status = KEY_STATUS[key.status] ?? { label: key.status, tone: 'neutral' as const };
         return <StatusChip tone={status.tone} label={status.label} />;
       },
@@ -218,7 +235,7 @@ const SecretOnce: React.FC<{ secret: NewSecret; onDone: () => void }> = ({ secre
 
 /** The user's API keys with request volume, per-key revoke (with Undo) and rotate, and revoke all. */
 export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
-  const keys = useAdminGetUserApiKeys(user.id);
+  const keys = useAdminGetUserApiKeys(user.id, { refetchInterval: 15_000 });
   const revoke = useAdminRevokeApiKey(user.id);
   const restore = useAdminRestoreApiKey(user.id);
   const rotate = useAdminRotateApiKey(user.id);
@@ -282,7 +299,7 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
     }
   };
 
-  const columns = buildColumns(keys.data?.requests, {
+  const columns = buildColumns(keys.data?.requests, keys.data?.liveUsage, {
     onRevoke: key => void revokeKey(key),
     onRotate: setRotating,
     pendingKeyId,

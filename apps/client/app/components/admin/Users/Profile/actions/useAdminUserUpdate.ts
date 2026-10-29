@@ -12,6 +12,7 @@ export type AdminUserUpdate = Partial<IUser> & {
   roleChangeReason?: string;
   throttleTier?: ThrottleTier;
   throttleReason?: string;
+  statusChangeReason?: string;
 };
 
 export const adminUpdateErrorMessage = (error: unknown, fallback: string): string => {

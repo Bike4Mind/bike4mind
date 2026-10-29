@@ -86,7 +86,7 @@ export default {
   'SlackMetrics/SlackMetricsTab.tsx': [[2, 'e2ae0a0feb2b939a']],
   'SlackWorkspacesTab.tsx': [[2, '533bd942dfb864f5']],
   'SreAgentTab.tsx': [[11, '5feea0e0c55f7cf4']],
-  'SubscribersTab.tsx': [[6, '77053e9dc3021c33']],
+  'WaitlistTab.tsx': [[6, '58d2e911d62ace4f']],
   'SystemPromptEditor.tsx': [[2, 'd7fd73474f2153cb']],
   'SystemPromptsManager.tsx': [[2, '98c62168033635be']],
   'SystemSecretsTab.tsx': [[12, 'dbb24e47ac76bfc0']],

@@ -29,15 +29,8 @@ vi.mock('@server/middlewares/requireTurnstile', () => ({
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
-const signedPayloads = vi.hoisted(() => [] as Record<string, unknown>[]);
-vi.mock('jsonwebtoken', () => ({
-  default: {
-    sign: (payload: Record<string, unknown>) => {
-      signedPayloads.push(payload);
-      return 'signed-pending-token';
-    },
-  },
-}));
+const mockJwtSign = vi.hoisted(() => vi.fn((_payload: Record<string, unknown>) => 'signed-pending-token'));
+vi.mock('jsonwebtoken', () => ({ default: { sign: mockJwtSign } }));
 
 const mockIsE2EEnabled = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
@@ -112,6 +105,7 @@ vi.mock('@bike4mind/services', () => ({
 import handler from '@pages/api/otc/send';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
 import { EmailEvents } from '@server/utils/eventBus';
+import { recordTurnstileVerification } from '@server/auth/signupChallenge';
 
 const EMAIL = 'someone@example.com';
 
@@ -213,6 +207,27 @@ describe('/api/otc/send per-email budget', () => {
       otcHash: 'code-hash',
       code: '123456',
     });
+  });
+
+  it.each([true, false])('signs server challenge proof (%s) rather than trusting the body', async verified => {
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    const { req, res } = makeReqRes();
+    Object.assign(req.body, { challengeVerified: !verified });
+    recordTurnstileVerification(req, verified);
+    mockSendOTC.mockImplementationOnce(
+      async (
+        _input: unknown,
+        adapters: {
+          signPendingToken: (payload: Record<string, unknown>) => string;
+        }
+      ) => ({ pendingToken: adapters.signPendingToken({ email: EMAIL }) })
+    );
+    await handler(req, res);
+    expect(mockJwtSign).toHaveBeenCalledWith(
+      { email: EMAIL, challengeVerified: verified ? true : null },
+      'test-secret',
+      { algorithm: 'HS256' }
+    );
   });
 
   async function post(email: string, ip: string) {
@@ -537,8 +552,8 @@ describe('/api/otc/send', () => {
       mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
       const res = await send({ formToken: 't', formExtra: 'x' });
       expect(res._getJSONData()).toEqual({ pendingToken: 'signed-pending-token' });
-      expect(signedPayloads.at(-1)).toHaveProperty('jti');
-      expect(signedPayloads.at(-1)).not.toHaveProperty('rs');
+      expect(mockJwtSign.mock.calls.at(-1)?.[0]).toHaveProperty('jti');
+      expect(mockJwtSign.mock.calls.at(-1)?.[0]).not.toHaveProperty('rs');
       expect(mockConfirmReservation.mock.calls[0][5]).toEqual(['signup_honeypot']);
     });
 

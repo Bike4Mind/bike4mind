@@ -5,7 +5,8 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 
-// Fields with their own audit action (role, credits) or that are request-only and never stored.
+// Fields with their own audit action (role, credits, suspension, restriction, restricted tier) or that are
+// request-only and never stored.
 const EXCLUDED_FIELDS = new Set([
   'id',
   'isAdmin',
@@ -13,6 +14,9 @@ const EXCLUDED_FIELDS = new Set([
   'currentCredits',
   'creditDelta',
   'creditReason',
+  'isBanned',
+  'isModerated',
+  'statusChangeReason',
   'throttleTier',
   'throttleReason',
 ]);

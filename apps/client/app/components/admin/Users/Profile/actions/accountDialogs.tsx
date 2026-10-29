@@ -8,7 +8,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useDeleteUser, useLoginAsUser } from '@client/app/hooks/data/user';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
-import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, useUndoToast } from '../../../shared';
+import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
 import { useAdminUserUpdate, adminUpdateErrorMessage } from './useAdminUserUpdate';
 import type { ProfileDialogProps } from './profileActions';
 import { accountStatus, displayName, isShadowTierExempt } from '../userProfileModel';
@@ -43,12 +43,12 @@ export const RestrictDialog: React.FC<ProfileDialogProps> = ({ user, onClose, on
   const before = accountStatus(user);
   const after = accountStatus({ ...user, isModerated: restricting });
 
-  const handleConfirm = async () => {
-    await update({ isModerated: restricting });
+  const handleConfirm = async (reason: string) => {
+    await update({ isModerated: restricting, statusChangeReason: reason });
     onClose();
     showUndo({
       message: restricting ? 'Account restricted' : 'Restriction lifted',
-      onUndo: () => update({ isModerated: !restricting }),
+      onUndo: () => update({ isModerated: !restricting, statusChangeReason: undoAdminReason(reason) }),
       onViewAudit: onAudit,
     });
   };
@@ -64,7 +64,6 @@ export const RestrictDialog: React.FC<ProfileDialogProps> = ({ user, onClose, on
           : 'AI features work again right away.'
       }
       reasonPresets={restricting ? ADMIN_REASON_PRESETS.restriction : ADMIN_REASON_PRESETS.reinstatement}
-      reasonAudited={false}
       confirmLabel={restricting ? 'Restrict account' : 'Lift restriction'}
       tone={restricting ? 'danger' : 'neutral'}
       onConfirm={handleConfirm}
@@ -145,12 +144,12 @@ export const EmailVerificationDialog: React.FC<ProfileDialogProps> = ({ user, on
   const verifying = !user.emailVerified;
   const label = (verified: boolean) => (verified ? 'Verified' : 'Unverified');
 
-  const handleConfirm = async () => {
-    await post(verifying ? 'verify-email' : 'unverify-email');
+  const handleConfirm = async (reason: string) => {
+    await post(verifying ? 'verify-email' : 'unverify-email', { reason });
     onClose();
     showUndo({
       message: verifying ? 'Email marked verified' : 'Email marked unverified',
-      onUndo: () => post(verifying ? 'unverify-email' : 'verify-email'),
+      onUndo: () => post(verifying ? 'unverify-email' : 'verify-email', { reason: undoAdminReason(reason) }),
       onViewAudit: onAudit,
     });
   };
@@ -166,7 +165,6 @@ export const EmailVerificationDialog: React.FC<ProfileDialogProps> = ({ user, on
           : `${user.email} must be confirmed again before features that need a verified email work.`
       }
       reasonPresets={ADMIN_REASON_PRESETS.emailVerification}
-      reasonAudited={false}
       confirmLabel={verifying ? 'Mark verified' : 'Mark unverified'}
       onConfirm={handleConfirm}
       data-testid="email-verification-dialog"
@@ -186,12 +184,12 @@ export const ApiKeyTrustDialog: React.FC<ProfileDialogProps> = ({ user, onClose,
   const approving = !user.apiKeyTrustApproved;
   const label = (trusted: boolean) => (trusted ? 'Trusted' : 'Not trusted');
 
-  const handleConfirm = async () => {
-    await post('api-key-trust', { approved: approving });
+  const handleConfirm = async (reason: string) => {
+    await post('api-key-trust', { approved: approving, reason });
     onClose();
     showUndo({
       message: approving ? 'Trusted for personal API keys' : 'API key trust removed',
-      onUndo: () => post('api-key-trust', { approved: !approving }),
+      onUndo: () => post('api-key-trust', { approved: !approving, reason: undoAdminReason(reason) }),
       onViewAudit: onAudit,
     });
   };
@@ -207,7 +205,6 @@ export const ApiKeyTrustDialog: React.FC<ProfileDialogProps> = ({ user, onClose,
           : 'New personal API keys need the usual account checks again. Existing keys keep working.'
       }
       reasonPresets={ADMIN_REASON_PRESETS.apiKeyTrust}
-      reasonAudited={false}
       confirmLabel={approving ? 'Trust account' : 'Remove trust'}
       onConfirm={handleConfirm}
       data-testid="api-key-trust-dialog"
@@ -359,8 +356,8 @@ export const SendMessageDialog: React.FC<ProfileDialogProps> = ({ user, onClose 
   const [message, setMessage] = useState('');
   const send = useSendSystemMessage();
 
-  const handleConfirm = async () => {
-    await send.mutateAsync({ title: title.trim(), message: message.trim(), receiverId: user.id });
+  const handleConfirm = async (reason: string) => {
+    await send.mutateAsync({ title: title.trim(), message: message.trim(), receiverId: user.id, reason });
     onClose();
   };
 
@@ -371,7 +368,6 @@ export const SendMessageDialog: React.FC<ProfileDialogProps> = ({ user, onClose 
       title="Send message"
       description={`Lands in ${displayName(user)}'s inbox from Bike4Mind.`}
       reasonPresets={ADMIN_REASON_PRESETS.systemMessage}
-      reasonAudited={false}
       confirmLabel="Send message"
       blockedReason={title.trim() && message.trim() ? null : 'Write a subject and a message.'}
       onConfirm={handleConfirm}

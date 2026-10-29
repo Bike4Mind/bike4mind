@@ -87,7 +87,8 @@ export function hasPaidSubscription(activeSubscriptions: readonly Pick<ActiveSub
 export function ladderRateTier(
   activeSubscriptions: readonly Pick<ActiveSubscription, 'priceId'>[]
 ): Exclude<UserRateTier, 'bypass'> {
-  // Same ladder read as the `plan:paid` entitlement (@server/entitlements), so the two never disagree.
+  // Same ladder read as the `plan:paid` entitlement (@server/entitlements), except that a credit
+  // purchase also grants `plan:paid` but leaves the rate tier at `free`.
   const highestTier = getHighestLadderTier(activeSubscriptions);
 
   if (highestTier === UserSubscriptionTier.Pro) return 'pro';

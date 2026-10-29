@@ -4,6 +4,7 @@ import type { AdminUserProfile } from '../userProfileModel';
 export type ProfileAction =
   | 'credits'
   | 'suspend'
+  | 'reinstate'
   | 'restrict'
   | 'shadowTier'
   | 'role'

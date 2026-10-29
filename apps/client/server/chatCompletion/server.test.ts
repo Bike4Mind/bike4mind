@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { questReplyText, spendCapExceededError } from '@bike4mind/common';
+import { CreditHolderType, TooManyRequestsError, questReplyText, spendCapExceededError } from '@bike4mind/common';
 import { InsufficientCreditsError } from '@bike4mind/services/llm';
 import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 import { setModelCatalogProvider } from '@bike4mind/llm-adapters';
@@ -64,6 +64,10 @@ vi.mock('@bike4mind/database', () => ({
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
 // callback without a real model call.
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
+const mockLogApiKeyUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
+  ApiKeyUsageManager: { logUsage: mockLogApiKeyUsage },
+}));
 
 // Replace the production schema (25+ fields) with a minimal one so the test can drive the
 // 400 (invalid) vs 202 (valid) branches without constructing a full QuestStartBody.
@@ -425,6 +429,7 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       request_id: res.headers.get('x-request-id'),
     });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockLogApiKeyUsage).not.toHaveBeenCalled();
   });
 
   it('returns 400 JSON for an empty conversation (no execution)', async () => {
@@ -474,6 +479,106 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(params.db.usageEvents).toBeDefined();
     expect(typeof params.requestId).toBe('string');
     expect(text).toContain('data: [DONE]');
+    await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalled());
+    // Let the socket close after finish; the row must still be written exactly once.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith({
+      keyId: 'key1',
+      userId: 'u1',
+      ipAddress: expect.any(String),
+      endpoint: '/api/ai/v1/completions',
+      method: 'POST',
+      responseTime: expect.any(Number),
+      statusCode: 200,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      logger: expect.any(Object),
+    });
+  });
+
+  it('counts an authenticated rate-limited request with its final status and billing owner', async () => {
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'org-key',
+      userId: 'owner',
+      scopes: [],
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockRejectedValueOnce(new TooManyRequestsError('At limit'));
+
+    const res = await postCompletion(VALID_COMPLETION, { 'x-api-key': 'b4m_test', 'user-agent': 'b4m-cli/1.0' });
+    await res.text();
+
+    expect(res.status).toBe(429);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keyId: 'org-key',
+        userId: 'owner',
+        statusCode: 429,
+        source: 'cli',
+        ownerType: CreditHolderType.Organization,
+      })
+    );
+  });
+
+  it('counts an API key stream once when the caller disconnects before execution ends', async () => {
+    const execution = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockExecuteCompletion.mockImplementationOnce(async ({ onReady }) => {
+      await onReady();
+      await execution.promise;
+    });
+
+    try {
+      const res = await fetch(`${baseUrl}/api/ai/v1/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_test' },
+        body: JSON.stringify(VALID_COMPLETION),
+        signal: controller.signal,
+      });
+      await res.body?.getReader().read();
+      controller.abort();
+
+      await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1));
+      expect(mockLogApiKeyUsage).toHaveBeenCalledWith(expect.objectContaining({ keyId: 'key1', statusCode: 200 }));
+    } finally {
+      controller.abort();
+      execution.resolve();
+    }
+  });
+
+  it('counts a caller that disconnects before any response as 499', async () => {
+    const controller = new AbortController();
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockImplementationOnce(() => new Promise(() => {}));
+
+    const request = fetch(`${baseUrl}/api/ai/v1/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_test' },
+      body: JSON.stringify(VALID_COMPLETION),
+      signal: controller.signal,
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(mockAuth.checkApiKeyRateLimitOrThrow).toHaveBeenCalled());
+    controller.abort();
+    await request;
+
+    await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1));
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(expect.objectContaining({ keyId: 'key1', statusCode: 499 }));
   });
 
   it('falls back to JWT auth when no API key is present', async () => {
@@ -492,6 +597,7 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
     expect(mockExecuteCompletion.mock.calls[0][0]).toMatchObject({ userId: 'u2' });
     expect(text).toContain('data: [DONE]');
+    expect(mockLogApiKeyUsage).not.toHaveBeenCalled();
   });
 
   // OpenAI-shape consumers send stream/tools/temperature/max_tokens at the top level (not
