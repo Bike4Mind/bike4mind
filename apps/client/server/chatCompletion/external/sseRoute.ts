@@ -62,6 +62,9 @@ import {
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 
 /**
  * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
@@ -289,6 +292,27 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       if (authResult.method === 'apiKey') {
         apiKeyInfo = authResult.apiKeyInfo;
+        const authenticatedKey = apiKeyInfo;
+        // Register before admission so authenticated rejections count as requests too.
+        const logUsage = () => {
+          res.off('finish', logUsage);
+          res.off('close', logUsage);
+          void ApiKeyUsageManager.logUsage({
+            keyId: authenticatedKey.keyId,
+            userId: authenticatedKey.userId,
+            ipAddress: getClientIp(req),
+            endpoint: COMPLETIONS_ENDPOINT,
+            method: req.method,
+            responseTime: Date.now() - startTime,
+            statusCode: res.statusCode,
+            source,
+            ownerType: resolveApiKeyOwnerType(authenticatedKey),
+            logger,
+          }).catch(error => logger.warn('Failed to log API key completion usage', { error: serializeError(error) }));
+        };
+        res.once('finish', logUsage);
+        res.once('close', logUsage);
+        if (res.destroyed || res.writableFinished) logUsage();
         logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
         await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
           userId: apiKeyInfo.userId,
