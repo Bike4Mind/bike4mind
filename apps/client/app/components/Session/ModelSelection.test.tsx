@@ -133,6 +133,9 @@ type SelectionProps = {
   setModel?: (model: ModelName) => void;
   onSelectionComplete?: () => void;
   onSettingsClick?: (model: ModelInfo) => void;
+  imageModel?: boolean;
+  showAllModels?: boolean;
+  modelFilter?: 'all' | 'text' | 'image' | 'video';
 };
 
 const selectionTree = (props: SelectionProps) => (
@@ -141,9 +144,9 @@ const selectionTree = (props: SelectionProps) => (
       model={props.model ?? textModel.id}
       setModel={props.setModel ?? vi.fn()}
       onSelectionComplete={props.onSelectionComplete}
-      imageModel={false}
-      showAllModels
-      modelFilter="all"
+      imageModel={props.imageModel ?? false}
+      showAllModels={props.showAllModels ?? true}
+      modelFilter={props.modelFilter ?? 'all'}
       onSettingsClick={props.onSettingsClick}
     />
   </CssVarsProvider>
@@ -849,7 +852,7 @@ describe('ModelSelection locked (paid-only) models', () => {
     renderSelection({ setModel, onSelectionComplete });
 
     const row = screen.getByTestId(`locked-model-row-${paidModel.id}`);
-    expect(row).toHaveAttribute('aria-disabled', 'true');
+    expect(within(row).getByText('(requires a paid plan)')).toBeInTheDocument();
     expect(within(row).getByText('Paid Text Model')).toBeInTheDocument();
     expect(within(row).queryByRole('button')).toBeNull();
     // Not offered as a selectable card anywhere in the picker either.
@@ -912,5 +915,38 @@ describe('ModelSelection locked (paid-only) models', () => {
     const section = screen.getByTestId('locked-models-section');
     expect(within(section).getAllByRole('listitem')).toHaveLength(1);
     expect(screen.queryByTestId('locked-model-row-retired-x')).toBeNull();
+  });
+
+  describe('by shown modality', () => {
+    const lockedOf = (id: string, type: ModelInfo['type']) => ({ ...paidModel, id, name: id, type }) as ModelInfo;
+
+    it('shows only locked video models under the video filter', () => {
+      locked.models = [lockedOf('locked-video', 'video'), lockedOf('locked-text', 'text')];
+      renderSelection({ showAllModels: false, modelFilter: 'video' });
+
+      expect(screen.getByTestId('locked-model-row-locked-video')).toBeInTheDocument();
+      expect(screen.queryByTestId('locked-model-row-locked-text')).toBeNull();
+    });
+
+    it('shows only locked image models for the image picker', () => {
+      locked.models = [lockedOf('locked-image', 'image'), lockedOf('locked-text', 'text')];
+      renderSelection({ showAllModels: false, modelFilter: 'image', imageModel: true });
+
+      expect(screen.getByTestId('locked-model-row-locked-image')).toBeInTheDocument();
+      expect(screen.queryByTestId('locked-model-row-locked-text')).toBeNull();
+    });
+
+    it('shows locked models of every modality under the All filter', () => {
+      const ids = ['locked-text', 'locked-image', 'locked-video', 'locked-stt'];
+      locked.models = [
+        lockedOf(ids[0], 'text'),
+        lockedOf(ids[1], 'image'),
+        lockedOf(ids[2], 'video'),
+        lockedOf(ids[3], 'speech-to-text'),
+      ];
+      renderSelection({ showAllModels: true, modelFilter: 'all' });
+
+      for (const id of ids) expect(screen.getByTestId(`locked-model-row-${id}`)).toBeInTheDocument();
+    });
   });
 });
