@@ -11,7 +11,7 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 const handler = baseApi().post(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
   const auditFailed: string[] = [];
-  const { blocked, evaluatedSince } = await runOauthAbuseAutoBlock({
+  const { blocked, failed, evaluatedSince } = await runOauthAbuseAutoBlock({
     now: new Date(),
     deps: {
       block: async (ip, reason, options) => {
@@ -52,10 +52,11 @@ const handler = baseApi().post(async (req, res) => {
       error: 'Audit or commit failed; these IPs were not blocked',
       auditFailed,
       blocked: blockedIps,
+      failed,
       evaluatedSince,
     });
   }
-  return res.status(200).json({ blocked: blockedIps, evaluatedSince });
+  return res.status(200).json({ blocked: blockedIps, failed, evaluatedSince });
 });
 
 export default handler;

@@ -61,6 +61,7 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
     candidates.list = [];
     runner.runOauthAbuseAutoBlock.mockReset().mockImplementation(async ({ deps }) => {
       const blocked = [];
+      const failed: string[] = [];
       for (const { ip, attempts } of candidates.list) {
         const options = { durationMs: 600_000, source: 'auto' as const, escalationLevel: 0 };
         try {
@@ -68,9 +69,10 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
           if (created) blocked.push({ ip, attempts, durationMs: options.durationMs, escalationLevel: 0 });
         } catch {
           // The real runner logs and moves on.
+          failed.push(ip);
         }
       }
-      return { evaluatedSince: EVALUATED_SINCE, blocked, failed: [] };
+      return { evaluatedSince: EVALUATED_SINCE, blocked, failed };
     });
     blockedIP.block.mockReset().mockResolvedValue({ doc: {}, created: true });
     audit.record.mockReset().mockImplementation(async () => {
@@ -92,7 +94,11 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
     await mockRefs.postHandler!(req, res);
     expect(runner.runOauthAbuseAutoBlock).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(200);
-    expect(JSON.parse(res._getData())).toEqual({ blocked: ['1.1.1.1'], evaluatedSince: EVALUATED_SINCE.toISOString() });
+    expect(JSON.parse(res._getData())).toEqual({
+      blocked: ['1.1.1.1'],
+      failed: [],
+      evaluatedSince: EVALUATED_SINCE.toISOString(),
+    });
   });
 
   it('records security.blocked_ip.auto_added per added IP inside its block transaction', async () => {
@@ -126,7 +132,7 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
     const { req, res } = mocks(ADMIN);
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().blocked).toEqual([]);
+    expect(res._getJSONData()).toMatchObject({ blocked: [], failed: ['1.1.1.1'] });
     expect(audit.record).not.toHaveBeenCalled();
   });
 
