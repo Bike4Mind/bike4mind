@@ -31,6 +31,8 @@ jobs:
   cla:
     runs-on: ubuntu-latest
     # Only run in the canonical public repo; never in the private monorepo or forks.
+    # The comment-body checks are a prefilter: the action trims and matches the exact phrase.
+    # Keep comments outside the folded expression so GitHub does not parse them as expression text.
     if: >
       github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&
       (
@@ -38,8 +40,6 @@ jobs:
         (
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
-          # A cheap prefilter only: the action trims the body and does the exact match itself,
-          # so this must not be stricter (a pasted sign phrase often carries a trailing newline).
           (
             contains(github.event.comment.body, 'I hereby sign the CLA') ||
             contains(github.event.comment.body, 'recheck')
