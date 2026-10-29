@@ -4,6 +4,7 @@ import {
   DATE_PRESET_DAYS,
   getActivePreset,
   getPresetRange,
+  isCompleteDateRange,
   today,
   type DatePresetDays,
   type DateRange,
@@ -49,10 +50,14 @@ interface DateFilterComponentProps {
 
 /**
  * Controlled: the owner decides where the range lives. Changes are emitted as one whole range
- * so a preset never lands as two half-updates against a stale start or end.
+ * so a preset never lands as two half-updates against a stale start or end. A cleared or partial
+ * date stays in the input's draft and is never emitted, since the server rejects it.
  */
 export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({ value, onChange }) => {
   const { startDate, endDate } = value;
+  const emitIfComplete = (range: DateRange) => {
+    if (isCompleteDateRange(range)) onChange(range);
+  };
   const activePreset = getActivePreset(value);
   const startDraft = useDateDraft(startDate);
   const endDraft = useDateDraft(endDate);
@@ -74,7 +79,7 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({ value,
             value={startDraft.draft}
             onChange={event => {
               startDraft.setDraft(event.target.value);
-              onChange({ startDate: event.target.value, endDate });
+              emitIfComplete({ startDate: event.target.value, endDate });
             }}
             onFocus={startDraft.onFocus}
             onBlur={startDraft.onBlur}
@@ -88,7 +93,7 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({ value,
             value={endDraft.draft}
             onChange={event => {
               endDraft.setDraft(event.target.value);
-              onChange({ startDate, endDate: event.target.value });
+              emitIfComplete({ startDate, endDate: event.target.value });
             }}
             onFocus={endDraft.onFocus}
             onBlur={endDraft.onBlur}

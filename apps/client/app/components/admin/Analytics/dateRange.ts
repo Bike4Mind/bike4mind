@@ -23,6 +23,12 @@ export const getPresetRange = (days: DatePresetDays): DateRange => ({
   endDate: today(),
 });
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Both ends are complete `YYYY-MM-DD` dates, the only shape the counter-logs API accepts. */
+export const isCompleteDateRange = ({ startDate, endDate }: DateRange): boolean =>
+  ISO_DATE.test(startDate) && ISO_DATE.test(endDate) && dayjs(startDate).isValid() && dayjs(endDate).isValid();
+
 /** The preset `range` matches exactly, or null for a custom range. */
 export const getActivePreset = ({ startDate, endDate }: DateRange): DatePresetDays | null => {
   if (endDate !== today()) return null;

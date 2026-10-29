@@ -78,4 +78,14 @@ describe('DateFilterComponent', () => {
 
     expect(useAnalyticsStore.getState().dateFilters).toBe(before);
   });
+
+  it('does not emit a cleared date, so no request goes out with an empty bound', () => {
+    const onChange = vi.fn();
+    renderFilter({ startDate: daysAgo(6), endDate: daysAgo(0) }, onChange);
+
+    fireEvent.change(screen.getByTestId('date-filter-start-input'), { target: { value: '' } });
+    fireEvent.change(screen.getByTestId('date-filter-end-input'), { target: { value: '' } });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

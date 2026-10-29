@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import dayjs from 'dayjs';
-import { getActivePreset, getPresetRange } from './dateRange';
+import { getActivePreset, getPresetRange, isCompleteDateRange } from './dateRange';
 
 const daysAgo = (days: number) => dayjs().subtract(days, 'day').format('YYYY-MM-DD');
 const spanDays = ({ startDate, endDate }: { startDate: string; endDate: string }) =>
@@ -36,5 +36,17 @@ describe('getActivePreset', () => {
 
   it('treats a 7-day range that does not end today as custom', () => {
     expect(getActivePreset({ startDate: daysAgo(7), endDate: daysAgo(1) })).toBeNull();
+  });
+});
+
+describe('isCompleteDateRange', () => {
+  it('accepts a range with both dates complete', () => {
+    expect(isCompleteDateRange({ startDate: '2026-01-01', endDate: '2026-01-07' })).toBe(true);
+  });
+
+  it('rejects an empty or partial bound', () => {
+    expect(isCompleteDateRange({ startDate: '', endDate: '2026-01-07' })).toBe(false);
+    expect(isCompleteDateRange({ startDate: '2026-01-01', endDate: '' })).toBe(false);
+    expect(isCompleteDateRange({ startDate: '202-01-01', endDate: '2026-01-07' })).toBe(false);
   });
 });
