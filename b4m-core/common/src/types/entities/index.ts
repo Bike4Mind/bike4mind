@@ -125,6 +125,7 @@ export * from './UserComplianceTypes';
 export * from './AdminSupportAccessTypes';
 export * from './AuthSessionTypes';
 export * from './WorkItemTypes';
+export * from './LoopTypes';
 export * from './QaTypes';
 export * from './AdminAuditLogTypes';
 export * from './adminActionReason';
