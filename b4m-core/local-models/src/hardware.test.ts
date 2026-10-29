@@ -636,12 +636,12 @@ describe('probeHardware on Windows without nvidia-smi', () => {
     });
   });
 
-  it('keeps a Windows Strix Halo carve-out smaller than the RAM Windows sees at low confidence', async () => {
+  it('leaves a Windows Strix Halo carve-out smaller than the RAM Windows sees unsized, at low confidence', async () => {
     const strix = JSON.parse(POWERSHELL_STRIX_HALO)[0];
     for (const memoryBytes of [512 * MiB, 16 * GiB]) {
       expect(await windows(JSON.stringify([{ ...strix, memoryBytes }]))).toMatchObject({
         memoryKind: 'unified',
-        gpuMemoryBytes: memoryBytes,
+        gpuMemoryBytes: null,
         confidence: 'low',
       });
     }

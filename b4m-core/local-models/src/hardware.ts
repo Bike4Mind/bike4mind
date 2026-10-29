@@ -202,10 +202,12 @@ export async function probeHardware(options: HardwareProbeOptions = {}): Promise
   // Linux ROCm moves to GTT once the carve-out is the smaller pool; what HIP on Windows reports then is unconfirmed.
   const unconfirmed =
     apu.memoryUnconfirmed || (platform === 'win32' && apuBytes !== null && apuBytes < totalMemoryBytes);
+  // A Windows carve-out below the RAM Windows sees is not the usable pool; leave it unknown so fit plans from RAM.
+  const carveOut = platform === 'win32' && apuBytes !== null && apuBytes < totalMemoryBytes;
   return {
     ...base,
     memoryKind: 'unified',
-    gpuMemoryBytes: apuBytes,
+    gpuMemoryBytes: carveOut ? null : apuBytes,
     gpuName: apu.name,
     gpuCount: 1,
     gpuVendor: 'amd',

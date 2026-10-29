@@ -534,6 +534,14 @@ describe('estimateFit', () => {
     expect(fit({ hardware: strix(125, 62), weightsGiB: 70, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
   });
 
+  it('plans a Windows Strix Halo carve-out machine from RAM, since its reported bytes are not the usable pool', () => {
+    const carveOut = { ...strix(64, 0.5), platform: 'win32' } as const;
+    expect(fit({ hardware: carveOut, weightsGiB: 4, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+    const unknown = { ...carveOut, gpuMemoryBytes: null };
+    expect(fit({ hardware: unknown, weightsGiB: 4, runtime: OLLAMA })).toMatchObject({ verdict: 'fast' });
+    expect(fit({ hardware: unknown, weightsGiB: 4, runtime: OLLAMA }).memory.budgetBytes).toBe(48 * GIB);
+  });
+
   it('grows compute with ubatch', () => {
     const at = (ubatch: number) =>
       fit({ hardware: machine('cpu', 64), runtime: { ...LS, ubatch }, context: 8192 }).requested!.memory.computeBytes;
