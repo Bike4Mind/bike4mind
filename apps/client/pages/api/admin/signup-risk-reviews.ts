@@ -1,6 +1,7 @@
 import {
   ApiKeyScope,
   SIGNUP_RISK_REVIEW_LIST_LIMIT,
+  SignupRiskScoringSchema,
   emailDomainOf,
   signupRiskReviewDecisionResultSchema,
   signupRiskReviewDecisionSchema,
@@ -8,8 +9,15 @@ import {
   type SignupRiskReviewItem,
   type SignupRiskReviewState,
 } from '@bike4mind/common';
-import { usageEventRepository, userApiKeyRepository, userRepository, withTransaction } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  usageEventRepository,
+  userApiKeyRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -58,10 +66,12 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       const users = await userRepository.findPendingRiskReviews(SIGNUP_RISK_REVIEW_LIST_LIMIT + 1);
       const listed = users.slice(0, SIGNUP_RISK_REVIEW_LIST_LIMIT);
       const ids = listed.map(user => user.id);
-      const [creditsSpent, apiKeysCreated] = await Promise.all([
+      const [creditsSpent, apiKeysCreated, settings] = await Promise.all([
         usageEventRepository.creditsSpentByUsers(ids),
         userApiKeyRepository.countCreatedByUserIds(ids),
+        getSettingsMap({ adminSettings: adminSettingsRepository }),
       ]);
+      const { reviewThreshold } = getSettingsValue('signupRiskScoring', settings, SignupRiskScoringSchema.parse({}));
       const data = listed.flatMap((user): SignupRiskReviewItem[] =>
         user.riskScore
           ? [
@@ -81,7 +91,11 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           : []
       );
       res.setHeader('Cache-Control', 'private, no-store');
-      respond(res, signupRiskReviewListSchema, { data, truncated: users.length > SIGNUP_RISK_REVIEW_LIST_LIMIT });
+      respond(res, signupRiskReviewListSchema, {
+        data,
+        truncated: users.length > SIGNUP_RISK_REVIEW_LIST_LIMIT,
+        reviewThreshold,
+      });
     })
   )
   .post(

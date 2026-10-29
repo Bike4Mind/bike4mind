@@ -30,6 +30,8 @@ export type SignupRiskReviewItem = z.infer<typeof signupRiskReviewItemSchema>;
 export const signupRiskReviewListSchema = z.object({
   data: z.array(signupRiskReviewItemSchema),
   truncated: z.boolean(),
+  /** The configured score at which an account needs review. */
+  reviewThreshold: z.number(),
 });
 export type SignupRiskReviewList = z.infer<typeof signupRiskReviewListSchema>;
 

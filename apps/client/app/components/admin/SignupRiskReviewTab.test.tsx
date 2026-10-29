@@ -81,7 +81,7 @@ const ROWS = [
 ];
 
 const queue = (data: SignupRiskReviewRow[], over: Record<string, unknown> = {}) => ({
-  data: { data, truncated: false },
+  data: { data, truncated: false, reviewThreshold: 50 },
   error: null,
   isPending: false,
   refetch: vi.fn(),
@@ -113,6 +113,14 @@ describe('SignupRiskReviewTab', () => {
     expect(screen.queryByTestId('signup-risk-truncated')).toBeNull();
   });
 
+  it('puts the high risk cut halfway between a custom review threshold and 100', () => {
+    m.useSignupRiskReviews.mockReturnValue(queue(ROWS, { data: { data: ROWS, truncated: false, reviewThreshold: 20 } }));
+    renderTab();
+
+    expect(within(screen.getByTestId('signup-risk-row-u1')).getByText('High risk')).toBeTruthy();
+    expect(within(screen.getByTestId('signup-risk-row-u2')).getByText('Medium risk')).toBeTruthy();
+  });
+
   it('shows the username only when it differs from the email local part', () => {
     m.useSignupRiskReviews.mockReturnValue(queue([row(), row({ userId: 'u3', username: 'renamed-bot' })]));
     renderTab();
@@ -122,7 +130,7 @@ describe('SignupRiskReviewTab', () => {
   });
 
   it('says when the queue is capped', () => {
-    m.useSignupRiskReviews.mockReturnValue({ ...queue(ROWS), data: { data: ROWS, truncated: true } });
+    m.useSignupRiskReviews.mockReturnValue({ ...queue(ROWS), data: { data: ROWS, truncated: true, reviewThreshold: 50 } });
     renderTab();
 
     expect(screen.getByTestId('signup-risk-truncated')).toBeTruthy();

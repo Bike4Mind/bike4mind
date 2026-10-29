@@ -42,8 +42,9 @@ export const SIGNAL_LABELS: Record<SignupRiskSignal, string> = {
   generatedLocalPart: 'Generated address',
 };
 
-// Every row is at or above the review threshold, so the split is only between "look" and "look first".
-const HIGH_RISK_SCORE = 75;
+// Every row is at or above the review threshold, so the split is only between "look" and "look first":
+// the midpoint between the threshold and the maximum score (75 at the default threshold of 50).
+const highRiskScore = (reviewThreshold: number) => reviewThreshold + (100 - reviewThreshold) / 2;
 
 // Domain filter options: the largest cohorts, so a burst is one pick away.
 const DOMAIN_FILTER_OPTIONS = 20;
@@ -107,6 +108,7 @@ export const SignupRiskReviewTab: React.FC = () => {
   const [failedCount, setFailedCount] = useState(0);
   const [now] = useState(() => Date.now());
 
+  const highRisk = highRiskScore(reviews.data?.reviewThreshold ?? 50);
   const rows = useMemo(() => reviews.data?.data ?? [], [reviews.data]);
   const domainOptions = useMemo(() => {
     const counts = new Map<string, number>();
@@ -202,8 +204,8 @@ export const SignupRiskReviewTab: React.FC = () => {
       render: row => (
         <Stack direction="row" gap={1} justifyContent="flex-end" alignItems="center">
           <StatusChip
-            tone={row.score >= HIGH_RISK_SCORE ? 'bad' : 'warn'}
-            label={row.score >= HIGH_RISK_SCORE ? 'High risk' : 'Medium risk'}
+            tone={row.score >= highRisk ? 'bad' : 'warn'}
+            label={row.score >= highRisk ? 'High risk' : 'Medium risk'}
           />
           {row.score}
         </Stack>

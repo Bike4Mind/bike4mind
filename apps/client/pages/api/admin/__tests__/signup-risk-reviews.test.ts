@@ -12,6 +12,11 @@ const h = vi.hoisted(() => ({
   record: vi.fn(),
   denySelf: vi.fn(),
   inTransaction: false,
+  settings: vi.fn(),
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: h.settings,
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -34,6 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findPendingRiskReviews: h.findPending, setRiskReviewState: h.setState },
   usageEventRepository: { creditsSpentByUsers: h.creditsSpent },
   userApiKeyRepository: { countCreatedByUserIds: h.keysCreated },
+  adminSettingsRepository: {},
   withTransaction: async (fn: () => Promise<unknown>) => {
     h.inTransaction = true;
     try {
@@ -78,6 +84,7 @@ const pendingUser = (id: string, email: string, score: number) => ({
 beforeEach(() => {
   h.findPending.mockReset().mockResolvedValue([]);
   h.setState.mockReset().mockResolvedValue(true);
+  h.settings.mockReset().mockResolvedValue({});
   h.creditsSpent.mockReset().mockResolvedValue({});
   h.keysCreated.mockReset().mockResolvedValue({});
   h.record.mockReset().mockImplementation(async () => expect(h.inTransaction).toBe(true));
@@ -112,6 +119,7 @@ describe('signup risk review queue', () => {
     expect(res._getHeaders()['cache-control']).toBe('private, no-store');
     const body = res._getJSONData();
     expect(body.truncated).toBe(false);
+    expect(body.reviewThreshold).toBe(50);
     expect(body.data).toMatchObject([
       { userId: USER_A, domain: 'burner-example.com', score: 80, creditsSpent: 1200, apiKeysCreated: 3 },
       { userId: USER_B, domain: 'example.org', score: 55, creditsSpent: 0, apiKeysCreated: 0 },
@@ -121,6 +129,15 @@ describe('signup risk review queue', () => {
       points: 15,
       reason: 'First API key created 3 minutes after signup',
     });
+  });
+
+  it('returns the configured review threshold', async () => {
+    h.settings.mockResolvedValue({ signupRiskScoring: { reviewThreshold: 30 } });
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(res._getJSONData().reviewThreshold).toBe(30);
   });
 
   it('caps the list and says so', async () => {

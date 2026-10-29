@@ -14,7 +14,7 @@ export type SignupRiskReviewRow = Omit<SignupRiskReviewItem, 'createdAt' | 'comp
 export function useSignupRiskReviews() {
   return useQuery({
     queryKey: SIGNUP_RISK_REVIEWS_QUERY_KEY,
-    queryFn: async () => (await api.get<{ data: SignupRiskReviewRow[]; truncated: boolean }>(ENDPOINT)).data,
+    queryFn: async () => (await api.get<{ data: SignupRiskReviewRow[]; truncated: boolean; reviewThreshold: number }>(ENDPOINT)).data,
   });
 }
 
