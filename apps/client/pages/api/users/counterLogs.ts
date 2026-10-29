@@ -1,4 +1,4 @@
-import { ApiKeyScope, Permission, dayjs, type CompletionSource } from '@bike4mind/common';
+import { ACTIVITY_REPORT_VERSION, ApiKeyScope, Permission, dayjs, type CompletionSource } from '@bike4mind/common';
 import {
   CounterLog,
   DailyReport,
@@ -22,7 +22,7 @@ import {
 import { z } from 'zod';
 import { Request } from 'express';
 import qs from 'qs';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { sendMaybeGzip } from '@server/utils/sendMaybeGzip';
 import {
   buildUserActivityPipeline,
@@ -147,7 +147,21 @@ interface DailyReportResponse {
   date: string;
   report: string;
   aiInsights?: string | null;
+  /** Set when generation failed for this date; `report` is empty and nothing was persisted. */
+  error?: string;
 }
+
+const REPORT_CACHE_TTL_MS = 60 * 60 * 1000;
+// A range that still includes the current UTC day changes as events arrive, so it must not sit in
+// the cache for the full hour after an admin hits Refresh.
+const CURRENT_DAY_REPORT_CACHE_TTL_MS = 5 * 60 * 1000;
+
+const reportCacheTtlMs = (endDate: string): number =>
+  endDate >= dayjs().format('YYYY-MM-DD') ? CURRENT_DAY_REPORT_CACHE_TTL_MS : REPORT_CACHE_TTL_MS;
+
+// A stored report from before versioning (or from an older format) reads as absent and is rebuilt.
+const isCurrentReportVersion = (stored: { reportVersion?: number | null } | null | undefined): boolean =>
+  (stored?.reportVersion ?? 0) >= ACTIVITY_REPORT_VERSION;
 
 interface WeeklyReportData {
   weekStart: string;
@@ -226,7 +240,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       // For report requests, check cache first
       if (report || weeklyReport) {
-        const cacheKey = `reports:${startDate}:${endDate}:${report}:${weeklyReport}:${includeInsights}`;
+        const cacheKey = `reports:v2:${startDate}:${endDate}:${report}:${weeklyReport}:${includeInsights}`;
 
         const cachedResult = await cacheRepository.findByKey(cacheKey);
         if (cachedResult) {
@@ -248,15 +262,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           ? await generateWeeklyReportResponse(startDate, endDate, apiKey, includeInsights)
           : await generateDailyReportResponse(startDate, endDate, apiKey, includeInsights);
 
-        // Cache the result with 1 hour expiry for reports
-        try {
-          await cacheRepository.createOrUpdate({
-            key: cacheKey,
-            result: response,
-            expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
-          });
-        } catch (error) {
-          console.error('Failed to cache reports: %s', error);
+        // A response carrying a failed date is returned but never cached, so the next request retries.
+        if (!response.reports.some(entry => 'error' in entry && entry.error)) {
+          try {
+            await cacheRepository.createOrUpdate({
+              key: cacheKey,
+              result: response,
+              expiresAt: new Date(Date.now() + reportCacheTtlMs(endDate)),
+            });
+          } catch (error) {
+            console.error('Failed to cache reports: %s', error);
+          }
         }
 
         return sendMaybeGzip(req, res, response);
@@ -372,10 +388,10 @@ const generateWeeklyReportResponse = async (
   endDate: string,
   apiKey: string | null,
   shouldIncludeInsights: boolean
-) => {
+): Promise<{ reports: Array<{ startDate: string; endDate: string; report: string; aiInsights?: string | null }> }> => {
   try {
     const cachedReport = await weeklyReportRepository.findByDateRange(startDate, endDate);
-    if (cachedReport) {
+    if (cachedReport && isCurrentReportVersion(cachedReport)) {
       return {
         reports: [
           {
@@ -526,16 +542,10 @@ const generateWeeklyReportResponse = async (
     };
   } catch (error) {
     console.error('Error generating weekly report: %s', error);
-    return {
-      reports: [
-        {
-          startDate,
-          endDate,
-          report: `Error generating report: ${error instanceof Error ? error.message : String(error)}`,
-          aiInsights: null,
-        },
-      ],
-    };
+    // Surfaced as a 5xx so the client shows its error state; a fake "report" would be cached.
+    throw new InternalServerError(
+      `Error generating weekly report: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 };
 
@@ -544,7 +554,7 @@ const generateDailyReportResponse = async (
   endDate: string,
   apiKey: string | null,
   shouldIncludeInsights: boolean
-) => {
+): Promise<{ reports: DailyReportResponse[] }> => {
   const reports: DailyReportResponse[] = [];
   const today = dayjs().format('YYYY-MM-DD');
   const logger = new Logger();
@@ -590,7 +600,8 @@ const generateDailyReportResponse = async (
   // Calculate metrics ONLY if we have any dates that need processing AND have data
   const datesNeedingProcessing = allDates.filter(date => {
     const isHistoricalDate = dayjs(date).isBefore(today, 'day');
-    return (!isHistoricalDate || !cachedReportsMap.has(date)) && datesWithData.has(date);
+    const cachedReport = cachedReportsMap.get(date);
+    return (!isHistoricalDate || !isCurrentReportVersion(cachedReport)) && datesWithData.has(date);
   });
 
   if (datesNeedingProcessing.length > 0) {
@@ -603,7 +614,7 @@ const generateDailyReportResponse = async (
       const isHistoricalDate = dayjs(date).isBefore(today, 'day');
       const cachedReport = cachedReportsMap.get(date);
 
-      if (isHistoricalDate && cachedReport) {
+      if (isHistoricalDate && cachedReport && isCurrentReportVersion(cachedReport)) {
         reports.push({
           date,
           report: cachedReport.report,
@@ -684,7 +695,8 @@ const generateDailyReportResponse = async (
       console.error('Error generating report for %s: %s', date, error);
       reports.push({
         date,
-        report: `Error generating report for ${date}: ${error}`,
+        report: '',
+        error: `Error generating report for ${date}: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
   }
