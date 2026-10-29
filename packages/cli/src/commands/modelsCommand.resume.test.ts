@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { OllamaRuntime, type HardwareProfile, type PullProgress } from '@bike4mind/local-models';
+import { OllamaRuntime, loadCuratedManifest, type HardwareProfile, type PullProgress } from '@bike4mind/local-models';
 import { delay, startFakeServer, type FakeServer } from '@bike4mind/local-models/testing';
 import { EXIT_CANCELLED, runModelsCommand, type ModelsDeps } from './modelsCommand.js';
 
@@ -104,6 +104,8 @@ describe('b4m models pull after an interrupted pull', () => {
           progress: { update: () => {}, end: () => {} },
           machine: async () => ({ hardware: CPU_64 }),
           runtimeHost: () => server?.baseUrl ?? null,
+          curated: () => loadCuratedManifest(() => {}),
+          hardware: async () => CPU_64,
           signal: controller.signal,
         };
         const code = await runModelsCommand(
@@ -155,6 +157,8 @@ describe('b4m models pull after an interrupted pull', () => {
         progress: { update: () => {}, end: () => {} },
         machine: async () => ({ hardware: CPU_64 }),
         runtimeHost: () => server?.baseUrl ?? null,
+        curated: () => loadCuratedManifest(() => {}),
+        hardware: async () => CPU_64,
         signal: new AbortController().signal,
       }
     );

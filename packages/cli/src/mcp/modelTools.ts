@@ -3,6 +3,7 @@ import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
   isAbliteratedModel,
+  loadCuratedManifest,
   type PullOptions,
 } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -23,6 +24,7 @@ import {
   formatBytes,
   hiddenAbliteratedMessage,
   hubAccessMessage,
+  licenseName,
   listInstalled,
   findInstalledModel,
   planPull,
@@ -36,6 +38,7 @@ import {
   sameModelName,
   shortDigest,
   type HubClient,
+  type LicenseInfo,
   type ModelSourceDeps,
   type PullPlan,
   type RuntimeTarget,
@@ -88,6 +91,8 @@ const removeShape = {
   name: z.string().trim().min(1).max(300).describe('The installed model name, as models_list shows it'),
 };
 
+const baseLicense = (license: LicenseInfo) => (license.base ? [license.base] : []);
+
 /** What the user must see before approving a pull. */
 function pullSummary(plan: PullPlan, fit: ModelFit) {
   const runtime = runtimeLabel(plan.target);
@@ -100,8 +105,8 @@ function pullSummary(plan: PullPlan, fit: ModelFit) {
       size: formatBytes(plan.manifest.sizeBytes),
       revision: null,
       digest: shortDigest(plan.manifest.digest),
-      licenses: [license.label],
-      license: { label: license.label, link: license.link, permissive: !license.restricted },
+      licenses: [license.label, ...baseLicense(license)],
+      license: { label: licenseName(license), link: license.link, permissive: !license.restricted },
       acknowledgementRequired: license.restricted,
       runtime,
       fit,
@@ -120,8 +125,8 @@ function pullSummary(plan: PullPlan, fit: ModelFit) {
       visionProjectorUpTo: formatBytes(plan.projectorBytes),
     }),
     revision: clean(detail.revision),
-    licenses: detail.licenses.map(clean),
-    license: { label: license.label, link: license.link, permissive: !license.restricted },
+    licenses: [...detail.licenses.map(clean), ...baseLicense(license)],
+    license: { label: licenseName(license), link: license.link, permissive: !license.restricted },
     acknowledgementRequired: license.restricted,
     gated: detail.gated,
     runtime,
@@ -236,6 +241,7 @@ export function localModelToolsDeps(configStore: ConfigStore | undefined): Model
       resolveRuntimeTarget({ env: process.env.B4M_OLLAMA_HOST, config: (await configStore?.load())?.ollamaHost }),
     defaultModel: async () => (await configStore?.load())?.defaultModel,
     machine: machineReader(),
+    curated: () => loadCuratedManifest(message => console.error(message)),
   };
 }
 

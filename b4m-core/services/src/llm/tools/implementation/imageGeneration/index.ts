@@ -176,12 +176,12 @@ function expectedFailureToolResult(error: unknown, logMessage: string): string |
 
 export const imageGenerationTool: ToolDefinition = {
   name: 'image_generation',
-  implementation: (context, config: GenerateImageToolCall) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async val => {
       // Get imageConfig from config (passed from client via imageConfig).
       // When no imageConfig is pre-set, signal via pendingAction so the caller
       // can handle model selection (e.g., show a picker UI).
-      const imageConfig = config;
+      const imageConfig = config as GenerateImageToolCall | undefined;
       if (!imageConfig) {
         const { prompt } = val as { prompt?: string };
         await context.statusUpdate({
@@ -489,7 +489,7 @@ export const imageGenerationTool: ToolDefinition = {
             description:
               "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
             // xhigh/max only for a 2.5 model, so the model is never offered a tier that renders as 'high'.
-            enum: isGPTImage25Model(config?.model)
+            enum: isGPTImage25Model((config as GenerateImageToolCall | undefined)?.model)
               ? [...TOOL_SELECTABLE_IMAGE_QUALITIES]
               : TOOL_SELECTABLE_IMAGE_QUALITIES.filter(quality => !isExtendedGptImageQuality(quality)),
           },

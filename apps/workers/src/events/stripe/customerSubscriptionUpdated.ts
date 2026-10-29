@@ -21,6 +21,8 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StripeEvents } from '@server/utils/eventBus';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { postSubscriptionChangesToSlack } from '@server/integrations/slack/subscriptionLifecycle';
+import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { sendToClient } from '@server/websocket/utils';
 import dayjs from 'dayjs';
@@ -130,6 +132,12 @@ export const handler = withEventContext(async (event, logger) => {
     return false;
   });
 
+  // Straight after the write: a redelivery compares Stripe's state with the row this attempt wrote
+  // and finds no change, so a timeout in the slower work below would lose these posts. Never throws.
+  if (owned && before) {
+    await postSubscriptionChangesToSlack(before, subscription);
+  }
+
   // A cancel recorded at Stripe - the Billing Portal path, where Stripe is the
   // only actor and none of our API routes are called - leaves the unpaid invoice
   // that triggered the dunning still open, and Stripe keeps retrying it and
@@ -220,11 +228,6 @@ export const handler = withEventContext(async (event, logger) => {
   }
 });
 
-/** Whether a subscription is set to cancel at the end of its period, and is not over yet. */
-function cancelIsPending(status: string, canceling: boolean): boolean {
-  return canceling && status !== 'canceled';
-}
-
 /**
  * The lifecycle events one subscription update carries, read off the row its write replaced and
  * Stripe's state after it: a move to another price, and a period-end cancel being set or
@@ -236,7 +239,7 @@ function cancelIsPending(status: string, canceling: boolean): boolean {
  * The events follow the row, which is only as current as the Stripe state each update fetched.
  * Updates running at once each see the state the other left, so they cannot both report one
  * transition; but one that fetched an older state and wrote it last moves the row back, reports
- * that move, and the next update reports the move forward again.
+ * that move unless the row was terminal, and the next update reports the move forward again.
  *
  * Only user-owned subscriptions, like purchases: no one user's signup can attribute an
  * organization's. Each occurrence names the row version it changed from, so each transition has
@@ -249,10 +252,11 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
     const toPriceId = subscription.items.data[0]?.price.id;
     const version = rowTimestamps(before).updatedAt?.toISOString() ?? 'unversioned';
     const sends: Array<Promise<unknown>> = [];
+    const { plan, cancel } = detectSubscriptionChanges(before, subscription);
 
-    if (toPriceId && before.priceId && toPriceId !== before.priceId) {
-      const from = planDetails(before.priceId);
-      const to = planDetails(toPriceId);
+    if (plan) {
+      const from = planDetails(plan.fromPriceId);
+      const to = planDetails(plan.toPriceId);
       sends.push(
         emitBillingEvent({
           user,
@@ -263,24 +267,17 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
             toPlan: to.plan,
             ...(from.interval && { fromInterval: from.interval }),
             ...(to.interval && { toInterval: to.interval }),
-            direction: planChangeDirection(before.priceId, toPriceId),
+            direction: planChangeDirection(plan.fromPriceId, plan.toPriceId),
           },
         })
       );
     }
 
-    // Before and after are read off the same field, Stripe's canceled_at, which the row stores
-    // verbatim: set when a cancel is requested, and the signal this handler's invoice cleanup
-    // below also acts on. Comparing it with itself, rather than the row's copy with Stripe's
-    // cancel_at_period_end, means a field the two disagree on cannot fire a transition on every
-    // later update; the worst a disagreement can do is miss one.
-    const wasPending = cancelIsPending(before.status, before.canceledAt != null);
-    const isPending = cancelIsPending(subscription.status, subscription.canceled_at != null);
-    if (wasPending !== isPending && subscription.status !== 'canceled') {
+    if (cancel) {
       sends.push(
         emitBillingEvent({
           user,
-          event: isPending ? 'subscription_cancel_scheduled' : 'subscription_cancel_reverted',
+          event: cancel === 'scheduled' ? 'subscription_cancel_scheduled' : 'subscription_cancel_reverted',
           occurrence: `${subscription.id}:cancel:${version}`,
           metadata: { ...planDetails(toPriceId ?? before.priceId) },
         })

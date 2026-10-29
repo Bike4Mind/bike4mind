@@ -80,7 +80,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .option('output-format', {
     type: 'string',
-    description: 'Output format when using -p: text (default), json, stream-json (NDJSON); json also applies to b4m models ls/search/show',
+    description: 'Output format when using -p: text (default), json, stream-json (NDJSON); json also applies to b4m models ls/search/show/curated',
     choices: ['text', 'json', 'stream-json'],
     default: 'text',
   })
@@ -318,6 +318,9 @@ const argv = await yargs(hideBin(process.argv))
       }, async () => {
         // Handled by external command handler
       })
+      .command('curated', 'List the models Bike4Mind picked, with picks for this computer first', {}, async () => {
+        // Handled by external command handler
+      })
       .command('pull <ref>', 'Download a model after showing its size and license', (yargs) => {
         return yargs
           .positional('ref', {
@@ -361,7 +364,7 @@ const argv = await yargs(hideBin(process.argv))
         // Handled by external command handler
       })
       .example('b4m models ls --ollama-host http://127.0.0.1:11434', 'Use and remember an Ollama host')
-      .demandCommand(1, 'You must provide a subcommand (ls, search, show, pull, rm, use)');
+      .demandCommand(1, 'You must provide a subcommand (ls, search, show, curated, pull, rm, use)');
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')

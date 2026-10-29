@@ -1,4 +1,5 @@
 import { marked } from 'marked';
+import type { Logger } from '@bike4mind/observability';
 
 export type ExportFormat = 'markdown' | 'txt' | 'html';
 
@@ -13,7 +14,7 @@ export interface ConversionResult {
  * Converts markdown content to various formats (txt, html)
  */
 export class FormatConverter {
-  constructor(private logger?: any) {}
+  constructor(private logger?: Logger) {}
 
   /**
    * Convert markdown content to specified format
