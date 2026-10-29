@@ -233,6 +233,29 @@ describe('pickForMachine policy', () => {
     expect(TIER_C_TOOL_REGRESSION_TOLERANCE).toBe(0.05);
     expect(listed(tierC(2, 18))).toBe(false);
     expect(listed(tierC(17, 18))).toBe(true);
+    // Exactly the tolerance below: 0.4 - 0.05 is 0.35000000000000003 in floating point.
+    expect(listed(tierC(7, 8))).toBe(true);
+    expect(listed(tierC(6, 8))).toBe(false);
+  });
+
+  it('never lists a Tier C variant whose tool-call counts have no runs, even past the schema', () => {
+    type Counts = { exact: number; of: number };
+    const listedWith = (edit: (own: { toolCall: Counts; parentToolCall?: Counts }) => void) => {
+      // The parsed manifest is frozen; a clone lets the counts go where the schema would refuse them.
+      const manifest = structuredClone(parseHubManifest(fixtureManifest()).manifest);
+      edit(manifest.entries.find(e => e.id === 'hybrid-27b-abliterated')!.builds[0].evidence[0].ownEval!);
+      return pickForMachine({
+        manifest,
+        hardware: MACHINES['mac-64'],
+        role: 'code',
+        runtimes: BOTH,
+        pins: PINS,
+        showAbliterated: true,
+      }).alternates.some(c => c.entry.id === 'hybrid-27b-abliterated');
+    };
+    expect(listedWith(() => {})).toBe(true);
+    expect(listedWith(own => Object.assign(own.parentToolCall!, { exact: 0, of: 0 }))).toBe(false);
+    expect(listedWith(own => (own.toolCall.of = 0))).toBe(false);
   });
 
   it('lists a Tier B build on the runtime that carries its eval when an earlier runtime is also installed', () => {
@@ -291,6 +314,50 @@ describe('pickForMachine policy', () => {
     expect(label(pick('mac-64', 'code', { manifest }).best)).toBe('hybrid-27b/iq4@llama-server fast:fits 262144 f16');
   });
 
+  it('does not let a speed run lift a build to the grade A a best pick needs', () => {
+    const manifest = withManifest(m => {
+      m.policy = { minGradeForBestPick: 'A' };
+      const evidence = m.entries.find(e => e.id === 'hybrid-27b')!.builds[1].evidence;
+      evidence[1] = { ...evidence[1], kind: 'speed', metric: 'decode tok/s', value: 30 };
+    });
+    const p = pick('mac-64', 'code', { manifest });
+    expect(p.best).toBeNull();
+    expect(p.alternates.find(c => c.entry.id === 'hybrid-27b')?.grade).toBe('B');
+  });
+
+  describe('falls back to the most restrictive choice for a policy value this client does not know', () => {
+    const unknown = (field: string, edit: (m: HubManifestInput) => void = () => {}) =>
+      withManifest(m => {
+        edit(m);
+        Object.assign(m, { policy: { [field]: 'from-a-newer-catalog' } });
+      });
+    const ids = (p: ReturnType<typeof pick>) => [p.best, ...p.alternates].map(c => c?.entry.id);
+
+    it('abliterated: hidden even with the toggle on', () => {
+      const p = pick('mac-64', 'code', { manifest: unknown('abliterated'), showAbliterated: true });
+      expect(ids(p)).not.toContain('hybrid-27b-abliterated');
+    });
+
+    it('restrictedLicense: hidden', () => {
+      expect(ids(pick('mac-24', 'chat', { manifest: unknown('restrictedLicense') }))).not.toContain('restricted-moe');
+    });
+
+    it('bestPickPermissiveOnly: a restricted license is never the best pick', () => {
+      const manifest = unknown('bestPickPermissiveOnly', m => {
+        m.rankings.chat = ['moe-35b', 'restricted-moe', 'gemma-12b', 'hybrid-27b', 'dense-9b-tuned'];
+      });
+      const p = pick('mac-24', 'chat', { manifest });
+      expect(p.best?.entry.id).toBe('gemma-12b');
+      expect(p.alternates.map(c => c.entry.id)).toContain('restricted-moe');
+    });
+
+    it('minGradeForBestPick: only a grade A build is the best pick', () => {
+      const p = pick('mac-64', 'code', { manifest: unknown('minGradeForBestPick') });
+      expect(label(p.best)).toBe('hybrid-27b/iq4@llama-server fast:fits 262144 f16');
+      expect(p.best?.grade).toBe('A');
+    });
+  });
+
   it('defaults the policy block when the manifest omits it', () => {
     expect(parseHubManifest(fixtureManifest()).manifest.policy).toEqual({
       abliterated: 'curated-opt-in',
@@ -306,6 +373,23 @@ describe('pickForMachine runtimes', () => {
     const p = pick('mac-64', 'code', { pins: OLD_PINS });
     expect(p.best).toBeNull();
     expect(p.alternates).toEqual([]);
+  });
+
+  it('goes by the newest smoke run on the pin, so a later failure is not hidden by an earlier pass', () => {
+    const withSmoke = (runs: Array<{ date: string; pass: boolean }>) =>
+      withManifest(m => {
+        const b = m.entries.find(e => e.id === 'embed-small')!.builds[0];
+        b.smoke = runs.map(run => ({ ...b.smoke[0], ...run }));
+      });
+    const best = (manifest: HubManifestInput) => pick('mac-16', 'embeddings', { manifest }).best?.entry.id;
+    const older = { date: '2026-10-21', pass: true };
+    const newerFail = { date: '2026-10-24', pass: false };
+    expect(best(withSmoke([older, newerFail]))).toBeUndefined();
+    expect(best(withSmoke([newerFail, older]))).toBeUndefined();
+    const olderFail = { date: '2026-10-21', pass: false };
+    const newerPass = { date: '2026-10-24', pass: true };
+    expect(best(withSmoke([olderFail, newerPass]))).toBe('embed-small');
+    expect(best(withSmoke([newerPass, { ...newerPass, pass: false }]))).toBeUndefined();
   });
 
   it('falls back to Ollama only for builds that allow it when llama-server is missing', () => {

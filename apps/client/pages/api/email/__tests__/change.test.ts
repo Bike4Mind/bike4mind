@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   requestEmailChange: vi.fn(),
   publish: vi.fn(),
   logAuditEvent: vi.fn(),
+  logAuthAudit: vi.fn(),
   users: { findById: vi.fn(), existsOtherUserWithEmail: vi.fn(), update: vi.fn() },
 }));
 
@@ -32,10 +33,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { requestEmailChange: h.requestEmailChange } }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
-vi.mock('@server/utils/auditLog', () => ({
-  logAuditEvent: h.logAuditEvent,
-  EmailAuditEvents: { EMAIL_CHANGE_REQUESTED: 'email_change_requested' },
-}));
+// logAuditEvent writes a CounterLog row; an own email change must never reach it.
+vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: h.logAuditEvent }));
+vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 
 process.env.APP_URL = 'https://app.test';
 await import('../change');
@@ -119,9 +119,23 @@ describe('POST /api/email/change templates', () => {
     expect(h.users.findById).toHaveBeenCalledWith('user-1');
     expect(h.users.existsOtherUserWithEmail).toHaveBeenCalledWith('new@x.com', 'user-1');
     expect(h.users.update).toHaveBeenCalledWith({ id: 'user-1' });
-    expect(h.logAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ userAgent: 'agent/1', oldEmail: undefined, newEmail }),
-      expect.anything()
+    expect(h.logAuthAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ metadata: { oldEmail: undefined, newEmail } })
     );
+  });
+
+  it('records the request in the user auth audit log, not CounterLog', async () => {
+    h.requestEmailChange.mockResolvedValue(undefined);
+    const req = { body: { newEmail }, user, ip: '127.0.0.1', headers: {}, logger: { error: vi.fn() } };
+
+    await h.handler!(req, { json: vi.fn() });
+
+    expect(h.logAuthAudit).toHaveBeenCalledWith(req, {
+      userId: 'user-1',
+      event: 'email_change_requested',
+      metadata: { oldEmail: user.email, newEmail },
+    });
+    expect(h.logAuditEvent).not.toHaveBeenCalled();
   });
 });

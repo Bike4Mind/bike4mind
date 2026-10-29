@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { build, fixtureManifest, ownEval, sha } from '../modelHub/__fixtures__/hubManifest';
-import { HubManifestSchema, ModelArchSchema, parseHubManifest, type HubManifestInput } from './modelHub';
+import {
+  CuratedCatalogSchema,
+  HUB_MAX_SEQUENCE,
+  HubManifestSchema,
+  ModelArchSchema,
+  parseHubManifest,
+  type HubManifestInput,
+} from './modelHub';
 
 type EntryInput = HubManifestInput['entries'][number];
 
@@ -17,6 +24,8 @@ function issuesAfter(id: string, edit: (e: EntryInput) => void): string[] {
 }
 
 const index = (id: string) => fixtureManifest().entries.findIndex(e => e.id === id);
+
+const pinned = () => ({ template: sha(5), params: sha(6), license: sha(7), numCtx: 40960 });
 
 const kvProbe = (runtime: string) => ({
   bytesPerToken: 1,
@@ -323,11 +332,201 @@ describe('parseHubManifest', () => {
     expect(dropped.map(d => d.path)).toEqual(['policy.abliterated']);
   });
 
+  it('reads a null policy as an absent one', () => {
+    const { manifest, dropped } = parseHubManifest({ ...fixtureManifest(), policy: null });
+    expect(manifest.policy).toEqual(parseHubManifest(fixtureManifest()).manifest.policy);
+    expect(dropped).toEqual([]);
+  });
+
   it('rejects a manifest whose envelope it cannot read', () => {
     expect(() => parseHubManifest({ ...fixtureManifest(), schemaVersion: 3 })).toThrow();
     expect(() =>
       parseHubManifest({ ...fixtureManifest(), entries: Array.from({ length: 501 }, () => ({})) })
     ).toThrow();
+  });
+});
+
+describe('curated sequence, changelog and tiers', () => {
+  const curated = () => ({
+    ...fixtureManifest(),
+    sequence: 3,
+    changelog: [
+      { sequence: 3, date: '2026-10-27', added: ['gemma-12b'], removed: [], changed: [], notes: 'Adds Gemma.' },
+      {
+        sequence: 2,
+        date: '2026-10-20',
+        added: [],
+        removed: [{ id: 'old-pick', name: 'Old' }],
+        changed: [],
+        notes: '',
+      },
+    ],
+    tiers: [
+      {
+        memoryKind: 'cpu',
+        minGiB: 0,
+        picks: [
+          { slot: 'best', entry: 'hybrid-27b', build: 'q6' },
+          { slot: 'light', entry: 'gemma-12b', build: 'q4' },
+        ],
+      },
+      { memoryKind: 'discrete', minGiB: 16, picks: [{ slot: 'fast', entry: 'gemma-12b', build: 'q4' }] },
+    ],
+  });
+
+  it('accepts them and defaults both lists to empty', () => {
+    expect(issues(curated())).toEqual([]);
+    const parsed = HubManifestSchema.parse(fixtureManifest());
+    expect(parsed).toMatchObject({ changelog: [], tiers: [] });
+    expect(parsed).not.toHaveProperty('sequence');
+    const { manifest, dropped } = parseHubManifest(curated());
+    expect(dropped).toEqual([]);
+    expect(manifest).toEqual(HubManifestSchema.parse(curated()));
+  });
+
+  it('rejects a pick of a missing build, a taken slot and a repeated tier', () => {
+    const m = curated();
+    m.tiers[0].picks.push({ slot: 'best', entry: 'gemma-12b', build: 'q4' });
+    m.tiers[1].picks[0].build = 'q9';
+    m.tiers.push({ memoryKind: 'cpu', minGiB: 0, picks: [] });
+    expect(issues(m)).toEqual([
+      'tiers.0.picks.2.slot: slot taken',
+      'tiers.1.picks.0: no build q9 in gemma-12b',
+      'tiers.2: duplicate tier',
+    ]);
+  });
+
+  it('allows best, fast and long-context on GPU tiers and best, fast and light on the CPU tier', () => {
+    const m = curated();
+    m.tiers[0].picks.push({ slot: 'long-context', entry: 'gemma-12b', build: 'q4' });
+    m.tiers[1].picks.push({ slot: 'light', entry: 'gemma-12b', build: 'q4' });
+    m.tiers.push({ memoryKind: 'unified', minGiB: 32, picks: [{ slot: 'light', entry: 'gemma-12b', build: 'q4' }] });
+    expect(issues(m)).toEqual([
+      'tiers.0.picks.2: no long-context slot in a cpu tier',
+      'tiers.1.picks.1: no light slot in a discrete tier',
+      'tiers.2.picks.0: no light slot in a unified tier',
+    ]);
+
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(manifest.tiers.map(tier => tier.picks.map(pick => pick.slot))).toEqual([['best', 'light'], ['fast'], []]);
+    expect(dropped.map(d => d.path)).toEqual(['tiers.0.picks.2', 'tiers.1.picks.1', 'tiers.2.picks.0']);
+  });
+
+  it('caps a tier at three picks: the strict schema rejects a fourth and the reader drops the tier', () => {
+    const m = curated();
+    m.tiers[1].picks = [
+      { slot: 'best', entry: 'gemma-12b', build: 'q4' },
+      { slot: 'fast', entry: 'gemma-12b', build: 'q4' },
+      { slot: 'long-context', entry: 'gemma-12b', build: 'q4' },
+    ];
+    expect(issues(m)).toEqual([]);
+    m.tiers[1].picks.push({ slot: 'best', entry: 'hybrid-27b', build: 'q6' });
+    expect(issues(m)).toEqual(['tiers.1.picks: Too big: expected array to have <=3 items']);
+
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(manifest.tiers.map(tier => tier.memoryKind)).toEqual(['cpu']);
+    expect(dropped).toEqual([{ path: 'tiers.1', reason: 'picks: Too big: expected array to have <=3 items' }]);
+  });
+
+  it('holds chat entries, and only chat entries, to a 16K trained context', () => {
+    const m = curated();
+    const short = (id: string) => {
+      const entry = m.entries.find(e => e.id === id)!;
+      entry.arch = { ...entry.arch, contextMax: 8192 };
+    };
+    short('gemma-12b');
+    short('embed-small');
+    expect(issues(m)).toEqual([
+      `entries.${index('gemma-12b')}.arch.contextMax: a chat model needs a context of at least 16384 tokens`,
+    ]);
+
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(manifest.entries.map(e => e.id)).not.toContain('gemma-12b');
+    expect(manifest.entries.map(e => e.id)).toContain('embed-small');
+    expect(manifest.tiers[0].picks.map(pick => pick.entry)).toEqual(['hybrid-27b']);
+    expect(dropped.map(d => d.path)).toContain(`entries.${index('gemma-12b')}`);
+  });
+
+  it('leaves a slot empty when its entry was dropped, and drops unreadable picks and changelog items', () => {
+    const m = curated();
+    m.entries.find(e => e.id === 'hybrid-27b')!.license.class = 'research';
+    Object.assign(m.tiers[1].picks[0], { slot: 'tiny' });
+    Object.assign(m.changelog[1], { date: 'yesterday' });
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(manifest.tiers).toEqual([
+      { memoryKind: 'cpu', minGiB: 0, picks: [{ slot: 'light', entry: 'gemma-12b', build: 'q4' }] },
+      { memoryKind: 'discrete', minGiB: 16, picks: [] },
+    ]);
+    expect(manifest.changelog.map(item => item.sequence)).toEqual([3]);
+    expect(dropped.map(d => d.path)).toEqual(
+      expect.arrayContaining(['tiers.0.picks.0', 'tiers.1.picks.0', 'changelog.1'])
+    );
+  });
+
+  it('rejects an envelope whose sequence is not a positive integer', () => {
+    expect(() => parseHubManifest({ ...curated(), sequence: 0 })).toThrow();
+    expect(() => parseHubManifest({ ...curated(), sequence: 1.5 })).toThrow();
+  });
+
+  it('caps the sequence at HUB_MAX_SEQUENCE', () => {
+    expect(parseHubManifest({ ...curated(), sequence: HUB_MAX_SEQUENCE }).manifest.sequence).toBe(HUB_MAX_SEQUENCE);
+    expect(() => parseHubManifest({ ...curated(), sequence: HUB_MAX_SEQUENCE + 1 })).toThrow();
+  });
+
+  it('reads revoked key ids, defaulting to none, and rejects the envelope when they are unreadable', () => {
+    expect(parseHubManifest(curated()).manifest.revokedKeyIds).toEqual([]);
+    const ids = ['0123456789abcdef'];
+    expect(parseHubManifest({ ...curated(), revokedKeyIds: ids }).manifest.revokedKeyIds).toEqual(ids);
+    expect(() => parseHubManifest({ ...curated(), revokedKeyIds: ['XYZ'] })).toThrow();
+    expect(() => parseHubManifest({ ...curated(), revokedKeyIds: Array(17).fill(ids[0]) })).toThrow();
+  });
+
+  it('reads an entry minimum Desktop version and drops the entry when it is not a version', () => {
+    const m = curated();
+    m.entries.find(e => e.id === 'gemma-12b')!.minDesktopVersion = '0.2.0';
+    expect(parseHubManifest(m).manifest.entries.find(e => e.id === 'gemma-12b')?.minDesktopVersion).toBe('0.2.0');
+    Object.assign(
+      m.entries.find(e => e.id === 'gemma-12b')!,
+      { minDesktopVersion: 'soon' }
+    );
+    expect(parseHubManifest(m).dropped.map(d => d.path)).toContain(`entries.${index('gemma-12b')}`);
+  });
+});
+
+describe('CuratedCatalogSchema', () => {
+  const catalog = () => ({
+    ...fixtureManifest(),
+    sequence: 3,
+    changelog: [
+      { sequence: 3, date: '2026-10-27', added: ['gemma-12b'], removed: [], changed: [], notes: '' },
+      { sequence: 1, date: '2026-10-01', added: ['gone'], removed: [], changed: [], notes: '' },
+    ],
+  });
+  const problems = (input: unknown) =>
+    (CuratedCatalogSchema.safeParse(input).error?.issues ?? []).map(i => `${i.path.join('.')}: ${i.message}`);
+
+  it('accepts a catalog whose older items name entries since removed', () => {
+    expect(problems(catalog())).toEqual([]);
+  });
+
+  it('needs a sequence that the newest changelog item carries, and strictly decreasing items', () => {
+    expect(problems({ ...catalog(), sequence: undefined })).toEqual(['sequence: a published catalog needs a sequence']);
+    expect(problems({ ...catalog(), sequence: 4 })).toEqual([
+      'changelog.0.sequence: the newest changelog item must carry the catalog sequence',
+    ]);
+    const m = catalog();
+    m.changelog[1].sequence = 3;
+    expect(problems(m)).toEqual(['changelog.1.sequence: changelog sequences must strictly decrease']);
+  });
+
+  it('checks the newest item against the entries', () => {
+    const m = catalog();
+    m.changelog[0].changed = ['missing'];
+    m.changelog[0].removed = [{ id: 'gemma-12b', name: 'Gemma' }];
+    expect(problems(m)).toEqual([
+      'changelog.0: no entry missing',
+      'changelog.0.removed: entry gemma-12b is still listed',
+    ]);
   });
 });
 
@@ -344,7 +543,16 @@ describe('HubEntrySchema cross-field rules', () => {
       'gemma-12b',
       'vision build without projector',
       e => delete e.builds[0].mmproj,
-      `builds.0.mmproj: a vision build needs an mmproj or an Ollama library source`,
+      `builds.0.mmproj: a vision build needs an mmproj, a pinned projector layer or an Ollama library source`,
+    ],
+    [
+      'gemma-12b',
+      'a vision hf-pull build whose layers pin no projector',
+      e => {
+        delete e.builds[0].mmproj;
+        e.builds[0].ollama = { kind: 'hf-pull', modelfile: {}, layers: pinned() };
+      },
+      `builds.0.mmproj: a vision build needs an mmproj, a pinned projector layer or an Ollama library source`,
     ],
     [
       'hybrid-27b',
@@ -353,10 +561,47 @@ describe('HubEntrySchema cross-field rules', () => {
       'roles: embeddings role and capabilities.embeddings must agree',
     ],
     [
+      'gemma-12b',
+      'a tool-use rating without tool support',
+      e => {
+        e.capabilities = { ...e.capabilities, tools: false };
+        e.toolUse = { rating: 'ok' };
+      },
+      'toolUse.rating: a tool-use rating needs capabilities.tools',
+    ],
+    [
+      'gemma-12b',
+      'a chat model trained on less than 16K',
+      e => (e.arch = { ...e.arch, contextMax: 16383 }),
+      'arch.contextMax: a chat model needs a context of at least 16384 tokens',
+    ],
+    [
       'hybrid-27b',
-      'tools without a clean own eval',
-      e => e.builds.forEach(b => (b.evidence = [])),
-      'capabilities.tools: tools needs an own eval with zero malformed tool calls',
+      'a pinned num_ctx without a params layer',
+      e => {
+        e.builds[2].ollama = { kind: 'hf-pull', modelfile: {}, layers: { ...pinned(), params: null } };
+      },
+      'builds.2.ollama.layers: numCtx needs a params layer',
+    ],
+    [
+      'hybrid-27b',
+      'a projector size without a projector layer',
+      e => {
+        e.builds[2].ollama = { kind: 'hf-pull', modelfile: {}, layers: { ...pinned(), projectorBytes: 1000 } };
+      },
+      'builds.2.ollama.layers: projectorBytes needs a projector layer',
+    ],
+    [
+      'hybrid-27b',
+      'a Hugging Face build with no weights',
+      e => (e.builds[2].weights = []),
+      'builds.2.weights: a build needs Hugging Face weights unless it is an Ollama library build',
+    ],
+    [
+      'hybrid-27b',
+      'a Hugging Face build with no repo',
+      e => delete e.builds[2].hf,
+      'builds.2.weights: a build needs Hugging Face weights unless it is an Ollama library build',
     ],
     [
       'hybrid-27b',
@@ -520,6 +765,81 @@ describe('HubEntrySchema cross-field rules', () => {
 
   it('reports each rule on its own: an unedited entry has no issues', () => {
     expect(issues(fixtureManifest())).toEqual([]);
+  });
+
+  it('lists tool support without any eval, and defaults the tool-use rating to unrated', () => {
+    const m = fixtureManifest();
+    for (const entry of m.entries) for (const b of entry.builds) b.evidence = [];
+    expect(issues(m)).toEqual([]);
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(dropped).toEqual([]);
+    const hybrid = manifest.entries.find(e => e.id === 'hybrid-27b');
+    expect(hybrid).toMatchObject({ capabilities: { tools: true }, toolUse: { rating: 'unrated' } });
+  });
+
+  it('keeps a rating and note beside tool support, and pinned hf-pull layers', () => {
+    expect(
+      issuesAfter('hybrid-27b', e => {
+        e.toolUse = { rating: 'weak', note: 'Often answers in prose instead of calling the tool.' };
+        e.builds[2].ollama = { kind: 'hf-pull', modelfile: {}, layers: pinned() };
+      })
+    ).toEqual([]);
+  });
+
+  it('accepts a vision hf-pull build whose registry serves a pinned projector', () => {
+    const layers = { ...pinned(), template: null, installedTemplate: sha(8), projector: sha(9), projectorBytes: 9 };
+    expect(
+      issuesAfter('gemma-12b', e => {
+        delete e.builds[0].mmproj;
+        e.builds[0].ollama = { kind: 'hf-pull', modelfile: {}, layers };
+      })
+    ).toEqual([]);
+  });
+
+  it('accepts an Ollama library build with pinned layers and no Hugging Face files', () => {
+    const m = fixtureManifest();
+    const embed = m.entries.find(e => e.id === 'embed-small')!;
+    delete embed.builds[0].hf;
+    embed.builds[0].weights = [];
+    embed.builds[0].ollama = {
+      kind: 'library',
+      ref: 'embed-small:0.6b',
+      sizeBytes: 639_150_000,
+      digest: sha(900),
+      layers: { ...pinned(), numCtx: null, draft: sha(10) },
+    };
+    expect(issues(m)).toEqual([]);
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(dropped).toEqual([]);
+    const parsed = manifest.entries.find(e => e.id === 'embed-small')!.builds[0];
+    expect(parsed.weights).toEqual([]);
+    expect(parsed.ollama).toMatchObject({ layers: { projector: null, draft: sha(10) } });
+  });
+
+  it('reads a tool-use rating it does not know as unrated instead of dropping the entry', () => {
+    const m = fixtureManifest();
+    const hybrid = m.entries.find(e => e.id === 'hybrid-27b');
+    if (!hybrid) throw new Error('no hybrid-27b');
+    (hybrid as { toolUse: unknown }).toolUse = { rating: 'excellent', note: 'From a newer rating scale.' };
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(dropped).toEqual([]);
+    expect(manifest.entries.find(e => e.id === 'hybrid-27b')?.toolUse).toEqual({ rating: 'unrated' });
+  });
+
+  it.each([
+    ['a rating on a model without tools', { rating: 'strong', note: 'Rated.' }, false, { rating: 'unrated' }],
+    ['a note past 200 characters', { rating: 'ok', note: 'x'.repeat(240) }, true, { rating: 'ok' }],
+    ['an empty note', { rating: 'weak', note: '' }, true, { rating: 'weak' }],
+    ['a tool-use value that is not an object', 'strong', true, { rating: 'unrated' }],
+  ])('keeps the entry when the tool-use label has %s', (_label, toolUse, tools, expected) => {
+    const m = fixtureManifest();
+    const hybrid = m.entries.find(e => e.id === 'hybrid-27b');
+    if (!hybrid) throw new Error('no hybrid-27b');
+    (hybrid as { toolUse: unknown }).toolUse = toolUse;
+    hybrid.capabilities.tools = tools;
+    const { manifest, dropped } = parseHubManifest(m);
+    expect(dropped).toEqual([]);
+    expect(manifest.entries.find(e => e.id === 'hybrid-27b')?.toolUse).toEqual(expected);
   });
 
   it('accepts evidence on an Ollama library digest', () => {

@@ -28,7 +28,7 @@ import type {
   ModelServerUpdateInput,
   ModelServerView,
 } from '@shared/modelServers';
-import type { HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
+import type { HfTokenStatus, HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
 import {
   IPC_CHANNELS,
   type BrowserFreezeFrameRequest,
@@ -68,11 +68,32 @@ const api: DesktopApi = {
     listInstalled: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled),
     search: (request: HubSearchRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsSearch, request),
     getDetail: (repo: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo),
+    listCurated: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListCurated),
+    getCuratedPull: (entryId: string, buildId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsGetCuratedPull, entryId, buildId),
+    checkCurated: (entryId: string, buildId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCurated, entryId, buildId),
+    checkCuratedList: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCuratedList),
+    getCuratedSettings: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSettings),
+    setCuratedEnabled: (enabled: boolean) => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSetEnabled, enabled),
+    onCuratedChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.modelsCuratedChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsCuratedChanged, handler);
+    },
     listPulls: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListPulls),
     pull: (request: ModelPullRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsPull, request),
     cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
     remove: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name),
+    getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
+    setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
+    clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),
+    onHfTokenChanged: listener => {
+      const handler = (_event: unknown, status: HfTokenStatus) => listener(status);
+      ipcRenderer.on(IPC_CHANNELS.modelsHfAccessChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsHfAccessChanged, handler);
+    },
     onPullsChanged: listener => {
       const handler = (_event: unknown, pulls: ModelPull[]) => listener(pulls);
       ipcRenderer.on(IPC_CHANNELS.modelsPullsChanged, handler);

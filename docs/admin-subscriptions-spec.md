@@ -145,38 +145,45 @@ The anatomy matches the users list (`Users/index.tsx`, `Users/List/*`).
 
 1. `AdminPageHeader`: title "Subscriptions", count = total matching. One primary action: **Export CSV** (exports the current filters, server-side, keyset-paged like `credit-ledger-export`).
 2. `AnomalyBanner` (to be built in `shared/` if it is still missing): shown only when the last reconciliation found mismatches. "12 subscriptions disagree with Stripe. Review mismatches", which opens the Mismatched view.
-3. `StatStrip`, 4 tiles, all scoped to the current filters: **Paying** (count), **MRR** (currency), **Past due** (count and amount, `valueColor` warn if > 0), **Canceling** (count).
+3. `StatStrip`, 4 tiles, all scoped to the current filters and aggregated by the summary route (6.5), never summed from the current page: **Paying** (count), **MRR** (currency), **Past due** (count and amount, `valueColor` warn if > 0), **Canceling** (count).
+   - **MRR** is the 5.3 definition, with that definition in a help popover beside the label. When rows count but are left out of the total, the comparison line says how many: "Not in total: 3 with no billed amount, 1 in another currency". So an undercount from rows whose amount is not mirrored yet (before the 6.1 backfill runs) is visible, not silent.
+   - **Past due** keeps the count of the Past due view as its value. Its amount, on the comparison line, is "MRR at risk": the MRR of the rows that view counts. Unpaid and incomplete rows are not MRR, so only `past_due` rows add to it, and the amount is per month, not the balance owed (invoices are not mirrored, D5). Rows it leaves out are noted the same way ("$38.00 MRR at risk, 1 not in total").
 4. `SavedViews` / `ViewTabs` built-in views:
 
 | View | Filter | Job |
 |---|---|---|
 | Paying | status in active, past_due; source stripe | J2 |
 | Past due | status in past_due, unpaid, incomplete | J3 |
-| Canceling | cancelAtPeriodEnd = true, not yet ended | J4 |
+| Canceling | canceledAt set (cancel requested) and status not terminal, via `cancel=scheduled`; switches to the mirrored Stripe cancel fields (6.1) once they are backfilled | J4 |
 | Comped | source admin_grant, not terminal | J5 |
-| Churned (30 days) | status canceled, canceledAt within 30 days | J8 |
+| Churned (30 days) | status canceled, canceledAt within 30 days. Windows on canceledAt (when the cancel was requested), not when the subscription ended, until an endedAt mirror exists | J8 |
 | Mismatched | has an open reconciliation finding | J6 |
 | All | none | |
 
+   The default view is Paying (status active or past_due, source stripe), so comps and canceled rows stay hidden until another view or the Source filter brings them in.
+
    Saved custom views work as in the users list (built on the saved-views PR).
-5. `FilterBar` filters, all server-side and in the URL through `useAdminListUrlState`, with keys registered in `adminTabParams.ts`:
+5. `FilterBar` filters, all server-side and in the URL through `useSubscriptionsTabParams` (`subscriptionsTabSearch.ts`), with keys registered in `adminTabParams.ts`:
    - Status
-   - Plan (from the checkout catalog, plus "Unknown price")
+   - Plan (from the checkout catalog, plus "Unknown plan")
    - Owner type (User / Organization)
    - Source (Stripe / Comped)
-   - Interval (Monthly / Yearly)
+   - Interval (Monthly / Yearly). Matches on the checkout catalog's price ids, not the mirrored `interval`, so a row whose price is not in the catalog never matches it, even though the Plan column labels that row from its billed interval.
    - Renews or ends (next 7 days / 30 days / overdue)
+   - Cancellation (Scheduled / Last 30 days)
    - Mismatch (yes)
 
    Search covers owner name, owner email, org name, Stripe customer id and Stripe subscription id (exact match on ids). Group by: Plan, Status, Owner type.
-6. `DataTable` in server-paged mode (`pagination` with a one-based page, `sort`/`onSortChange`, `pageResetKey`). The whole row opens the detail page.
+6. `DataTable` in server-paged mode (`pagination` with a one-based page, `sort`/`onSortChange`, `pageResetKey`). The whole row opens the detail page. Until the detail page exists, a row opens its owner: the user profile, or the org in the Organizations tab.
+
+Comped rows show a neutral Comped chip and never a price, including ended comps.
 
 | Column | Content | Notes |
 |---|---|---|
 | Customer | Avatar and name, email underneath; org icon and org name for orgs | |
-| Plan | Plan name, then "Monthly" or "Yearly" | "Unknown price" with a `warn` chip if the price id is not in the catalog |
+| Plan | Plan name, then the interval Stripe bills, from the mirrored `interval` and `intervalCount` ("Monthly", "Yearly", "Every 3 months"; same vocabulary as MRR in 5.3). A row with no mirrored interval falls back to the catalog plan's Monthly or Yearly | "Unknown plan" `warn` chip, with the hover "Price ID not in the plan catalog", if the price id is not in the catalog; the billed interval still shows under it |
 | Status | `StatusChip`, tones in 5.4 | |
-| MRR | currency, numeric | dash for comps (they are not revenue) |
+| MRR | the row's MRR (5.3), numeric; header "MRR (USD)" | dash for comps (they are not revenue), including a comp that carries an amount, and for statuses MRR excludes. A counted row with no mirrored amount is a small neutral "No amount" chip whose hover says "Stripe has no fixed amount for this price yet" (some causes are permanent, see 5.3); a row MRR does not count keeps the plain dash. A row billed in another currency shows its own currency ("CA$18.00"), muted, with a hover saying it is not in the total |
 | Seats | "8 / 10" (used / paid), with an `InlineBar` | orgs only; `warn` when used > paid |
 | Renews | relative date, exact UTC on hover | "Ends" plus the date when canceling |
 | Credits / cycle | number, numeric | shows the custom override with a "custom" chip |
@@ -236,6 +243,13 @@ Detail anatomy, max width 1280.
   - **At risk**: past due plus canceling, sorted by MRR.
 - Definitions, shown in a help popover so finance and admins agree:
   - **MRR**: the sum over Stripe-billed subscriptions with status active or past_due of `unitAmount x quantity`, normalized to a month (yearly / 12), in the account currency. Excludes comps, trialing, canceled, incomplete. Past due is included but shown separately as "at risk".
+    - As built (`server/admin/subscriptionsList/subscriptionMrr.ts`): `unitAmount` and `quantity` are the mirrored fields (6.1), so a Team row is the per-seat price times its seats. Never a price from the plan catalog: a row without a mirrored amount has none.
+    - Normalizing divides by the months one billing period covers: `interval` month is 1, year is 12, and `intervalCount` multiplies it (every 3 months is 3). Week and day periods use the average month (52 / 12 weeks, 365 / 12 days). A row with no known interval counts as having no amount.
+    - Statuses: only `active` and `past_due` (`MRR_STATUSES`). Excluded: `trialing`, `canceled`, `incomplete`, `incomplete_expired`, `unpaid`, `paused`. A Canceling row (cancel requested, still active) counts until it ends.
+    - "Stripe-billed" is `source: stripe` on the row, the same condition as the Paying view.
+    - Amounts are before discounts and coupons: the mirror stores the price's unit amount, not the invoice total.
+    - The account currency is USD (`MRR_CURRENCY`), the only currency checkout charges. A row whose `currency` is set to anything else is counted in the other-currency note. A counted row with no `unitAmount` (not yet synced or backfilled, or a price with no flat amount in the billed currency) is counted in the "no billed amount" note. Some of those causes are permanent (a tiered or `unit_amount_decimal` price, a currency with no `currency_options`), so the copy never promises the amount will arrive.
+    - Rounding: a row's MRR is rounded to a whole minor unit; a total is summed unrounded and rounded once, so it can differ from the sum of the column by a cent per few yearly rows.
   - **New MRR**: subscriptions created in the range.
   - **Churned MRR**: MRR of subscriptions that reached canceled in the range.
   - Expansion/contraction (seat or plan changes) is a wish (needs BillingEvent history).
@@ -263,9 +277,9 @@ There is one mapping, `subscriptionStatusTone.ts` in the Subscriptions folder, u
 
 ### 5.5 Money formatting (add to DESIGN_GUIDE.md)
 
-The guide has no money rule today. Proposed addition:
+Added to DESIGN_GUIDE.md as section 6 "Money":
 
-- Store amounts in minor units. Display with `Intl.NumberFormat(locale, { style: 'currency', currency })`: "$1,234.56", or "$12.3k" only inside StatTiles above 10,000.
+- Store amounts in minor units. Display with `Intl.NumberFormat(locale, { style: 'currency', currency })`: "$1,234.56", or "$12.3K" only inside StatTiles from 10,000 major units. The locale is `en-US`, like the rest of the admin's pricing copy, and "K" is Intl's compact suffix.
 - Right-aligned, tabular, with the currency named once in the column header ("MRR (USD)").
 - Credits are integers with a thousands separator and never carry a currency symbol. A credits value next to a money value is labeled "credits".
 - Negative money is shown as "-$12.00" (refunds), never in parentheses.
@@ -283,7 +297,7 @@ Shared helper: `shared/formatMoney.ts`, so that every money cell goes through on
 | List API error | `ErrorState` with "Try again". |
 | Stripe unreachable or rate-limited on the detail page | Mongo sections still render. Stripe sections show the inline ErrorState "Couldn't reach Stripe. The rest of this page is from our records.", with Try again. Stripe-write actions are disabled, with the in-place reason "Stripe is unreachable". |
 | Stripe not configured (self-host) | Revenue and the Stripe sections show "Stripe isn't configured on this deployment" with a link to the self-host docs. Comps still fully work. |
-| Unknown price id | The row still renders: Plan "Unknown price" (warn), MRR a dash, and it shows in the Mismatched view. |
+| Unknown price id | The row still renders: Plan "Unknown plan" (warn, hover "Price ID not in the plan catalog") with the billed interval under it, MRR from the mirrored billed amount (MRR never reads the catalog), and it shows in the Mismatched view. The CSV export writes "Unknown plan" in its Plan column. |
 
 ### 5.7 Charts
 
@@ -314,6 +328,16 @@ To make this possible, `RevenueSnapshot` (6.4) also stores per day:
 - the paying count;
 - new and churned MRR;
 - past-due and canceling MRR.
+
+### 5.8 Sidebar indicator
+
+Money > Subscriptions shows a dot when Stripe-sourced subscriptions started after this browser last opened the tab.
+
+- Last-seen is the newest Stripe row timestamp observed at the start of a successful list visit, stored in localStorage per browser, not per admin account. It never uses the browser clock or moves backwards.
+- The first visit sets the baseline and shows no dot.
+- The count refreshes every 5 minutes while the admin sidebar is mounted and the browser tab is focused. The query sets `refetchInterval` only, so react-query's default `refetchIntervalInBackground: false` pauses polling in a background tab.
+- Opening the tab captures a fresh server watermark. Once the list loads successfully, that watermark clears the dot; a failed list read keeps the previous watermark. Rows started since the previous successful visit get a New chip. Rows arriving after the captured watermark stay new, including while the tab is open. If the watermark request fails, unread state is preserved; reopening the tab retries that snapshot.
+- Known limit: an org comp that converts to paid keeps the comp's `createdAt`, so the dot and the New chip miss it. The Slack new-paid post still fires.
 
 ---
 
@@ -371,7 +395,7 @@ The endpoints use the contract pattern only if they become public; these stay ad
 | Route | Purpose |
 |---|---|
 | `GET /api/admin/subscriptions` | Server filters, sort, keyset or page pagination, owner join for user and org |
-| `GET /api/admin/subscriptions/summary` | Counts and MRR for the current filters (StatStrip, view counts) |
+| `GET /api/admin/subscriptions/summary` | Counts and MRR for the current filters (StatStrip, view counts). See the summary fields below. |
 | `GET /api/admin/subscriptions/export` | CSV |
 | `GET /api/admin/subscriptions/[id]` | Detail from Mongo |
 | `GET /api/admin/subscriptions/[id]/stripe` | Live read: invoices, payment method, upcoming invoice; cached 60 s |
@@ -379,7 +403,59 @@ The endpoints use the contract pattern only if they become public; these stay ad
 | `GET /api/admin/revenue` | Snapshot series and current totals |
 | `POST /api/admin/subscriptions/[id]/sync` | Sync from Stripe (5.2, 7) |
 
+`GET /api/admin/subscriptions` takes an optional `cancel` filter, inherited by the list, summary and export routes:
+
+| Value | Meaning |
+|---|---|
+| `scheduled` | Status is not terminal and `canceledAt` is set. Stripe sets `canceled_at` when a cancel is requested. Switches to the mirrored cancel fields (6.1) once they exist. |
+| `last30` | `canceledAt` is within the 30-day churn window. |
+
+The Canceling view is `cancel=scheduled`. The Churned (30 days) view is status canceled plus `cancel=last30`, the same definition as `summary.views.churned`.
+
+MRR on the list and summary routes (5.3 definition):
+
+| Where | Field | Meaning |
+|---|---|---|
+| list row | `mrr: { amount, currency } \| null` | The row's MRR in minor units of its own billed currency. `null` for a row that does not count (comps, statuses outside MRR) and for one with no mirrored amount. |
+| list row | `billedInterval: { interval, intervalCount } \| null` | The mirrored Stripe interval (`day`, `week`, `month`, `year`) and count, a missing count read as 1. `null` on comps and rows not synced yet; the Plan column then falls back to the catalog. |
+| summary | `mrr: { currency, amount, unpriced, otherCurrency }` | MRR of the rows matching the filters: `amount` per month in minor units of `currency` (`usd`); `unpriced` counts rows that count but have no mirrored amount; `otherCurrency` counts rows billed in another currency. Neither is in `amount`. |
+| summary | `pastDueMrr` (same shape) | The part of `mrr` from rows the Past due view counts: the Past due tile's "MRR at risk". |
+
+The summary aggregates both in the same facet query as the counts, grouping by currency, interval and whether an amount is mirrored with only `$match`, `$group`, `$sum`, `$multiply`, `$ifNull` and `$ne`, so it runs unchanged under DocumentDB's split-facet path (`executeFacetCompatible`). The normalization to a month happens on the grouped sums in code.
+
+The CSV export carries the list's MRR column as two columns after Source: `MRR` (major units at the currency's precision, "19.00", blank where the row has none) and `MRR currency` ("USD"). Its Interval column writes the Plan column's label ("Yearly", "Every 3 months": the billed interval, else the catalog plan's), so the export and the list agree.
+
 The old `GET /api/subscriptions` and `/stats` admin routes are deleted once nothing reads them.
+
+### 6.6 Slack notifications
+
+Subscription events post to a Slack channel for the admins.
+
+- **Webhook:** the admin setting `SlackSubscriptionsWebhookUrl` (Feedback group), falling back to the default Slack webhook and then the `SLACK_WEBHOOK_URL` secret, like the other channels.
+- **Stage:** posts only on the production stage. Self-host and preview stages never post.
+
+Events:
+
+| Event | Posts when |
+|---|---|
+| New paid subscription | The first invoice has amount paid > 0. Shows the recurring price per interval, plus a First charge line when the amount paid differs (for example a coupon or proration). |
+| Plan upgraded / downgraded / changed | The plan changes on the stored row. |
+| Cancellation scheduled | A cancel is requested. Shows the end date. |
+| Cancellation reverted | A scheduled cancel is undone. |
+| Subscription ended | The row transitions into canceled, from whichever of the update or delete event gets there first. Shows Stripe's cancellation reason. |
+| Payment failed | The first failed attempt only. |
+
+Renewals do not post. $0 first invoices do not post.
+
+Content: plan, interval, amount, seats for org subscriptions, the owner's ID, and a link to the owner in admin (the user profile, or the org in the Organizations tab). Never email, name, username or org name.
+
+Redelivery: plan and cancel posts are gated by the stored-row diff, and ended is gated by the prior status. An exact redelivery of a new-subscription or first-failure event can post twice.
+
+Delivery is best-effort. Posts run after the row commits and before invoice cleanup; Slack failures are logged and swallowed so they do not retry billing writes. A failed post, or an interruption between the row write and the post, can lose a plan, cancel or ended notification because a redelivery finds the new row state. There is no durable notification outbox.
+
+Out-of-order updates: a canceled row overwritten by a stale live update and then canceled again posts Subscription ended twice.
+
+The existing refund and dispute posts (Liveops channel) show the owner ID and admin link instead of names or emails. The earlier new-subscription post that included the customer email is removed.
 
 ---
 
@@ -427,11 +503,12 @@ Ordered by value. Each item ships on its own behind the existing admin gate. Lab
 |---|---|---|---|
 | 1 ([#6012](https://github.com/Bike4Mind/bike4mind/issues/6012)) | **Rename Subscribers to Waitlist**: nav, slug alias redirect, palette, page copy, email audience labels, docs-site with redirect; move Email marketing to People | S | - |
 | 2 ([#6013](https://github.com/Bike4Mind/bike4mind/issues/6013)) | **Close reason/audit gaps on existing money routes**: reason required on credits-per-cycle, remove, seats, revoke, convert-to-paid; block "remove" on live Stripe-billed rows; new reason preset sets. The existing Organizations-tab modals get the minimum change needed to send a reason; their redesign belongs to [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772) | S | - |
-| 3 ([#6014](https://github.com/Bike4Mind/bike4mind/issues/6014)) | **Admin subscriptions list API**: `GET /api/admin/subscriptions` + `summary` + `export`, server filters, org subscriptions included, indexes | M | - |
-| 4 ([#6015](https://github.com/Bike4Mind/bike4mind/issues/6015)) | **Subscriptions list page on the shared toolkit**: views, FilterBar, DataTable server mode, StatStrip (counts only), status tone map, money formatter, CSV export | M | 3 |
+| 3 ([#6014](https://github.com/Bike4Mind/bike4mind/issues/6014)) | **Admin subscriptions list API**: `GET /api/admin/subscriptions` + `summary` + `export`, server filters, org subscriptions included, indexes. **Shipped.** | M | - |
+| 4 ([#6015](https://github.com/Bike4Mind/bike4mind/issues/6015)) | **Subscriptions list page on the shared toolkit**: views, FilterBar, DataTable server mode, StatStrip (counts only), status tone map, money formatter, CSV export. **Partly shipped.** Remaining: saved custom views, Group by, bulk Export selected, Open in Stripe, the Mismatched view and anomaly banner (with [#6021](https://github.com/Bike4Mind/bike4mind/issues/6021)), and the detail page link (with [#6016](https://github.com/Bike4Mind/bike4mind/issues/6016)) | M | 3 |
+| 4b | **Additional scope implemented in [PR #6099](https://github.com/Bike4Mind/bike4mind/pull/6099)**, beyond the list-page scope of #6015: Slack notifications (6.6) and the sidebar indicator (5.8), and the Canceling and Churned (30 days) views (`cancel` filter, 6.5) | S | 3 |
 | 5 ([#6016](https://github.com/Bike4Mind/bike4mind/issues/6016)) | **Subscription detail page (Mongo-only)**: header, Overview (Plan, Credits, Owner, Seats), Admin log, comp actions moved to ActionDialog (grant, extend, end, edit credits per cycle, remove); profile and org cards link here; delete legacy `UserSubscriptionStatus` and `EditCreditsModal`. The Organizations-tab modals (`AdjustSeatsModal`, revoke) stay with [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772) | L | 2, 3 |
 | 6 ([#6017](https://github.com/Bike4Mind/bike4mind/issues/6017)) | **Mirror price and cancel fields on Subscription** (6.1), plus a read-only backfill script | M | - |
-| 7 ([#6018](https://github.com/Bike4Mind/bike4mind/issues/6018)) | **MRR in the list**: MRR column and tile, Canceling view | S | 4, 6 |
+| 7 ([#6018](https://github.com/Bike4Mind/bike4mind/issues/6018)) | **MRR in the list**: MRR column and tile, Past due amount, MRR definition popover, shared `formatMoney` and the DESIGN_GUIDE money rule, MRR in the CSV export. **Shipped.** The Canceling view is implemented with 4b via `cancel=scheduled`; it moves to the mirrored cancel fields once their backfill has run | S | 4, 6 |
 | 8 ([#6019](https://github.com/Bike4Mind/bike4mind/issues/6019)) | **Detail: live Stripe read**: Payment card, Invoices tab with credits-granted join, Lifetime paid | M | 5 |
 | 9 ([#6020](https://github.com/Bike4Mind/bike4mind/issues/6020)) | **BillingEvent store and Timeline tab** (6.2) | M | 5 |
 | 10 ([#6021](https://github.com/Bike4Mind/bike4mind/issues/6021)) | **Reconciliation cron, Mismatched view, AnomalyBanner, Sync from Stripe** (6.3); replaces Reconcile seats | M | 4, 6 |

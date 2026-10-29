@@ -41,14 +41,17 @@ export function evidenceStrength(evidence: HubEvidence, entry: HubEntry, pins: R
 }
 
 /**
- * A: a current own eval plus one more strong or medium item from outside our harness. B: any strong item.
- * C: any medium item. D: weak items only. Computed from evidence, never stored.
+ * A: a current own eval plus one more strong or medium quality item from outside our harness; a speed run never
+ * counts. B: any strong item. C: any medium item. D: weak items only. Computed from evidence, never stored.
  */
 export function gradeBuild(entry: HubEntry, build: HubBuild, pins: RuntimePins): BuildGrade {
   if (build.evidence.length === 0) return 'none';
   const strengths = build.evidence.map(e => evidenceStrength(e, entry, pins));
   const current = build.evidence.some(e => isCurrentOwnEval(e, pins));
-  const corroborated = strengths.some((s, i) => build.evidence[i].kind !== 'own-eval' && s !== 'weak');
+  const corroborated = strengths.some((s, i) => {
+    const { kind } = build.evidence[i];
+    return kind !== 'own-eval' && kind !== 'speed' && s !== 'weak';
+  });
   if (current && corroborated) return 'A';
   if (strengths.includes('strong')) return 'B';
   if (strengths.includes('medium')) return 'C';

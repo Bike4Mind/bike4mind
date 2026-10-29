@@ -91,6 +91,17 @@
       "outputs": ["out/**"],
       "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json"]
     },
+    // local-models bundles the Curated models list from catalog/model-hub, and its tests validate that file.
+    // Desktop and the CLI get it only through this build, so ^build carries a manifest change to them.
+    "@bike4mind/local-models#build": {
+      "dependsOn": ["codegen", "^build"],
+      "outputs": ["dist/**"],
+      "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json", "$TURBO_ROOT$/catalog/model-hub/**"]
+    },
+    "@bike4mind/local-models#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/catalog/model-hub/**"]
+    },
     // @bike4mind/workers compiles and tests apps/client/server code through its interim path
     // alias (apps/workers/tsconfig.json), and some of that code imports the premium-generated
     // stubs @bike4mind/client's codegen writes - same cross-package edge as @bike4mind/scripts.

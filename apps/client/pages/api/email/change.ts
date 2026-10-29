@@ -9,7 +9,7 @@ import {
   publishEmailChangeMessages,
   type EmailChangeMessage,
 } from '@server/users/emailChangeMailer';
-import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
+import { logAuthAudit } from '@server/utils/authAudit';
 import { z } from 'zod';
 import { stepUpGate } from '@server/auth/stepUp';
 
@@ -56,18 +56,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
           }
         );
 
-        // Log email change request (inside transaction - part of the write)
-        await logAuditEvent(
-          {
-            userId: req.user.id,
-            action: EmailAuditEvents.EMAIL_CHANGE_REQUESTED,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
-            oldEmail: req.user.email || undefined,
-            newEmail,
-          },
-          req.logger
-        );
+        await logAuthAudit(req, {
+          userId: req.user.id,
+          event: 'email_change_requested',
+          metadata: { oldEmail: req.user.email || undefined, newEmail },
+        });
       });
 
       await publishEmailChangeMessages(pendingEmails, req.logger, req.user.id);

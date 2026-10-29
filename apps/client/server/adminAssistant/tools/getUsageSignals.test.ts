@@ -6,6 +6,11 @@ vi.mock('@bike4mind/database', () => ({
   userUsagePatternSignalsRepository: { findByUserId: (...args: unknown[]) => findByUserId(...args) },
 }));
 
+const resolveAdminUserRef = vi.fn();
+vi.mock('../resolveAdminUserRef', () => ({
+  resolveAdminUserRef: (...args: unknown[]) => resolveAdminUserRef(...args),
+}));
+
 import { getUsageSignalsTool } from './getUsageSignals';
 
 const USER_ID = '65f1a2b3c4d5e6f708192a3b';
@@ -20,7 +25,38 @@ const runTool = async (args: unknown) => {
 };
 
 describe('getUsageSignalsTool', () => {
-  beforeEach(() => findByUserId.mockReset());
+  beforeEach(() => {
+    findByUserId.mockReset();
+    resolveAdminUserRef
+      .mockReset()
+      .mockImplementation(async (ref: { userId?: string }) => (ref.userId ? { id: ref.userId } : null));
+  });
+
+  it('looks a user up by email', async () => {
+    resolveAdminUserRef.mockResolvedValue({ id: USER_ID });
+    findByUserId.mockResolvedValue({
+      userId: USER_ID,
+      score: 1,
+      needsReview: false,
+      computedAt: new Date('2026-10-01T00:00:00Z'),
+      signals: [],
+    });
+
+    const result = await runTool({ email: 'ada@example.com' });
+
+    expect(resolveAdminUserRef).toHaveBeenCalledWith({ email: 'ada@example.com' });
+    expect(findByUserId).toHaveBeenCalledWith(USER_ID);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('returns not_found for an unknown user without reading signals', async () => {
+    resolveAdminUserRef.mockResolvedValue(null);
+
+    const result = await runTool({ email: 'nobody@example.com' });
+
+    expect(result).toEqual({ ok: false, error: 'not_found', message: 'No user matches that id or email.' });
+    expect(findByUserId).not.toHaveBeenCalled();
+  });
 
   it('returns the stored signals', async () => {
     const computedAt = new Date('2026-10-01T00:00:00Z');

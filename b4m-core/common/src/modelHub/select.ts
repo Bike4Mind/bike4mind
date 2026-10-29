@@ -71,8 +71,11 @@ function semverAtLeast(version: string, minimum: string): boolean {
   return true;
 }
 
+// The newest run on the pin decides; a failure on that date outweighs a pass the same day.
 function smokePassed(build: HubBuild, runtime: HubRuntime, pins: RuntimePins): boolean {
-  return build.smoke.some(s => s.runtime === runtime && s.pass && s.runtimeVersion === pins[runtime]);
+  const runs = build.smoke.filter(s => s.runtime === runtime && s.runtimeVersion === pins[runtime]);
+  const newest = runs.reduce((date, s) => (s.date > date ? s.date : date), '');
+  return runs.length > 0 && runs.every(s => s.date !== newest || s.pass);
 }
 
 function runtimeUsable(build: HubBuild, runtime: HubRuntime, options: PickOptions): boolean {
@@ -168,9 +171,11 @@ function meetsListingBar(tier: ProducerTier, own: HubOwnEval | null): boolean {
   if (own === null) return false;
   if (tier === 'B') return true;
   const parent = own.parentToolCall;
-  if (!parent) return false;
-  const rate = own.toolCall.exact / own.toolCall.of;
-  return rate >= parent.exact / parent.of - TIER_C_TOOL_REGRESSION_TOLERANCE;
+  if (!parent || own.toolCall.of <= 0 || parent.of <= 0) return false;
+  // Cross-multiplied in integers, so a drop of exactly the tolerance is not lost to float rounding.
+  // Assumes the tolerance is a whole percent; a finer one would be rounded here.
+  const points = Math.round(TIER_C_TOOL_REGRESSION_TOLERANCE * 100);
+  return 100 * own.toolCall.exact * parent.of >= (100 * parent.exact - points * parent.of) * own.toolCall.of;
 }
 
 /** The first usable runtime that meets the listing bar, preferring one with a current own eval. */

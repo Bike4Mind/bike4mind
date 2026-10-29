@@ -575,7 +575,7 @@ export async function performDeepResearch(
 
 export const deepResearchTool: ToolDefinition = {
   name: 'deep_research',
-  implementation: (context, config) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async value => {
       const params = value as DeepResearchParams;
       await context.onStart?.('deep_research', params);
@@ -583,7 +583,11 @@ export const deepResearchTool: ToolDefinition = {
       const effectiveParams = {
         topic: params.topic,
       };
-      const result = await performDeepResearch(context, effectiveParams, config ?? {});
+      const result = await performDeepResearch(
+        context,
+        effectiveParams,
+        (config ?? {}) as Parameters<typeof performDeepResearch>[2]
+      );
       return JSON.stringify(result);
     },
     toolSchema: {

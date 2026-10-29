@@ -7,6 +7,7 @@ import { eventBus } from './bus';
 import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
 import { createEventBusDeadLetter } from './eventBusDeadLetter';
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
+import { appUrlForLambdaEnv } from './router';
 
 // Stripe events
 const billingEventsDLQ = new sst.aws.Queue('billingEventsDLQ', {
@@ -28,6 +29,7 @@ const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
     timeout: '1 minute',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
     // Lumina5/Entitlements skip metrics (emitMetric in the handler + plan-lookup miss
     // in handleUserSubscriptionInvoice).
@@ -58,6 +60,7 @@ const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
     timeout: '1 minute',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
     // Lumina5/Entitlements reconcile metrics (emitMetric in the handler).
     permissions: [

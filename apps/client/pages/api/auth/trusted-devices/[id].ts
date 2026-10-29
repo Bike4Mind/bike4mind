@@ -21,7 +21,7 @@ const handler = baseApi().delete(
     const revoked = await trustedDeviceRepository.revoke(deviceId, userId);
     if (!revoked) throw new NotFoundError('Trusted device not found');
 
-    if (current?.id === deviceId) clearTrustedDeviceCookie(res);
+    if (current?.id === deviceId) clearTrustedDeviceCookie(res, userId);
     await logAuthAudit(req, { userId, event: 'trusted_device_revoked', metadata: { deviceId, scope: 'one' } });
     return res.status(200).json({ revoked: true, id: deviceId });
   })
