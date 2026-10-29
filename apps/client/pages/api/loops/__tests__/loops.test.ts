@@ -150,6 +150,13 @@ describe('POST /api/loops', () => {
     );
   });
 
+  it('refuses fewer than two stages', async () => {
+    await expect(call('collection', 'post', { body: { ...validBody, stages: ['todo'] } }).result).rejects.toMatchObject(
+      { statusCode: 400 }
+    );
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
   it('keeps an explicit model', async () => {
     await call('collection', 'post', { body: { ...validBody, model: 'claude-x' } }).result;
     expect(resolveDefaultChatModel).not.toHaveBeenCalled();
@@ -310,6 +317,18 @@ describe('PATCH /api/loops/:id status transitions', () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ agentId: 'a1', budgetCreditsPerDay: 5 }));
     await call('item', 'patch', { query: { id: OID }, body: { agentId: null, budgetCreditsPerDay: null } }).result;
     expect(repo.updateForUser.mock.calls[0][2]).toEqual({ agentId: null, budgetCreditsPerDay: null });
+  });
+
+  it('refuses fewer than two stages, which could not hold a ticket', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { stages: ['only'] } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    // Duplicates collapse, so two copies of one name are still one stage.
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { stages: ['a', 'a'] } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
   });
 
   it('validates the other fields', async () => {

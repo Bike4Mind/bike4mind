@@ -130,8 +130,24 @@ describe('loop_ticket_update', () => {
     expect(items.updateForUser).toHaveBeenCalledWith(
       't1',
       'u1',
-      expect.objectContaining({ status: 'blocked', statusReason: 'needs a login', stage: 'todo' })
+      expect.objectContaining({ status: 'blocked', statusReason: 'needs a login', stage: 'todo' }),
+      'in_progress'
     );
+  });
+
+  it('tells the model when its loop folded the ticket mid-update, instead of overwriting the fold', async () => {
+    items.findByIdForUser.mockResolvedValue({
+      id: 't1',
+      loopId: OWN,
+      stage: 'doing',
+      status: 'in_progress',
+      dependencies: [],
+    });
+    items.updateForUser.mockResolvedValueOnce(null);
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN });
+
+    expect(await run(tools, 'loop_ticket_update', { id: 't1', status: 'closed' })).toMatch(/^Error: ticket changed/);
+    expect(items.updateForUser).toHaveBeenCalledWith('t1', 'u1', expect.anything(), 'in_progress');
   });
 
   it("moves a ticket to another of the user's loops, never to another user's", async () => {
@@ -149,7 +165,8 @@ describe('loop_ticket_update', () => {
     expect(items.updateForUser).toHaveBeenCalledWith(
       't1',
       'u1',
-      expect.objectContaining({ loopId: SIBLING, stage: 'todo', status: 'open' })
+      expect.objectContaining({ loopId: SIBLING, stage: 'todo', status: 'open' }),
+      'open'
     );
   });
 });

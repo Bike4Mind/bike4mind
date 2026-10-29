@@ -277,26 +277,26 @@ describe('PATCH /api/work-items/:id', () => {
   it('patches only the fields supplied', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' }, undefined);
   });
 
   // '' and null are the clearing signal; the repository turns a null into $unset.
   it('turns an empty description into the clearing value', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { description: '' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null }, undefined);
   });
 
   it('turns an explicit null description into the clearing value', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { description: null } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null }, undefined);
   });
 
   it('leaves description alone when the field is absent', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' }, undefined);
   });
 
   it('rejects an empty status rather than silently ignoring it', async () => {
@@ -309,10 +309,12 @@ describe('PATCH /api/work-items/:id', () => {
   it('stamps closedAt when the item is closed', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { status: 'closed' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', {
-      status: 'closed',
-      closedAt: expect.any(Date),
-    });
+    expect(repo.updateForUser).toHaveBeenCalledWith(
+      OID_A,
+      'u1',
+      { status: 'closed', closedAt: expect.any(Date) },
+      undefined
+    );
   });
 
   it('clears closedAt when a closed item is reopened', async () => {
@@ -320,13 +322,13 @@ describe('PATCH /api/work-items/:id', () => {
 
     await call('item', 'patch', { query: { id: OID_A }, body: { status: 'open' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { status: 'open', closedAt: null });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { status: 'open', closedAt: null }, undefined);
   });
 
   it('leaves closedAt alone when the status is unchanged', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { status: 'open', title: 'Renamed' } }).result;
 
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' }, undefined);
   });
 
   it('refuses a self-dependency', async () => {
@@ -489,7 +491,8 @@ describe('loop tickets through the work-items routes', () => {
     expect(repo.updateForUser).toHaveBeenLastCalledWith(
       OID_A,
       'u1',
-      expect.objectContaining({ stage: 'done', status: 'closed', closedAt: expect.any(Date) })
+      expect.objectContaining({ stage: 'done', status: 'closed', closedAt: expect.any(Date) }),
+      'open'
     );
 
     repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'done', status: 'closed' }));
@@ -497,7 +500,8 @@ describe('loop tickets through the work-items routes', () => {
     expect(repo.updateForUser).toHaveBeenLastCalledWith(
       OID_A,
       'u1',
-      expect.objectContaining({ stage: 'doing', status: 'open', closedAt: null })
+      expect.objectContaining({ stage: 'doing', status: 'open', closedAt: null }),
+      'closed'
     );
   });
 
@@ -510,7 +514,8 @@ describe('loop tickets through the work-items routes', () => {
     expect(repo.updateForUser).toHaveBeenLastCalledWith(
       OID_A,
       'u1',
-      expect.objectContaining({ status: 'blocked', statusReason: 'waiting on X' })
+      expect.objectContaining({ status: 'blocked', statusReason: 'waiting on X' }),
+      'open'
     );
   });
 
@@ -520,7 +525,48 @@ describe('loop tickets through the work-items routes', () => {
     expect(repo.updateForUser).toHaveBeenLastCalledWith(
       OID_A,
       'u1',
-      expect.objectContaining({ loopId: null, stage: null, statusReason: null, executionId: null })
+      expect.objectContaining({ loopId: null, stage: null, statusReason: null, executionId: null }),
+      'open'
+    );
+  });
+
+  it('writes a ticket only while its status holds, and is a 409 when its loop folded it mid-request', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'doing', status: 'in_progress' }));
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(
+      call('item', 'patch', { query: { id: OID_A }, body: { status: 'blocked', reason: 'stuck' } }).result
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID_A, 'u1', expect.anything(), 'in_progress');
+  });
+
+  it('keeps a plain item write unconditional', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ status: 'open' }));
+    await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID_A, 'u1', expect.anything(), undefined);
+  });
+
+  it('treats loopId: null as not linked on POST, and a stage without a loop as a 400 on POST and PATCH', async () => {
+    await call('collection', 'post', { body: { title: 'T', loopId: null } }).result;
+    expect(repo.create.mock.calls[0][0]).not.toHaveProperty('loopId');
+    expect(repo.create.mock.calls[0][0]).not.toHaveProperty('stage');
+
+    await expect(call('collection', 'post', { body: { title: 'T', stage: 'todo' } }).result).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    await expect(
+      call('collection', 'post', { body: { title: 'T', loopId: null, stage: 'todo' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'doing', executionId: 'e1' }));
+    await expect(
+      call('item', 'patch', { query: { id: OID_A }, body: { loopId: null, stage: 'todo' } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await call('item', 'patch', { query: { id: OID_A }, body: { loopId: null, stage: null } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ loopId: null, stage: null, executionId: null }),
+      'open'
     );
   });
 
@@ -532,7 +578,8 @@ describe('loop tickets through the work-items routes', () => {
     expect(repo.updateForUser).toHaveBeenLastCalledWith(
       OID_A,
       'u1',
-      expect.objectContaining({ loopId: null, executionId: null, status: 'open' })
+      expect.objectContaining({ loopId: null, executionId: null, status: 'open' }),
+      'in_progress'
     );
 
     repo.updateForUser.mockClear();

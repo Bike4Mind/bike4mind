@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { IWorkItem } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import { assertLoopTicketAccess, makeDueIfReady, ticketMovePatch } from '@server/utils/loopTickets';
@@ -71,7 +72,9 @@ const handler = baseApi()
     const description = validateWorkItemDescription(body.description);
     const requestedStatus = validateWorkItemStatus(body.status);
     const dependencies = validateWorkItemDependencies(body.dependencies) ?? [];
-    const loop = body.loopId !== undefined ? await assertLoopTicketAccess(req, body.loopId) : undefined;
+    // Same rule as PATCH: `loopId: null` means not linked, and a stage needs a loop.
+    const loop = body.loopId != null ? await assertLoopTicketAccess(req, body.loopId) : undefined;
+    if (!loop && body.stage != null) throw new BadRequestError('stage is only valid on a loop ticket');
     const ticket =
       loop && ticketMovePatch(loop, undefined, { stage: body.stage, status: requestedStatus, reason: body.reason });
     const status = ticket?.status ?? requestedStatus ?? 'open';

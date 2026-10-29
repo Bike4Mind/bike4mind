@@ -134,8 +134,16 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
 
   buildGraphForUser(userId: string): Promise<IWorkItemGraph>;
 
-  /** Scoped update - returns null when the item is missing or owned by someone else. */
-  updateForUser(id: string, userId: string, patch: WorkItemPatch): Promise<IWorkItem | null>;
+  /**
+   * Scoped update - returns null when the item is missing or owned by someone else. With `expectedStatus`
+   * it only applies while the item still has that status, so a loop's fold landing mid-request is not overwritten.
+   */
+  updateForUser(
+    id: string,
+    userId: string,
+    patch: WorkItemPatch,
+    expectedStatus?: WorkItemStatus
+  ): Promise<IWorkItem | null>;
 
   /** Soft delete. Returns false when nothing matched. */
   softDeleteForUser(id: string, userId: string): Promise<boolean>;
