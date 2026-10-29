@@ -440,7 +440,7 @@ export function registerChat(
   const localSizing = localContextSizing({ setting: () => localContext.read() });
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
-    store: new ModelServerStore(safeStorage, mcpStoreFile(join(userData, 'model-servers.json')), logger),
+    store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
     logger,
     changed: servers => {
       models.forgetLocal();
