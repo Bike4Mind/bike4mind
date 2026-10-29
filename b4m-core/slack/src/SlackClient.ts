@@ -1,4 +1,4 @@
-import { isPlaceholderValue } from '@bike4mind/common';
+import { escapeSlackText, isPlaceholderValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import {
   WebClient,
@@ -184,9 +184,7 @@ export interface SlackSearchResult {
  * Slack's own text-escaping rules) is sufficient, since those special forms cannot parse without
  * them.
  */
-export function escapeSlackMrkdwn(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+export const escapeSlackMrkdwn = escapeSlackText;
 
 /**
  * Centralized interface for all Slack API interactions via the @slack/web-api SDK.
