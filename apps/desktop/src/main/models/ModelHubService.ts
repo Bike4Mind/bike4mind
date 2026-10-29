@@ -6,7 +6,17 @@ import {
   ModelNotFoundError,
   RuntimeConnectionError,
   RuntimeHttpError,
+  curatedLibrary as libraryOf,
+  curatedListing,
+  curatedOllamaBlocked as ollamaBlocked,
+  curatedParamsLabel as paramsLabel,
+  curatedPicks,
+  curatedPins as pinsOf,
+  curatedSource,
   isAbliteratedModel,
+  isCuratedListable as listable,
+  isCuratedPullable as pullable,
+  isPermissiveEntry as permissive,
   type HardwareProfile,
   ollamaPullRef,
   ollamaRefAliases,
@@ -25,14 +35,7 @@ import {
   type PullProgress,
   type RuntimeHealth,
 } from '@bike4mind/local-models';
-import {
-  CURATED_SLOTS,
-  MIN_CHAT_CONTEXT,
-  curatedTier,
-  type HubBuild,
-  type HubEntry,
-  type HubManifest,
-} from '@bike4mind/common';
+import type { HubBuild, HubEntry, HubManifest } from '@bike4mind/common';
 import {
   licenseKind,
   pullKey,
@@ -129,38 +132,7 @@ const OLLAMA_LIBRARY_URL = 'https://ollama.com/library';
 const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const hubBuildId = (path: string) => path.replace(/\.gguf$/i, '');
 
-function paramsLabel(entry: HubEntry): string {
-  const { totalB, activeB } = entry.params;
-  return activeB === null ? `${totalB}B` : `${totalB}B, ${activeB}B active`;
-}
-
-const permissive = (entry: HubEntry) =>
-  entry.license.class === 'permissive' && entry.license.base.class === 'permissive';
-
-const libraryOf = (build: HubBuild) => (build.ollama?.kind === 'library' ? build.ollama : null);
-const pinsOf = (build: HubBuild) =>
-  build.ollama?.kind === 'library' || build.ollama?.kind === 'hf-pull' ? build.ollama.layers : undefined;
 const modelDigest = (build: HubBuild) => libraryOf(build)?.digest ?? build.weights[0]?.sha256;
-
-/** Abliterated entries never reach Curated, whatever the manifest policy says. */
-function listable(entry: HubEntry, manifest: HubManifest): boolean {
-  if (entry.flags.abliterated || entry.lineage.variantType === 'abliterated' || entry.license.legal === 'blocked')
-    return false;
-  if (entry.roles.includes('chat') && entry.arch.contextMax < MIN_CHAT_CONTEXT) return false;
-  const sources = entry.builds.map(build => build.hf?.repo ?? libraryOf(build)?.ref ?? '');
-  if (isAbliteratedModel({ id: entry.id, tags: [entry.name, ...sources], baseModels: [entry.lineage.base] }))
-    return false;
-  return permissive(entry) || manifest.policy.restrictedLicense === 'curated-labelled';
-}
-
-// The library serves a tag whole; hf.co serves one file per tag, so only single-file builds without a separate
-// projector qualify there, and only with the template pinned, since hf.co builds it from the repo's main branch.
-function pullable(build: HubBuild): boolean {
-  const pins = pinsOf(build);
-  if (!pins) return false;
-  if (libraryOf(build)) return true;
-  return !!(pins.installedTemplate ?? pins.template) && !!build.hf && build.weights.length === 1 && !build.mmproj;
-}
 
 const OLLAMA_LAYER = 'application/vnd.ollama.image.';
 const PINNED_LAYERS = ['template', 'params', 'license', 'projector', 'draft'] as const;
@@ -231,22 +203,6 @@ function pause(ms: number, signal: AbortSignal): Promise<boolean> {
   });
 }
 
-// Pre-release suffixes are dropped on purpose (0.32.12-rc1 meets a 0.32.12 floor); a dev build
-// reporting 0.0.0 is blocked, which is the safe side.
-const versionParts = (text: string) => /^v?(\d+)\.(\d+)\.(\d+)/.exec(text.trim())?.slice(1).map(Number);
-
-/** Why this Ollama cannot download the build; one with a minimum is blocked while Ollama reports no version. */
-export function ollamaBlocked(build: HubBuild, version: string | null): string | null {
-  const minimum = build.runtimeMin?.ollama;
-  const want = minimum && versionParts(minimum);
-  if (!minimum || !want) return null;
-  const needs = `Needs Ollama ${minimum} or newer`;
-  const have = version ? versionParts(version) : undefined;
-  if (!have) return `${needs}, and Ollama did not report its version`;
-  const differs = have.findIndex((part, index) => part !== want[index]);
-  return differs !== -1 && have[differs] < want[differs] ? needs : null;
-}
-
 /** Cold-cache /api/show reads in flight at once, so a long installed list does not swamp a busy daemon. */
 const INSPECT_CONCURRENCY = 4;
 
@@ -262,8 +218,6 @@ async function mapLimited<T, R>(items: readonly T[], limit: number, map: (item: 
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
 }
-
-const smallestBuild = (entry: CuratedEntryView) => Math.min(...entry.builds.map(build => build.sizeBytes));
 
 /** `listed` keeps the failure in the pull list, as a failed download rather than a refused one. */
 type Refusal = { ok: false; error: ModelHubError; listed: boolean };
@@ -769,48 +723,26 @@ export class ModelHubService {
     return this.#pulledRefs.get(`${entryId}\0${build.id}`) ?? `hf.co/${build.hf?.repo ?? ''}:${build.quant.label}`;
   }
 
-  #curatedBuild(entry: HubEntry, build: HubBuild, sizing: Sizing, version: string | null) {
-    const fit = reviewedFit(entry, build, sizing);
-    const blockedReason = ollamaBlocked(build, version);
-    const library = libraryOf(build);
-    if (library)
-      return {
-        id: build.id,
-        repo: library.ref,
-        pullBuildId: build.id,
-        quant: build.quant.label,
-        sizeBytes: library.sizeBytes,
-        ollamaRef: library.ref,
-        fit,
-        blockedReason,
-      } satisfies CuratedBuildView;
-    const repo = build.hf?.repo ?? '';
-    const file = build.weights[0];
+  #curatedBuild(entry: HubEntry, build: HubBuild, sizing: Sizing, version: string | null): CuratedBuildView {
+    const { repo, pullBuildId, sizeBytes, ollamaRef } = curatedSource(build);
     return {
       id: build.id,
       repo,
-      pullBuildId: hubBuildId(file.path),
+      pullBuildId,
       quant: build.quant.label,
-      sizeBytes: file.sizeBytes + (pinsOf(build)?.projectorBytes ?? 0),
-      ollamaRef: this.#hfRef(entry.id, build),
-      fit,
-      blockedReason,
-    } satisfies CuratedBuildView;
+      sizeBytes,
+      ollamaRef: libraryOf(build) ? ollamaRef : this.#hfRef(entry.id, build),
+      fit: reviewedFit(entry, build, sizing),
+      blockedReason: ollamaBlocked(build, version),
+    };
   }
 
   /** Recommended goes to the first pick, best first, that fits and can be downloaded here. */
   #picks(entries: readonly CuratedEntryView[], hardware: HardwareProfile): CuratedPickView[] {
-    const tier = curatedTier(this.#deps.curated.tiers, hardware);
-    if (!tier) return [];
-    const shown = tier.picks
-      .map(pick => ({
-        pick,
-        build: entries.find(entry => entry.id === pick.entry)?.builds.find(build => build.id === pick.build),
-      }))
-      .filter((shownPick): shownPick is { pick: (typeof tier.picks)[number]; build: CuratedBuildView } =>
-        Boolean(shownPick.build)
-      )
-      .sort((a, b) => CURATED_SLOTS.indexOf(a.pick.slot) - CURATED_SLOTS.indexOf(b.pick.slot));
+    const shown = curatedPicks(this.#deps.curated, hardware).picks.flatMap(({ pick }) => {
+      const build = entries.find(entry => entry.id === pick.entry)?.builds.find(view => view.id === pick.build);
+      return build ? [{ pick, build }] : [];
+    });
     const recommended = shown.findIndex(({ build }) => build.fit.level !== 'too-large' && !build.blockedReason);
     return shown.map(({ pick }, index) => ({
       slot: pick.slot,
@@ -825,33 +757,29 @@ export class ModelHubService {
     const { hardware } = sizing;
     const manifest = this.#deps.curated;
     const version = health.ok ? health.version : null;
-    const entries = manifest.entries
-      .filter(entry => listable(entry, manifest))
-      .map((entry): CuratedEntryView => {
-        const library = entry.builds.map(libraryOf).find(source => source !== null);
-        const repo = entry.builds.find(build => build.hf)?.hf?.repo;
-        return {
-          id: entry.id,
-          name: entry.name,
-          why: entry.why,
-          params: paramsLabel(entry),
-          licenseName: entry.license.id,
-          licenseUrl: entry.license.source,
-          licenseKind: permissive(entry) ? 'permissive' : 'restricted',
-          thinking: entry.capabilities.thinking,
-          vision: entry.capabilities.vision,
-          code: entry.roles.includes('code'),
-          tools: entry.capabilities.tools,
-          toolUse: { rating: entry.toolUse.rating, note: entry.toolUse.note ?? null },
-          sourceUrl: library
-            ? `${OLLAMA_LIBRARY_URL}/${library.ref.slice(0, library.ref.indexOf(':'))}`
-            : `${hub.endpoint}/${repo ?? ''}`,
-          sourceName: library ? 'Ollama' : 'Hugging Face',
-          builds: entry.builds.filter(pullable).map(build => this.#curatedBuild(entry, build, sizing, version)),
-        };
-      })
-      .filter(entry => entry.builds.length > 0)
-      .sort((a, b) => smallestBuild(a) - smallestBuild(b));
+    const entries = curatedListing(manifest).map(({ entry, builds }): CuratedEntryView => {
+      const library = entry.builds.map(libraryOf).find(source => source !== null);
+      const repo = entry.builds.find(build => build.hf)?.hf?.repo;
+      return {
+        id: entry.id,
+        name: entry.name,
+        why: entry.why,
+        params: paramsLabel(entry),
+        licenseName: entry.license.id,
+        licenseUrl: entry.license.source,
+        licenseKind: permissive(entry) ? 'permissive' : 'restricted',
+        thinking: entry.capabilities.thinking,
+        vision: entry.capabilities.vision,
+        code: entry.roles.includes('code'),
+        tools: entry.capabilities.tools,
+        toolUse: { rating: entry.toolUse.rating, note: entry.toolUse.note ?? null },
+        sourceUrl: library
+          ? `${OLLAMA_LIBRARY_URL}/${library.ref.slice(0, library.ref.indexOf(':'))}`
+          : `${hub.endpoint}/${repo ?? ''}`,
+        sourceName: library ? 'Ollama' : 'Hugging Face',
+        builds: builds.map(build => this.#curatedBuild(entry, build, sizing, version)),
+      };
+    });
     return {
       updatedAt: manifest.updatedAt,
       machine: machineView(hardware),

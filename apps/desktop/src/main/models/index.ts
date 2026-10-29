@@ -1,6 +1,12 @@
 import { join } from 'node:path';
 import { app, ipcMain, safeStorage } from 'electron';
-import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers, probeHardware } from '@bike4mind/local-models';
+import {
+  HuggingFaceHub,
+  OllamaRuntime,
+  loadCuratedManifest,
+  ollamaLibraryLayers,
+  probeHardware,
+} from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { HfTokenResult, ModelPull } from '@shared/models';
 import { localHardware } from '../chat/localContextSizing';
@@ -8,7 +14,6 @@ import { createMainLogger } from '../logger';
 import { privateFile } from '../privateFile';
 import { appWindows } from '../windows';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
-import { loadCuratedManifest } from './loadCuratedManifest';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
 
 const MAX_TEXT = 512;

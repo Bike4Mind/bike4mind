@@ -6,6 +6,7 @@ import {
   LocalRuntimeError,
   ModelNotFoundError,
   RuntimeConnectionError,
+  loadCuratedManifest,
   type HardwareProfile,
   ollamaPullRef,
   type HubGgufBuild,
@@ -24,7 +25,6 @@ import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localConte
 import { pullKey, type ModelPull } from '@shared/models';
 import { describe, expect, it, vi } from 'vitest';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
-import { loadCuratedManifest } from './loadCuratedManifest';
 import {
   ModelHubService,
   toModelHubError,

@@ -89,15 +89,16 @@
     "@bike4mind/desktop#build": {
       "dependsOn": ["^build"],
       "outputs": ["out/**"],
-      "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json", "$TURBO_ROOT$/catalog/model-hub/**"]
+      "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json"]
     },
-    // The main process imports the curated manifest from catalog/, outside the package, and its
-    // tests validate it; without this a manifest-only change replays cached results.
-    "@bike4mind/desktop#typecheck": {
+    // local-models bundles the Curated models list from catalog/model-hub, and its tests validate that file.
+    // Desktop and the CLI get it only through this build, so ^build carries a manifest change to them.
+    "@bike4mind/local-models#build": {
       "dependsOn": ["codegen", "^build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/catalog/model-hub/**"]
+      "outputs": ["dist/**"],
+      "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json", "$TURBO_ROOT$/catalog/model-hub/**"]
     },
-    "@bike4mind/desktop#test": {
+    "@bike4mind/local-models#test": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/catalog/model-hub/**"]
     },
