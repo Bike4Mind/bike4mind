@@ -128,6 +128,41 @@ describe('defaultWriteRateLimit', () => {
     expect(next).toHaveBeenCalledWith();
   });
 
+  it('allows the write when the counter fails, in enforce mode too', async () => {
+    mocks.tryIncrement.mockRejectedValue(new Error('cache collection unavailable'));
+    const { next, setHeader, warn } = await run();
+    expect(next).toHaveBeenCalledWith();
+    expect(setHeader).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('[defaultWriteRateLimit] counter unavailable; allowing the write', {
+      error: expect.any(Error),
+    });
+  });
+
+  it('skips the counter in log mode once the user is over and logged this window', async () => {
+    settings('log');
+    mocks.tryIncrement.mockResolvedValue({ success: false, expiresAt: WINDOW_END });
+    await run();
+    await run();
+    expect(mocks.tryIncrement).toHaveBeenCalledTimes(1);
+  });
+
+  it('still counts every write in enforce mode once over the limit', async () => {
+    mocks.tryIncrement.mockResolvedValue({ success: false, expiresAt: WINDOW_END });
+    await run();
+    const second = await run();
+    expect(mocks.tryIncrement).toHaveBeenCalledTimes(2);
+    expect(second.next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 429 }));
+  });
+
+  it('names the admin when the over-limit writes come from a support session', async () => {
+    mocks.tryIncrement.mockResolvedValue({ success: false, expiresAt: WINDOW_END });
+    const { warn } = await run({ user: { id: 'u1', isAdmin: false, tags: [], impersonatedBy: 'admin-7' } } as never);
+    expect(warn).toHaveBeenCalledWith(
+      '[defaultWriteRateLimit] over the default write limit',
+      expect.objectContaining({ userId: 'u1', impersonatedBy: 'admin-7' })
+    );
+  });
+
   it('reads the settings once per cache window, not per request', async () => {
     await run();
     await run();

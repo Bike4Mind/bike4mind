@@ -1,4 +1,10 @@
-import { hasDeveloperUserTag, type SettingKey } from '@bike4mind/common';
+import {
+  DEFAULT_WRITE_RATE_LIMIT_MODES,
+  DEFAULT_WRITE_RATE_LIMIT_PER_MIN,
+  hasDeveloperUserTag,
+  type DefaultWriteRateLimitMode,
+  type SettingKey,
+} from '@bike4mind/common';
 import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue, TooManyRequestsError } from '@bike4mind/utils';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
@@ -18,18 +24,16 @@ const BUCKET = 'default-write';
 
 const LIMIT_SETTING: SettingKey = 'apiRateLimitDefaultWritePerMin';
 const MODE_SETTING: SettingKey = 'apiRateLimitDefaultWriteMode';
-export const DEFAULT_WRITE_LIMIT_MODES = ['off', 'log', 'enforce'] as const;
-export type DefaultWriteLimitMode = (typeof DEFAULT_WRITE_LIMIT_MODES)[number];
 
 /**
  * Used when the settings cannot be read. Log-only, unlike the tier limiter's fail-closed floor:
  * this cap covers every write route, so blocking on a settings outage would break normal use.
  */
-const FALLBACK = { mode: 'log' as DefaultWriteLimitMode, perMin: 120 };
+const FALLBACK = { mode: 'log' as DefaultWriteRateLimitMode, perMin: DEFAULT_WRITE_RATE_LIMIT_PER_MIN };
 
 // ms. Same short TTL as the tier settings (userRateTier.ts), so an admin's change lands within 15s.
 const SETTINGS_CACHE_TTL_MS = 15_000;
-let settingsCache: { value: { mode: DefaultWriteLimitMode; perMin: number }; expiresAt: number } | undefined;
+let settingsCache: { value: { mode: DefaultWriteRateLimitMode; perMin: number }; expiresAt: number } | undefined;
 
 // User id -> the window (its expiry, ms) already logged for that user.
 const loggedWindows = new Map<string, number>();
@@ -41,7 +45,7 @@ export const __resetDefaultWriteLimitCache = (): void => {
   loggedWindows.clear();
 };
 
-async function readSettings(): Promise<{ mode: DefaultWriteLimitMode; perMin: number }> {
+async function readSettings(): Promise<{ mode: DefaultWriteRateLimitMode; perMin: number }> {
   const now = Date.now();
   if (settingsCache && settingsCache.expiresAt > now) return settingsCache.value;
   let value = FALLBACK;
@@ -53,8 +57,8 @@ async function readSettings(): Promise<{ mode: DefaultWriteLimitMode; perMin: nu
     const mode = getSettingsValue(MODE_SETTING, settings);
     const perMin = getSettingsValue(LIMIT_SETTING, settings);
     value = {
-      mode: DEFAULT_WRITE_LIMIT_MODES.includes(mode as DefaultWriteLimitMode)
-        ? (mode as DefaultWriteLimitMode)
+      mode: DEFAULT_WRITE_RATE_LIMIT_MODES.includes(mode as DefaultWriteRateLimitMode)
+        ? (mode as DefaultWriteRateLimitMode)
         : FALLBACK.mode,
       perMin: typeof perMin === 'number' && perMin > 0 ? perMin : FALLBACK.perMin,
     };
@@ -82,12 +86,23 @@ export async function defaultWriteRateLimit(req: Request, res: Response, next: N
 
   const { mode, perMin } = await readSettings();
   if (mode === 'off') return next();
+  // Already over and logged this window: log mode would let it through anyway, so skip the counter,
+  // whose over-limit path costs several Mongo round trips per request.
+  if (mode === 'log' && (loggedWindows.get(user.id) ?? 0) > Date.now()) return next();
 
-  const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-    `rate-limit:${user.id}:${BUCKET}`,
-    perMin,
-    WINDOW_MS
-  );
+  let counted: { success: boolean; expiresAt: Date };
+  try {
+    counted = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      `rate-limit:${user.id}:${BUCKET}`,
+      perMin,
+      WINDOW_MS
+    );
+  } catch (error) {
+    // A soft abuse cap: a counter failure must not fail the user's write, in either mode.
+    req.logger.warn('[defaultWriteRateLimit] counter unavailable; allowing the write', { error });
+    return next();
+  }
+  const { success, expiresAt } = counted;
   if (success) return next();
 
   // One line per user per window per process, so the log-only phase shows who would be limited and
@@ -97,6 +112,8 @@ export async function defaultWriteRateLimit(req: Request, res: Response, next: N
     loggedWindows.set(user.id, expiresAt.getTime());
     req.logger.warn('[defaultWriteRateLimit] over the default write limit', {
       userId: user.id,
+      // Set during an admin's support session, whose writes count against the user it acts as.
+      impersonatedBy: user.impersonatedBy,
       path: req.url?.split('?')[0],
       method: req.method,
       perMin,

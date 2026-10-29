@@ -255,7 +255,8 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // and 403 for an OAuth token unless this route opted in via `oauthScopes`.
     router.use(oauthRouteGate({ oauthScopes: resolvedOptions.oauthScopes }));
 
-    // After every gate that can reject, so a refused request never spends the user's write budget.
+    // After baseApi's auth gates, so a request they refuse never spends the user's write budget. Requests
+    // refused later (a route's own rateLimit, validation, handler errors) still count.
     if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
 
     // Fire-and-forget analytics: ≤1 emit/user/UTC-day per Lambda instance (best-effort).

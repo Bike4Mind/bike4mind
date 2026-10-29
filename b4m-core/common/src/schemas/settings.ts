@@ -1049,6 +1049,14 @@ function makeStringSetting(
  * this change exists to expose for a sort-memory failure on the same large lakes. Raise it only
  * alongside keyset file pagination.
  */
+/**
+ * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
+ * them (apps/client/server/middlewares/defaultWriteRateLimit.ts), which falls back to these values.
+ */
+export const DEFAULT_WRITE_RATE_LIMIT_MODES = ['off', 'log', 'enforce'] as const;
+export type DefaultWriteRateLimitMode = (typeof DEFAULT_WRITE_RATE_LIMIT_MODES)[number];
+export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
+
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
 
@@ -3248,12 +3256,12 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 4,
   }),
-  // Both read by apps/client/server/middlewares/defaultWriteRateLimit.ts, which falls back to log-only
-  // at 120/min when they cannot be read.
+  // Both read by apps/client/server/middlewares/defaultWriteRateLimit.ts, which falls back to log mode
+  // at DEFAULT_WRITE_RATE_LIMIT_PER_MIN when they cannot be read.
   apiRateLimitDefaultWritePerMin: makeNumberSetting({
     key: 'apiRateLimitDefaultWritePerMin',
     name: 'Default Write Rate Limit (writes/min per user)',
-    defaultValue: 120,
+    defaultValue: DEFAULT_WRITE_RATE_LIMIT_PER_MIN,
     min: 1,
     max: 100000,
     int: true,
@@ -3269,7 +3277,7 @@ export const settingsMap = {
     defaultValue: 'log',
     description:
       '"log": writes over the cap are allowed and logged, to measure real usage before enforcing. "enforce": writes over the cap get 429 Too Many Requests. "off": not counted at all. Changes apply within 15 seconds.',
-    options: ['off', 'log', 'enforce'],
+    options: [...DEFAULT_WRITE_RATE_LIMIT_MODES],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 6,
