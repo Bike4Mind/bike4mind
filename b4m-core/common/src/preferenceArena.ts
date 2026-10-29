@@ -31,7 +31,10 @@ export type ArenaRejectReason =
   | 'low_gold_accuracy'
   | 'daily_cap'
   | 'lifetime_cap'
-  /** The vote earned but the credit write threw; kept countable so it can be reconciled. */
+  /**
+   * The vote earned but the credit write threw. It still counts toward gold accuracy and the
+   * rejection stats (not toward the credit caps) and is not retried automatically; re-granting with the same transaction id is deduped by the credit ledger.
+   */
   | 'grant_failed';
 
 export const PREFERENCE_ARENA_REWARD_REASON = 'preference_arena_vote';
