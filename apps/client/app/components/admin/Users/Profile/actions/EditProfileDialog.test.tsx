@@ -137,7 +137,9 @@ describe('EditProfileDialog', () => {
     expect(screen.getByTestId(`${ID}-username-input`)).toHaveValue('');
     type('email', 'first@example.com');
 
-    expect(screen.getByTestId(`${ID}-email-note`)).toHaveTextContent('The address is added once the link is clicked.');
+    expect(screen.getByTestId(`${ID}-email-note`)).toHaveTextContent(
+      'The address is added once the link is clicked. The account has no current email, so the user is not told about the request.'
+    );
     expect(screen.getByTestId(`${ID}-preview-email-before`)).toHaveTextContent('-');
   });
 

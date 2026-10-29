@@ -63,7 +63,7 @@ const EmailNote: React.FC<{ user: AdminUserProfile; email: string }> = ({ user, 
     We email a confirmation link to {email}.{' '}
     {user.email
       ? `The account keeps ${user.email} until the link is clicked, and ${user.email} is told about the request.`
-      : 'The address is added once the link is clicked.'}
+      : 'The address is added once the link is clicked. The account has no current email, so the user is not told about the request.'}
     {user.pendingEmail && ` This replaces the pending change to ${user.pendingEmail}.`}
   </Typography>
 );
