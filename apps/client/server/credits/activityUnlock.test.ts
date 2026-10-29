@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   drip: vi.fn(),
@@ -6,9 +6,10 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   aggregate: vi.fn(),
   setting: vi.fn(),
+  limits: vi.fn(),
 }));
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: h.protection }));
-vi.mock('@bike4mind/services', () => ({ userService: { dripSignupGrant: h.drip } }));
+vi.mock('@bike4mind/services', () => ({ userService: { dripSignupGrant: h.drip, resolveDripLimits: h.limits } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: h.setting },
   creditLotRepository: {},
@@ -28,6 +29,11 @@ const grantedUser = (extra: Record<string, unknown> = {}) => ({
 const qualifying = (messages: number) => h.aggregate.mockReturnValue({ option: async () => [{ messages }] });
 
 describe('activity signup drip evaluation', () => {
+  beforeEach(() => {
+    h.aggregate.mockClear();
+    h.limits.mockResolvedValue({ dailyCredits: 1000, maxCredits: 9000 });
+  });
+
   it('drips for the current UTC day with the shared domain protection when the day qualifies', async () => {
     h.setting.mockImplementation(async (name: string) => ({
       settingValue: { signupGrantActivityEnabled: 'true', signupGrantActivityMinMessages: '2' }[name],
@@ -44,11 +50,14 @@ describe('activity signup drip evaluation', () => {
     ['below the daily message minimum', grantedUser(), 1],
     ['the day was already dripped', grantedUser({ lastDripDay: '2030-03-01' }), 5],
     ['the signup tranche is unpaid', grantedUser({ stage: 'pending_email' }), 5],
+    ['the account is unlocked', grantedUser({ stage: 'unlocked' }), 5],
+    ['the drip is capped', grantedUser({ dripCredits: 9000 }), 5],
   ])('does not drip when %s', async (_label, user, messages) => {
     h.drip.mockClear();
     h.findById.mockResolvedValue(user);
     qualifying(messages);
     expect((await unlockSignupGrantFromActivity('user-1', NOW)).creditsGranted).toBe(0);
     expect(h.drip).not.toHaveBeenCalled();
+    if (_label !== 'below the daily message minimum') expect(h.aggregate).not.toHaveBeenCalled();
   });
 });
