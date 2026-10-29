@@ -101,7 +101,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | models | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | notebooks | 6 | 0 | 6 | 0 | 0 | 0 | 2 |
 | oauth | 13 | 0 | 1 | 4 | 0 | 8 | 9 |
-| ollama | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
+| ollama | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | organizations | 36 | 0 | 35 | 1 | 0 | 0 | 1 |
 | otc | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | overwatch | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
@@ -1057,7 +1057,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/api/ollama/models` | GET | handler | - | no | - | 0 |
+| `/api/ollama/models` | GET | jwt | - | no | - | 0 |
 
 ### organizations
 
