@@ -979,6 +979,8 @@ export interface ReservationUsage {
   outputTokens: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /** The share of cacheCreationInputTokens written at the 1-hour TTL, which is priced higher. */
+  cacheWrite1hInputTokens?: number;
 }
 
 /**
@@ -1207,8 +1209,14 @@ export class ChatCompletionProcess {
     // The running attempt's provider-reported counts, when the adapter reported any before the abort.
     reported?: Pick<
       CompletionInfo,
-      'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens'
+      | 'inputTokens'
+      | 'outputTokens'
+      | 'cacheReadInputTokens'
+      | 'cacheCreationInputTokens'
+      | 'cacheWrite1hInputTokens'
+      | 'turnUsage'
     >;
+    cacheTtl?: PromptCacheTtl;
   } | null = null;
 
   // Phase 2: Tool state management
@@ -5294,6 +5302,7 @@ export class ChatCompletionProcess {
             };
             quest.promptMeta!.tokenUsage = { ...quest.promptMeta!.tokenUsage, promptCacheTtl: roundCacheTtl };
             cacheTtlForSettlement = roundCacheTtl;
+            if (this.reservationBasis) this.reservationBasis.cacheTtl = roundCacheTtl;
 
             // Log cache strategy decision with structured metadata
             this.logger.info('[PromptCache] Strategy determined', {
@@ -7393,7 +7402,9 @@ export class ChatCompletionProcess {
         usage.inputTokens,
         usage.outputTokens,
         usage.cacheReadInputTokens ?? 0,
-        usage.cacheCreationInputTokens ?? 0
+        usage.cacheCreationInputTokens ?? 0,
+        undefined,
+        usage.cacheWrite1hInputTokens ?? 0
       );
       return { ...usage, costUsd, credits: usdToCreditsStochastic(costUsd) };
     });
@@ -7450,7 +7461,10 @@ export class ChatCompletionProcess {
           costUsd: usage.costUsd,
           creditsCharged: usage.credits,
           // getTextModelCost above tiered on inputTokens (its default basis).
-          ...buildUsagePriceStamp(usage.modelInfo, { tierBasisTokens: usage.inputTokens }),
+          ...buildUsagePriceStamp(usage.modelInfo, {
+            tierBasisTokens: usage.inputTokens,
+            cacheWrite1hTokens: usage.cacheWrite1hInputTokens,
+          }),
           writtenOffCredits: writtenOffCredits > 0 && usage === priced[0] ? writtenOffCredits : undefined,
           status,
           latencyMs: Date.now() - processStartTime,
@@ -7548,6 +7562,13 @@ export class ChatCompletionProcess {
             outputTokens,
             cacheReadInputTokens,
             cacheCreationInputTokens,
+            cacheWrite1hInputTokens: reported.turnUsage?.length
+              ? sumOneHourCacheWrites(reported.turnUsage)
+              : oneHourWritesOf(
+                  cacheCreationInputTokens,
+                  reported.cacheWrite1hInputTokens,
+                  basis.cacheTtl ?? DEFAULT_PROMPT_CACHE_TTL
+                ),
           }
         : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
     if (quest.promptMeta) {

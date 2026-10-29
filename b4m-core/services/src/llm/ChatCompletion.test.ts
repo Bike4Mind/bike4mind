@@ -5224,6 +5224,35 @@ describe('ChatCompletionProcess', () => {
       expect(charged[0]).toBeGreaterThanOrEqual(settledCredits(1000));
     });
 
+    it.each([
+      ['1h', 100_000 * 10e-6 + 0.0003],
+      ['5m', 100_000 * 6.25e-6 + 0.0003],
+    ])('prices the cache writes of a %s turn stopped after the adapter reported them', async (ttl, expectedUsd) => {
+      const { complete } = reservationOrgSetup({
+        id: ChatModels.CLAUDE_4_8_OPUS,
+        backend: ModelBackend.Anthropic,
+        pricing: { 200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 } },
+      });
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['x'], { inputTokens: 10, outputTokens: 10, cacheCreationInputTokens: 100_000 });
+        throw abortError();
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      mockSession.promptCacheTtl = ttl;
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+      const body = reservationBody();
+      body.params = { ...body.params, model: ChatModels.CLAUDE_4_8_OPUS };
+
+      await service.process({ body, logger: mockLogger });
+
+      const [event] = usageEventsRecord.mock.calls[0];
+      expect(event.status).toBe('error');
+      expect(event.costUsd).toBeCloseTo(expectedUsd, 6);
+      expect(event.rates?.cacheWrite1h === undefined).toBe(ttl === '5m');
+    });
+
     it('refunds the whole hold of a thrown abort that streamed nothing', async () => {
       const { complete } = reservationOrgSetup();
       complete.mockImplementation(async () => {
