@@ -14,6 +14,7 @@ const NAME_MAX = 120;
 const GOAL_MAX = 8000;
 const TOOLS_MAX = 50;
 const TOOL_NAME_MAX = 200;
+const ID_MAX = 200;
 const STAGES_MAX = 20;
 const STAGE_NAME_MAX = 60;
 const INTERVAL_MIN = 5;
@@ -50,8 +51,9 @@ function validateStringList(field: string, value: unknown, maxEntries: number, m
 
 export const validateLoopName = (value: unknown) => validateString('name', value, NAME_MAX);
 export const validateLoopGoal = (value: unknown) => validateString('goal', value, GOAL_MAX);
-export const validateLoopModel = (value: unknown) => validateString('model', value, TOOL_NAME_MAX);
-export const validateLoopAgentId = (value: unknown) => validateString('agentId', value, TOOL_NAME_MAX);
+export const validateLoopModel = (value: unknown) => validateString('model', value, ID_MAX);
+export const validateLoopAgentId = (value: unknown) => validateString('agentId', value, ID_MAX);
+export const validateLoopOrganizationId = (value: unknown) => validateString('organizationId', value, ID_MAX);
 export const validateLoopTools = (value: unknown) => validateStringList('tools', value, TOOLS_MAX, TOOL_NAME_MAX);
 export const validateLoopStages = (value: unknown) => validateStringList('stages', value, STAGES_MAX, STAGE_NAME_MAX);
 
@@ -88,8 +90,11 @@ export function nextStatusPatch(loop: ILoop, requested: unknown, now: Date): Rec
   }
   if (requested === 'paused') return { status: 'paused', statusReason: null };
 
-  const nextRunAt = loop.lastRunAt
-    ? new Date(Math.max(now.getTime(), new Date(loop.lastRunAt).getTime() + loop.intervalMinutes * 60 * 1000))
-    : now;
-  return { status: 'live', nextRunAt, consecutiveFailures: 0, statusReason: null };
+  return { status: 'live', nextRunAt: nextRunAtFor(loop, now), consecutiveFailures: 0, statusReason: null };
+}
+
+/** Now if the loop never ran, else one interval after its last run (never in the past). */
+export function nextRunAtFor(loop: Pick<ILoop, 'lastRunAt' | 'intervalMinutes'>, now: Date): Date {
+  if (!loop.lastRunAt) return now;
+  return new Date(Math.max(now.getTime(), new Date(loop.lastRunAt).getTime() + loop.intervalMinutes * 60 * 1000));
 }

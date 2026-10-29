@@ -2,11 +2,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopRepository } from '@bike4mind/database';
 import { ILoop } from '@bike4mind/common';
-import { NotFoundError } from '@bike4mind/utils';
+import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   assertLoopsEnabled,
   LOOP_RATE_LIMIT,
   LOOP_RATE_WINDOW_MS,
+  nextRunAtFor,
   nextStatusPatch,
   validateLoopAgentId,
   validateLoopBudget,
@@ -54,10 +55,17 @@ const handler = baseApi()
       patch.budgetCreditsPerDay =
         body.budgetCreditsPerDay === null ? null : validateLoopBudget(body.budgetCreditsPerDay);
     }
-    if (body.status !== undefined) Object.assign(patch, nextStatusPatch(existing, body.status, new Date()));
+    const now = new Date();
+    if (body.status !== undefined) Object.assign(patch, nextStatusPatch(existing, body.status, now));
+    // A new interval on a live loop moves its next run, not just the one after.
+    const intervalMinutes = patch.intervalMinutes as number | undefined;
+    if (intervalMinutes !== undefined && existing.status === 'live' && patch.nextRunAt === undefined) {
+      patch.nextRunAt = nextRunAtFor({ lastRunAt: existing.lastRunAt, intervalMinutes }, now);
+    }
 
-    const updated = await loopRepository.updateForUser(id, req.user!.id, patch);
-    if (!updated) throw notFound(id);
+    // Conditional on the status the patch was computed from, so a scheduler write in between is not lost.
+    const updated = await loopRepository.updateForUser(id, req.user!.id, patch, existing.status);
+    if (!updated) throw new ConflictError('Loop changed while saving; reload and try again');
     res.json(updated);
   })
   .delete(async (req, res) => {

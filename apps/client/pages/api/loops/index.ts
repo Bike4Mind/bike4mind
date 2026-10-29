@@ -16,6 +16,7 @@ import {
   validateLoopInterval,
   validateLoopModel,
   validateLoopName,
+  validateLoopOrganizationId,
   validateLoopStages,
   validateLoopTools,
 } from '@server/utils/loopValidation';
@@ -39,8 +40,10 @@ const handler = baseApi()
     const budgetCreditsPerDay =
       body.budgetCreditsPerDay === undefined ? undefined : validateLoopBudget(body.budgetCreditsPerDay);
 
-    if (body.organizationId) {
-      await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, body.organizationId);
+    const organizationId =
+      body.organizationId === undefined ? undefined : validateLoopOrganizationId(body.organizationId);
+    if (organizationId) {
+      await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, organizationId);
     }
 
     // Same default as POST /api/v1/agent-executions, resolved once so every run uses the same model.
@@ -59,7 +62,7 @@ const handler = baseApi()
 
     const created = await loopRepository.create({
       userId: req.user!.id,
-      ...(body.organizationId && { organizationId: body.organizationId }),
+      ...(organizationId && { organizationId }),
       name,
       goal,
       model,

@@ -151,6 +151,20 @@ describe('POST /api/loops', () => {
     expect(getOrCreateSession).not.toHaveBeenCalled();
   });
 
+  it('stores an organizationId the caller may bill to', async () => {
+    verifyOrgAccess.mockResolvedValue(undefined);
+    await call('collection', 'post', { body: { ...validBody, organizationId: 'org1' } }).result;
+    expect(verifyOrgAccess).toHaveBeenCalledWith({ id: 'u1', isAdmin: false }, 'org1');
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org1' }));
+  });
+
+  it('rejects a non-string organizationId before creating the notebook', async () => {
+    await expect(
+      call('collection', 'post', { body: { ...validBody, organizationId: { $ne: null } } }).result
+    ).rejects.toThrow(/organizationId/);
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+  });
+
   it('checks org membership before creating anything', async () => {
     verifyOrgAccess.mockRejectedValue(new Error('not a member'));
     await expect(call('collection', 'post', { body: { ...validBody, organizationId: 'org1' } }).result).rejects.toThrow(
@@ -223,6 +237,36 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(repo.updateForUser).not.toHaveBeenCalled();
   });
 
+  it('needs_you -> live', async () => {
+    expect(await patchStatus({ status: 'needs_you' }, 'live')).toMatchObject({ status: 'live' });
+  });
+
+  it('writes only while the loop still has the status the patch was computed from', async () => {
+    await patchStatus({ status: 'live' }, 'paused');
+    expect(repo.updateForUser.mock.calls[0][3]).toBe('live');
+  });
+
+  it('is a 409 when the loop changed status mid-request', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live' }));
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { status: 'paused' } }).result
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('moves the next run of a live loop when its interval changes', async () => {
+    const lastRunAt = new Date(Date.now() - 60_000);
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', lastRunAt }));
+    await call('item', 'patch', { query: { id: OID }, body: { intervalMinutes: 60 } }).result;
+    expect(repo.updateForUser.mock.calls[0][2].nextRunAt).toEqual(new Date(lastRunAt.getTime() + 60 * 60_000));
+  });
+
+  it('clears agentId and budgetCreditsPerDay with null', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ agentId: 'a1', budgetCreditsPerDay: 5 }));
+    await call('item', 'patch', { query: { id: OID }, body: { agentId: null, budgetCreditsPerDay: null } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).toEqual({ agentId: null, budgetCreditsPerDay: null });
+  });
+
   it('validates the other fields', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop());
     await expect(call('item', 'patch', { query: { id: OID }, body: { intervalMinutes: 1 } }).result).rejects.toThrow(
@@ -235,7 +279,13 @@ describe('POST /api/loops/:id/run', () => {
   it('makes a live loop due now', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live' }));
     await call('run', 'post', { query: { id: OID } }).result;
-    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { nextRunAt: expect.any(Date) });
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { nextRunAt: expect.any(Date) }, 'live');
+  });
+
+  it('is a 409 when the loop stopped being live mid-request', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live' }));
+    repo.updateForUser.mockResolvedValue(null);
+    await expect(call('run', 'post', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it('is a 409 for a loop that is not live', async () => {
