@@ -1,5 +1,5 @@
 import { DEVELOPER_USER_TAGS, hasDeveloperUserTag, type ILoginRecord, type IUserDocument } from '@bike4mind/common';
-import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
+export { isManagedTag } from '@client/lib/entitlements/managedUserTags';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 
@@ -40,25 +40,6 @@ const isDeveloperTag = (tag: string): boolean => (DEVELOPER_USER_TAGS as readonl
 export const tagsForRole = (tags: readonly string[], role: UserRole): string[] => {
   const stripped = tags.filter(tag => !isDeveloperTag(tag));
   return role === 'developer' ? [...stripped, 'Developer'] : stripped;
-};
-
-/**
- * Comp tags that grant a product entitlement (e.g. `opti`). They have their own grant control in
- * Product access, so the free-form tag editor hides them. Derived from the live registry, so a retired
- * grant tag is shown as an ordinary tag again.
- */
-const PRODUCT_GRANT_TAGS = allKnownEntitlementKeys()
-  .map(grantTagForEntitlement)
-  .filter((tag): tag is string => Boolean(tag))
-  .map(tag => tag.toLowerCase());
-
-/** Tags owned by Role (developer) or Product access, which the free-form tag editor must not touch. */
-export const isManagedTag = (tag: string): boolean => {
-  const normalized = tag.toLowerCase();
-  return (
-    (DEVELOPER_USER_TAGS as readonly string[]).some(t => t.toLowerCase() === normalized) ||
-    PRODUCT_GRANT_TAGS.includes(normalized)
-  );
 };
 
 export const displayName = (user: Pick<AdminUserListItem, 'name' | 'username' | 'email'>): string =>

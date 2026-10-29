@@ -4,22 +4,45 @@ import {
   BURST_MIN_ACCOUNTS,
   classifyDomainCohorts,
   classifySignup,
+  classifySignupClusters,
   classifySignups,
   localPartTemplate,
+  networkPrefix,
+  SHARED_NETWORK_MIN_ACCOUNTS,
+  SPIKE_MIN_ACCOUNTS,
+  spikeHours,
   type SignupCandidate,
 } from './signupClassifier';
 
 const T0 = Date.parse('2026-01-01T00:00:00Z');
 const MIN = 60 * 1000;
 const at = (offsetMs: number) => new Date(T0 + offsetMs);
-const NOW = at(10 * 24 * 60 * MIN);
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
+const NOW = at(10 * DAY);
 
+/** An ordinary account that came back two days after signup unless `extra` says otherwise. */
 const user = (id: string, email: string, offsetMs: number, extra: Partial<SignupCandidate> = {}): SignupCandidate => ({
   id,
   email,
   createdAt: at(offsetMs),
+  lastActiveAt: at(offsetMs + 2 * DAY),
   ...extra,
 });
+
+/** Digit-free unique names (`a`, `b`, ... `ba`), so test addresses never share a patternedEmail template. */
+const letters = (n: number): string =>
+  n.toString(26).replace(/./g, digit => String.fromCharCode(97 + parseInt(digit, 26)));
+
+/** Signups per UTC hour, the shape getSignupTimeseries passes to classifySignups. */
+const hourlyCountsOf = (users: SignupCandidate[]) => {
+  const counts = new Map<number, number>();
+  for (const { createdAt } of users) {
+    const hour = Math.floor(createdAt.getTime() / HOUR) * HOUR;
+    counts.set(hour, (counts.get(hour) ?? 0) + 1);
+  }
+  return counts;
+};
 
 // Deterministic pseudo-random gaps so the "human" cohorts are irregular but stable across runs.
 function poissonOffsets(count: number, meanGapMs: number, seed = 7): number[] {
@@ -132,7 +155,12 @@ describe('per-account signals', () => {
     expect(
       classifySignup(user('a', 'a@corp.test', 0, { lastActiveAt: at(3 * 24 * 60 * MIN) }), new Set(), NOW)
     ).toEqual([]);
-    expect(classifySignup(user('a', 'a@corp.test', 0, { lastActiveAt: null }), new Set(), NOW)).toEqual([]);
+  });
+
+  it('reads an account that was never active as dormant once it is over a day old', () => {
+    const neverActive = user('a', 'a@gmail.com', 0, { lastActiveAt: null });
+    expect(classifySignup(neverActive, new Set(), NOW)).toEqual(['dormantAfterSignup']);
+    expect(classifySignup(neverActive, new Set(), at(12 * HOUR))).toEqual([]);
   });
 
   it('does not call an API-first developer dormant or suspected', () => {
@@ -172,5 +200,99 @@ describe('suspected verdict', () => {
     expect(farm.every(u => isSuspectedSignup(result.get(u.id) ?? []))).toBe(true);
     expect(farm.every(u => result.get(u.id)?.includes('earlyApiKey'))).toBe(true);
     expect(humans.some(u => isSuspectedSignup(result.get(u.id) ?? []))).toBe(false);
+  });
+});
+
+describe('network and inbox clusters', () => {
+  it('reduces addresses to their /24 or /64 and rejects what does not parse', () => {
+    expect(networkPrefix('198.51.100.23')).toBe('198.51.100.0/24');
+    expect(networkPrefix('::ffff:198.51.100.23')).toBe('198.51.100.0/24');
+    expect(networkPrefix('2001:db8:aa:1::5')).toBe('2001:db8:aa:1::/64');
+    expect(networkPrefix('2001:0db8:00aa:0001:ffff:0:0:1')).toBe('2001:db8:aa:1::/64');
+    expect(networkPrefix('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(networkPrefix('fe80::1%eth0')).toBe('fe80:0:0:0::/64');
+    expect(networkPrefix('::FFFF:198.51.100.23')).toBe('198.51.100.0/24');
+    expect(networkPrefix('999.1.1.1')).toBeNull();
+    expect(networkPrefix('not-an-ip')).toBeNull();
+    expect(networkPrefix(null)).toBeNull();
+  });
+
+  it('flags accounts sharing one network range within a day, Gmail included', () => {
+    const farm = Array.from({ length: SHARED_NETWORK_MIN_ACCOUNTS }, (_, i) =>
+      user(`n${i}`, `person${i}@gmail.com`, i * 3 * HOUR, { signupMeta: { ip: `198.51.100.${10 + i}` } })
+    );
+    const signals = classifySignupClusters(farm);
+    expect(farm.every(u => signals.get(u.id)?.has('sharedNetwork'))).toBe(true);
+    expect(isSuspectedSignup(['sharedNetwork'])).toBe(false);
+  });
+
+  it('does not flag a network range one account short, spread over more than a day, or across ranges', () => {
+    const short = Array.from({ length: SHARED_NETWORK_MIN_ACCOUNTS - 1 }, (_, i) =>
+      user(`s${i}`, `s${i}@gmail.com`, i * HOUR, { signupMeta: { ip: '198.51.100.7' } })
+    );
+    const spread = Array.from({ length: SHARED_NETWORK_MIN_ACCOUNTS }, (_, i) =>
+      user(`w${i}`, `w${i}@gmail.com`, i * 13 * HOUR, { signupMeta: { ip: '203.0.113.7' } })
+    );
+    const distinct = Array.from({ length: 5 }, (_, i) =>
+      user(`d${i}`, `d${i}@gmail.com`, i * MIN, { signupMeta: { ip: `192.0.${i}.9` } })
+    );
+    expect(classifySignupClusters([...short, ...spread, ...distinct]).size).toBe(0);
+  });
+
+  it('flags addresses that deliver to one Gmail inbox through dots and plus tags', () => {
+    const aliases = [
+      user('a1', 'jane.doe@gmail.com', 0),
+      user('a2', 'janedoe+1@gmail.com', HOUR),
+      user('a3', 'j.a.n.e.doe@googlemail.com', 2 * HOUR),
+    ];
+    const other = user('o', 'jane.doe2@gmail.com', 3 * HOUR);
+    const signals = classifySignupClusters([...aliases, other]);
+    expect(aliases.every(u => signals.get(u.id)?.has('aliasedEmail'))).toBe(true);
+    expect(signals.has('o')).toBe(false);
+  });
+});
+
+describe('signup spike', () => {
+  const HOUR0 = Math.floor(T0 / HOUR) * HOUR + 30 * DAY;
+
+  it('marks an hour at the floor over a quiet baseline, and not one below it', () => {
+    expect(spikeHours(new Map([[HOUR0, SPIKE_MIN_ACCOUNTS]]))).toEqual(new Set([HOUR0]));
+    expect(spikeHours(new Map([[HOUR0, SPIKE_MIN_ACCOUNTS - 1]])).size).toBe(0);
+  });
+
+  it('scales with the baseline, so steady growth is not a spike', () => {
+    // Two signups every hour for four weeks: the baseline median is 2, so a spike needs 20.
+    const busy = new Map(Array.from({ length: 28 * 24 }, (_, i) => [HOUR0 - (i + 1) * HOUR, 2] as const));
+    expect(spikeHours(new Map([...busy, [HOUR0, 19]])).has(HOUR0)).toBe(false);
+    expect(spikeHours(new Map([...busy, [HOUR0, 20]])).has(HOUR0)).toBe(true);
+  });
+
+  it('marks never-active accounts from a Gmail spike suspected, but not real users in the same hour', () => {
+    const start = HOUR0 - T0;
+    const wave = Array.from({ length: 40 }, (_, i) =>
+      user(`b${i}`, `wave${letters(i)}@gmail.com`, start + i * MIN, { lastActiveAt: null })
+    );
+    const returning = Array.from({ length: 5 }, (_, i) =>
+      user(`r${i}`, `realperson${letters(i)}@gmail.com`, start + i * 7 * MIN)
+    );
+    const all = [...wave, ...returning];
+    const result = classifySignups(all, new Date(HOUR0 + 3 * DAY), hourlyCountsOf(all));
+    expect(wave.every(u => result.get(u.id)?.join() === 'dormantAfterSignup,signupSpike')).toBe(true);
+    expect(wave.every(u => isSuspectedSignup(result.get(u.id) ?? []))).toBe(true);
+    expect(returning.every(u => result.get(u.id)?.join() === 'signupSpike')).toBe(true);
+    expect(returning.some(u => isSuspectedSignup(result.get(u.id) ?? []))).toBe(false);
+  });
+
+  it('leaves four weeks of ordinary Gmail signups at normal volume likely legit', () => {
+    const ordinary = poissonOffsets(60, 11 * HOUR, 11).map((offset, i) =>
+      user(`g${i}`, `first.${letters(i)}.last@gmail.com`, offset, {
+        lastActiveAt: at(offset + (i % 3 === 0 ? 30 * MIN : 3 * DAY)),
+        signupMeta: { ip: `10.${i}.${i % 7}.1` },
+      })
+    );
+    const now = at(40 * DAY);
+    const result = classifySignups(ordinary, now, hourlyCountsOf(ordinary));
+    expect(ordinary.some(u => isSuspectedSignup(result.get(u.id) ?? []))).toBe(false);
+    expect([...result.values()].some(signals => signals.includes('signupSpike'))).toBe(false);
   });
 });

@@ -8,6 +8,8 @@ export interface ModelHubState {
   refresh: () => Promise<void>;
 }
 
+export const DOWN_RECHECK_MS = 5_000;
+
 /** Runtime health, installed models and pulls; pulls live in main, so they survive leaving the screen. */
 export function useModelHub(): ModelHubState {
   const [status, setStatus] = useState<ModelRuntimeStatus | null>(null);
@@ -47,6 +49,13 @@ export function useModelHub(): ModelHubState {
       offInstalled();
     };
   }, [refresh, takePulls]);
+
+  // A check that missed a busy daemon reads as down, and nothing else would check again until a click.
+  useEffect(() => {
+    if (!status || status.reachable) return;
+    const timer = setTimeout(() => void refresh(), DOWN_RECHECK_MS);
+    return () => clearTimeout(timer);
+  }, [status, refresh]);
 
   return { status, installed, pulls, refresh };
 }

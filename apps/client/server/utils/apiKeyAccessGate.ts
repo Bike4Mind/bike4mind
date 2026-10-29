@@ -1,4 +1,9 @@
-import { CreditHolderType, OAUTH_DEVICE_CLIENT_IDS, hasDeveloperUserTag } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  OAUTH_DEVICE_CLIENT_IDS,
+  hasDeveloperUserTag,
+  type AdminApiKeyAccess,
+} from '@bike4mind/common';
 import { adminSettingsRepository, authSessionRepository } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -63,21 +68,14 @@ async function orgHasPaidPlan(organizationId: string): Promise<boolean> {
   return hasPaidSubscription(rows);
 }
 
-/**
- * Admins, developers and trusted admin-provisioned keys bypass the switch. Paid access includes
- * standalone plans and org seats. Read failures propagate so clients get a retryable 5xx.
- */
-export async function isApiKeyAccessAllowed(
+type ApiKeyAccessBasis = AdminApiKeyAccess['basis'];
+
+/** The paid-mode subscription check shared by the gate and the admin description of it. */
+async function hasPaidApiKeyAccess(
   user: RateTierUser,
   billing?: ApiKeyBillingRef,
   req?: ActiveSubscriptionsRequest
 ): Promise<boolean> {
-  if (user.isAdmin || hasDeveloperUserTag(user.tags) || billing?.createdByUserId) return true;
-
-  const mode = await readMode();
-  if (mode === 'all') return true;
-  if (mode === 'disabled') return false;
-
   const matchingRequest = req && (!req.user || req.user.id === user.id) ? req : undefined;
   const rows =
     matchingRequest?.activeSubscriptionsStrict && matchingRequest.activeSubscriptions
@@ -93,6 +91,41 @@ export async function isApiKeyAccessAllowed(
     return orgHasPaidPlan(billing.organizationId);
   }
   return false;
+}
+
+/**
+ * Admins, developers and trusted admin-provisioned keys bypass the switch. Paid access includes
+ * standalone plans and org seats. Read failures propagate so clients get a retryable 5xx.
+ */
+export async function isApiKeyAccessAllowed(
+  user: RateTierUser,
+  billing?: ApiKeyBillingRef,
+  req?: ActiveSubscriptionsRequest
+): Promise<boolean> {
+  if (user.isAdmin || hasDeveloperUserTag(user.tags) || billing?.createdByUserId) return true;
+
+  const mode = await readMode();
+  if (mode === 'all') return true;
+  if (mode === 'disabled') return false;
+
+  return hasPaidApiKeyAccess(user, billing, req);
+}
+
+/**
+ * Why the gate lets a user mint and use personal keys right now, for the admin profile. Mirrors
+ * isApiKeyAccessAllowed for a key with no billing ref (a user's own standalone access); an
+ * org-billed or admin-provisioned key can still pass where `allowed` is false.
+ */
+export async function describeApiKeyAccess(user: RateTierUser): Promise<AdminApiKeyAccess> {
+  const mode = await readMode();
+  const bypass = (basis: ApiKeyAccessBasis): AdminApiKeyAccess => ({ mode, allowed: true, basis });
+  if (user.isAdmin) return bypass('admin');
+  if (hasDeveloperUserTag(user.tags)) return bypass('developer');
+  if (mode === 'all') return bypass('open_to_all');
+  if (mode === 'disabled') return { mode, allowed: false, basis: 'disabled' };
+
+  const paid = await hasPaidApiKeyAccess(user);
+  return { mode, allowed: paid, basis: paid ? 'paid_subscription' : 'no_paid_subscription' };
 }
 
 export async function assertApiKeyAccessAllowed(

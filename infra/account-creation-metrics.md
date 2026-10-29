@@ -1,9 +1,10 @@
 # Account creation and mail metrics
 
-All additions are opt-in. Set `SIGNUP_ALARM_PER_HOUR` and/or
-`NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR` to positive integers in deploy configuration.
-No operational ceilings are provided here. Existing OTC dispatch monitoring remains
-configured by `SIGNUP_CODE_SEND_ALARM_PER_HOUR`.
+The two census alarms are on by default on monitored stages: `SIGNUP_ALARM_PER_HOUR`
+defaults to 8 and `NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR` to 5. Set either to a positive
+integer in deploy configuration to override it. The SES bounce and complaint alarms
+below stay opt-in. Existing OTC dispatch monitoring remains configured by
+`SIGNUP_CODE_SEND_ALARM_PER_HOUR`.
 
 The census runs five minutes after each UTC hour and reads the preceding complete
 hour using the scheduled event time, not invocation time. `SuccessfulSignups` counts

@@ -7,6 +7,7 @@ import type { RequestHandler } from 'express';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { ipBucket as otcIpBucket } from '@bike4mind/server-utils/utils/ipBucket';
+import { deliveryMailbox } from './deliveryMailbox';
 
 export { otcIpBucket };
 
@@ -87,24 +88,6 @@ export function normalizeOtcEmail(value: unknown): string | undefined {
   return email || undefined;
 }
 
-/**
- * The inbox an address delivers to, for limit keys only (never for account identity): a bomber can
- * otherwise rotate plus-tags, Gmail dots, or compatibility-form characters to get a fresh per-email
- * budget for the same inbox. Folding more than strictly needed only makes a limit stricter.
- */
-export function otcLimitMailbox(email: string): string {
-  const folded = email.normalize('NFKC').toLowerCase();
-  const at = folded.lastIndexOf('@');
-  if (at <= 0) return folded;
-  let local = folded.slice(0, at);
-  let domain = folded.slice(at + 1).replace(/\.+$/, '');
-  if (domain === 'googlemail.com') domain = 'gmail.com';
-  const plus = local.indexOf('+');
-  if (plus > 0) local = local.slice(0, plus);
-  if (domain === 'gmail.com') local = local.replace(/\./g, '');
-  return `${local}@${domain}`;
-}
-
 /** Hashed so cache keys never carry a raw email address. */
 export function otcEmailKey(email: string): string {
   return createHash('sha256').update(email).digest('hex').slice(0, 32);
@@ -156,8 +139,8 @@ interface OtcEmailBudget {
   subject: (email: string, ip: string) => string | undefined;
 }
 
-const inbox = (email: string) => otcLimitMailbox(email);
-const inboxFromSource = (email: string, ip: string) => `${otcLimitMailbox(email)}|${ip}`;
+const inbox = (email: string) => deliveryMailbox(email);
+const inboxFromSource = (email: string, ip: string) => `${deliveryMailbox(email)}|${ip}`;
 
 const PERSONAL_EMAIL_PROVIDERS: ReadonlySet<string> = new Set(personalEmailProviders);
 
@@ -167,7 +150,7 @@ const PERSONAL_EMAIL_PROVIDERS: ReadonlySet<string> = new Set(personalEmailProvi
  * domain.
  */
 export function otcLimitDomain(email: string): string | undefined {
-  const mailbox = otcLimitMailbox(email);
+  const mailbox = deliveryMailbox(email);
   const domain = registrableDomain(mailbox.slice(mailbox.lastIndexOf('@') + 1));
   if (!domain || PERSONAL_EMAIL_PROVIDERS.has(domain)) return undefined;
   return domain;
@@ -294,7 +277,7 @@ export const otcDistinctEmailsPerIpLimit = (): RequestHandler => async (req, res
   const { windowMs } = OTC_LIMITS.send.perIpDistinctEmails;
   const limit = await otcLimitOf(OTC_LIMITS.send.perIpDistinctEmails);
   const ip = otcIpBucket(getClientIp(req));
-  const pairKey = `otc-limit:ip-email-seen:${ip}:${otcEmailKey(otcLimitMailbox(email))}`;
+  const pairKey = `otc-limit:ip-email-seen:${ip}:${otcEmailKey(deliveryMailbox(email))}`;
 
   // Slot before marker: a marker only ever follows a granted slot, so a concurrent duplicate of a
   // refused pair cannot ride its marker past the cap. Racing first sightings may both take a slot.

@@ -20,13 +20,17 @@ import type { SNSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
 
 import {
+  appUrlFromEnv,
+  composeAlarmMessage,
   escapeMrkdwn,
   formatAlarmSlackMessage,
   isCloudWatchAlarm,
   postAlarmToSlack,
   resolveAlarmWebhookUrl,
+  type FormatOptions,
   type SlackAlarmMessage,
 } from './alarmSlackMessage';
+import { readAlarmMention } from './alarmSlackMention';
 
 /** The subset of an EventBridge ECS Task State Change event this handler reports on. */
 interface EcsTaskStateChangeEvent {
@@ -59,8 +63,8 @@ function isEcsTaskStateChange(payload: unknown): payload is EcsTaskStateChangeEv
 }
 
 /** Returns the Slack message for a payload, or null when it should not be reported. */
-function formatMessage(payload: unknown, stage: string): SlackAlarmMessage | null {
-  if (isCloudWatchAlarm(payload)) return formatAlarmSlackMessage(payload, stage);
+function formatMessage(payload: unknown, stage: string, options: FormatOptions): SlackAlarmMessage | null {
+  if (isCloudWatchAlarm(payload)) return formatAlarmSlackMessage(payload, stage, options);
 
   if (isEcsTaskStateChange(payload)) {
     const detail = payload.detail ?? {};
@@ -68,28 +72,28 @@ function formatMessage(payload: unknown, stage: string): SlackAlarmMessage | nul
     // The container-level reason is where CannotPullContainerError and friends land;
     // the task-level stoppedReason is often just a generic wrapper.
     const containerReason = detail.containers?.find(c => c.reason)?.reason;
-    const heading = `🔴 A background service failed to start: ${detail.group ?? 'unknown service'}`;
+    const service = detail.group ?? 'unknown service';
     const reason = containerReason ?? detail.stoppedReason ?? 'not reported';
-    return {
-      text: escapeMrkdwn(heading),
-      blocks: [
-        { type: 'header', text: { type: 'plain_text', text: heading.slice(0, 150), emoji: true } },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*Reason*\n${escapeMrkdwn(reason)}\n\n*Task*\n${escapeMrkdwn(detail.taskArn ?? 'unknown')}`,
-          },
-        },
-        { type: 'context', elements: [{ type: 'mrkdwn', text: escapeMrkdwn(stage) }] },
+    return composeAlarmMessage({
+      stage,
+      level: 'page',
+      title: `A background service failed to start: ${service}`,
+      mention: options.mention,
+      sections: [
+        `*Reason*\n${escapeMrkdwn(reason)}`,
+        `*Task*\n${escapeMrkdwn(detail.taskArn ?? 'unknown')}`,
+        '*What to do*\nCheck the service events in ECS; the reason above is usually enough to name the fix (image pull, missing secret).',
       ],
-    };
+      context: [escapeMrkdwn(stage), 'level page', 'ecs task failed to start'],
+      summary: reason,
+    });
   }
 
   return null;
 }
 
 export const handler = async (event: SNSEvent): Promise<void> => {
+  const options: FormatOptions = { appUrl: appUrlFromEnv(), mention: await readAlarmMention() };
   for (const record of event.Records) {
     let payload: unknown;
     try {
@@ -99,7 +103,7 @@ export const handler = async (event: SNSEvent): Promise<void> => {
       continue;
     }
 
-    const message = formatMessage(payload, Resource.App.stage);
+    const message = formatMessage(payload, Resource.App.stage, options);
     if (!message) continue;
 
     await postAlarmToSlack(resolveAlarmWebhookUrl(Resource), message);

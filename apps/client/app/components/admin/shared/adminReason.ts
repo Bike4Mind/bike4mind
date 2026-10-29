@@ -16,6 +16,8 @@ export const ADMIN_REASON_PRESETS = {
   restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
+  apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
+  apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
   productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
   systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
@@ -26,7 +28,13 @@ export const ADMIN_REASON_PRESETS = {
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
+  bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
+  compChange: ['Pilot or trial ended', 'Granted in error', 'Customer request', 'Account cleanup'],
+  creditRateChange: ['Plan change', 'Goodwill adjustment', 'Billing correction', 'Customer request'],
+  subscriptionRemove: ['Duplicate record', 'Comp no longer needed', 'Test or internal record', 'Billing correction'],
+  seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
+  paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;

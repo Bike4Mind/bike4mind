@@ -55,7 +55,7 @@ describe('MFAModal passkey option', () => {
   });
 
   it('is never offered during MFA setup', () => {
-    renderModal({ onPasskeyVerify: vi.fn(), title: 'Set Up Multi-Factor Authentication' });
+    renderModal({ onPasskeyVerify: vi.fn(), mode: 'setup', title: 'Set Up Multi-Factor Authentication' });
     expect(screen.queryByTestId(PASSKEY_BTN)).toBeNull();
   });
 

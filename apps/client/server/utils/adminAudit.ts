@@ -100,20 +100,28 @@ export const loadCreditGrantPolicy = async (): Promise<adminAuditService.CreditG
 
 const writerAdapters = async (
   req: AuditRequest,
-  action: AdminAuditAction
+  action: AdminAuditAction,
+  preloadedPolicy?: () => Promise<adminAuditService.CreditGrantPolicy>
 ): Promise<adminAuditService.RecordAdminActionAdapters> => ({
   db: { adminAuditLog: adminAuditLogRepository },
-  creditGrantPolicy: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS.includes(action) ? await loadCreditGrantPolicy() : undefined,
+  creditGrantPolicy: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS.includes(action)
+    ? await (preloadedPolicy ?? loadCreditGrantPolicy)()
+    : undefined,
   logger: req.logger,
 });
 
+/**
+ * `options.creditGrantPolicy` lets a caller writing many entries (a bulk batch) read the AdminSettings
+ * thresholds once instead of once per entry.
+ */
 export const recordAdminActionFromRequest = async (
   req: AuditRequest,
-  { actorScope, ...input }: RecordAdminActionFromRequestInput
+  { actorScope, ...input }: RecordAdminActionFromRequestInput,
+  options: { creditGrantPolicy?: () => Promise<adminAuditService.CreditGrantPolicy> } = {}
 ): Promise<AuditEntry | null> =>
   adminAuditService.recordAdminAction(
     { ...input, actor: await resolveActor(req, actorScope ?? 'platform'), context: buildContext(req) },
-    await writerAdapters(req, input.action)
+    await writerAdapters(req, input.action, options.creditGrantPolicy)
   );
 
 /** For routes with no req.user (returnToAdmin authenticates by cookie): the caller names the actor. */

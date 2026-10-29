@@ -52,10 +52,9 @@ const mockRevokeBySid = vi.fn();
 const mockFindBySid = vi.fn();
 const mockEndConnections = vi.fn();
 const mockUserFindById = vi.fn();
-const mockRecordForActor = vi.fn();
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
-  recordAdminActionForActor: (...args: any[]) => mockRecordForActor(...args),
+const mockEndImpersonation = vi.fn();
+vi.mock('@server/auth/impersonation', () => ({
+  endImpersonation: (...args: unknown[]) => mockEndImpersonation(...args),
 }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...args: any[]) => mockUserFindById(...args) },
@@ -127,7 +126,7 @@ describe('POST /api/auth/returnToAdmin', () => {
     vi.clearAllMocks();
     mockRevokeBySid.mockResolvedValue(undefined);
     mockEndConnections.mockResolvedValue({ connectionIds: [] });
-    mockRecordForActor.mockResolvedValue(null);
+    mockEndImpersonation.mockResolvedValue(undefined);
     mockUserFindById.mockResolvedValue({ id: 'cust-1', name: 'Customer', username: 'customer' });
     mockRotateSession.mockResolvedValue({
       status: 'rotated',
@@ -263,17 +262,14 @@ describe('POST /api/auth/returnToAdmin', () => {
 
       await handler(req as any, res as any);
 
-      expect(mockRecordForActor).toHaveBeenCalledTimes(1);
-      const [, actor, input] = mockRecordForActor.mock.calls[0];
-      expect(actor).toMatchObject({ kind: 'user', userId: 'admin-1', impersonatedUserId: 'cust-1' });
-      expect(input).toMatchObject({
-        action: 'user.impersonation.ended',
-        target: { kind: 'user', id: 'cust-1', displayName: 'Customer' },
-        related: { impersonationSessionId: 'cust-sid' },
-      });
+      expect(mockEndImpersonation).toHaveBeenCalledWith(
+        req,
+        'cust-sid',
+        expect.objectContaining({ userId: 'admin-1' })
+      );
     });
 
-    it('records nothing when the rotation coalesced, so a double click writes one entry', async () => {
+    it('delegates concurrent end idempotence to the durable lifecycle helper', async () => {
       mockRotateSession.mockResolvedValue({
         status: 'coalesced',
         user: { id: 'admin-1' },
@@ -286,16 +282,24 @@ describe('POST /api/auth/returnToAdmin', () => {
 
       await handler(req as any, res as any);
 
-      expect(mockRecordForActor).not.toHaveBeenCalled();
+      expect(mockEndImpersonation).toHaveBeenCalledWith(
+        req,
+        'cust-sid',
+        expect.objectContaining({ userId: 'admin-1' })
+      );
     });
 
-    it("records nothing when the impersonation session is not this admin's", async () => {
+    it('binds durable cleanup to the restored admin even for a foreign session cookie', async () => {
       mockFindBySid.mockResolvedValue({ sid: 'cust-sid', userId: 'cust-1', impersonatedBy: 'a-different-admin' });
       const { req, res } = post(cookie);
 
       await handler(req as any, res as any);
 
-      expect(mockRecordForActor).not.toHaveBeenCalled();
+      expect(mockEndImpersonation).toHaveBeenCalledWith(
+        req,
+        'cust-sid',
+        expect.objectContaining({ userId: 'admin-1' })
+      );
     });
 
     it('records nothing when there is no impersonation cookie to name a session', async () => {
@@ -303,7 +307,7 @@ describe('POST /api/auth/returnToAdmin', () => {
 
       await handler(req as any, res as any);
 
-      expect(mockRecordForActor).not.toHaveBeenCalled();
+      expect(mockEndImpersonation).not.toHaveBeenCalled();
     });
   });
 });

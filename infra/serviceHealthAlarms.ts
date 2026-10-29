@@ -25,6 +25,7 @@
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { chatCompletion } from './chatCompletion';
 import { secrets } from './secrets';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { subscriberFanout } from './subscriberFanout';
 import { cluster } from './vpc';
 import {
@@ -100,11 +101,13 @@ if (isMonitoredStage) {
     ),
   });
 
+  const mentionArgs = alarmSlackMentionFunctionArgs();
   serviceHealthAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/serviceHealthAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL, secrets.SLACK_ALARMS_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...mentionArgs.environment },
+      permissions: mentionArgs.permissions,
     },
     {
       transform: {

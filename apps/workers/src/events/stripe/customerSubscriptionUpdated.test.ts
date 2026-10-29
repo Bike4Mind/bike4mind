@@ -34,6 +34,11 @@ const { mockEmitBillingEvent, mockSubscriptionEventUser } = vi.hoisted(() => ({
   mockSubscriptionEventUser: vi.fn(),
 }));
 vi.mock('@server/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
+// Which transitions post, and their wording, are covered in subscriptionLifecycle.test.ts.
+const { mockPostSubscriptionChangesToSlack } = vi.hoisted(() => ({ mockPostSubscriptionChangesToSlack: vi.fn() }));
+vi.mock('@server/integrations/slack/subscriptionLifecycle', () => ({
+  postSubscriptionChangesToSlack: mockPostSubscriptionChangesToSlack,
+}));
 vi.mock('@server/analytics/billingEventDetails', () => ({
   planDetails: (priceId: string) => ({ plan: `plan:${priceId}`, interval: 'monthly' }),
   planChangeDirection: () => 'upgrade',
@@ -310,6 +315,46 @@ describe('customerSubscriptionUpdated — stage guard', () => {
     expect(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).toHaveBeenCalled();
     expect(sendToClient).toHaveBeenCalledWith(...entitlementsPush('u1'));
   });
+
+  it('mirrors price, currency, interval, cancel state, trial end and customer onto the row', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue({
+      ...buildUserSub({ cancelAtPeriodEnd: true }),
+      cancel_at: 1702592000,
+      currency: 'usd',
+      trial_end: 1700604800,
+      items: {
+        data: [
+          {
+            ...buildUserSub().items.data[0],
+            price: {
+              id: 'price_pro',
+              unit_amount: 2000,
+              currency: 'usd',
+              recurring: { interval: 'month', interval_count: 1 },
+            },
+          },
+        ],
+      },
+    });
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).toHaveBeenCalledWith(
+      'sub_stripe_u',
+      expect.objectContaining({
+        priceId: 'price_pro',
+        unitAmount: 2000,
+        currency: 'usd',
+        interval: 'month',
+        intervalCount: 1,
+        cancelAtPeriodEnd: true,
+        cancelAt: new Date(1702592000 * 1000),
+        trialEndsAt: new Date(1700604800 * 1000),
+        stripeCustomerId: 'cus_u',
+        lastSyncedAt: expect.any(Date),
+      })
+    );
+  });
 });
 
 describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorded', () => {
@@ -571,5 +616,57 @@ describe('customerSubscriptionUpdated - lifecycle events', () => {
       action: 'invalidate_query',
       queryKey: ['subscriptions'],
     });
+  });
+
+  it('hands the replaced row and Stripe state to the Slack post, organization-owned included', async () => {
+    const before = rowBefore({ ownerType: 'Organization' });
+    writeFinds(before);
+    mockSubscriptionEventUser.mockResolvedValue(null);
+    const sub = userSub();
+    sub.items.data[0].price.id = 'price_pro';
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(sub as never);
+
+    await run();
+
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledOnce();
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledWith(before, sub);
+  });
+
+  it('hands a sync into canceled to the Slack post, which reports the end, with no analytics event', async () => {
+    const before = rowBefore({ canceledAt: new Date('2026-10-01T00:00:00Z') });
+    writeFinds(before);
+    const sub = userSub({
+      status: 'canceled',
+      canceled_at: 1700500000,
+      cancellation_details: { reason: 'cancellation_requested' },
+    });
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(sub as never);
+
+    await run();
+
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledOnce();
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledWith(before, sub);
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('posts to Slack before the invoice cleanup, so a delivery that times out in it has still posted', async () => {
+    vi.mocked(voidOpenSubscriptionInvoices).mockReturnValueOnce(new Promise(() => {}));
+    const sub = userSub({ status: 'canceled', canceled_at: 1700500000 });
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(sub as never);
+
+    // Not awaited: the handler waits on the cleanup, which here never settles.
+    void run();
+    await vi.waitFor(() => expect(voidOpenSubscriptionInvoices).toHaveBeenCalled());
+
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledOnce();
+  });
+
+  it('posts nothing to Slack for a row this stage does not own', async () => {
+    writeFinds(null);
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(userSub({ canceled_at: 1700500000 }) as never);
+
+    await run();
+
+    expect(mockPostSubscriptionChangesToSlack).not.toHaveBeenCalled();
   });
 });

@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   expectShellRun,
   forgetSessionWrites,
   gitRunsConfiguredProgram,
+  recordSessionTreeWrite,
   recordSessionWrite,
   sessionScriptRun,
   shellCommandRan,
@@ -224,11 +225,83 @@ describe('sessionScriptRun', () => {
     forgetSessionWrites(session);
   });
 
+  it('counts a file under a rewritten folder as written', async () => {
+    const id = 'session-scripts-tree';
+    await recordSessionTreeWrite({ sessionId: id } as ToolContext, join(root, 'tools'));
+    expect(await runs('python3 tools/go.py', id)).toEqual(['tools/go.py']);
+    expect(await runs('bash data.txt', id)).toBeNull();
+    expect(await runs('cd tools && ./missing.sh', id)).toBeNull();
+  });
+
+  it('flags git after a folder holding a repository is rewritten', async () => {
+    const id = 'session-scripts-tree-hooks';
+    await recordSessionTreeWrite({ sessionId: id } as ToolContext, join(root, 'repo'));
+    expect((await sessionScriptRun('git status', join(root, 'repo'), id))?.hooks).toHaveLength(1);
+  });
+
   it('forgets a closed session', async () => {
     const id = 'session-scripts-closed';
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'setup.sh'));
     forgetSessionWrites(id);
     expect(await sessionScriptRun('bash setup.sh', root, id)).toBeNull();
+  });
+});
+
+describe('session writes across a restart', () => {
+  let root: string;
+  const saved = new Map<string, unknown>();
+  const store = {
+    loadSessionWrites: async (id: string) => saved.get(id) ?? null,
+    saveSessionWrites: async (id: string, writes: unknown) => void saved.set(id, structuredClone(writes)),
+    deleteSessionWrites: async (id: string) => void saved.delete(id),
+  };
+
+  /** A fresh copy of the module, as after an app restart, reading the same store. */
+  const relaunch = async () => {
+    vi.resetModules();
+    const fresh = await import('./sessionScripts');
+    fresh.keepSessionWritesIn(store);
+    return fresh;
+  };
+
+  beforeAll(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-session-restart-')));
+    await mkdir(join(root, 'out'));
+    await writeFile(join(root, 'setup.sh'), 'x\n', 'utf8');
+    await writeFile(join(root, 'out', 'run.sh'), 'x\n', 'utf8');
+  });
+
+  afterAll(() => rm(root, { recursive: true, force: true }));
+
+  it('still asks in a resumed session, with the same generation', async () => {
+    const before = await relaunch();
+    const context = { sessionId: 'restart' } as ToolContext;
+    await before.recordSessionWrite(context, join(root, 'setup.sh'));
+    await before.recordSessionTreeWrite(context, join(root, 'out'));
+    const first = await before.sessionScriptRun('bash setup.sh && bash out/run.sh', root, 'restart');
+
+    const after = await relaunch();
+    const resumed = await after.sessionScriptRun('bash setup.sh && bash out/run.sh', root, 'restart');
+    expect(resumed?.names).toEqual(['setup.sh', 'out/run.sh']);
+    expect(resumed?.generation).toBe(first?.generation);
+    expect(await after.sessionScriptRun('bash setup.sh', root, 'other')).toBeNull();
+
+    await after.recordSessionWrite(context, join(root, 'setup.sh'));
+    expect((await after.sessionScriptRun('bash setup.sh', root, 'restart'))?.generation).not.toBe(first?.generation);
+  });
+
+  it('asks before any script run when the stored record does not read back', async () => {
+    saved.set('corrupt', { files: 'nope' });
+    const after = await relaunch();
+    expect(await after.sessionScriptRun('bash setup.sh', root, 'corrupt')).toMatchObject({ untracked: true });
+  });
+
+  it('removes the stored record when the session is deleted', async () => {
+    const before = await relaunch();
+    await before.recordSessionWrite({ sessionId: 'deleted' } as ToolContext, join(root, 'setup.sh'));
+    await before.forgetSessionWrites('deleted');
+    expect(saved.has('deleted')).toBe(false);
+    expect(await (await relaunch()).sessionScriptRun('bash setup.sh', root, 'deleted')).toBeNull();
   });
 });
 

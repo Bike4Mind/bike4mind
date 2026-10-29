@@ -27,6 +27,7 @@ export * from './dashboard';
 export * from './modelSunsetDashboard';
 export * from './dataLakeSearchDashboard';
 export * from './dlqAlarms';
+export * from './mailAlarms';
 export * from './signupAlarms';
 export * from './accountCreationAlarms';
 export * from './llmSpend';

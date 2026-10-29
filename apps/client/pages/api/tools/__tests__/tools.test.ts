@@ -21,7 +21,10 @@ const { mockValidate, mockUserFindById, mockKeyRateLimit, mockSearch, mockAuditC
 const USER = { id: 'user-1', _id: 'user-1', username: 'jules', tokenVersion: 0, isBanned: false };
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),

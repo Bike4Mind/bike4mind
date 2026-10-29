@@ -10,10 +10,12 @@ import { createTextRefinementContract } from '@bike4mind/common';
 import { getHttpStatus } from '@bike4mind/utils';
 import { RefineFailedError, RefineProviderUnavailableError, refineTextRequest } from '@server/ai/refineTextRequest';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 
 const handler = nextRouteForContract(createTextRefinementContract).post(async (req, res) => {
   const { text, context } = req.validated;
 
+  const quota = await admitRequestCompletion(req, { holdSlot: true });
   let refined: string | undefined;
   try {
     refined = await refineTextRequest({ text, context }, req);
@@ -41,6 +43,8 @@ const handler = nextRouteForContract(createTextRefinementContract).post(async (r
     // Anything unclassified - a cache/DB fault, a resolver failure - is an internal error, not a
     // provider one. Rethrow so errorHandler answers the same 500 the legacy route gets.
     throw error;
+  } finally {
+    await quota.release();
   }
 
   // Deliberate product decision, not a schema requirement: TextRefinementResponseSchema is

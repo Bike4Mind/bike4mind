@@ -15,9 +15,10 @@ vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganization
 vi.mock('../AdminProfileModal', () => ({ default: () => null }));
 vi.mock('./ComplianceModal', () => ({ default: () => null }));
 vi.mock('./CreateUserModal', () => ({ default: () => null, useCreateUserModal: () => ({ setOpen: vi.fn() }) }));
-vi.mock('./BulkAbuseResponseModal', () => ({
-  default: ({ selectedUserIds }: { selectedUserIds: string[] }) => (
-    <div data-testid="bulk-abuse-modal">{selectedUserIds.join(',')}</div>
+vi.mock('./List/UsersBulkActionDialog', async importOriginal => ({
+  ...(await importOriginal<typeof import('./List/UsersBulkActionDialog')>()),
+  UsersBulkActionDialog: ({ type, target }: { type: string; target: unknown }) => (
+    <div data-testid="bulk-dialog">{JSON.stringify({ type, target })}</div>
   ),
 }));
 vi.mock('./Profile/useOpenUserProfile', () => ({ useOpenUserProfile: () => openProfile }));
@@ -59,6 +60,7 @@ const respond = (url: string) => {
     return { total: 2, activeThisWeek: 1, views: { newThisWeek: 0, highRisk: 0, suspended: 1 } };
   }
   if (url === '/api/admin/signup-anomaly') return undefined;
+  if (url === '/api/admin/saved-views') return { views: [] };
   return { users: [row('u1', 'Ada'), row('u2', 'Grace')], totalUsers: 2, page: 1, totalPages: 1 };
 };
 
@@ -126,14 +128,27 @@ describe('UsersTab', () => {
     );
   });
 
-  it('hands the selected rows to the bulk response and drops them when the filter changes', async () => {
+  it('hands the selected ids to a bulk action and drops them when the filter changes', async () => {
     renderTab();
     fireEvent.click(within(await screen.findByTestId('admin-table-select-u1')).getByRole('checkbox'));
-    fireEvent.click(screen.getByTestId('bulk-abuse-open-btn'));
-    expect(screen.getByTestId('bulk-abuse-modal').textContent).toBe('u1');
+    fireEvent.click(screen.getByTestId('admin-users-bulk-contain-btn'));
+    expect(JSON.parse(screen.getByTestId('bulk-dialog').textContent ?? '')).toEqual({
+      type: 'contain',
+      target: { kind: 'ids', userIds: ['u1'] },
+    });
 
     fireEvent.click(screen.getByTestId('admin-users-views-suspended-btn'));
-    await waitFor(() => expect(screen.queryByTestId('bulk-abuse-selected-count')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull());
+  });
+
+  it('sends the current filter, not ids, once every matching user is selected', async () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('admin-users-views-suspended-btn'));
+    fireEvent.click(within(await screen.findByTestId('admin-table-select-u1')).getByRole('checkbox'));
+    fireEvent.click(screen.getByTestId('admin-select-all-matching-btn'));
+    fireEvent.click(screen.getByTestId('admin-users-bulk-suspend-btn'));
+    const { target } = JSON.parse(screen.getByTestId('bulk-dialog').textContent ?? '');
+    expect(target).toMatchObject({ kind: 'filter', filter: { status: 'suspended' } });
   });
 
   it('drops a row ticked while the previous filter rows are still showing once the new page lands', async () => {
@@ -150,10 +165,10 @@ describe('UsersTab', () => {
     fireEvent.click(screen.getByTestId('admin-users-views-suspended-btn'));
     await waitFor(() => expect(fakeAdminRouter.search).toMatchObject({ status: 'suspended' }));
     fireEvent.click(within(screen.getByTestId('admin-table-select-u1')).getByRole('checkbox'));
-    expect(screen.getByTestId('bulk-abuse-selected-count')).toBeTruthy();
+    expect(screen.getByTestId('admin-bulk-action-bar')).toBeTruthy();
 
     await act(async () => releaseFiltered());
-    await waitFor(() => expect(screen.queryByTestId('bulk-abuse-selected-count')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull());
   });
 
   it('filters to a signup chart window, replacing the signed-up filter, and clears it from the chip', async () => {
