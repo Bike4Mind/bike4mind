@@ -46,6 +46,17 @@ and to the out-of-band topic (`OPS_ALERT_EMAIL`). Each alarm notifies on an ALAR
 to OK, allowing a later burst to notify again; a continuous breach remains one
 alarm episode.
 
+### Large grant with protections off
+
+The Next.js server log group also emits `signup-grant-protections-off` when a pending free-credit
+grant is released while the largest configured grant (the flat grant, or the staged signup plus
+unlock total) is above 100 credits and any of these is still at its default: the signup risk policy
+(`enabled`), `maxSignupsPerIpPerDay`, `maxSignupsPerAsnPerHour`, `signupBurstAutoHold`. The log carries
+the largest grant and the protection keys that are off, nothing about the account. The metric is
+`SignupGrantProtectionGaps` in the same `Signup` namespace; the alarm fires on a single occurrence in
+5 minutes and routes to the same two topics. Saving a larger grant in this state is refused at
+`/api/settings/update`, so the alarm covers configurations saved before that check existed.
+
 ## WAF edge alarm (`infra/waf.ts`)
 
 A metric filter on the WAF log group (us-east-1) counts requests whose
