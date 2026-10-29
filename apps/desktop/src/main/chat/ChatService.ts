@@ -20,6 +20,7 @@ import type {
   ChatProject,
   ChatQueuedMessage,
   ChatReplyRound,
+  ChatSentRound,
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
@@ -568,6 +569,7 @@ interface RawRound {
   reasoning: string;
   timing: ChatRoundTiming;
   usage?: ChatUsage;
+  sent: ChatSentRound;
 }
 
 /**
@@ -2774,6 +2776,7 @@ export class ChatService {
               timing: entry.round.timing,
               ...(entry.round.usage ? { usage: entry.round.usage } : {}),
               ...(entry.round.reasoning.trim() ? { reasoning: entry.round.reasoning.trim() } : {}),
+              sent: entry.round.sent,
             }))
             // A round with only usage is kept: it is the measured size of a trimmed round stopped early.
             .filter(round => round.text.length > 0 || round.toolCallIds.length > 0 || round.reasoning || round.usage),
@@ -2928,6 +2931,7 @@ export class ChatService {
           reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
           ...(turnUsage ? { usage: turnUsage } : {}),
+          sent: { ...(turnThinking ? { thinking: turnThinking } : {}), text: turnText },
         };
         produced.push(round);
 
@@ -3083,9 +3087,13 @@ export class ChatService {
           roundsSincePlanUpdate
         );
         const lastResult = results[results.length - 1];
+        const resultBase = lastResult?.content;
         if (nudge && lastResult) lastResult.content = `${lastResult.content}\n\n${nudge}`;
         if (rootNote.length > 0 && lastResult) {
           lastResult.content = [lastResult.content, '', 'The user changed the shared folders:', ...rootNote].join('\n');
+        }
+        if (lastResult && typeof resultBase === 'string' && lastResult.content !== resultBase) {
+          round.sent.resultNote = lastResult.content.slice(resultBase.length);
         }
         wire.push({ role: 'user', content: results });
         const { kept, dropped } = withinImageBudget(
@@ -6720,6 +6728,11 @@ async function toCompletionMessages(
       continue;
     }
 
+    const asSent = sentRounds(message);
+    if (asSent) {
+      wire.push(...asSent);
+      continue;
+    }
     wire.push({
       role: 'assistant',
       content: [
@@ -6728,18 +6741,55 @@ async function toCompletionMessages(
         ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
       ],
     });
-    wire.push({
-      role: 'user',
-      content: calls.map(call => ({
-        type: 'tool_result',
-        tool_use_id: call.id,
-        content: toolResultContent(call),
-        ...(call.error ? { is_error: true } : {}),
-      })),
-    });
+    wire.push({ role: 'user', content: calls.map(call => toolResultBlock(call)) });
   }
 
   return wire;
+}
+
+function toolResultBlock(call: ChatToolCall, note = ''): Record<string, unknown> {
+  return {
+    type: 'tool_result',
+    tool_use_id: call.id,
+    content: `${toolResultContent(call)}${call.cleared ? '' : note}`,
+    ...(call.error ? { is_error: true } : {}),
+  };
+}
+
+/**
+ * A tool turn as its rounds sent it: each round's assistant message and tool results, then the
+ * answer as its own assistant message, so the next turn reads the entry the last round cached.
+ * Must stay in step with the round loop in runReply. Undefined when a round predates `sent`.
+ */
+function sentRounds(message: ChatMessage): CompletionMessage[] | undefined {
+  const rounds = message.rounds;
+  if (!rounds?.length || rounds.some(round => !round.sent)) return undefined;
+  const byId = new Map((message.toolCalls ?? []).map(call => [call.id, call]));
+  const out: CompletionMessage[] = [];
+  for (const round of rounds) {
+    const sent = round.sent as ChatSentRound;
+    const calls = round.toolCallIds.flatMap(id => byId.get(id) ?? []);
+    if (calls.length !== round.toolCallIds.length) return undefined;
+    if (calls.length === 0) {
+      if (sent.text) out.push({ role: 'assistant', content: sent.text });
+      continue;
+    }
+    out.push({
+      role: 'assistant',
+      content: [
+        ...(sent.thinking ?? []),
+        ...(sent.text ? [{ type: 'text', text: sent.text }] : []),
+        ...calls.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })),
+      ],
+    });
+    out.push({
+      role: 'user',
+      content: calls.map((call, index) =>
+        toolResultBlock(call, index === calls.length - 1 ? (sent.resultNote ?? '') : '')
+      ),
+    });
+  }
+  return out;
 }
 
 /** App-written notes ride after the turn's own words, so what the user said stays first. */

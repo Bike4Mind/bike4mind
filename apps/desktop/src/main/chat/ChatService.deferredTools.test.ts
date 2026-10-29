@@ -170,6 +170,35 @@ describe('ChatService deferred tools', () => {
     expect(third.messages.filter(message => message.cache).length).toBe(3);
   });
 
+  it.each([
+    ['today', undefined],
+    ['deferred', { startSetMaxTokens: 100_000 }],
+  ])('replays a tool turn exactly as its rounds sent it (%s)', async (_label, flag) => {
+    deferredTools = flag;
+    const { id } = await service.createSession();
+    const before = post.mock.calls.length;
+    await service.send(id, 'read it');
+    await vi.waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 });
+    streams[before].write(frame({ type: 'content', text: 'Reading.' }));
+    streams[before].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'call_1', name: 'file_read', arguments: JSON.stringify({ path: join(root, 'tiny.txt') }) }],
+      })
+    );
+    streams[before].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === before + 2, { timeout: 3000, interval: 5 });
+    streams[before + 1].write(frame({ type: 'content', text: 'It says z.' }));
+    streams[before + 1].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+    const lastRound = body(before + 1);
+
+    const next = await turn(id, 'thanks');
+    const unmarked = ({ cache: _cache, ...rest }: WireMessage) => rest;
+    expect(next.messages.slice(0, lastRound.messages.length).map(unmarked)).toEqual(lastRound.messages.map(unmarked));
+    expect(next.messages[lastRound.messages.length]).toEqual({ role: 'assistant', content: 'It says z.' });
+  });
+
   it('keeps the request shape of today with the flag off', async () => {
     deferredTools = undefined;
     const { id } = await service.createSession();

@@ -1744,6 +1744,18 @@ export interface ChatReplyRound {
    * `thinking`, never this.
    */
   reasoning?: string;
+  /**
+   * Main only: what this round put on the wire, so later requests replay the turn byte for byte and
+   * read the cache entry its last round wrote (see toCompletionMessages). Absent on older rounds.
+   */
+  sent?: ChatSentRound;
+}
+
+/** A round's assistant message as sent, plus any app text appended to its last tool result. */
+export interface ChatSentRound {
+  thinking?: unknown[];
+  text: string;
+  resultNote?: string;
 }
 
 /**
