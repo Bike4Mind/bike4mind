@@ -83,6 +83,15 @@ describe('signup grant protections', () => {
     ]);
   });
 
+  it('does not treat a non-boolean enabled value as protection', () => {
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: { enabled: 'true' } })).toEqual([
+      'signupGrantRiskPolicy',
+    ]);
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: '{"enabled":"true"}' })).toEqual([
+      'signupGrantRiskPolicy',
+    ]);
+  });
+
   it('reports only the protections still off', () => {
     expect(findUnsetSignupProtections({ ...allOn, maxSignupsPerAsnPerHour: 0 })).toEqual(['maxSignupsPerAsnPerHour']);
     expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: 'on' })).toEqual(['signupGrantRiskPolicy']);
