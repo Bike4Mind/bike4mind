@@ -27,6 +27,7 @@ import { ExternalLink } from '../chat/ExternalLink';
 import { SearchIcon } from '../chat/icons';
 import { readShowAbliterated, writeShowAbliterated } from './abliteratedSetting';
 import { AccessSteps } from './AccessSteps';
+import { FitBadge } from './FitBadge';
 import { HuggingFaceToken } from './HuggingFaceToken';
 import type { ModelTarget } from './modelTarget';
 import { PullDialog, type PullConsent } from './PullDialog';
@@ -49,6 +50,35 @@ export function hubErrorText(error: ModelHubError): string {
     return `Hugging Face is rate limiting this computer. Try again ${seconds ? `in ${seconds} seconds` : 'in a minute'}.`;
   }
   return error.message;
+}
+
+/** Opens Explore on `repo` the next time the tab mounts. */
+export function rememberExploreRepo(repo: string): void {
+  remembered.query = repo;
+  remembered.selected = repo;
+}
+
+/** Starts a pull of a reviewed build; resolves to an error the screen should show, or null. */
+export async function startPull(
+  model: HubModelView,
+  build: HubBuildView,
+  consent: PullConsent,
+  onRecheck: () => void,
+  { serverId, curated }: { serverId?: string; curated?: { entryId: string; buildId: string } } = {}
+): Promise<ModelHubError | null> {
+  const result = await window.b4m.models.pull({
+    repo: model.id,
+    buildId: build.id,
+    revision: model.revision,
+    sizeBytes: build.sizeBytes,
+    ...consent,
+    ...(serverId === undefined ? {} : { serverId }),
+    ...(curated ? { curated } : {}),
+  });
+  if (result.ok) return null;
+  if (result.error.kind === 'runtime-unavailable') onRecheck();
+  if (result.listed || result.error.kind === 'cancelled') return null;
+  return result.error;
 }
 
 function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selected: boolean; onSelect: () => void }) {
@@ -107,13 +137,14 @@ function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selecte
   );
 }
 
-function BuildRow({
+export function BuildRow({
   repo,
   build,
   pull,
   installed,
   runtimeReady,
   canPull,
+  preparing = false,
   onPull,
 }: {
   repo: string;
@@ -122,6 +153,8 @@ function BuildRow({
   installed: boolean;
   runtimeReady: boolean;
   canPull: boolean;
+  /** The Download button waits on a check before the dialog opens. */
+  preparing?: boolean;
   onPull: () => void;
 }) {
   let action = null;
@@ -160,6 +193,7 @@ function BuildRow({
         size="sm"
         variant="soft"
         disabled={!runtimeReady}
+        loading={preparing}
         onClick={onPull}
         data-testid="models-build-pull-btn"
         data-build={build.id}
@@ -185,6 +219,7 @@ function BuildRow({
           {formatBytes(build.sizeBytes)}
         </Typography>
       </Box>
+      <FitBadge fit={build.fit} />
       {action}
     </Stack>
   );
@@ -249,22 +284,15 @@ function ModelDetail({
 
   const model = detail.model;
   const runtimeReady = status?.reachable === true;
+  // Fit rates this computer, not a saved server.
+  const shown = (build: HubBuildView): HubBuildView => (target.local ? build : { ...build, fit: null });
   const start = async (build: HubBuildView, serverId: string | undefined, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
-    const result = await window.b4m.models.pull({
-      repo: model.id,
-      buildId: build.id,
-      revision: model.revision,
-      sizeBytes: build.sizeBytes,
-      ...consent,
-      ...(serverId === undefined ? {} : { serverId }),
-    });
-    if (result.ok) return;
-    if (result.error.kind === 'runtime-unavailable') onRecheck();
-    if (result.listed || result.error.kind === 'cancelled') return;
-    setPullError(hubErrorText(result.error));
-    if (result.error.kind === 'changed') void load();
+    const error = await startPull(model, build, consent, onRecheck, { serverId });
+    if (!error) return;
+    setPullError(hubErrorText(error));
+    if (error.kind === 'changed') void load();
   };
 
   return (
@@ -352,7 +380,7 @@ function ModelDetail({
             <BuildRow
               key={build.id}
               repo={model.id}
-              build={build}
+              build={shown(build)}
               pull={pulls.find(entry => entry.key === pullKey(model.id, build.id, target.id))}
               installed={build.installedNames.some(name => installedNames.has(name))}
               runtimeReady={runtimeReady}
@@ -371,7 +399,7 @@ function ModelDetail({
       {canPull && confirmingOn && (
         <PullDialog
           model={model}
-          build={confirmingOn.build}
+          build={shown(confirmingOn.build)}
           target={target}
           onClose={() => setConfirming(null)}
           onConfirm={consent => void start(confirmingOn.build, confirmingOn.serverId, consent)}

@@ -1,11 +1,23 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { HubGgufBuild, HubModelDetail, PullProgress } from '@bike4mind/local-models';
+import {
+  loadCuratedManifest,
+  type HubGgufBuild,
+  type HubModelDetail,
+  type PullProgress,
+} from '@bike4mind/local-models';
+import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
-import { ModelHubService, type HubTokenPort, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
+import {
+  ModelHubService,
+  type HubTokenPort,
+  type ModelHubPort,
+  type ModelHubServiceDeps,
+  type ModelRuntimePort,
+} from './ModelHubService';
 
 const TOKEN = 'tok-secret-zz';
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -144,8 +156,17 @@ const hub = {
   search: async () => ({ models: [], nextCursor: null }),
   getModel: async () => detail(),
   verifyOllamaRef: async () => REF,
+  ollamaLayers: async () => null,
   checkToken: async () => true,
 } satisfies ModelHubPort;
+
+const curatedDeps = {
+  libraryLayers: async () => null,
+  hardware: () => Promise.reject(new Error('a pull does not read the hardware')),
+  localContext: async () => AUTO_LOCAL_CONTEXT,
+  curated: () => loadCuratedManifest(() => {}),
+  warn: () => undefined,
+} satisfies Pick<ModelHubServiceDeps, 'libraryLayers' | 'hardware' | 'localContext' | 'curated' | 'warn'>;
 
 const noToken: HubTokenPort = {
   persisted: () => true,
@@ -158,6 +179,7 @@ const unusedLocal: ModelRuntimePort = {
   baseUrl: 'http://127.0.0.1:11434',
   health: async () => ({ ok: true, version: '0.12.0', error: null }),
   list: async () => [],
+  inspect: () => Promise.reject(new Error('this computer must not be asked')),
   loaded: async () => [],
   pull: () => Promise.reject(new Error('this computer must not be asked')),
   remove: () => Promise.reject(new Error('this computer must not be asked')),
@@ -209,6 +231,7 @@ async function setup(
     },
     createHub: () => hub,
     tokens: noToken,
+    ...curatedDeps,
     onPullsChanged: () => undefined,
     onInstalledChanged: installedChanged,
     keepAwake,

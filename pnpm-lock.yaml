@@ -1554,6 +1554,9 @@ importers:
 
   b4m-core/local-models:
     dependencies:
+      '@bike4mind/common':
+        specifier: workspace:*
+        version: link:../common
       zod:
         specifier: ^4.6.6
         version: 4.6.6
@@ -2449,6 +2452,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.111.0
         version: 0.111.0(zod@4.6.6)
+      '@aws-sdk/client-cloudfront':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-lambda':
         specifier: ^3.1150.0
         version: 3.1151.0
@@ -2479,6 +2485,9 @@ importers:
       '@bike4mind/llm-adapters':
         specifier: workspace:*
         version: link:../../b4m-core/llm-adapters
+      '@bike4mind/local-models':
+        specifier: workspace:*
+        version: link:../../b4m-core/local-models
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../../b4m-core/observability
@@ -2543,6 +2552,9 @@ importers:
       '@types/yargs':
         specifier: ^17.0.35
         version: 17.0.35
+      aws-sdk-client-mock:
+        specifier: ^4.1.0
+        version: 4.1.0
       mailparser:
         specifier: ^3.12.4
         version: 3.12.4

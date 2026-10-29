@@ -148,6 +148,22 @@ describe('SidebarNav', () => {
     });
   });
 
+  describe('new subscriptions dot', () => {
+    it('marks Subscriptions with a labelled dot when a new one started', () => {
+      renderNav({ newSubscriptions: true });
+
+      const dot = screen.getByRole('img', { name: 'New subscriptions since your last visit' });
+      expect(dot).toHaveAttribute('data-testid', 'admin-sidebar-new-subscriptions-dot');
+      expect(screen.getByRole('link', { name: /Subscriptions/ })).toContainElement(dot);
+    });
+
+    it('shows no dot by default', () => {
+      renderNav();
+
+      expect(screen.queryByTestId('admin-sidebar-new-subscriptions-dot')).toBeNull();
+    });
+  });
+
   describe('footer', () => {
     it('shows the signed-in account name and role', () => {
       renderNav({ account: { name: 'Ada Admin', role: 'Super admin' } });

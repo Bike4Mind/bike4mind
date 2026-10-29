@@ -10,7 +10,7 @@ export function text(value: unknown): string | null {
 }
 
 /** A server id from the renderer: omitted means this computer; null when it is present but not an id. */
-function server(value: unknown): { id: string | undefined } | null {
+export function serverArg(value: unknown): { id: string | undefined } | null {
   if (value === undefined) return { id: undefined };
   const id = text(value);
   return id ? { id } : null;
@@ -33,15 +33,26 @@ export function registerModelsIpc(
   ipc: Pick<IpcMain, 'handle'>,
   service: Pick<
     ModelHubService,
-    'status' | 'installed' | 'pulls' | 'search' | 'detail' | 'pull' | 'cancel' | 'resume' | 'dismiss' | 'remove'
+    | 'status'
+    | 'installed'
+    | 'pulls'
+    | 'search'
+    | 'detail'
+    | 'curatedPull'
+    | 'checkCurated'
+    | 'pull'
+    | 'cancel'
+    | 'resume'
+    | 'dismiss'
+    | 'remove'
   >
 ): void {
   ipc.handle(IPC_CHANNELS.modelsGetStatus, (_event, value: unknown) => {
-    const target = server(value);
+    const target = serverArg(value);
     return target ? service.status(target.id) : invalidStatus;
   });
   ipc.handle(IPC_CHANNELS.modelsListInstalled, (_event, value: unknown) => {
-    const target = server(value);
+    const target = serverArg(value);
     return target ? service.installed(target.id) : invalid;
   });
   ipc.handle(IPC_CHANNELS.modelsListPulls, () => service.pulls());
@@ -55,16 +66,33 @@ export function registerModelsIpc(
     const id = text(repo);
     return id ? service.detail(id) : invalid;
   });
+  ipc.handle(IPC_CHANNELS.modelsGetCuratedPull, (_event, entryId: unknown, buildId: unknown, value: unknown) => {
+    const entry = text(entryId);
+    const build = text(buildId);
+    const target = serverArg(value);
+    return entry && build && target ? service.curatedPull(entry, build, target.id) : invalid;
+  });
+  ipc.handle(IPC_CHANNELS.modelsCheckCurated, (_event, entryId: unknown, buildId: unknown, value: unknown) => {
+    const entry = text(entryId);
+    const build = text(buildId);
+    const target = serverArg(value);
+    return entry && build && target ? service.checkCurated(entry, build, target.id) : invalid;
+  });
   ipc.handle(IPC_CHANNELS.modelsPull, (_event, request: unknown) => {
     const body = request && typeof request === 'object' ? (request as Record<string, unknown>) : null;
     const repo = text(body?.repo);
     const buildId = text(body?.buildId);
     const revision = text(body?.revision);
     const sizeBytes = body?.sizeBytes;
-    const target = server(body?.serverId);
+    const target = serverArg(body?.serverId);
+    const curatedBody =
+      body?.curated && typeof body.curated === 'object' ? (body.curated as Record<string, unknown>) : null;
+    const curated = curatedBody ? { entryId: text(curatedBody.entryId), buildId: text(curatedBody.buildId) } : null;
+    if (body?.curated !== undefined && (!curated?.entryId || !curated.buildId)) return { ...invalid, listed: false };
     if (
       !repo ||
-      !isHubRepoId(repo) ||
+      // A curated library build names an Ollama library ref; the service checks it against the reviewed list.
+      (!curated && !isHubRepoId(repo)) ||
       !buildId ||
       !revision ||
       typeof sizeBytes !== 'number' ||
@@ -80,6 +108,9 @@ export function registerModelsIpc(
       acceptLicense: body?.acceptLicense === true,
       confirmAccess: body?.confirmAccess === true,
       serverId: target.id,
+      ...(curated?.entryId && curated.buildId
+        ? { curated: { entryId: curated.entryId, buildId: curated.buildId } }
+        : {}),
     });
   });
   ipc.handle(IPC_CHANNELS.modelsCancelPull, (_event, key: unknown) => {
@@ -96,7 +127,7 @@ export function registerModelsIpc(
   });
   ipc.handle(IPC_CHANNELS.modelsRemove, (_event, name: unknown, value: unknown) => {
     const id = text(name);
-    const target = server(value);
+    const target = serverArg(value);
     return id && target ? service.remove(id, target.id) : invalid;
   });
 }

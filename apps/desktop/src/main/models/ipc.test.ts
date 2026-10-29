@@ -1,5 +1,6 @@
-import type { HubModelDetail } from '@bike4mind/local-models';
+import { curatedLibrary, loadCuratedManifest, type HubModelDetail } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
 import type { ModelServerManagement } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
 import { registerModelsIpc } from './ipc';
@@ -7,11 +8,14 @@ import { ModelHubService, type ModelRuntimePort } from './ModelHubService';
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
+const CURATED = loadCuratedManifest(() => {});
+
 function runtime(): ModelRuntimePort & { pull: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> } {
   return {
     baseUrl: 'http://192.168.1.20:11434',
     health: async () => ({ ok: true, version: '0.12.0', error: null }),
     list: async () => [],
+    inspect: () => Promise.reject(new Error('not inspected here')),
     loaded: async () => [],
     pull: vi.fn(async () => undefined),
     remove: vi.fn(async () => undefined),
@@ -32,11 +36,17 @@ function setup(management: ModelServerManagement) {
       search: async () => ({ models: [], nextCursor: null }),
       getModel,
       verifyOllamaRef: async () => null,
+      ollamaLayers: async () => null,
       checkToken: async () => true,
     }),
     tokens: { persisted: () => true, get: async () => null, set: async () => undefined, clear: async () => undefined },
+    libraryLayers: async () => null,
+    hardware: () => Promise.reject(new Error('not read here')),
+    localContext: async () => AUTO_LOCAL_CONTEXT,
+    curated: () => CURATED,
     onPullsChanged: () => undefined,
     onInstalledChanged: () => undefined,
+    warn: () => undefined,
   });
   const handlers = new Map<string, Handler>();
   registerModelsIpc(
@@ -82,6 +92,30 @@ describe('registerModelsIpc', () => {
       expect(await invoke(IPC_CHANNELS.modelsListPulls)).toEqual([]);
     }
   );
+
+  it('passes the server to a curated dialog, check and pull, so a Chat only server refuses each', async () => {
+    const { invoke, remote, getModel } = setup('chat-only');
+    const entry = CURATED.entries.find(candidate => candidate.id === 'gemma-4-e4b');
+    const build = entry?.builds[0];
+    if (!entry || !build) throw new Error('the bundled list lost its Gemma 4 E4B pick');
+    const refused = { ok: false, error: { kind: 'not-allowed' } };
+    expect(await invoke(IPC_CHANNELS.modelsGetCuratedPull, entry.id, build.id, 'gpu')).toMatchObject(refused);
+    expect(await invoke(IPC_CHANNELS.modelsCheckCurated, entry.id, build.id, 'gpu')).toMatchObject(refused);
+    expect(
+      await invoke(IPC_CHANNELS.modelsPull, {
+        ...pullRequest,
+        repo: curatedLibrary(build)?.ref,
+        buildId: build.id,
+        curated: { entryId: entry.id, buildId: build.id },
+      })
+    ).toMatchObject({ ...refused, listed: false });
+    expect(await invoke(IPC_CHANNELS.modelsGetCuratedPull, entry.id, build.id, 42)).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid' },
+    });
+    expect(getModel).not.toHaveBeenCalled();
+    expect(remote.pull).not.toHaveBeenCalled();
+  });
 
   it('sends a removal to the named server, and to this computer without one', async () => {
     const { invoke, local, remote } = setup('allowed');

@@ -124,6 +124,7 @@ interface SessionLayoutControlState {
   floatingChatPosition: { x: number; y: number };
   floatingChatSize: { width: number; height: number };
   floatingChatMinimized: boolean;
+  floatingChatPillPosition: { x: number; y: number } | null;
   // Docked chat panel sizing (percentage)
   dockChatWidth: number; // Width % for dockRight mode (default 40)
   dockChatHeight: number; // Height % for dockBottom mode (default 40)
@@ -165,6 +166,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
       floatingChatMinimized: false,
+      floatingChatPillPosition: null,
       dockChatWidth: 40,
       dockChatHeight: 40,
     }),
@@ -181,6 +183,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
         // Floating chat window position/size persisted for cross-session memory
         floatingChatPosition: state.floatingChatPosition,
         floatingChatSize: state.floatingChatSize,
+        floatingChatPillPosition: state.floatingChatPillPosition,
         // floatingChatMinimized intentionally excluded - controlled at mount time
         // to avoid hydration race where persisted false overwrites auto-minimize on mobile
         // Docked chat panel sizing persisted for cross-session memory

@@ -68,6 +68,19 @@ const api: DesktopApi = {
     listInstalled: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled, serverId),
     search: (request: HubSearchRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsSearch, request),
     getDetail: (repo: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo),
+    listCurated: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListCurated, serverId),
+    getCuratedPull: (entryId: string, buildId: string, serverId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsGetCuratedPull, entryId, buildId, serverId),
+    checkCurated: (entryId: string, buildId: string, serverId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCurated, entryId, buildId, serverId),
+    checkCuratedList: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCuratedList),
+    getCuratedSettings: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSettings),
+    setCuratedEnabled: (enabled: boolean) => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSetEnabled, enabled),
+    onCuratedChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.modelsCuratedChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsCuratedChanged, handler);
+    },
     listPulls: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListPulls),
     pull: (request: ModelPullRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsPull, request),
     cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),

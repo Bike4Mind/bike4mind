@@ -138,12 +138,13 @@ void app.whenReady().then(async () => {
     claudeImport,
     spareWorktrees,
     modelServers,
+    localContext,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
   });
-  const models = registerModels(modelServers);
+  const models = registerModels(modelServers, { localContext: () => localContext.read() });
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;

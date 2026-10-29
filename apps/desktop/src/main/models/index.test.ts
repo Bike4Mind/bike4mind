@@ -1,17 +1,19 @@
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { HfTokenResult } from '@shared/models';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
+import type { CuratedSourceView, HfTokenResult } from '@shared/models';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelHubServiceDeps } from './ModelHubService';
 
 type Handler = (event: { sender: { id: number } }, value?: unknown) => unknown;
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, Handler>(),
-  app: { getPath: () => '/unused/test-user-data' },
+  app: { getPath: () => '/unused/test-user-data', getVersion: () => '0.1.12', isPackaged: true },
   ipcMain: { handle: vi.fn() },
   powerSaveBlocker: { start: vi.fn(() => 7), stop: vi.fn() },
   safeStorage: {},
 }));
-const { origin, other } = vi.hoisted(() => ({
+const { origin, other, sourceView } = vi.hoisted(() => ({
+  sourceView: vi.fn(),
   origin: { webContents: { id: 1, send: vi.fn() } },
   other: { webContents: { id: 2, send: vi.fn() } },
 }));
@@ -20,15 +22,25 @@ const service = vi.hoisted(() => ({
   serverChanged: vi.fn(),
   setToken: vi.fn(),
   clearToken: vi.fn(),
+  curated: vi.fn(),
 }));
 
 vi.mock('electron', () => electron);
+vi.mock('./curated/CuratedSource', () => ({
+  CuratedSource: class {
+    current = vi.fn();
+    loaded = async () => {};
+    checkIfDue = async () => {};
+    view = sourceView;
+  },
+}));
 vi.mock('../windows', () => ({ appWindows: () => [origin, other] }));
 vi.mock('./ModelHubService', () => ({
   ModelHubService: class {
     serverChanged = service.serverChanged;
     setToken = service.setToken;
     clearToken = service.clearToken;
+    curated = service.curated;
     constructor(deps: ModelHubServiceDeps) {
       service.deps = deps;
     }
@@ -48,7 +60,7 @@ function setup() {
       return () => {};
     }),
   };
-  registerModels(servers);
+  registerModels(servers, { localContext: async () => AUTO_LOCAL_CONTEXT });
   const deps = service.deps;
   if (!deps) throw new Error('ModelHubService was not built');
   return { deps, saved: (id: string) => saved?.(id) };
@@ -56,11 +68,22 @@ function setup() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal('__B4M_CURATED_DEV_KEYS__', false);
+  sourceView.mockReset().mockReturnValue({
+    origin: 'bundled',
+    sequence: 1,
+    check: 'idle',
+    checkedAt: null,
+    stale: false,
+  } satisfies CuratedSourceView);
   electron.handlers.clear();
   electron.ipcMain.handle.mockImplementation((channel: string, handler: Handler) => {
     electron.handlers.set(channel, handler);
   });
   service.deps = null;
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('registerModels', () => {
@@ -128,4 +151,43 @@ describe('Models credential IPC', () => {
       expect(other.webContents.send).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('Models curated IPC', () => {
+  const list = {
+    updatedAt: '2026-10-27T00:00:00Z',
+    machine: { memoryKind: 'cpu', totalMemoryBytes: 16 * 1024 ** 3, gpuMemoryBytes: null, gpuName: null },
+    entries: [],
+    picks: [],
+  };
+
+  it('keeps source metadata with the manifest snapshot while model probes are pending', async () => {
+    const bundledView = sourceView();
+    let finish: (() => void) | undefined;
+    service.curated.mockImplementation(async () => {
+      await new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      return list;
+    });
+    setup();
+    const response = electron.handlers.get(IPC_CHANNELS.modelsListCurated)?.({ sender: { id: 1 } });
+    await vi.waitFor(() => expect(service.curated).toHaveBeenCalledOnce());
+    sourceView.mockReturnValue({ ...bundledView, origin: 'updated', sequence: 2, check: 'updated' });
+    if (!finish) throw new Error('The curated probe never started');
+    finish();
+    await expect(response).resolves.toMatchObject({ source: bundledView });
+  });
+
+  it('lists curated models for the chosen server and refuses a malformed server id', async () => {
+    service.curated.mockResolvedValue(list);
+    setup();
+    const handler = electron.handlers.get(IPC_CHANNELS.modelsListCurated);
+    await handler?.({ sender: { id: 1 } }, 'srv1');
+    expect(service.curated).toHaveBeenLastCalledWith('srv1');
+    await handler?.({ sender: { id: 1 } });
+    expect(service.curated).toHaveBeenLastCalledWith(undefined);
+    await expect(handler?.({ sender: { id: 1 } }, 42)).resolves.toMatchObject({ ok: false });
+    expect(service.curated).toHaveBeenCalledTimes(2);
+  });
 });

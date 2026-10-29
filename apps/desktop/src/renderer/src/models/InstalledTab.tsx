@@ -21,6 +21,7 @@ import {
 } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { TrashIcon } from '../chat/icons';
+import { FitBadge } from './FitBadge';
 import type { ModelTarget } from './modelTarget';
 
 /** A device-side model a chat points at: its Ollama name and the server it runs on. */
@@ -79,6 +80,7 @@ function InstalledRow({ model, onRemove }: { model: LocalModelEntry; onRemove: (
               Loaded
             </Chip>
           )}
+          <FitBadge fit={model.fit} />
         </Stack>
         <Stack direction="row" flexWrap="wrap" useFlexGap spacing={0.75} sx={{ mt: 0.75 }}>
           <Typography level="body-xs" textColor="text.tertiary">

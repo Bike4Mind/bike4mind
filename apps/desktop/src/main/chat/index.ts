@@ -274,6 +274,8 @@ export interface RegisteredChat {
   spareWorktrees: SpareWorktrees;
   /** Saved model servers, which the Models screen also pulls to and removes from. */
   modelServers: ModelServerRegistry;
+  /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
+  localContext: LocalContextPreference;
 }
 
 /**
@@ -1252,7 +1254,7 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, modelServers };
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, modelServers, localContext };
 }
 
 export { ChatService } from './ChatService';

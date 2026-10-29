@@ -11,6 +11,7 @@ import Typography from '@mui/joy/Typography';
 import { formatBytes, type HubBuildView, type HubModelView } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { AccessSteps } from './AccessSteps';
+import { FitBadge } from './FitBadge';
 import type { ModelTarget } from './modelTarget';
 
 export interface PullConsent {
@@ -22,7 +23,10 @@ function joinNames(names: readonly string[]): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : (names[0] ?? '');
 }
 
-/** Size and license before anything downloads; restricted licenses and gated repos need an explicit tick. */
+/**
+ * Size, fit and license before anything downloads; restricted licenses, gated repos and builds too large for
+ * this computer need an explicit tick.
+ */
 export function PullDialog({
   model,
   build,
@@ -39,8 +43,10 @@ export function PullDialog({
   const server = target.local ? null : target.name;
   const [acceptLicense, setAcceptLicense] = useState(false);
   const [confirmAccess, setConfirmAccess] = useState(false);
+  const [overrideFit, setOverrideFit] = useState(false);
   const restricted = model.licenseKind === 'restricted';
-  const ready = (!restricted || acceptLicense) && (!model.needsAccess || confirmAccess);
+  const tooLarge = build.fit?.level === 'too-large';
+  const ready = (!restricted || acceptLicense) && (!model.needsAccess || confirmAccess) && (!tooLarge || overrideFit);
   const names = model.licenseNames;
   const several = names.length > 1;
   const acceptLabel =
@@ -69,6 +75,21 @@ export function PullDialog({
               <Typography level="body-sm" data-testid="models-pull-dialog-server">
                 Desktop cannot see how much free space {server} has. Keep Bike4Mind open until the download finishes.
               </Typography>
+            )}
+            {build.fit && (
+              <Stack direction="row" spacing={1} alignItems="flex-start" data-testid="models-pull-dialog-fit">
+                <FitBadge fit={build.fit} bare />
+                <Typography level="body-sm">{build.fit.detail}</Typography>
+              </Stack>
+            )}
+            {tooLarge && (
+              <Checkbox
+                size="sm"
+                checked={overrideFit}
+                onChange={event => setOverrideFit(event.target.checked)}
+                label="Download it anyway. It may fail to load or make this computer swap."
+                slotProps={{ input: { 'data-testid': 'models-pull-dialog-fit-checkbox' } }}
+              />
             )}
             <Typography level="body-sm" data-testid="models-pull-dialog-license">
               {several ? 'Licenses' : 'License'}:{' '}

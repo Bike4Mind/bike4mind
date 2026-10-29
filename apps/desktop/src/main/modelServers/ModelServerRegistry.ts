@@ -371,6 +371,7 @@ export class ModelServerRegistry {
         },
         list: () => this.run(id, undefined, current => current.runtime.list()),
         loaded: () => this.run(id, undefined, current => current.runtime.loaded()),
+        inspect: (model, options) => this.run(id, options?.signal, current => current.runtime.inspect(model, options)),
         pull: (ref, options) => this.run(id, options?.signal, current => current.runtime.pull(ref, options)),
         remove: model => this.run(id, undefined, current => current.runtime.remove(model)),
       },
