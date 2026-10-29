@@ -60,6 +60,8 @@ export interface INetworkMeta {
 
 export interface ISignupMeta extends INetworkMeta {
   capturedAt: Date;
+  /** Server-verified challenge proof; absent/null when skipped, unavailable, or a test secret was used. */
+  challengeVerified?: true | null;
 }
 
 /**

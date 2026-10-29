@@ -12,6 +12,7 @@ import {
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
 import { requireTurnstile } from '@server/middlewares/requireTurnstile';
+import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import { TURNSTILE_ACTION_OTC_SEND } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
@@ -119,7 +120,9 @@ const handler = baseApi({ auth: false })
             },
           },
           signPendingToken: payload => {
-            return jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' });
+            return jwt.sign({ ...payload, challengeVerified: wasTurnstileVerified(req) }, Config.JWT_SECRET, {
+              algorithm: 'HS256',
+            });
           },
         }
       )

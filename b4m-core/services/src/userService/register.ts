@@ -95,11 +95,13 @@ interface RegisterUserAdapters {
   skipInviteCheck?: boolean;
   /** Forwarded to the staged signup grant's first assessment (see FreeCreditAdapters). */
   collectRiskSignals?: FreeCreditAdapters['collectRiskSignals'];
+  emitRiskBand?: FreeCreditAdapters['emitRiskBand'];
+  signupMeta?: IUserDocument['signupMeta'];
 }
 
 export const registerUser = async (
   params: RegisterUserParameters,
-  { db, logger, skipInviteCheck }: RegisterUserAdapters
+  { db, logger, skipInviteCheck, signupMeta }: RegisterUserAdapters
 ) => {
   const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } = params;
 
@@ -323,6 +325,7 @@ export const registerUser = async (
     currentStorageSize: 0,
     currentCredits: 0,
     pendingCreditGrant: freeCredits > 0 ? freeCredits : null,
+    ...(signupMeta ? { signupMeta } : {}),
     ...(!hasInviteCode ? { signupGrant: await newSignupGrant(db.adminSettings) } : {}),
     level: 'DemoUser',
     isBanned: false,
@@ -458,6 +461,7 @@ export const registerViaOTC = async (
       reason: 'OTC registration (email verified)',
       logger,
       collectRiskSignals: adapters.collectRiskSignals,
+      emitRiskBand: adapters.emitRiskBand,
     });
     // On failure the patch is empty, so the pending tag and amount survive as the retry
     // breadcrumb while the user is still verified and let in.

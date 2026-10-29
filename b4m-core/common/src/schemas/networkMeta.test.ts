@@ -15,6 +15,12 @@ const signupMeta = {
 };
 
 describe('optional signup fingerprints', () => {
+  it('preserves genuine challenge proof and leaves skipped challenges unknown', () => {
+    expect(signupMetaSchema.parse({ ...signupMeta, challengeVerified: true }).challengeVerified).toBe(true);
+    expect(signupMetaSchema.parse({ ...signupMeta, challengeVerified: null }).challengeVerified).toBeNull();
+    expect(signupMetaSchema.safeParse({ ...signupMeta, challengeVerified: 'true' }).success).toBe(false);
+    expect(signupMetaSchema.safeParse({ ...signupMeta, challengeVerified: false }).success).toBe(false);
+  });
   it.each(['h2', 'H2', 'aZ', '00'])('preserves case in the ALPN component %s', alpn => {
     const fingerprint = `t13d0101${alpn}_111111111111_222222222222`;
     expect(ja4FingerprintSchema.parse(fingerprint)).toBe(fingerprint);

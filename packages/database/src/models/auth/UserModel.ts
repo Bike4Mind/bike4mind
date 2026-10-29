@@ -971,6 +971,7 @@ const SignupMetaSchema = new Schema(
   {
     ...NETWORK_META_FIELDS,
     capturedAt: { type: Date, required: true },
+    challengeVerified: { type: Boolean, default: undefined },
   },
   { _id: false }
 );
