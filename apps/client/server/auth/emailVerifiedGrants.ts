@@ -71,7 +71,8 @@ export async function releaseVerifiedPendingFreeCredits(
   user: PendingFreeCreditUser,
   reason: string,
   logger: Logger,
-  signupNetwork?: INetworkMeta
+  signupNetwork?: INetworkMeta,
+  options: { bypassBudget?: boolean } = {}
 ): Promise<PendingFreeCreditReleaseResult> {
   let release: Awaited<ReturnType<typeof userService.releasePendingFreeCredits>>;
   try {
@@ -88,6 +89,7 @@ export async function releaseVerifiedPendingFreeCredits(
         reason,
         logger,
         collectRiskSignals: createSignupRiskCollector(signupNetwork),
+        bypassBudget: options.bypassBudget,
       }
     );
   } catch (error) {
