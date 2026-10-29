@@ -88,6 +88,14 @@ const describeDangerChanges = (editedFields: EditedFieldsState, formState: Admin
   return changes;
 };
 
+/** Presets for the staged change that leads the sentence above: ban first, then moderation. */
+const dangerReasonPresets = (editedFields: EditedFieldsState, formState: AdminUserListItem): readonly string[] => {
+  if (editedFields.isBanned) {
+    return formState.isBanned ? ADMIN_REASON_PRESETS.suspension : ADMIN_REASON_PRESETS.reinstatement;
+  }
+  return formState.isModerated ? ADMIN_REASON_PRESETS.restriction : ADMIN_REASON_PRESETS.reinstatement;
+};
+
 // Keyed by IUserDocument, not the narrower list-projection row: admins edit fields the
 // list endpoint does not read back (e.g. emailVerifiedAt), and the PATCH body is a
 // Partial<IUserDocument>.
@@ -119,6 +127,8 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
   const [loginAsMfaRequiredOpen, setLoginAsMfaRequiredOpen] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
   const [dangerConfirmOpen, setDangerConfirmOpen] = useState(false);
+  // Collected by the ban/moderation confirm, held so the role step that may follow still sends it.
+  const [statusReason, setStatusReason] = useState<string | undefined>(undefined);
   const [activeTab, setActiveTab] = useState<UserProfileTab>('overview');
 
   useEffect(() => {
@@ -173,12 +183,12 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
   };
 
   // A role change is routed through a confirm dialog that collects the reason first.
-  const requestSave = () => {
+  const requestSave = (statusChangeReason?: string) => {
     if (editedFields.isAdmin) {
       setRoleConfirmOpen(true);
       return;
     }
-    handleSaveChanges();
+    handleSaveChanges(undefined, statusChangeReason);
   };
 
   // Ban and moderation are staged like any field, so they are confirmed on Update, before the role step.
@@ -191,26 +201,29 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
     requestSave();
   };
 
-  const confirmDangerChanges = () => {
+  const confirmDangerChanges = (reason: string) => {
+    setStatusReason(reason);
     setDangerConfirmOpen(false);
-    requestSave();
+    requestSave(reason);
   };
 
-  const handleSaveChanges = async (roleReason?: string) => {
-    const data = Object.entries(editedFields).reduce<Partial<IUserDocument> & { roleChangeReason?: string }>(
-      (acc, [key, value]) => {
-        if (value) {
-          // formState carries admin-editable fields beyond the list projection, so index it
-          // structurally rather than through AdminUserListItem's narrower keys.
-          (acc as Record<string, unknown>)[key] = (formState as Record<string, unknown>)[key];
-        }
-        return acc;
-      },
-      {}
-    );
+  const handleSaveChanges = async (roleReason?: string, statusChangeReason?: string) => {
+    const data = Object.entries(editedFields).reduce<
+      Partial<IUserDocument> & { roleChangeReason?: string; statusChangeReason?: string }
+    >((acc, [key, value]) => {
+      if (value) {
+        // formState carries admin-editable fields beyond the list projection, so index it
+        // structurally rather than through AdminUserListItem's narrower keys.
+        (acc as Record<string, unknown>)[key] = (formState as Record<string, unknown>)[key];
+      }
+      return acc;
+    }, {});
 
     if (editedFields.isAdmin && roleReason) {
       data.roleChangeReason = roleReason.trim();
+    }
+    if ((editedFields.isBanned || editedFields.isModerated) && statusChangeReason) {
+      data.statusChangeReason = statusChangeReason;
     }
 
     updateUser.mutate(
@@ -497,25 +510,22 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
       </Box>
 
       {/* Ban / moderation confirmation: both are staged, so this guards the save that applies them */}
-      <Modal open={dangerConfirmOpen} onClose={() => setDangerConfirmOpen(false)}>
-        <ModalDialog data-testid="user-profile-danger-confirm-modal">
-          <ModalClose />
-          <Typography level="title-md" startDecorator={<DangerousIcon />}>
-            Confirm account restriction change
-          </Typography>
-          <Typography level="body-sm" sx={{ mb: 1 }}>
+      <ActionDialog
+        open={dangerConfirmOpen}
+        onClose={() => setDangerConfirmOpen(false)}
+        title="Confirm account restriction change"
+        description={
+          <>
             You are about to {dangerChanges.join(' and ')} <strong>{user.name || user.email}</strong>.
-          </Typography>
-          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={() => setDangerConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button color="danger" onClick={confirmDangerChanges} data-testid="user-profile-danger-confirm-btn">
-              Confirm
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+          </>
+        }
+        reasonPresets={dangerReasonPresets(editedFields, formState)}
+        confirmLabel="Confirm"
+        tone="danger"
+        onConfirm={confirmDangerChanges}
+        data-testid="user-profile-danger-confirm-modal"
+        testIds={{ confirm: 'user-profile-danger-confirm-btn' }}
+      />
 
       {/* System Message Modal */}
       <SystemMessageModal
@@ -582,7 +592,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index }) => {
         confirmLabel={formState.isAdmin ? 'Grant Super Admin' : 'Remove Super Admin'}
         tone="danger"
         pending={updateUser.isPending}
-        onConfirm={handleSaveChanges}
+        onConfirm={roleReason => handleSaveChanges(roleReason, statusReason)}
         data-testid="role-change-confirm-modal"
         testIds={{ reason: 'role-change-reason-input', confirm: 'role-change-confirm-btn' }}
       />

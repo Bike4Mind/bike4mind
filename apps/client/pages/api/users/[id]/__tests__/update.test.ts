@@ -98,6 +98,8 @@ vi.mock('@bike4mind/services', async orig => ({
       password: z.string().nullable().optional(),
       email: z.string().optional(),
       isBanned: z.boolean().optional(),
+      isModerated: z.boolean().optional(),
+      statusChangeReason: z.string().optional(),
       moderationStatus: z.string().optional(),
     }),
     updateUserSchema: z.object({
@@ -124,7 +126,7 @@ vi.mock('@bike4mind/database', () => ({
           const keep = fields.split(' ');
           // The session-end snapshot is the only read that asks for every block field; note
           // whether it happened inside the change callback (the transaction) or before it.
-          if (fields === 'isAdmin email isBanned disputePending moderation') {
+          if (fields === 'isAdmin email isBanned isModerated disputePending moderation') {
             txnState.snapshotReadInsideChange = txnState.changeRunning;
           }
           projected =
@@ -354,7 +356,7 @@ describe("PUT /api/users/:id/update - an admin changing another user's credentia
 
   it.each([
     ['revoking the admin role', { isAdmin: false, roleChangeReason: 'Left the support team' }],
-    ['a ban', { isBanned: true }],
+    ['a ban', { isBanned: true, statusChangeReason: 'Repeated abuse reports' }],
     ['an unrelated field', { name: 'Renamed' }],
   ])('leaves %s ungated, including with an API key', async (_label, body) => {
     mockUserFindById.mockReturnValue({ id: 'other-user', isAdmin: true });
@@ -729,7 +731,12 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     ['sets their password', { password: 'n3w-Passw0rd!' }, BEFORE, 'password_changed'],
     ['sets an empty-string password', { password: '' }, BEFORE, 'password_changed'],
     ['changes their email', { email: 'new@example.com' }, { ...BEFORE, email: 'new@example.com' }, 'email_changed'],
-    ['bans them', { isBanned: true }, { ...BEFORE, isBanned: true }, 'account_blocked'],
+    [
+      'bans them',
+      { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+      { ...BEFORE, isBanned: true },
+      'account_blocked',
+    ],
     [
       'suspends them',
       { moderationStatus: 'suspended' },
@@ -749,7 +756,11 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     // The reason has to see the state the write saw; a read before the write can be stale by the
     // time it commits (and stays stale across a transaction retry).
     adminEdit(BEFORE, { ...BEFORE, isBanned: true });
-    const { promise } = run({ user: ADMIN, userId: 'target', body: { isBanned: true } });
+    const { promise } = run({
+      user: ADMIN,
+      userId: 'target',
+      body: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    });
     await promise;
 
     expect(txnState.snapshotReadInsideChange).toBe(true);
@@ -760,7 +771,12 @@ describe('PUT /api/users/:id/update - ends sessions on credential and account-st
     const { promise } = run({
       user: ADMIN,
       userId: 'target',
-      body: { password: 'n3w-Passw0rd!', email: 'new@example.com', isBanned: true },
+      body: {
+        password: 'n3w-Passw0rd!',
+        email: 'new@example.com',
+        isBanned: true,
+        statusChangeReason: 'Repeated abuse reports',
+      },
     });
     await promise;
 
@@ -1102,6 +1118,83 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
 
       expect(res._getStatusCode()).toBe(200);
       expect(mockDeny).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('status changes', () => {
+    const STATUS_REASON = 'Repeated abuse reports';
+    const flip = (flag: 'isBanned' | 'isModerated', before: boolean, after: boolean) => {
+      mockUserFindById.mockReturnValue(target({ [flag]: before }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ [flag]: after }), creditAdjustment: undefined });
+    };
+
+    it.each([
+      ['suspends', 'isBanned', false, true, 'user.suspended'],
+      ['reinstates', 'isBanned', true, false, 'user.reinstated'],
+      ['restricts', 'isModerated', false, true, 'user.restricted'],
+      ['lifts the restriction on', 'isModerated', true, false, 'user.restriction_lifted'],
+    ] as const)('%s with the reason and a change row', async (_label, field, before, after, action) => {
+      flip(field, before, after);
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { [field]: after, statusChangeReason: `  ${STATUS_REASON}  ` },
+      });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action,
+          target: expect.objectContaining({ kind: 'user', id: 'other-user' }),
+          reason: STATUS_REASON,
+          changes: [{ field, before, after }],
+        })
+      );
+    });
+
+    it.each([
+      ['isBanned', { isBanned: true }],
+      ['isModerated', { isModerated: true }],
+    ])('answers 400 and writes nothing when %s flips without a statusChangeReason', async (_label, body) => {
+      mockUserFindById.mockReturnValue(target());
+      const { promise } = run({ user: ADMIN, userId: 'other-user', body });
+
+      await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('answers 400 for a statusChangeReason under five characters', async () => {
+      mockUserFindById.mockReturnValue(target());
+      const { promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { isBanned: true, statusChangeReason: 'abc' },
+      });
+
+      await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it('needs no reason and writes no status entry when a flag is sent with its stored value', async () => {
+      mockUserFindById.mockReturnValue(target({ isBanned: true, isModerated: false }));
+      mockAdminUpdateUser.mockResolvedValue({
+        user: target({ isBanned: true, isModerated: false }),
+        creditAdjustment: undefined,
+      });
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: 'other-user',
+        body: { name: 'Renamed', isBanned: true, isModerated: false },
+      });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockAdminUpdateUser).toHaveBeenCalledTimes(1);
+      expect(mockRecord).not.toHaveBeenCalled();
     });
   });
 

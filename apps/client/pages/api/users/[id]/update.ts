@@ -129,11 +129,14 @@ async function handleTelemetryConsentChange(
 
 type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
   isAdmin?: boolean;
+  isModerated?: boolean;
   email?: string | null;
 };
 
 type AuditTargetSnapshot = {
   isAdmin?: boolean;
+  isBanned?: boolean;
+  isModerated?: boolean;
   currentCredits?: number;
   name?: string;
   username?: string;
@@ -145,6 +148,27 @@ const userAuditTarget = (userId: string, user: AuditTargetSnapshot | null) => ({
   id: userId,
   displayName: user?.name || user?.username || user?.email || userId,
 });
+
+/** The status flags an admin update can flip, each with its own audit action pair. */
+const STATUS_FLAGS = [
+  {
+    field: 'isBanned',
+    on: { action: 'user.suspended', summary: 'suspended the account' },
+    off: { action: 'user.reinstated', summary: 'reinstated the account' },
+  },
+  {
+    field: 'isModerated',
+    on: { action: 'user.restricted', summary: 'restricted the account' },
+    off: { action: 'user.restriction_lifted', summary: 'lifted the restriction' },
+  },
+] as const;
+
+/**
+ * The flags this body actually flips. Generic edits resend the whole user, so a flag sent with its
+ * current value is not a change and needs no reason.
+ */
+const statusFlagChanges = (body: userService.AdminUpdateUserParameters, before: AuditTargetSnapshot | null) =>
+  STATUS_FLAGS.filter(({ field }) => body[field] !== undefined && body[field] !== !!before?.[field]);
 
 /** Whether an admin update body asks to move the balance; mirrors adminUpdateUser's delta rule. */
 const requestsCreditChange = (body: userService.AdminUpdateUserParameters, currentCredits: number | undefined) =>
@@ -231,10 +255,11 @@ const handler = baseApi().put(
       const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
 
       const targetBefore = (await User.findById(userId)
-        .select('isAdmin currentCredits name username email')
+        .select('isAdmin isBanned isModerated currentCredits name username email')
         .lean()) as AuditTargetSnapshot | null;
       const auditTarget = userAuditTarget(userId, targetBefore);
       const changesRole = body.isAdmin !== undefined && body.isAdmin !== !!targetBefore?.isAdmin;
+      const statusChanges = statusFlagChanges(body, targetBefore);
       const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
 
       // No self-service privilege: an admin cannot move their own balance or change their own
@@ -258,6 +283,7 @@ const handler = baseApi().put(
       // Validated before any write so a missing reason never leaves a half-applied update.
       const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+      const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
 
       // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
       if (changesRole && body.isAdmin === false) {
@@ -282,7 +308,7 @@ const handler = baseApi().put(
           // Read inside the transaction so the reason sees the state the write saw; an
           // outside read can be stale by the time the write commits.
           const snapshot = (await User.findById(userId)
-            .select('isAdmin email isBanned disputePending moderation')
+            .select('isAdmin email isBanned isModerated disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
           const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
             currentUser.id,
@@ -299,8 +325,8 @@ const handler = baseApi().put(
             }
           );
 
-          // Both entries are strict: a failed audit write aborts this transaction, so neither the
-          // role change nor the balance change can commit without its record.
+          // These entries are strict: a failed audit write aborts this transaction, so no role,
+          // balance, suspension or restriction change can commit without its record.
           if (changesRole && snapshot?.isAdmin !== updated?.isAdmin) {
             await recordAdminActionFromRequest(req, {
               action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
@@ -308,6 +334,17 @@ const handler = baseApi().put(
               summary: updated?.isAdmin ? 'granted the admin role' : 'revoked the admin role',
               reason: roleChangeReason,
               changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
+            });
+          }
+          for (const { field, on, off } of statusChanges) {
+            const before = !!snapshot?.[field];
+            const after = !!updated?.[field];
+            if (before === after) continue;
+            await recordAdminActionFromRequest(req, {
+              ...(after ? on : off),
+              target: auditTarget,
+              reason: statusChangeReason,
+              changes: [{ field, before, after }],
             });
           }
           if (creditAdjustment) {

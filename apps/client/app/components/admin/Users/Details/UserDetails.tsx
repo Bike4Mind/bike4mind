@@ -23,6 +23,39 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 
+/** The account writes here that the server audits with a required reason. */
+type ReasonedAction = 'verify' | 'unverify' | 'trust' | 'untrust';
+
+const REASONED_ACTIONS: Record<
+  ReasonedAction,
+  { title: string; confirmLabel: string; presets: readonly string[]; tone: 'neutral' | 'danger' }
+> = {
+  verify: {
+    title: 'Verify email',
+    confirmLabel: 'Mark verified',
+    presets: ADMIN_REASON_PRESETS.emailVerification,
+    tone: 'neutral',
+  },
+  unverify: {
+    title: 'Unverify email',
+    confirmLabel: 'Mark unverified',
+    presets: ADMIN_REASON_PRESETS.emailVerification,
+    tone: 'danger',
+  },
+  trust: {
+    title: 'Trust for personal API keys',
+    confirmLabel: 'Trust account',
+    presets: ADMIN_REASON_PRESETS.apiKeyTrust,
+    tone: 'neutral',
+  },
+  untrust: {
+    title: 'Remove API key trust',
+    confirmLabel: 'Remove trust',
+    presets: ADMIN_REASON_PRESETS.apiKeyTrust,
+    tone: 'neutral',
+  },
+};
+
 interface UserDetailsProps {
   user: AdminUserListItem;
   editedFields: EditedFieldsState;
@@ -35,6 +68,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   const [isGenerateApiKeyModalOpen, setIsGenerateApiKeyModalOpen] = useState(false);
   const [isApiKeysModalOpen, setIsApiKeysModalOpen] = useState(false);
   const [isMfaResetOpen, setIsMfaResetOpen] = useState(false);
+  const [reasonedAction, setReasonedAction] = useState<ReasonedAction | null>(null);
   // Server-confirmed value from the last toggle; overrides the prop until the refetch lands.
   const [apiKeyTrustOverride, setApiKeyTrustOverride] = useState<boolean | null>(null);
   const apiKeyTrustApproved = apiKeyTrustOverride ?? user.apiKeyTrustApproved === true;
@@ -44,8 +78,8 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   const confirm = useConfirmation();
 
   const verifyEmail = useMutation({
-    mutationFn: async (userId: string) => {
-      const response = await api.post(`/api/admin/users/${userId}/verify-email`);
+    mutationFn: async (reason: string) => {
+      const response = await api.post(`/api/admin/users/${user.id}/verify-email`, { reason });
       return response.data;
     },
     onSuccess: () => {
@@ -60,8 +94,8 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   });
 
   const unverifyEmail = useMutation({
-    mutationFn: async (userId: string) => {
-      const response = await api.post(`/api/admin/users/${userId}/unverify-email`);
+    mutationFn: async (reason: string) => {
+      const response = await api.post(`/api/admin/users/${user.id}/unverify-email`, { reason });
       return response.data;
     },
     onSuccess: () => {
@@ -100,9 +134,10 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   });
 
   const setApiKeyTrust = useMutation({
-    mutationFn: async (approved: boolean) => {
+    mutationFn: async ({ approved, reason }: { approved: boolean; reason: string }) => {
       const response = await api.post<{ apiKeyTrustApproved: boolean }>(`/api/admin/users/${user.id}/api-key-trust`, {
         approved,
+        reason,
       });
       return response.data;
     },
@@ -159,55 +194,47 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
     );
   };
 
-  const handleApiKeyTrustToggle = async (approved: boolean) => {
+  const descriptions: Record<ReasonedAction, string> = {
+    verify: `${user.email} is treated as confirmed without the user clicking the link.`,
+    unverify: `${user.email} must be confirmed again before features that need a verified email work.`,
+    trust: 'They can create personal API keys without waiting for the account-age or purchase requirement.',
+    untrust: 'New personal API keys need the usual account checks again. Existing keys keep working.',
+  };
+
+  // A rejection is rethrown so the ActionDialog stays open with the reason the admin typed.
+  const confirmReasonedAction = async (reason: string) => {
+    if (!reasonedAction) return;
     try {
-      await setApiKeyTrust.mutateAsync(approved);
-      toast.success(
-        approved
-          ? `${user.username} is now trusted for personal API keys`
-          : `API key trust revoked for ${user.username}`
-      );
+      switch (reasonedAction) {
+        case 'verify':
+          await verifyEmail.mutateAsync(reason);
+          toast.success(`Email verified for ${user.username}`);
+          break;
+        case 'unverify':
+          await unverifyEmail.mutateAsync(reason);
+          toast.success(`Email unverified for ${user.username}`);
+          break;
+        case 'trust':
+        case 'untrust': {
+          const approved = reasonedAction === 'trust';
+          await setApiKeyTrust.mutateAsync({ approved, reason });
+          toast.success(
+            approved
+              ? `${user.username} is now trusted for personal API keys`
+              : `API key trust revoked for ${user.username}`
+          );
+          break;
+        }
+      }
+      setReasonedAction(null);
     } catch (error) {
       toast.error(
-        isAxiosError<{ error?: string }>(error)
-          ? (error.response?.data?.error ?? error.message)
-          : 'Failed to update API key trust'
+        isAxiosError<{ error?: string; message?: string }>(error)
+          ? (error.response?.data?.error ?? error.response?.data?.message ?? error.message)
+          : 'The change was not saved'
       );
+      throw error;
     }
-  };
-
-  const handleVerifyEmail = () => {
-    confirm({
-      title: 'Verify Email',
-      description: `Are you sure you want to manually verify the email for ${user.username} (${user.email})?`,
-      type: 'success',
-      onOk: async () => {
-        try {
-          await verifyEmail.mutateAsync(user.id);
-          toast.success(`Email verified for ${user.username}`);
-        } catch (error: any) {
-          const errorMessage = error.response?.data?.message || error.message || 'Failed to verify email';
-          toast.error(errorMessage);
-        }
-      },
-    });
-  };
-
-  const handleUnverifyEmail = () => {
-    confirm({
-      title: 'Unverify Email',
-      description: `Are you sure you want to unverify the email for ${user.username} (${user.email})? This will require the user to verify their email again.`,
-      type: 'danger',
-      onOk: async () => {
-        try {
-          await unverifyEmail.mutateAsync(user.id);
-          toast.success(`Email unverified for ${user.username}`);
-        } catch (error: any) {
-          const errorMessage = error.response?.data?.message || error.message || 'Failed to unverify email';
-          toast.error(errorMessage);
-        }
-      },
-    });
   };
 
   const handleResendVerification = () => {
@@ -368,7 +395,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
               startDecorator={<CancelIcon />}
               color="danger"
               variant="outlined"
-              onClick={handleUnverifyEmail}
+              onClick={() => setReasonedAction('unverify')}
               loading={unverifyEmail.isPending}
             >
               Unverify Email
@@ -379,7 +406,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
                 startDecorator={<CheckCircleIcon />}
                 color="success"
                 variant="solid"
-                onClick={handleVerifyEmail}
+                onClick={() => setReasonedAction('verify')}
                 loading={verifyEmail.isPending}
                 sx={{ flex: 1 }}
               >
@@ -409,7 +436,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
             <Switch
               checked={apiKeyTrustApproved}
               disabled={setApiKeyTrust.isPending}
-              onChange={event => handleApiKeyTrustToggle(event.target.checked)}
+              onChange={event => setReasonedAction(event.target.checked ? 'trust' : 'untrust')}
               slotProps={{
                 input: {
                   'aria-label': 'Trusted for personal API keys',
@@ -469,6 +496,20 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
         data-testid="mfa-reset-modal"
         testIds={{ reason: 'mfa-reset-reason-input', confirm: 'mfa-reset-confirm-btn' }}
       />
+
+      {reasonedAction && (
+        <ActionDialog
+          open
+          onClose={() => setReasonedAction(null)}
+          title={REASONED_ACTIONS[reasonedAction].title}
+          description={descriptions[reasonedAction]}
+          reasonPresets={REASONED_ACTIONS[reasonedAction].presets}
+          confirmLabel={REASONED_ACTIONS[reasonedAction].confirmLabel}
+          tone={REASONED_ACTIONS[reasonedAction].tone}
+          onConfirm={confirmReasonedAction}
+          data-testid="user-details-reason-modal"
+        />
+      )}
 
       <GrantSubscriptionModal
         user={user}

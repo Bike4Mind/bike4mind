@@ -156,7 +156,10 @@ describe('FullUsersView - reason-required admin actions', () => {
 describe('FullUsersView - ban confirmation', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('confirms a staged ban before saving it', () => {
+  const typeReason = (testId: string, value: string) =>
+    fireEvent.change(screen.getByTestId(testId), { target: { value } });
+
+  it('holds a staged ban until a reason is given, then saves it as statusChangeReason', () => {
     render(<FullUsersView index={0} user={savedUser()} />, { wrapper: TestWrapper });
 
     fireEvent.click(screen.getByTestId('stub-ban-toggle'));
@@ -164,11 +167,36 @@ describe('FullUsersView - ban confirmation', () => {
 
     expect(mutations.updateMutate).not.toHaveBeenCalled();
     expect(screen.getByTestId('user-profile-danger-confirm-modal')).toHaveTextContent('You are about to ban Ada');
+    expect(screen.getByTestId('user-profile-danger-confirm-btn')).toBeDisabled();
 
+    typeReason('user-profile-danger-confirm-modal-reason-input', 'Repeated abuse reports');
     fireEvent.click(screen.getByTestId('user-profile-danger-confirm-btn'));
 
     expect(mutations.updateMutate).toHaveBeenCalledTimes(1);
-    expect(mutations.updateMutate.mock.calls[0][0]).toMatchObject({ id: 'u1', data: { isBanned: true } });
+    expect(mutations.updateMutate.mock.calls[0][0]).toMatchObject({
+      id: 'u1',
+      data: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    });
+  });
+
+  it('keeps the status reason through the role step that follows', () => {
+    render(<FullUsersView index={0} user={savedUser()} />, { wrapper: TestWrapper });
+
+    fireEvent.click(screen.getByTestId('stub-ban-toggle'));
+    fireEvent.click(screen.getByTestId('role-radio-super-admin').querySelector('input') as HTMLInputElement);
+    fireEvent.click(screen.getByTestId('user-update-btn'));
+    typeReason('user-profile-danger-confirm-modal-reason-input', 'Repeated abuse reports');
+    fireEvent.click(screen.getByTestId('user-profile-danger-confirm-btn'));
+
+    expect(mutations.updateMutate).not.toHaveBeenCalled();
+    typeReason('role-change-reason-input', 'Promoted to cover on-call');
+    fireEvent.click(screen.getByTestId('role-change-confirm-btn'));
+
+    expect(mutations.updateMutate.mock.calls[0][0].data).toMatchObject({
+      isBanned: true,
+      statusChangeReason: 'Repeated abuse reports',
+      roleChangeReason: 'Promoted to cover on-call',
+    });
   });
 });
 

@@ -53,9 +53,54 @@ describe('auditUndo', () => {
 
   it('reverses a field change that still stands', () => {
     expect(auditUndo(suspend, [], buildProfile({ isBanned: true }))).toEqual({
-      patch: { isBanned: false },
-      redo: { isBanned: true },
+      patch: { isBanned: false, statusChangeReason: 'Undo: Suspended account' },
+      redo: { isBanned: true, statusChangeReason: 'Suspended account' },
     });
+  });
+
+  it('undoes a dedicated user.suspended entry, carrying the stored reason and marking the undo', () => {
+    const entry = makeAuditEntry({
+      action: 'user.suspended',
+      summary: 'suspended the account',
+      reason: 'Repeated abuse reports',
+      changes: [{ field: 'isBanned', before: false, after: true }],
+    });
+    expect(auditUndo(entry, [], buildProfile({ isBanned: true }))).toEqual({
+      patch: { isBanned: false, statusChangeReason: 'Undo: Repeated abuse reports' },
+      redo: { isBanned: true, statusChangeReason: 'Repeated abuse reports' },
+    });
+  });
+
+  it.each([
+    ['user.reinstated', 'isBanned', true, false],
+    ['user.restricted', 'isModerated', false, true],
+    ['user.restriction_lifted', 'isModerated', true, false],
+  ] as const)('accepts %s entries', (action, field, before, after) => {
+    const entry = makeAuditEntry({ action, reason: 'Because it was needed', changes: [{ field, before, after }] });
+    expect(auditUndo(entry, [], buildProfile({ [field]: after }))).toEqual({
+      patch: { [field]: before, statusChangeReason: 'Undo: Because it was needed' },
+      redo: { [field]: after, statusChangeReason: 'Because it was needed' },
+    });
+  });
+
+  it('falls back to the sentence when the entry has no reason', () => {
+    const entry = makeAuditEntry({
+      action: 'user.suspended',
+      reason: undefined,
+      changes: [{ field: 'isBanned', before: false, after: true }],
+    });
+    expect(auditUndo(entry, [], buildProfile({ isBanned: true }))).toMatchObject({
+      patch: { statusChangeReason: `Undo: ${describeAuditEntry(entry)}` },
+      redo: { statusChangeReason: describeAuditEntry(entry) },
+    });
+  });
+
+  it('sends no statusChangeReason for a tags-only undo', () => {
+    const tags = profileUpdate([{ field: 'tags', before: ['a'], after: ['b'] }]);
+    const undo = auditUndo(tags, [], buildProfile({ tags: ['b'] }));
+    expect(undo).toEqual({ patch: { tags: ['a'] }, redo: { tags: ['b'] } });
+    expect(undo?.patch).not.toHaveProperty('statusChangeReason');
+    expect(undo?.redo).not.toHaveProperty('statusChangeReason');
   });
 
   it('refuses once the account no longer holds the written value', () => {

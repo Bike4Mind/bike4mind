@@ -59,10 +59,15 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
   'user.impersonation.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Single-user counterparts of user.bulk.suspended / user.bulk.restricted, written by PUT /api/users/[id]/update.
+  'user.suspended': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.reinstated': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.restricted': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
-  // notice, not info: the same entry carries an admin's change to another user's email, password, tags and ban state.
+  // notice, not info: the same entry carries an admin's change to another user's email, password and tags.
   'user.profile.updated': { category: 'account', severity: 'notice', write: 'bestEffort' },
   'user.note.created': { category: 'support', severity: 'info', write: 'strict' },
   'user.note.edited': { category: 'support', severity: 'notice', write: 'strict' },
