@@ -391,6 +391,40 @@ describe('signup grant daily budget', () => {
     expect(await githubUnlock(second.id)).toEqual({ granted: false, refusal: 'signup_grant_pending' });
   });
 
+  it('meters a staging-off referral invitee but not an admin-code grant', async () => {
+    config.signupGrantDailyBudget = '12';
+    clock = new Date('2030-03-01T10:00:00Z');
+    const referrer = await createUser(false, 0);
+    const invitee = await User.create({
+      username: 'synthetic-invitee',
+      name: 'Synthetic Invitee',
+      email: 'invitee@example.test',
+      emailVerified: true,
+      pendingCreditGrant: 12,
+      referredByUserId: referrer.id,
+    });
+    const admin = await User.create({
+      username: 'synthetic-admin-code',
+      name: 'Synthetic Admin Code',
+      email: 'admincode@example.test',
+      emailVerified: true,
+      pendingCreditGrant: 50,
+    });
+    expect(await userService.grantFreeCredits(invitee, adapters)).toMatchObject({ creditsGranted: 12 });
+    expect(await spentToday()).toBe(12);
+    expect(await userService.grantFreeCredits(admin, adapters)).toMatchObject({ creditsGranted: 50 });
+    expect(await spentToday()).toBe(12);
+    const second = await User.create({
+      username: 'synthetic-invitee-2',
+      name: 'Synthetic Invitee 2',
+      email: 'invitee2@example.test',
+      emailVerified: true,
+      pendingCreditGrant: 12,
+      referredByUserId: referrer.id,
+    });
+    expect(await userService.grantFreeCredits(second, adapters)).toMatchObject({ withheld: true, creditsGranted: 0 });
+  });
+
   it('counts a reservation once per transaction id and refunds it once', async () => {
     const repo = signupGrantBudgetRepository;
     expect(await repo.reserve('2030-02-01', 'tx-1', 10, 25)).toEqual({ spent: 10, fresh: true });

@@ -95,7 +95,7 @@ export const grantFreeCredits = async (
     if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
-  const result = await grantFlatFreeCredits(user, { db, reason, bypassBudget });
+  const result = await grantFlatFreeCredits(user, { db, reason, bypassBudget }, !!persisted?.referredByUserId);
   // Every outcome but a hold is final, so a held reason left from an earlier attempt must not outlive it.
   if (!result.withheld && persisted?.signupGrantHeldReason)
     await db.users.update({ id: user.id, signupGrantHeldReason: null });
@@ -104,7 +104,8 @@ export const grantFreeCredits = async (
 
 async function grantFlatFreeCredits(
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
-  { db, reason, bypassBudget }: Pick<FreeCreditAdapters, 'db' | 'reason' | 'bypassBudget'>
+  { db, reason, bypassBudget }: Pick<FreeCreditAdapters, 'db' | 'reason' | 'bypassBudget'>,
+  referred: boolean
 ): Promise<GrantFreeCreditsResult> {
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
@@ -126,9 +127,13 @@ async function grantFlatFreeCredits(
     return { creditsGranted: 0, currentCredits: null };
   }
 
-  const budget = bypassBudget
-    ? { outcome: 'unmetered' as const, release: async () => {} }
-    : await reserveSignupGrantBudget(db, transactionId, amount);
+  // An invite-resolved amount is an explicit grant (admin/unlimited code, subscriber), not the open-signup
+  // budget. A referral invitee also carries one (staging off) but is an open-signup grant: it stays metered.
+  const isExplicitGrant = !isDefaultGrant && !referred;
+  const budget =
+    bypassBudget || isExplicitGrant
+      ? { outcome: 'unmetered' as const, release: async () => {} }
+      : await reserveSignupGrantBudget(db, transactionId, amount);
   if (budget.outcome === 'exhausted') {
     await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     await db.users.update({ id: user.id, signupGrantHeldReason: 'budget_exhausted' });

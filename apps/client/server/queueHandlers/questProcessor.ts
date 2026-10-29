@@ -44,6 +44,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { unlockSignupGrantFromActivity } from '@server/credits/activityUnlock';
 import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
@@ -175,6 +176,9 @@ export const getStaticOptions = () => {
     getEntitlements: getUserEntitlements,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    onSignupActivityTurnDone: async ({ userId }) => {
+      await unlockSignupGrantFromActivity(userId);
+    },
     invokeCreateMemento: async (
       questId: string,
       sessionId: string,

@@ -8,6 +8,8 @@ export const SIGNUP_GRANT_UNLOCK_REASONS = [
   'org_invite',
   'github_verified',
   'work_email_verified',
+  'activity_drip',
+  'subscription',
 ] as const;
 
 export type SignupGrantUnlockReason = (typeof SIGNUP_GRANT_UNLOCK_REASONS)[number];
@@ -31,6 +33,10 @@ export interface SignupGrant {
   unlockedBy?: SignupGrantUnlockReason;
   /** Organization whose invite released the remainder; caps org_invite unlocks per org. */
   unlockedOrgId?: string;
+  /** Credits released by the activity drip so far; absent on grants that predate it. */
+  dripCredits?: number;
+  /** UTC day (YYYY-MM-DD) of the latest drip payout. */
+  lastDripDay?: string;
 }
 
 export function signupGrantRemaining(grant: SignupGrant): number {
@@ -57,14 +63,20 @@ export async function resolveSignupGrantSettings(adminSettings: Pick<IAdminSetti
   };
 }
 
-export async function newSignupGrant(adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>) {
+/** `totalCredits` fixes the whole entitlement (tranche first, remainder locked) instead of the signup settings. */
+export async function newSignupGrant(
+  adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>,
+  totalCredits?: number
+) {
   const enabled = await adminSettings.findBySettingName('stagedSignupGrantEnabled');
   if (enabled?.settingValue !== 'true' && (enabled?.settingValue as unknown) !== true) return undefined;
   const config = await resolveSignupGrantSettings(adminSettings);
+  const signupCredits =
+    totalCredits === undefined ? config.signupCredits : Math.min(config.signupCredits, totalCredits);
   return {
     stage: 'pending_email',
-    signupCredits: config.signupCredits,
-    unlockCredits: config.unlockCredits,
+    signupCredits,
+    unlockCredits: totalCredits === undefined ? config.unlockCredits : totalCredits - signupCredits,
     creditsReleased: 0,
     nextCondition: 'email_verification',
   } satisfies SignupGrant;

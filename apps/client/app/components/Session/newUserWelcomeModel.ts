@@ -48,6 +48,14 @@ interface CreditsLineArgs {
   /** An explicit grant or the maximum staged entitlement before risk assessment. */
   pendingGrant: number | null;
   pendingGrantIsMaximum?: boolean;
+  /** Daily activity drip amount; omitted or 0 when the drip is off. */
+  dailyDripCredits?: number;
+}
+
+/** The self-serve unlock paths we advertise; org invites and admin releases also unlock but are not offered here. */
+export function unlockPathsCopy(dailyDripCredits: number): string {
+  const drip = dailyDripCredits > 0 ? `up to ${formatCreditBalance(dailyDripCredits)} for each day you use chat, ` : '';
+  return `The rest unlocks ${drip}all at once when you subscribe, or all at once when you verify a card.`;
 }
 
 /**
@@ -61,12 +69,13 @@ export function welcomeCreditsLine({
   awaitingVerification,
   pendingGrant,
   pendingGrantIsMaximum = false,
+  dailyDripCredits = 0,
 }: CreditsLineArgs): string | null {
   if (!enforceCredits) return null;
   if (awaitingVerification) {
     return pendingGrant && pendingGrant > 0
       ? pendingGrantIsMaximum
-        ? `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)}, subject to eligibility checks.`
+        ? `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)} now. ${unlockPathsCopy(dailyDripCredits)}`
         : `Verify your email to unlock your ${formatCreditBalance(pendingGrant)}.`
       : 'Verify your email to unlock your free credits.';
   }

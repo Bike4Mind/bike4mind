@@ -1013,7 +1013,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
     signupGrantAssessment: { type: Schema.Types.Mixed, default: undefined },
-    signupGrantHeldReason: { type: String, enum: ['budget_exhausted', null], default: null },
+    signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
+    // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
+    signupGrantHeldAt: { type: Date },
     signupGrant: {
       type: new Schema(
         {
@@ -1024,6 +1026,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
           unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
           unlockedOrgId: { type: String },
+          dripCredits: { type: Number, min: 0 },
+          lastDripDay: { type: String },
         },
         { _id: false }
       ),
@@ -1410,6 +1414,7 @@ UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' }
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
 UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'user_signupGrantAssessment_band' });
+// Serves the held-grants admin list and release sweep, and the activity drip held-tranche existence check.
 UserSchema.index(
   { signupGrantHeldReason: 1, _id: 1 },
   { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }

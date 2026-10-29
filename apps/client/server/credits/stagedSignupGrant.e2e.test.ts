@@ -398,11 +398,7 @@ describe('staged signup ledger', () => {
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${user.id}` })).toBe(1);
   });
 
-  it('unlocks from persisted completed session turns on distinct elapsed days, not pending or copied turns', async () => {
-    const user = await createUser();
-    const first = new Date(Date.now() - 3 * 86400000);
-    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date(first.getTime() - 86400000) } });
-    await userService.releaseSignupTranche(user.id, adapters);
+  const activitySettings = (overrides: Record<string, string | undefined> = {}) =>
     vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
       async name =>
         ({
@@ -410,66 +406,58 @@ describe('staged signup ledger', () => {
             {
               signupGrantActivityEnabled: 'true',
               signupGrantActivityMinMessages: '2',
-              signupGrantActivityMinDays: '2',
-            } as Record<string, string>
+              signupGrantActivityDailyCredits: '10',
+              signupGrantActivityMaxCredits: '28',
+              ...overrides,
+            } as Record<string, string | undefined>
           )[name],
         }) as never
     );
-    const turn = {
-      sessionId: 'synthetic-session',
-      timestamp: first,
-      type: 'message',
-      status: 'done',
-      reply: 'Completed answer',
-      signupActivity: { userId: user.id, turnId: 'original', startedAt: first },
-    };
-    await Quest.create([
-      turn,
-      { ...turn, sessionId: 'copy' },
-      { ...turn, signupActivity: undefined },
-      {
-        ...turn,
-        status: 'running',
-        signupActivity: { ...turn.signupActivity, turnId: 'pending', startedAt: new Date() },
-      },
-    ]);
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
-    await Quest.create({
-      ...turn,
-      signupActivity: { ...turn.signupActivity, turnId: 'second', startedAt: new Date(first.getTime() + 86400000) },
-    });
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(28);
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
+  const activityTurn = (userId: string, turnId: string, startedAt: Date, extra: Record<string, unknown> = {}) => ({
+    sessionId: 'synthetic-session',
+    timestamp: startedAt,
+    type: 'message',
+    status: 'done',
+    reply: 'Completed answer',
+    signupActivity: { userId, turnId, startedAt },
+    ...extra,
   });
 
-  it('does not equate a midnight boundary with a full elapsed activity day', async () => {
+  it('drips once per qualifying UTC day from completed first-party turns, not pending or copied turns', async () => {
+    const user = await createUser();
+    const dayOne = new Date('2030-03-01T10:00:00Z');
+    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2030-02-01T00:00:00Z') } });
+    await userService.releaseSignupTranche(user.id, adapters);
+    activitySettings();
+    await Quest.create([
+      activityTurn(user.id, 'original', dayOne),
+      activityTurn(user.id, 'original', dayOne, { sessionId: 'copy' }),
+      activityTurn(user.id, 'x', dayOne, { signupActivity: undefined }),
+      activityTurn(user.id, 'pending', new Date(dayOne.getTime() + 60000), { status: 'running' }),
+    ]);
+    expect((await unlockSignupGrantFromActivity(user.id, dayOne)).creditsGranted).toBe(0);
+    await Quest.create(activityTurn(user.id, 'second', new Date(dayOne.getTime() + 120000)));
+    expect((await unlockSignupGrantFromActivity(user.id, dayOne)).creditsGranted).toBe(10);
+    expect((await unlockSignupGrantFromActivity(user.id, dayOne)).creditsGranted).toBe(0);
+    const nextDay = new Date(dayOne.getTime() + 86400000);
+    await Quest.create([
+      activityTurn(user.id, 'n1', nextDay),
+      activityTurn(user.id, 'n2', new Date(nextDay.getTime() + 60000)),
+    ]);
+    expect((await unlockSignupGrantFromActivity(user.id, nextDay)).creditsGranted).toBe(10);
+  });
+
+  it('counts a turn on the UTC day it started, so turns across midnight do not qualify one day', async () => {
     const user = await createUser();
     await userService.releaseSignupTranche(user.id, adapters);
-    const first = new Date('2026-01-01T23:59:00Z');
     await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2026-01-01T00:00:00Z') } });
-    vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
-      async name =>
-        ({
-          settingValue: (
-            {
-              signupGrantActivityEnabled: 'true',
-              signupGrantActivityMinMessages: '2',
-              signupGrantActivityMinDays: '2',
-            } as Record<string, string>
-          )[name],
-        }) as never
-    );
-    await Quest.create(
-      [0, 120000].map((offset, index) => ({
-        sessionId: 'synthetic-session',
-        timestamp: first,
-        type: 'message',
-        status: 'done',
-        reply: 'Completed answer',
-        signupActivity: { userId: user.id, turnId: String(index), startedAt: new Date(first.getTime() + offset) },
-      }))
-    );
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
+    activitySettings();
+    await Quest.create([
+      activityTurn(user.id, '0', new Date('2026-01-01T23:59:00Z')),
+      activityTurn(user.id, '1', new Date('2026-01-02T00:01:00Z')),
+    ]);
+    expect((await unlockSignupGrantFromActivity(user.id, new Date('2026-01-01T23:59:30Z'))).creditsGranted).toBe(0);
+    expect((await unlockSignupGrantFromActivity(user.id, new Date('2026-01-02T12:00:00Z'))).creditsGranted).toBe(0);
   });
 
   it('pays only the delta as stronger validated identities arrive, including concurrent retries', async () => {
@@ -754,32 +742,12 @@ describe('staged signup ledger', () => {
 
   it.each([['false'], [undefined]])('does not unlock from activity when the flag is %s', async flag => {
     const user = await createUser();
-    const first = new Date(Date.now() - 3 * 86400000);
-    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date(first.getTime() - 86400000) } });
+    const at = new Date('2030-03-01T10:00:00Z');
+    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2030-02-01T00:00:00Z') } });
     await userService.releaseSignupTranche(user.id, adapters);
-    vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
-      async name =>
-        ({
-          settingValue: (
-            {
-              signupGrantActivityEnabled: flag,
-              signupGrantActivityMinMessages: '2',
-              signupGrantActivityMinDays: '2',
-            } as Record<string, string | undefined>
-          )[name],
-        }) as never
-    );
-    await Quest.create(
-      [0, 86400000].map((offset, index) => ({
-        sessionId: 'synthetic-session',
-        timestamp: first,
-        type: 'message',
-        status: 'done',
-        reply: 'Completed answer',
-        signupActivity: { userId: user.id, turnId: String(index), startedAt: new Date(first.getTime() + offset) },
-      }))
-    );
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
+    activitySettings({ signupGrantActivityEnabled: flag });
+    await Quest.create([activityTurn(user.id, '0', at), activityTurn(user.id, '1', new Date(at.getTime() + 60000))]);
+    expect((await unlockSignupGrantFromActivity(user.id, at)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.currentCredits).toBe(12);
   });
 });

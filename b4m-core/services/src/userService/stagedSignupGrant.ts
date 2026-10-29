@@ -1,6 +1,7 @@
 import {
   CreditHolderType,
   PENDING_FREE_CREDITS_TAG,
+  settingsMap,
   type IUserDocument,
   type SignupGrant,
   type SignupGrantUnlockReason,
@@ -22,10 +23,17 @@ export type SignupGrantValidator = (
   user: IUserDocument
 ) => Promise<boolean | { cumulativeCredits: number } | { unlockedOrgId: string }>;
 
+/** One UTC day's activity drip: a fixed daily amount, bounded by the account-wide drip cap. */
+type DripEvidence = { drip: { day: string; dailyCredits: number; maxCredits: number } };
+
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
-/** Card verification and admin releases are never throttled by the daily signup grant budget. */
-const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = new Set(['card_verified', 'admin']);
+/** Card verification, subscription and admin releases are never throttled by the daily signup grant budget. */
+const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = new Set([
+  'card_verified',
+  'subscription',
+  'admin',
+]);
 
 class InboxGrantClaimDeniedError extends Error {}
 
@@ -35,7 +43,7 @@ function isReleaseEligible(
 ): user is IUserDocument & { signupGrant: SignupGrant } {
   if (!user?.signupGrant || accountBlockReasons(user).length || isAiAccessRevoked(user)) return false;
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
-  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche before a card unlock.
+  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or subscription unlock.
   return user.signupGrant.stage !== 'pending_email';
 }
 
@@ -43,7 +51,7 @@ async function releaseStage(
   userId: string,
   expected: SignupGrant['stage'],
   reason: SignupGrantUnlockReason | undefined,
-  validate: SignupGrantValidator,
+  validate: (user: IUserDocument) => ReturnType<SignupGrantValidator> | Promise<DripEvidence | false>,
   adapters: GrantAdapters
 ): Promise<GrantFreeCreditsResult> {
   const { db, audit } = adapters;
@@ -80,6 +88,7 @@ async function releaseStage(
         throw new Error('Invalid staged grant amount');
       let assessment = user.signupGrantAssessment;
       let target: number;
+      let dripAmount = 0;
       if (expected === 'pending_email') {
         if (!assessment) {
           const setting = await db.adminSettings.findBySettingName('signupGrantRiskPolicy');
@@ -112,32 +121,54 @@ async function releaseStage(
         if (!Number.isSafeInteger(target) || target < 0 || target > grant.signupCredits)
           throw new Error('Invalid signup assessment entitlement');
       } else {
-        target = evidence === true || 'unlockedOrgId' in evidence ? maximum : evidence.cumulativeCredits;
+        if (typeof evidence === 'object' && 'drip' in evidence) {
+          const { day, dailyCredits, maxCredits } = evidence.drip;
+          const dripped = grant.dripCredits ?? 0;
+          if (grant.lastDripDay === day || !Number.isSafeInteger(dripped) || dripped < 0) return noGrant();
+          dripAmount = Math.max(0, Math.min(dailyCredits, maxCredits - dripped, maximum - grant.creditsReleased));
+          target = grant.creditsReleased + dripAmount;
+        } else {
+          target = evidence === true || 'unlockedOrgId' in evidence ? maximum : evidence.cumulativeCredits;
+        }
         if (!Number.isSafeInteger(target) || target < 0 || target > maximum)
           throw new Error('Invalid unlock entitlement');
       }
       const amount = Math.max(0, target - grant.creditsReleased);
       if (expected !== 'pending_email' && amount === 0) return noGrant();
       // The target is account-wide, not reason-wide: competing validators cannot stack grants.
-      const transactionId =
-        expected === 'pending_email'
+      // A drip is keyed by UTC day instead, so each day pays at most once whatever else was released.
+      const dripDay = typeof evidence === 'object' && 'drip' in evidence ? evidence.drip.day : undefined;
+      const transactionId = dripDay
+        ? `unlock-grant:activity:${userId}:${dripDay}`
+        : expected === 'pending_email'
           ? `verify-grant:${userId}`
           : grant.creditsReleased === (assessment?.credits ?? grant.signupCredits)
             ? `unlock-grant:${userId}`
             : `unlock-grant:${userId}:${target}`;
       const existing = await db.creditTransactions.findOne({ transactionId });
-      if (existing) throw new Error('Staged grant ledger and account state disagree');
+      if (existing) {
+        if (dripDay) return noGrant();
+        throw new Error('Staged grant ledger and account state disagree');
+      }
       let balance = user.currentCredits;
       let creditTransactionId: string | undefined;
       if (amount > 0) {
         if (!BUDGET_EXEMPT_REASONS.has(reason) && !adapters.bypassBudget) {
-          const reservation = await reserveSignupGrantBudget(db, transactionId, amount);
+          const reservation = await reserveSignupGrantBudget(db, transactionId, amount, dripDay);
           reservations.push(reservation);
+          // A same-day drip that did not make the draw fresh belongs to a concurrent attempt that may
+          // still refund it; paying on that reservation could pay unmetered.
+          // A retried transaction re-reserves as a no-op, so an earlier attempt's fresh draw is still ours.
+          if (dripDay && reservation.outcome === 'reserved' && !reservations.some(held => held.fresh)) return noGrant();
           if (reservation.outcome === 'exhausted') {
-            // The tranche stays pending (and tagged) so a later day or a card unlock can pay it.
+            // The tranche stays pending (and tagged) until a card or subscription unlock pays it; nothing retries it on a schedule.
             if (expected === 'pending_email') {
               await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
-              await db.users.update({ id: userId, signupGrantHeldReason: 'budget_exhausted' });
+              await db.users.update({
+                id: userId,
+                signupGrantHeldReason: 'budget_exhausted',
+                signupGrantHeldAt: db.signupProtection?.grantBudget?.now?.() ?? new Date(),
+              });
             }
             return { ...noGrant(), withheld: true, budgetExhausted: true };
           }
@@ -177,6 +208,7 @@ async function releaseStage(
           creditsReleased: released,
           nextCondition: unlocked ? null : 'verification',
           ...(reason ? { unlockedBy: reason } : {}),
+          ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
           ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
             ? { unlockedOrgId: evidence.unlockedOrgId }
             : {}),
@@ -227,7 +259,7 @@ export const unlockSignupGrant = (
   if (!validator || (reason === 'admin' && !adapters.audit)) return Promise.resolve(noGrant());
   const unlock = () =>
     releaseStage(userId, 'signup', reason, async user => (user.emailVerified ? validator(user) : false), adapters);
-  if (reason !== 'card_verified') return unlock();
+  if (reason !== 'card_verified' && reason !== 'subscription') return unlock();
   return unlockWithHeldTranche(userId, adapters, unlock);
 };
 
@@ -251,4 +283,52 @@ async function unlockWithHeldTranche(
   const remainder = await unlock();
   const creditsGranted = tranche.creditsGranted + remainder.creditsGranted;
   return { ...remainder, creditsGranted, currentCredits: remainder.currentCredits ?? tranche.currentCredits };
+}
+
+export async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettings']) {
+  const read = async (key: 'signupGrantActivityDailyCredits' | 'signupGrantActivityMaxCredits') => {
+    const parsed = settingsMap[key].schema.safeParse((await adminSettings.findBySettingName(key))?.settingValue);
+    return parsed.success ? parsed.data : 0;
+  };
+  return {
+    dailyCredits: await read('signupGrantActivityDailyCredits'),
+    maxCredits: await read('signupGrantActivityMaxCredits'),
+  };
+}
+
+/**
+ * Pays one UTC day's activity drip. The caller has already established that `day` qualifies; this owns
+ * the rate, the cap, the once-per-day ledger id and the daily budget draw. Signup tranches still held
+ * for the budget are paid first, so a drip is skipped (withheld) while a live one from `day` exists.
+ */
+export async function dripSignupGrant(
+  userId: string,
+  day: string,
+  adapters: GrantAdapters
+): Promise<GrantFreeCreditsResult> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
+  const { dailyCredits, maxCredits } = await resolveDripLimits(adapters.db.adminSettings);
+  if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
+  const user = await adapters.db.users.findById(userId);
+  if (!user?.signupGrant || user.signupGrant.lastDripDay === day) return noGrant();
+  // Existence only, and bounded: holders that are blocked, AI-revoked or held before `day` are ignored
+  // so one abandoned hold cannot stall every drip. Nothing retries a hold, so only today's holds count.
+  const heldTranche = await adapters.db.users.findOne({
+    signupGrantHeldReason: 'budget_exhausted',
+    'signupGrant.stage': 'pending_email',
+    isBanned: { $ne: true },
+    isModerated: { $ne: true },
+    disputePending: { $ne: true },
+    'moderation.status': { $ne: 'suspended' },
+    deletedAt: { $exists: false },
+    signupGrantHeldAt: { $gte: new Date(`${day}T00:00:00.000Z`) },
+  });
+  if (heldTranche) return { ...noGrant(), withheld: true };
+  return releaseStage(
+    userId,
+    'signup',
+    'activity_drip',
+    async current => (current.emailVerified ? { drip: { day, dailyCredits, maxCredits } } : false),
+    adapters
+  );
 }

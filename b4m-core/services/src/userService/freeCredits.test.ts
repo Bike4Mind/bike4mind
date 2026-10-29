@@ -225,6 +225,15 @@ describe('free credits service', () => {
       );
     });
 
+    it('pays an invite-resolved amount without drawing the daily signup budget', async () => {
+      const adapters = buildAdapters('100');
+      const reserve = vi.fn().mockResolvedValue(null);
+      (adapters.db as Record<string, unknown>).signupProtection = { grantBudget: { repository: { reserve } } };
+      const result = await grantFreeCredits({ id: 'user-2', pendingCreditGrant: 5000 }, adapters);
+      expect(reserve).not.toHaveBeenCalled();
+      expect(result.creditsGranted).toBe(5000);
+    });
+
     it('does not spend the inbox claim when there is nothing to grant', async () => {
       const adapters = buildAdapters('0');
       await grantFreeCredits({ id: 'user-1' }, adapters);

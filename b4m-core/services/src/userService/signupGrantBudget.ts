@@ -8,6 +8,8 @@ type BudgetAdapters = {
 
 export type SignupGrantBudgetReservation = {
   outcome: 'unmetered' | 'reserved' | 'exhausted';
+  /** False when this transaction id already held a draw, i.e. another attempt owns it and may still refund it. */
+  fresh?: boolean;
   /** Releases a 'reserved' hold when the payout did not commit. Safe to call more than once. */
   release: () => Promise<void>;
 };
@@ -55,11 +57,13 @@ async function alertCrossing(
 /**
  * Draws `amount` credits from today's signup grant budget. 'unmetered' when no budget is configured
  * (the setting is 0, missing or invalid, or no counter is wired), which keeps that path unchanged.
+ * `dayOverride` pins the draw to a caller-chosen UTC day so a payout keyed by that day books against it.
  */
 export async function reserveSignupGrantBudget(
   adapters: BudgetAdapters,
   transactionId: string,
-  amount: number
+  amount: number,
+  dayOverride?: string
 ): Promise<SignupGrantBudgetReservation> {
   const budgetConfig = adapters.signupProtection?.grantBudget;
   if (!budgetConfig || amount <= 0) return { outcome: 'unmetered', release: noop };
@@ -68,7 +72,7 @@ export async function reserveSignupGrantBudget(
   const budget = parsed.success ? parsed.data : 0;
   if (budget <= 0) return { outcome: 'unmetered', release: noop };
 
-  const day = signupGrantBudgetDay(budgetConfig.now?.());
+  const day = dayOverride ?? signupGrantBudgetDay(budgetConfig.now?.());
   const reservation = await budgetConfig.repository.reserve(day, transactionId, amount, budget);
   if (!reservation) {
     await alertCrossing(budgetConfig, day, 100, () => budgetConfig.repository.getSpent(day), budget);
@@ -83,5 +87,5 @@ export async function reserveSignupGrantBudget(
           console.warn('[signup-grant-budget] Refund failed; the day may under-report remaining budget', error);
         });
   refundScope.getStore()?.push(release);
-  return { outcome: 'reserved', release };
+  return { outcome: 'reserved', release, fresh: reservation.fresh };
 }
