@@ -15,6 +15,9 @@ export const isSignupGrantGuardedKey = (key: string): key is SignupGrantGuardedK
  * Protections still off when this write would leave a grant above the limit less protected (see
  * signupGrantWriteGap), or null when the write is allowed. Reads the other grant fields and the
  * protections from storage, so a unit-by-unit increase cannot slip past by changing one field at a time.
+ * The read is not tied to the write, so two concurrent saves (one raising a grant, one turning a protection
+ * off) can both pass; accepted for this admin-only path, and the runtime alarm in signupGrantProtectionAlarm
+ * catches the resulting state.
  */
 export async function unsetProtectionsForSignupGrantWrite(
   key: SignupGrantGuardedKey,
