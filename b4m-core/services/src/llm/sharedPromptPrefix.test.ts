@@ -20,6 +20,7 @@ import {
   hasCoreTool,
   lookbackAnchor,
   planToolTimeline,
+  startToolNames,
   type ToolTimeline,
 } from './deferredToolLoading';
 import { ToolBuilder, type ToolBuilderConfig } from './tools/ToolBuilder';
@@ -77,11 +78,11 @@ const DENVER_MEMBER: Caller = {
 type PastTurn = { prompt: string; reply: string; offered: string[] };
 
 /** Whether deferred tool loading is on for the turn (as ChatCompletionProcess decides it), and the history. */
-type SendOptions = { deferTools?: boolean; history?: PastTurn[]; prompt?: string };
+type SendOptions = { deferTools?: boolean; loadStartSet?: boolean; history?: PastTurn[]; prompt?: string };
 
 async function sendTurn(
   caller: Caller,
-  { deferTools = false, history = [], prompt = 'hello' }: SendOptions = {}
+  { deferTools = false, loadStartSet = false, history = [], prompt = 'hello' }: SendOptions = {}
 ): Promise<Request> {
   vi.mocked(getConversationContextSystemMessage).mockResolvedValue(sys(caller.conversationEntities) as never);
   const offered = caller.toolOrder;
@@ -92,9 +93,12 @@ async function sendTurn(
     historyMessages.push(promptMessage, { role: 'assistant', content: past.reply });
     toolTurns.push({ prompt: promptMessage, offeredTools: past.offered, calledTools: [] });
   }
+  const start = new Set(loadStartSet ? startToolNames(toolTurns, offered, () => true) : []);
   const timeline: ToolTimeline | null =
-    deferTools && hasCoreTool(offered) ? planToolTimeline(toolTurns, offered) : null;
-  const guided = new Set(timeline?.everAdded ?? []);
+    deferTools && hasCoreTool(offered) ? planToolTimeline(toolTurns, offered, new Set(), start) : null;
+  const loaded = timeline?.loaded ?? new Set<string>();
+  const guided = new Set((timeline?.everAdded ?? []).filter(name => !loaded.has(name)));
+  const flagged = new Set([...guided, ...loaded]);
   const toolPrompt = await new ToolBuilder({
     user: { id: caller.timezone },
     db: { sessions: {} },
@@ -102,10 +106,10 @@ async function sendTurn(
   } as unknown as ToolBuilderConfig).buildToolPrompt({
     hasContentTransform: false,
     hasChessEngine: false,
-    hasCurrentDateTime: offered.includes('current_datetime') || guided.has('current_datetime'),
-    hasWebSearch: offered.includes('web_search') || guided.has('web_search'),
+    hasCurrentDateTime: offered.includes('current_datetime') || flagged.has('current_datetime'),
+    hasWebSearch: offered.includes('web_search') || flagged.has('web_search'),
     webSearchGuidance: 'web search guidance',
-    hasKnowledgeBase: offered.includes('search_knowledge_base') || guided.has('search_knowledge_base'),
+    hasKnowledgeBase: offered.includes('search_knowledge_base') || flagged.has('search_knowledge_base'),
     knowledgeBaseGuidance: 'knowledge base guidance',
     deferGuidanceFor: guided,
     userTimezone: caller.timezone,
@@ -119,7 +123,7 @@ async function sendTurn(
   const extraContext = [sys(`[Current View Context]\nPath: ${caller.currentPath}`)];
 
   // Shaped like ChatCompletionProcess.process() on a default first turn.
-  const navigateView = offered.includes('navigate_view');
+  const navigateView = offered.includes('navigate_view') || loaded.has('navigate_view');
   const tagged = buildTaggedContextMessages({
     dateContext: [sys(caller.date)],
     extraContext,
@@ -153,7 +157,9 @@ async function sendTurn(
   };
   const guidance = new Map(toolPrompt.deferredGuidance.map(entry => [entry.tool, entry.text]));
   if (guided.has('navigate_view')) guidance.set('navigate_view', getViewSummaryForLLM({ isAdmin: false }));
-  const tools = timeline ? declareDeferredTools(offered.map(tool), timeline.notOffered.map(tool)) : offered.map(tool);
+  const tools = timeline
+    ? declareDeferredTools(offered.map(tool), timeline.notOffered.map(tool), loaded)
+    : offered.map(tool);
   const messages = timeline ? applyToolTimeline(anchored, timeline.changes, guidance) : anchored;
 
   const backend = new AnthropicBackend('test-key');
@@ -361,6 +367,52 @@ describe('shareable prompt prefix with deferred tool loading', () => {
       );
 
       expect(markedTexts(third)).toEqual(['a2']);
+    });
+  });
+
+  describe('with the start set loaded', () => {
+    const turn1Tools = ['current_model_details', 'web_search', 'navigate_view'];
+
+    it('sends the first turn as today plus the anchor, with no change message', async () => {
+      const first = await sendTurn({ ...WEB_USER, toolOrder: turn1Tools }, { deferTools: true, loadStartSet: true });
+      const today = await sendTurn({ ...WEB_USER, toolOrder: turn1Tools });
+
+      expect(first.tools?.filter(block => block.defer_loading === true).map(block => block.name)).toEqual([
+        'deferred_tools_anchor',
+      ]);
+      expect(sharedHead({ ...first, tools: first.tools?.filter(block => block.defer_loading !== true) })).toBe(
+        sharedHead(today)
+      );
+      expect(first.messages?.some(message => message.role === 'system')).toBe(false);
+    });
+
+    it('keeps the head and history when a later turn drops a start tool and adds another', async () => {
+      const first = await sendTurn(
+        { ...WEB_USER, toolOrder: turn1Tools },
+        { deferTools: true, loadStartSet: true, prompt: 'u1' }
+      );
+      const second = await sendTurn(
+        { ...WEB_USER, toolOrder: ['current_model_details', 'navigate_view', 'current_datetime'] },
+        {
+          deferTools: true,
+          loadStartSet: true,
+          history: [{ prompt: 'u1', reply: 'a1', offered: turn1Tools }],
+          prompt: 'u2',
+        }
+      );
+
+      expect(renderedHeadHash(second)).toBe(renderedHeadHash(first));
+      expect(withoutCacheControl(second.messages?.slice(0, first.messages!.length))).toBe(
+        withoutCacheControl(first.messages)
+      );
+      expect(second.messages?.at(-1)?.content).toEqual(
+        expect.arrayContaining([
+          { type: 'tool_removal', tool: { type: 'tool_reference', name: 'web_search' } },
+          { type: 'tool_addition', tool: { type: 'tool_reference', name: 'current_datetime' } },
+        ])
+      );
+      expect(second.tools?.find(block => block.name === 'web_search')?.defer_loading).toBeUndefined();
+      expect(JSON.stringify(second.system)).toContain('web search guidance');
     });
   });
 

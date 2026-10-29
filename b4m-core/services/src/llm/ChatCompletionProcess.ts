@@ -159,7 +159,7 @@ import { resolveCorrectionContext } from './buildCorrectionContext';
 import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
-import { LATTICE_TOOL_NAMES } from './tools';
+import { b4mTools, LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
 import {
@@ -315,9 +315,11 @@ import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentM
 import {
   applyToolTimeline,
   declareDeferredTools,
+  estimateToolDefinitionTokens,
   hasCoreTool,
   lookbackAnchor,
   planToolTimeline,
+  startToolNames,
   type ToolTimeline,
   undoDeferredTools,
 } from './deferredToolLoading';
@@ -3823,7 +3825,13 @@ export class ChatCompletionProcess {
         hasCoreTool(offeredToolNames)
       ) {
         const historyToolTurns = cacheInfo.toolTurns ?? [];
-        toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames);
+        const startTools = new Set(
+          startToolNames(historyToolTurns, offeredToolNames, name =>
+            Object.prototype.hasOwnProperty.call(b4mTools, name)
+          )
+        );
+        let undeclarable = new Set<string>();
+        toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable, startTools);
         if (toolTimeline.notOffered.length > 0) {
           // Built by the same gates as an offer; whatever no longer builds is re-written out of history.
           const notOffered = new Set(toolTimeline.notOffered);
@@ -3837,25 +3845,40 @@ export class ChatCompletionProcess {
             }) ?? []
           ).filter(tool => notOffered.has(tool.toolSchema.name) && !denied.has(tool.toolSchema.name));
           const declared = new Set(removedToolDeclarations.map(tool => tool.toolSchema.name));
-          const undeclarable = new Set(toolTimeline.notOffered.filter(name => !declared.has(name)));
+          undeclarable = new Set(toolTimeline.notOffered.filter(name => !declared.has(name)));
           if (undeclarable.size > 0) {
-            toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable);
+            toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable, startTools);
           }
         }
+        // A large start set is cheaper deferred while traffic leaves its own head cold; the limit is
+        // the admin's call (0 defers every optional tool behind one shared head).
+        const loaded = toolTimeline.loaded;
+        const startTokens = estimateToolDefinitionTokens(
+          [...(allTools ?? []), ...removedToolDeclarations].filter(tool => loaded.has(tool.toolSchema.name))
+        );
+        const startLimit = getSettingsValue('DeferredToolStartSetMaxTokens', defaultAdminSettings);
+        if (loaded.size > 0 && startTokens > (startLimit ?? Number.POSITIVE_INFINITY)) {
+          toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable);
+        }
       }
-      // Guidance for every tool a change adds rides with that addition, whether or not it is offered now.
-      const deferredGuidanceTools = new Set(toolTimeline?.everAdded ?? []);
+      const loadedStartTools = toolTimeline?.loaded ?? new Set<string>();
+      // Guidance for a tool a change adds rides with that addition, whether or not it is offered now. A
+      // start-set tool keeps its guidance in the system prompt even after a removal, so the head holds.
+      const deferredGuidanceTools = new Set(
+        (toolTimeline?.everAdded ?? []).filter(name => !loadedStartTools.has(name))
+      );
+      const guidanceTools = new Set([...deferredGuidanceTools, ...loadedStartTools]);
       const viewRegistryDeferred = deferredGuidanceTools.has('navigate_view');
 
       const toolPromptMessages = await toolBuilder.buildToolPrompt({
         toolPromptId,
-        hasContentTransform: (hasContentTransform && blogDraftAvailable) || deferredGuidanceTools.has('blog_draft'),
-        hasChessEngine: enabledTools.includes('chess_engine') || deferredGuidanceTools.has('chess_engine'),
-        hasCurrentDateTime: enabledTools.includes('current_datetime') || deferredGuidanceTools.has('current_datetime'),
+        hasContentTransform: (hasContentTransform && blogDraftAvailable) || guidanceTools.has('blog_draft'),
+        hasChessEngine: enabledTools.includes('chess_engine') || guidanceTools.has('chess_engine'),
+        hasCurrentDateTime: enabledTools.includes('current_datetime') || guidanceTools.has('current_datetime'),
         // Unlike the two lines above, web_search is key-gated (GATED_TOOLS in toolAvailability.ts)
         // and can be dropped from the built schemas while the requested list still carries it, so
         // this reads the offered set for the same reason blog_draft and navigate_view do above.
-        hasWebSearch: offeredToolNames.includes('web_search') || deferredGuidanceTools.has('web_search'),
+        hasWebSearch: offeredToolNames.includes('web_search') || guidanceTools.has('web_search'),
         webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
         // Same offered-set check that seeds `promptMeta.retrieval.mode` above, so the nudge covers
         // the optional-path turns that fold measures. One caveat for a reader re-running that
@@ -3863,7 +3886,7 @@ export class ChatCompletionProcess {
         // nudged too and land in a different bucket. Whether the section actually shipped is
         // recorded per turn as `retrieval.knowledgeBaseGuidanceInjected`, which is what makes an
         // A/B driven by clearing the setting readable straight off the fold.
-        hasKnowledgeBase: knowledgeToolOffered || deferredGuidanceTools.has('search_knowledge_base'),
+        hasKnowledgeBase: knowledgeToolOffered || guidanceTools.has('search_knowledge_base'),
         knowledgeBaseGuidance,
         userTimezone,
         mcpTools: directMcpTools,
@@ -3978,7 +4001,7 @@ export class ChatCompletionProcess {
         // is the same for every user (shareable prefix); the admin views and the current-page
         // emphasis vary per caller and ride behind it as viewRegistryAdmin.
         viewRegistry:
-          navigateViewAvailable && !viewRegistryDeferred
+          (navigateViewAvailable || loadedStartTools.has('navigate_view')) && !viewRegistryDeferred
             ? [
                 {
                   role: 'system' as const,
@@ -4970,7 +4993,7 @@ export class ChatCompletionProcess {
       if (toolTimeline && options.tools) {
         const guidance = new Map(toolPromptMessages.deferredGuidance.map(entry => [entry.tool, entry.text]));
         if (viewRegistryDeferred) guidance.set('navigate_view', getViewSummaryForLLM({ isAdmin: false }));
-        options.tools = declareDeferredTools(options.tools, removedToolDeclarations);
+        options.tools = declareDeferredTools(options.tools, removedToolDeclarations, toolTimeline.loaded);
         outboundMessages = applyToolTimeline(outboundMessages, toolTimeline.changes, guidance);
         deferredState = {
           declaredOnly: new Set([...removedToolDeclarations.map(t => t.toolSchema.name), DEFERRED_ANCHOR_TOOL_NAME]),

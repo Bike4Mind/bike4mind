@@ -301,6 +301,7 @@ export const SettingKeySchema = z.enum([
   'KnowledgeBaseRetrievalPrompt',
   'UseFormatPrompt',
   'EnableDeferredToolLoading',
+  'DeferredToolStartSetMaxTokens',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
   'EnableHearth',
@@ -3170,6 +3171,16 @@ export const settingsMap = {
       'On supported Claude models, send the optional chat tools a turn offers with defer_loading and add them, with their guidance, through a mid-conversation tool_addition message, so the cached tools-and-system head is the same for every user whatever tools they have on. Unsupported models and fallback hops keep the current request shape. Off by default until the live cache check passes.',
     category: 'AI',
     order: 14,
+  }),
+  DeferredToolStartSetMaxTokens: makeNumberSetting({
+    key: 'DeferredToolStartSetMaxTokens',
+    name: 'Deferred Tool Loading: Start Set Limit (tokens)',
+    defaultValue: 100000,
+    description:
+      'With Deferred Tool Loading on, the built-in tools a conversation offers on its first turn stay loaded when their definitions total at most this many tokens (estimated), and only tools offered later are added through tool_addition. A loaded start set uses the cached head shared by every chat with that tool set, which is the cheapest choice once traffic keeps those heads warm. 0 defers every optional tool behind one shared head, which costs each conversation its definitions once more but is cheaper at low traffic. MCP tools are always deferred.',
+    category: 'AI',
+    order: 15,
+    dependsOn: 'EnableDeferredToolLoading',
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',

@@ -13,8 +13,9 @@ import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentM
 
 /**
  * Deferred tool loading for in-app chat, on the shared helpers in @bike4mind/common deferredTools.ts
- * (also used by Desktop). Each tool is added after the turn that first offered it and removed after
- * the turn that stopped offering it, with its guidance as a text block in the same message. Only
+ * (also used by Desktop). The conversation's start set stays loaded (startToolNames); every other
+ * tool is added after the turn that first offered it and removed after the turn that stopped
+ * offering it, with its guidance as a text block in the same message. Only
  * tools the turn offers are callable; anything else in `tools` is a deferred declaration that
  * earlier references need, and refuses if called.
  */
@@ -39,7 +40,9 @@ export type ToolTimeline = {
   changes: ToolChange[];
   /** Every tool some change adds; their guidance rides with the addition. */
   everAdded: string[];
-  /** Added at some point but not offered now: declared deferred so earlier references resolve. */
+  /** Active from the start and declared loaded on every turn (see startToolNames). */
+  loaded: ReadonlySet<string>;
+  /** Loaded or added at some point but not offered now: declared so earlier references resolve. */
   notOffered: string[];
 };
 
@@ -56,18 +59,41 @@ const deferrable = (names: Iterable<string>, exclude: ReadonlySet<string>) =>
 const sorted = (names: Iterable<string>) => [...names].sort();
 
 /**
- * Replays each turn's offered tools (plus any it called) into the minimal additions and removals.
- * A turn with no record keeps the previous set. `exclude` drops tools that cannot be declared now,
- * which re-writes history from their first addition.
+ * The optional tools a conversation keeps loaded: the shared ones (`isShared`, never per-user MCP
+ * tools) its first recorded turn offered, or this turn's on a new chat. Fixed per conversation, so
+ * its head is the per-tool-set head today's shape caches, warm at scale. Later changes go through
+ * tool change messages, so they never rewrite the conversation.
+ */
+export function startToolNames(
+  history: readonly HistoryToolTurn[],
+  currentOffered: readonly string[],
+  isShared: (name: string) => boolean
+): string[] {
+  const first = history.find(turn => turn.offeredTools)?.offeredTools ?? currentOffered;
+  return sorted([...deferrable(first, new Set())].filter(isShared));
+}
+
+/** Rough token count of tool definitions: JSON schemas run about 3 characters per token. */
+export function estimateToolDefinitionTokens(tools: readonly ICompletionOptionTools[]): number {
+  return Math.ceil(tools.reduce((total, tool) => total + JSON.stringify(tool.toolSchema).length, 0) / 3);
+}
+
+/**
+ * Replays each turn's offered tools (plus any it called) into the minimal additions and removals,
+ * starting from the `loaded` set. A turn with no record keeps the previous set. `exclude` drops tools
+ * that cannot be declared now, which re-writes history from their first addition (or, for a loaded
+ * tool, changes the head).
  */
 export function planToolTimeline(
   history: readonly HistoryToolTurn[],
   currentOffered: readonly string[],
-  exclude: ReadonlySet<string> = new Set()
+  exclude: ReadonlySet<string> = new Set(),
+  loaded: ReadonlySet<string> = new Set()
 ): ToolTimeline {
   const changes: ToolChange[] = [];
   const everAdded = new Set<string>();
-  let active = new Set<string>();
+  const start = deferrable(loaded, exclude);
+  let active = start;
   const step = (after: IMessage | null, offered: Set<string>) => {
     const { added, removed } = diffToolNames(active, offered);
     if (added.length > 0 || removed.length > 0) changes.push({ after, added, removed });
@@ -83,7 +109,8 @@ export function planToolTimeline(
   return {
     changes,
     everAdded: sorted(everAdded),
-    notOffered: sorted([...everAdded].filter(name => !current.has(name))),
+    loaded: start,
+    notOffered: sorted([...new Set([...start, ...everAdded])].filter(name => !current.has(name))),
   };
 }
 
@@ -156,22 +183,23 @@ export function applyToolTimeline(
 }
 
 /**
- * The tools for a deferred turn: offered optional tools marked deferred, the core tools loaded, the
- * removed tools declared deferred with a refusing toolFn, and the anchor.
+ * The tools for a deferred turn: the core and `loaded` tools loaded, other offered tools deferred,
+ * the removed tools declared (loaded ones stay loaded so the head keeps its bytes) with a refusing
+ * toolFn, and the anchor.
  */
 export function declareDeferredTools(
   offered: readonly ICompletionOptionTools[],
-  removedDeclarations: readonly ICompletionOptionTools[] = []
+  removedDeclarations: readonly ICompletionOptionTools[] = [],
+  loaded: ReadonlySet<string> = new Set()
 ): ICompletionOptionTools[] {
   const defer = (tool: ICompletionOptionTools) =>
-    CORE_TOOL_NAMES.has(tool.toolSchema.name)
+    CORE_TOOL_NAMES.has(tool.toolSchema.name) || loaded.has(tool.toolSchema.name)
       ? tool
       : { ...tool, toolSchema: { ...tool.toolSchema, defer_loading: true } };
   return [
     ...offered.map(defer),
     ...removedDeclarations.map(tool => ({
-      ...tool,
-      toolSchema: { ...tool.toolSchema, defer_loading: true },
+      ...defer(tool),
       toolFn: async () => notAvailable(tool.toolSchema.name),
     })),
     deferredAnchorTool(),

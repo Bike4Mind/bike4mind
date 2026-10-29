@@ -7,9 +7,11 @@ import {
   applyToolTimeline,
   declareDeferredTools,
   DEFERRED_TOOLS_MARKER,
+  estimateToolDefinitionTokens,
   hasCoreTool,
   lookbackAnchor,
   planToolTimeline,
+  startToolNames,
   undoDeferredTools,
 } from './deferredToolLoading';
 
@@ -61,6 +63,7 @@ describe('planToolTimeline', () => {
     expect(timeline).toEqual({
       changes: [{ after: u1, added: ['navigate_view', 'web_search'], removed: [] }],
       everAdded: ['navigate_view', 'web_search'],
+      loaded: new Set(),
       notOffered: [],
     });
   });
@@ -105,6 +108,84 @@ describe('planToolTimeline', () => {
 
   it('plans no change for a core-only conversation', () => {
     expect(planToolTimeline([turn(u1, [CORE])], [CORE]).changes).toEqual([]);
+  });
+
+  describe('with a loaded start set', () => {
+    const start = new Set(['search_knowledge_base', 'web_search']);
+
+    it('adds only what the start set lacks, then appends later changes', () => {
+      const timeline = planToolTimeline(
+        [turn(u1, [CORE, 'search_knowledge_base', 'web_search', 'mcp_tool'])],
+        [CORE, 'search_knowledge_base', 'web_search', 'mcp_tool', 'image_generation'],
+        new Set(),
+        start
+      );
+      expect(timeline.changes).toEqual([
+        { after: u1, added: ['mcp_tool'], removed: [] },
+        { after: null, added: ['image_generation'], removed: [] },
+      ]);
+      expect(timeline.loaded).toEqual(start);
+    });
+
+    it('removes and re-adds a start tool by change message, and keeps it declared while withdrawn', () => {
+      const withdrawn = planToolTimeline(
+        [turn(u1, [CORE, 'search_knowledge_base', 'web_search'])],
+        [CORE, 'search_knowledge_base'],
+        new Set(),
+        start
+      );
+      expect(withdrawn.changes).toEqual([{ after: null, added: [], removed: ['web_search'] }]);
+      expect(withdrawn.notOffered).toEqual(['web_search']);
+
+      const back = planToolTimeline(
+        [turn(u1, [CORE, 'search_knowledge_base', 'web_search']), turn(u2, [CORE, 'search_knowledge_base'])],
+        [CORE, 'search_knowledge_base', 'web_search'],
+        new Set(),
+        start
+      );
+      expect(back.changes).toEqual([
+        { after: u2, added: [], removed: ['web_search'] },
+        { after: null, added: ['web_search'], removed: [] },
+      ]);
+    });
+
+    it('drops an undeclarable start tool from the loaded set', () => {
+      const timeline = planToolTimeline(
+        [turn(u1, [CORE, 'search_knowledge_base', 'web_search'])],
+        [CORE, 'search_knowledge_base'],
+        new Set(['web_search']),
+        start
+      );
+      expect(timeline.loaded).toEqual(new Set(['search_knowledge_base']));
+      expect(timeline.changes).toEqual([]);
+    });
+  });
+});
+
+describe('startToolNames', () => {
+  const shared = (name: string) => !name.startsWith('mcp_');
+
+  it('takes the shared optional tools of the first recorded turn', () => {
+    const history = [
+      turn(user('u0')),
+      turn(user('u1'), [CORE, 'web_search', 'mcp_tool', 'navigate_view']),
+      turn(user('u2'), [CORE, 'image_generation']),
+    ];
+    expect(startToolNames(history, [CORE, 'recharts'], shared)).toEqual(['navigate_view', 'web_search']);
+  });
+
+  it('takes the current offer on a new chat', () => {
+    expect(startToolNames([], [CORE, 'web_search', 'mcp_tool', DEFERRED_ANCHOR_TOOL_NAME], shared)).toEqual([
+      'web_search',
+    ]);
+  });
+});
+
+describe('estimateToolDefinitionTokens', () => {
+  it('counts about three characters of schema JSON per token', () => {
+    const one = tool('web_search');
+    expect(estimateToolDefinitionTokens([one])).toBe(Math.ceil(JSON.stringify(one.toolSchema).length / 3));
+    expect(estimateToolDefinitionTokens([])).toBe(0);
   });
 });
 
@@ -205,6 +286,17 @@ describe('declareDeferredTools', () => {
     await expect(declared[2].toolFn({})).resolves.toContain('not available');
     await expect(declared[3].toolFn({})).resolves.toContain('not available');
     await expect(declared[0].toolFn({})).resolves.toBe('ok');
+  });
+
+  it('keeps start-set tools loaded, including a withdrawn one, which still refuses', async () => {
+    const declared = declareDeferredTools(
+      [tool('search_knowledge_base'), tool('image_generation'), tool(CORE)],
+      [tool('web_search')],
+      new Set(['search_knowledge_base', 'web_search'])
+    );
+
+    expect(deferredNames(declared)).toEqual(['image_generation', DEFERRED_ANCHOR_TOOL_NAME]);
+    await expect(declared[3].toolFn({})).resolves.toContain('not available');
   });
 });
 
