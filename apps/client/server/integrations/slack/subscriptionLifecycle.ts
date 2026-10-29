@@ -1,6 +1,6 @@
 import type Stripe from 'stripe';
 import { Logger } from '@bike4mind/observability';
-import { ADMIN_TAB_PARAM, classifyStage, toAbsoluteUrl } from '@bike4mind/common';
+import { ADMIN_TAB_PARAM, classifyStage, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
@@ -77,10 +77,6 @@ const PLAN_CHANGE_TITLES: Record<PlanChangeDirection, string> = {
   same_tier: ':left_right_arrow: *Plan changed (same tier)*',
   unknown: ':left_right_arrow: *Plan changed*',
 };
-
-function escapeSlackText(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 function formatMoney({ amountMinor, currency }: LifecycleMoney): string {
   if (!Number.isFinite(amountMinor) || !currency) return 'unknown';

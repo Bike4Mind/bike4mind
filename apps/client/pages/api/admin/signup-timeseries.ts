@@ -1,17 +1,15 @@
 import { z } from 'zod';
-import { SIGNUP_TIMESERIES_RANGES } from '@client/app/utils/signupSignals';
+import {
+  SIGNUP_TIMESERIES_RANGES,
+  SIGNUP_TZ_OFFSET_MESSAGE,
+  signupTzOffsetSchema,
+} from '@client/app/utils/signupSignals';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getSignupTimeseries } from '@server/users/signupTimeseries';
 
 const querySchema = z.object({
   range: z.enum(SIGNUP_TIMESERIES_RANGES).default('30d'),
-  // Minutes east of UTC, so buckets start at the viewer's local hour or midnight.
-  tzOffset: z.coerce
-    .number()
-    .int()
-    .min(-14 * 60)
-    .max(14 * 60)
-    .default(0),
+  tzOffset: signupTzOffsetSchema,
 });
 
 export default baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
@@ -20,7 +18,7 @@ export default baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   if (!parsed.success) {
     const message =
       parsed.error.issues[0]?.path[0] === 'tzOffset'
-        ? 'tzOffset must be a whole number of minutes between -840 and 840.'
+        ? SIGNUP_TZ_OFFSET_MESSAGE
         : 'Range must be one of 24h, 7d, 30d or 90d.';
     return res.status(400).json({ message });
   }

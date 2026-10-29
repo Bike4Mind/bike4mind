@@ -1,3 +1,4 @@
+import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -56,6 +57,7 @@ export const getImageEdit = (): ImageEditService => {
       // lake-only anchor the workbench admitted must still resolve as an edit input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),
       creditHolds: imageCreditHolds,
+      assertModelAdmission: assertMediaModelAdmission,
       startImageEditProcess: async body => {
         const queue = new SQSService();
         const queueUrl = getSourceQueueUrl('imageEditQueue');

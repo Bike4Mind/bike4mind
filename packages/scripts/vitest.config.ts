@@ -1,7 +1,14 @@
 import { defineConfig } from 'vitest/config';
+import path from 'path';
 import { sharedTest } from '../../vitest.shared';
 
+const client = path.resolve(__dirname, '../../apps/client');
+
 export default defineConfig({
+  resolve: {
+    // Lets the backfill scripts reuse apps/client/server code the way apps/workers does.
+    alias: { '@server': path.join(client, 'server'), '@client': client },
+  },
   test: {
     ...sharedTest,
     // Raise the 15s shared floor to 30s for the CI "misc" shard. This package has a handful of

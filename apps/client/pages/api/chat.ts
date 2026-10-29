@@ -17,6 +17,7 @@ import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
   getDefaultChatCompletionOptions,
   getSharedTokenizer,
@@ -139,7 +140,8 @@ async function handleChat(
       userId: req.user.id,
       logger: req.logger,
     });
-    model = resolved.model;
+    // A free account must not start on a paid-only admin default.
+    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger);
     // Self-host, no-explicit-model guard: apiKeys/models are populated only on self-host.
     // If even the resolved default is unusable (no provider key and no local model), fail
     // fast with actionable guidance instead of a cryptic backend error deep in the pipeline.

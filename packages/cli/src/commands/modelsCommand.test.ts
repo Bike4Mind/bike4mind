@@ -35,6 +35,7 @@ import {
   type HubClient,
   type RuntimeTarget,
 } from '../models/localModels.js';
+import { machineReader, type MachineReader } from '../models/fit.js';
 import type { OllamaManifestInfo } from './ollamaRegistry.js';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -110,6 +111,23 @@ function installed(name: string, extra: Partial<InstalledModel> = {}): Installed
   };
 }
 
+const GIB = 1024 ** 3;
+
+function cpuMachine(ramGiB: number): HardwareProfile {
+  return {
+    platform: 'linux',
+    arch: 'x64',
+    memoryKind: 'cpu',
+    totalMemoryBytes: ramGiB * GIB,
+    gpuMemoryBytes: null,
+    gpuName: null,
+    gpuCount: 0,
+    chip: null,
+    diskFreeBytes: null,
+    confidence: 'high',
+  };
+}
+
 function fakeRuntime(overrides: Partial<LocalRuntime> = {}): LocalRuntime {
   return {
     id: 'ollama:127.0.0.1:11500',
@@ -126,7 +144,8 @@ function fakeRuntime(overrides: Partial<LocalRuntime> = {}): LocalRuntime {
     inspect: vi.fn(),
     pull: vi.fn(async (_ref: string, opts?: PullOptions) => {
       opts?.onProgress?.({ status: 'pulling manifest', completedBytes: 0, totalBytes: null });
-      opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 100, totalBytes: 400 });
+      opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 0, totalBytes: 400 });
+      opts?.onProgress?.({ status: 'pulling def456', completedBytes: 100, totalBytes: 400 });
       opts?.onProgress?.({ status: 'success', completedBytes: 400, totalBytes: 400 });
     }),
     remove: vi.fn().mockResolvedValue(undefined),
@@ -177,8 +196,6 @@ function fakeHub(overrides: Partial<HubClient> = {}): HubClient {
   };
 }
 
-const GIB = 1024 ** 3;
-
 function machine(overrides: Partial<HardwareProfile> = {}): HardwareProfile {
   return {
     platform: 'linux',
@@ -220,6 +237,8 @@ function harness(
     isTTY?: boolean;
     source?: RuntimeTarget['source'];
     config?: { defaultModel?: string; ollamaHost?: string };
+    machine?: MachineReader;
+    runtimeHost?: string | null;
   } = {}
 ): Harness {
   const lines: string[] = [];
@@ -253,6 +272,8 @@ function harness(
     isTTY: options.isTTY ?? true,
     log: line => lines.push(line),
     progress: { update: line => progress.push(line), end: () => progress.push('<end>') },
+    machine: options.machine ?? (async () => ({ hardware: cpuMachine(64) })),
+    runtimeHost: () => options.runtimeHost ?? null,
     curated: options.curated ?? (() => loadCuratedManifest(() => {})),
     hardware: options.hardware ?? (async () => machine()),
     signal: controller.signal,
@@ -260,7 +281,7 @@ function harness(
   return { deps, lines, questions, progress, saved, runtime, hub, registry, controller };
 }
 
-const OPTS: ModelsOptions = { json: false, yes: false, acceptLicense: false, includeAbliterated: false };
+const OPTS: ModelsOptions = { json: false, yes: false, force: false, acceptLicense: false, includeAbliterated: false };
 
 describe('parsePullTarget', () => {
   it('reads Hugging Face repos with and without a host or quant', () => {
@@ -562,8 +583,8 @@ describe('models show', () => {
     const text = h.lines.join('\n');
     expect(text).toMatch(/License: {3}apache-2\.0\n/);
     expect(text).toMatch(/Gated: {5}no/);
-    expect(text).toMatch(/Q4_K_M\s+491 MB\s+hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
-    expect(text).toMatch(/F16\s+1\.2 GB\s+none: split into shards/);
+    expect(text).toMatch(/Q4_K_M\s+491 MB\s+fits\s+hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
+    expect(text).toMatch(/F16\s+1\.2 GB\s+fits\s+none: split into shards/);
     expect(text).toMatch(/Pull one with: b4m models pull Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
   });
 
@@ -577,9 +598,9 @@ describe('models show', () => {
     const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(detail({ builds })) }) });
     await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
     const text = h.lines.join('\n');
-    expect(text).toMatch(/\n {2}Q4_0 {6}219 MB\s+hf\.co\/\S+:Q4_0\n/);
-    expect(text).toMatch(/\n {2}BUILD\s+SIZE\s+OLLAMA REF\n/);
-    expect(text).toMatch(/\n {2}QAD-Q4_0 {2}219 MB\s+hf\.co\/\S+:QAD-Q4_0\n/);
+    expect(text).toMatch(/\n {2}Q4_0 {6}219 MB\s+\S+\s+hf\.co\/\S+:Q4_0\n/);
+    expect(text).toMatch(/\n {2}BUILD\s+SIZE\s+FIT\s+OLLAMA REF\n/);
+    expect(text).toMatch(/\n {2}QAD-Q4_0 {2}219 MB\s+\S+\s+hf\.co\/\S+:QAD-Q4_0\n/);
     expect(pickBuild(builds, 'qad-q4_0')).toBe(qad);
     expect(pickBuild(builds, 'Q4_0')).toBe(builds[0]);
     expect(pickBuild([{ ...qad, ollamaRef: null, ollamaRefIssue: 'ambiguous' }], 'QAD-Q4_0')?.id).toBe(qad.id);
@@ -595,7 +616,78 @@ describe('models show', () => {
     });
     const h = harness({ hub });
     await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
-    expect(h.lines.join('\n')).toMatch(/Q4_K_L\s+500 MB\s+none: Ollama cannot pull this quant from Hugging Face/);
+    expect(h.lines.join('\n')).toMatch(
+      /Q4_K_L\s+500 MB\s+fits\s+none: Ollama cannot pull this quant from Hugging Face/
+    );
+  });
+
+  describe('fit', () => {
+    const sized = detail({
+      gguf: { architecture: 'qwen2', contextLength: 131072, parameterCount: 72_000_000_000 },
+      builds: [build('Q4_K_M', 20_000_000_000), build('Q6_K', 47_000_000_000), build('Q8_0', 77_000_000_000)],
+    });
+
+    it('rates each build for this machine at the context the CLI requests', async () => {
+      const h = harness({
+        hub: fakeHub({ getModel: vi.fn().mockResolvedValue(sized) }),
+        machine: async () => ({ hardware: cpuMachine(64) }),
+      });
+      await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+      const text = h.lines.join('\n');
+      expect(text).toMatch(/BUILD\s+SIZE\s+FIT\s+OLLAMA REF/);
+      expect(text).toMatch(/Q4_K_M\s+20\.0 GB\s+fits\s/);
+      expect(text).toMatch(/Q6_K\s+47\.0 GB\s+tight\s/);
+      expect(text).toMatch(/Q8_0\s+77\.0 GB\s+too large\s/);
+      expect(text).toContain("Fit is a rough estimate from each file's size for this machine (no GPU, 68.7 GB RAM)");
+    });
+
+    it('adds the fit to each build in JSON', async () => {
+      const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(sized) }) });
+      await runModelsCommand('show', { _: [], repo: REPO, 'output-format': 'json' }, h.deps);
+      const builds = JSON.parse(h.lines.join('\n')).builds as Array<{ quant: string; fit: { verdict: string } }>;
+      expect(builds.map(entry => [entry.quant, entry.fit.verdict])).toEqual([
+        ['Q4_K_M', 'fits'],
+        ['Q6_K', 'tight'],
+        ['Q8_0', 'too-large'],
+      ]);
+    });
+
+    it('says the fit is unknown for an Ollama on another machine', async () => {
+      const h = harness({
+        hub: fakeHub({ getModel: vi.fn().mockResolvedValue(sized) }),
+        machine: machineReader(async () => cpuMachine(64)),
+        runtimeHost: 'http://gpu-box:11434',
+      });
+      await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+      const text = h.lines.join('\n');
+      expect(text).toMatch(/Q8_0\s+77\.0 GB\s+unknown\s/);
+      expect(text).toContain('Fit is unknown. Ollama at http://gpu-box:11434 runs on another machine');
+    });
+
+    it.each(['weights', 'projector', 'shard'] as const)(
+      'keeps an unknown %s size unknown in show and pull',
+      async missing => {
+        const weights = build('Q4_K_M', missing === 'weights' ? 0 : 491_400_032);
+        if (missing === 'shard') weights.files.push({ ...weights.files[0], path: 'other.gguf', sizeBytes: 0 });
+        const model = detail({
+          builds: [weights],
+          projectors: [
+            {
+              ...weights.files[0],
+              path: 'mmproj.gguf',
+              sizeBytes: missing === 'projector' ? 0 : 500_000_000,
+              quant: 'F16',
+            },
+          ],
+        });
+        const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(model) }), answers: [true] });
+        await runModelsCommand('show', { _: [], repo: REPO, 'output-format': 'json' }, h.deps);
+        expect(JSON.parse(h.lines[0]).builds[0].fit.verdict).toBe('unknown');
+        await runModelsCommand('pull', { _: [], ref: REPO }, h.deps);
+        expect(h.lines).toContain('Fit:      unknown. The download size is unknown.');
+        expect(h.runtime.pull).toHaveBeenCalled();
+      }
+    );
   });
 
   it('explains how to get access to a gated repo', async () => {
@@ -853,7 +945,14 @@ describe('models pull (Hugging Face)', () => {
     const verifyOrder = vi.mocked(h.hub.verifyOllamaRef).mock.invocationCallOrder[0];
     const pullOrder = vi.mocked(h.runtime.pull).mock.invocationCallOrder[0];
     expect(verifyOrder).toBeLessThan(pullOrder);
-    expect(h.progress).toEqual(['pulling manifest', 'pulling abc123  25%  100 B / 400 B', 'success', '<end>']);
+    expect(h.progress).toEqual([
+      'pulling manifest',
+      'pulling abc123  0%  0 B / 400 B',
+      'pulling def456  25%  100 B / 400 B',
+      'success',
+      '<end>',
+    ]);
+    expect(h.lines.some(line => line.startsWith('Already downloaded'))).toBe(false);
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pulled hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M\./);
   });
 
@@ -1013,7 +1112,7 @@ describe('models pull (Hugging Face)', () => {
       pull: vi.fn(
         (_ref: string, opts?: PullOptions) =>
           new Promise<void>((_resolve, reject) => {
-            opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 50, totalBytes: 400 });
+            opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 0, totalBytes: 400 });
             opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
             h.controller.abort();
           })
@@ -1021,7 +1120,7 @@ describe('models pull (Hugging Face)', () => {
     });
     const h = harness({ runtime, answers: [true] });
     expect(await runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).toBe(EXIT_CANCELLED);
-    expect(h.progress).toEqual(['pulling abc123  12%  50 B / 400 B', '<end>']);
+    expect(h.progress).toEqual(['pulling abc123  0%  0 B / 400 B', '<end>']);
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pull cancelled\. Nothing was installed/);
   });
 
@@ -1141,6 +1240,67 @@ describe('confirmOnTerminal', () => {
     const answer = confirmOnTerminal('Go? ', controller.signal, streams());
     controller.abort();
     await expect(answer).rejects.toBeInstanceOf(CancelledError);
+  });
+});
+
+describe('models pull fit check', () => {
+  const big = detail({ builds: [build('Q4_K_M', 90_000_000_000)] });
+
+  it('prints the verdict at the context the CLI requests before asking', async () => {
+    const h = harness({ answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).toBe(0);
+    const fit = h.lines.find(line => line.startsWith('Fit:'));
+    expect(fit).toMatch(/^Fit: {6}fits\. Rough estimate from the file size: about \d+ MB before context memory/);
+    expect(fit).toContain('at the 32K context the CLI requests, of the 51.5 GB a model can use in RAM here.');
+  });
+
+  it('refuses a too-large build before asking anything unless --force', async () => {
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }), answers: [true] });
+    await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).rejects.toThrow(
+      `Nothing was downloaded: this build is rated too large for this machine. Pick a smaller quant from: b4m models show ${REPO}, or re-run with --force to download it anyway.`
+    );
+    expect(h.lines.find(line => line.startsWith('Fit:'))).toMatch(/^Fit: {6}too large\. .*exceeds the 51\.5 GB/);
+    expect(h.questions).toEqual([]);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('says a refusal counts RAM only when the GPU could not be read', async () => {
+    const h = harness({
+      hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }),
+      machine: async () => ({ hardware: { ...cpuMachine(64), confidence: 'low' } }),
+      answers: [true],
+    });
+    await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).rejects.toThrow(
+      'Nothing was downloaded: this build is rated too large from system RAM alone, since the GPU could not be read. If this machine has a GPU that can hold it, re-run with --force to download it anyway.'
+    );
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('pulls a too-large build with --force after the usual prompt', async () => {
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }), answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M`, force: true }, h.deps)).toBe(0);
+    expect(h.questions).toEqual(['Download 90.0 GB? [y/N] ']);
+    expect(h.runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
+  });
+
+  it('never blocks on an unknown fit', async () => {
+    const h = harness({
+      hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }),
+      machine: async () => ({ unknown: "This machine's memory could not be read" }),
+      answers: [true],
+    });
+    expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).toBe(0);
+    expect(h.lines).toContain("Fit:      unknown. This machine's memory could not be read.");
+    expect(h.runtime.pull).toHaveBeenCalled();
+  });
+
+  it('rates an Ollama registry model at up to the cap, since its trained length is unread', async () => {
+    const h = harness({ registry: async () => manifestInfo(200_000_000_000, [APACHE]) });
+    await expect(runModelsCommand('pull', { _: [], ref: 'huge:latest', yes: true }, h.deps)).rejects.toThrow(
+      'Pick a smaller tag, or re-run with --force'
+    );
+    expect(h.lines.find(line => line.startsWith('Fit:'))).toContain('at up to the 32K context the CLI requests');
+    expect(h.runtime.pull).not.toHaveBeenCalled();
   });
 });
 

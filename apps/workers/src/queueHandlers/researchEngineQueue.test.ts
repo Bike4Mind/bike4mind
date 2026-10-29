@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { insufficientCreditsError, ResearchTaskStatus } from '@bike4mind/common';
+import { insufficientCreditsError, ResearchTaskStatus, TooManyRequestsError } from '@bike4mind/common';
 
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
@@ -150,6 +150,20 @@ describe('researchEngineQueue metering', () => {
         status: ResearchTaskStatus.FAILED,
         statusFailedMessage: 'Not enough credits',
       })
+    );
+  });
+
+  it('fails a discovered-links run on the free-tier daily cap without rethrowing', async () => {
+    const message = 'Daily free limit reached';
+    h.meter.mockRejectedValue(
+      new TooManyRequestsError(message, { errorCode: 'daily_free_limit_reached', retryAfter: 3600 })
+    );
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).resolves.toBeUndefined();
+
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'rt1', status: ResearchTaskStatus.FAILED, statusFailedMessage: message })
     );
   });
 });
