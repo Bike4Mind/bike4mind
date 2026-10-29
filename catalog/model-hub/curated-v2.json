@@ -195,7 +195,7 @@
               "draft": "b0108ebdcf5adea94899909c0cd6c12565f079f819991e68e464cb2e69a5d93d"
             }
           },
-          "runtimeMin": { "ollama": "0.19.0" },
+          "runtimeMin": { "ollama": "0.30.0" },
           "routing": { "preferred": "ollama", "reasons": ["library-tag", "renderer-known"], "ollamaFallback": false },
           "smoke": [
             {
