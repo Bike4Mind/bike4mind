@@ -56,7 +56,7 @@ describe('welcomeCreditsLine', () => {
         dailyDripCredits: 1000,
       })
     ).toBe(
-      'Verify your email to unlock up to 1,000 credits now. The rest unlocks up to 1,000 credits for each day you use chat, all at once when you subscribe, or all at once when you verify a card.'
+      'Verify your email to unlock up to 1,000 credits now. The rest unlocks up to 1,000 credits for each day you keep Bike4Mind open for about 10 minutes, all at once when you subscribe, or all at once when you verify a card.'
     );
   });
 

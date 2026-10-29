@@ -54,7 +54,10 @@ interface CreditsLineArgs {
 
 /** The self-serve unlock paths we advertise; org invites and admin releases also unlock but are not offered here. */
 export function unlockPathsCopy(dailyDripCredits: number): string {
-  const drip = dailyDripCredits > 0 ? `up to ${formatCreditBalance(dailyDripCredits)} for each day you use chat, ` : '';
+  const drip =
+    dailyDripCredits > 0
+      ? `up to ${formatCreditBalance(dailyDripCredits)} for each day you keep Bike4Mind open for about 10 minutes, `
+      : '';
   return `The rest unlocks ${drip}all at once when you subscribe, or all at once when you verify a card.`;
 }
 

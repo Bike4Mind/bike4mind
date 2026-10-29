@@ -47,7 +47,7 @@ describe('signup grant status', () => {
     show();
     expect(screen.getByTestId('signup-grant-released')).toHaveTextContent('9,000 more credits are still locked');
     const paths = screen.getByTestId('signup-grant-unlock-paths');
-    expect(paths).toHaveTextContent('up to 1,000 credits for each day you use chat');
+    expect(paths).toHaveTextContent('up to 1,000 credits for each day you keep Bike4Mind open for about 10 minutes');
     expect(paths).toHaveTextContent('when you subscribe');
     expect(paths).toHaveTextContent('when you verify a card');
     expect(screen.getByTestId('signup-grant-status')).not.toHaveTextContent('eligibility');
