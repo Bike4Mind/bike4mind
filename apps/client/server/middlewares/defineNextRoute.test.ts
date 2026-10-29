@@ -520,6 +520,7 @@ describe('nextRouteForContract', () => {
         expect(res._getStatusCode()).toBe(200);
         expect(res._getJSONData()).toEqual({ ok: 'yes', extra: 1 });
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('fixtureOp response 200 violates schema'));
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^[^\n]*"ok"[^\n]*$/));
       }
     );
 

@@ -222,8 +222,11 @@ export function nextRouteForContract<C extends EndpointContract>(
             }
             if (strip) outgoing = result.data;
           } else if (result) {
+            // One line, bounded: this logs per request in production, and a union's raw
+            // ZodError message lists every branch's issues.
+            const violation = fromZodError(result.error, { maxIssuesInMessage: 5 }).message.slice(0, 1000);
             req.logger?.warn(
-              `[contract] ${contract.operationId} response ${res.statusCode} violates schema: ${result.error.message}`
+              `[contract] ${contract.operationId} response ${res.statusCode} violates schema: ${violation}`
             );
           }
         } catch {
