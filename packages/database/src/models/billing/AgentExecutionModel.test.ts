@@ -332,6 +332,10 @@ describe('AgentExecutionRepository', () => {
       await agentExecutionRepository.addViewer(execution.id, 'viewer');
       expect((await agentExecutionRepository.findById(execution.id))?.connectionId).toBe('owner');
     });
+
+    it('ignores a malformed id on remove', async () => {
+      await expect(agentExecutionRepository.removeViewer('not-an-id', 'conn-a')).resolves.toBeUndefined();
+    });
   });
 
   describe('findRootExecutionId', () => {

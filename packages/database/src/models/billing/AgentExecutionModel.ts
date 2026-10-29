@@ -1551,6 +1551,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   async removeViewer(id: string, connectionId: string): Promise<void> {
+    // The id comes straight from a client (`unsubscribe`); a malformed one would throw a CastError.
+    if (!mongoose.isObjectIdOrHexString(id)) return;
     await this.model.updateOne({ _id: id }, { $pull: { viewerConnectionIds: connectionId } });
   }
 

@@ -302,7 +302,17 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
     case 'subscribe': {
       const subscribeCmd = SubscribeCommandSchema.parse(rawBody);
-      await handleSubscribe(subscribeCmd, userId, connectionId, endpoint, logger);
+      try {
+        await handleSubscribe(subscribeCmd, userId, connectionId, endpoint, logger);
+      } catch (error) {
+        // Without a reply the viewer would spin forever.
+        logger.error('[Subscribe] Failed:', error);
+        await sendAgentEvent(connectionId, endpoint, {
+          action: 'reconnect_result',
+          requestId: subscribeCmd.requestId,
+          found: false,
+        });
+      }
       break;
     }
     case 'unsubscribe': {
@@ -926,14 +936,10 @@ async function handleSubscribe(
   // Never `updateConnectionId` here: that would steal the stream from the run's own client
   // and, for a headless run, flip `hasApprover` (see the executor's `createWsSender`).
   await agentExecutionRepository.addViewer(execution.id, connectionId);
-  await sendExecutionSnapshot(
-    execution,
-    cmd.requestId,
-    connectionId,
-    endpoint,
-    logger,
-    '[Subscribe] Viewer subscribed'
-  );
+  // Snapshot from a read taken after `addViewer`, so a step persisted in between is not lost;
+  // the client drops the overlap with live frames.
+  const current = (await agentExecutionRepository.findById(execution.id)) ?? execution;
+  await sendExecutionSnapshot(current, cmd.requestId, connectionId, endpoint, logger, '[Subscribe] Viewer subscribed');
 }
 
 /** The `reconnect_result` snapshot shared by `reconnect` and `subscribe`; callers authorize first. */

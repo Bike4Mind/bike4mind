@@ -913,11 +913,12 @@ describe('subscribe / unsubscribe commands', () => {
   });
 
   it('adds the owner as a viewer and sends the snapshot without taking over the run', async () => {
-    mockFindById.mockResolvedValueOnce({
+    const running = {
       ...baseExecution,
       status: 'running',
       checkpoint: { iteration: 2, steps: [{ type: 'thought', content: 'hi' }] },
-    });
+    };
+    mockFindById.mockResolvedValueOnce(running).mockResolvedValueOnce(running);
 
     await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-1' }), {}, noopLogger);
 
@@ -965,6 +966,35 @@ describe('subscribe / unsubscribe commands', () => {
 
     expect(mockAddViewer).not.toHaveBeenCalled();
     expect(sentPayloads()).toEqual([{ action: 'reconnect_result', found: false }]);
+  });
+
+  it('builds the snapshot from a read taken after adding the viewer', async () => {
+    mockFindById
+      .mockResolvedValueOnce({ ...baseExecution, status: 'running', checkpoint: { iteration: 1, steps: [] } })
+      .mockResolvedValueOnce({
+        ...baseExecution,
+        status: 'running',
+        checkpoint: { iteration: 2, steps: [{ type: 'thought', content: 'late' }] },
+      });
+
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1' }), {}, noopLogger);
+
+    expect(mockFindById).toHaveBeenCalledTimes(2);
+    expect(sentPayloads()[0]).toMatchObject({ found: true, steps: [{ type: 'thought', content: 'late' }] });
+  });
+
+  it('answers found:false for a missing run', async () => {
+    mockFindById.mockResolvedValueOnce(null);
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-3' }), {}, noopLogger);
+    expect(mockAddViewer).not.toHaveBeenCalled();
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-3', found: false }]);
+  });
+
+  it('answers found:false when subscribing throws, so the viewer does not spin forever', async () => {
+    mockFindById.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+    mockAddViewer.mockRejectedValueOnce(new Error('db down'));
+    await invoke(wsEvent({ command: 'subscribe', executionId: 'exec-1', requestId: 'req-4' }), {}, noopLogger);
+    expect(sentPayloads()).toEqual([{ action: 'reconnect_result', requestId: 'req-4', found: false }]);
   });
 
   it('removes this connection on unsubscribe', async () => {
