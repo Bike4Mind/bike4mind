@@ -156,6 +156,13 @@ describe('serveNextPair', () => {
     votes.findOutstanding.mockResolvedValueOnce(null).mockResolvedValueOnce(servedRow());
     expect((await service.serveNextPair('u1')).status).toBe('ready');
   });
+
+  it('reports empty instead of throwing when a serve race hit an already-voted pair', async () => {
+    const { service, votes } = build();
+    votes.serve.mockResolvedValue(null);
+    votes.findOutstanding.mockResolvedValue(null);
+    expect(await service.serveNextPair('u1')).toEqual({ status: 'empty' });
+  });
 });
 
 describe('submitVote', () => {

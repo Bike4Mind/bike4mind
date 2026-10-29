@@ -147,8 +147,8 @@ export function createArenaService(deps: ArenaServiceDeps) {
 
     // A concurrent request served this user first; show that pair rather than a second one.
     const winner = await viewOutstanding(userId);
-    if (!winner) throw new Error('Arena serve lost a race but no outstanding pair exists');
-    return winner;
+    // No outstanding row means the duplicate was this user's already-voted {userId, pairId}.
+    return winner ?? { status: 'empty' };
   }
 
   async function grantCredits(userId: string, voteId: string, pairId: string, credits: number): Promise<boolean> {
