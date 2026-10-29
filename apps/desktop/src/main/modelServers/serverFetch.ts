@@ -5,6 +5,7 @@ import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import type { FetchLike } from '@bike4mind/local-models';
 import { scopeOfIp, transportVerdict } from './addressPolicy';
+import { credentialRedactor, type CredentialRedactor } from './redact';
 
 /** Refused before anything was sent: wrong origin, or a transport rule (see addressPolicy). */
 export class ServerTransportError extends Error {
@@ -44,6 +45,12 @@ export interface ServerFetchDeps {
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const NO_BODY = new Set([204, 205, 304]);
+const responseRedactors = new WeakMap<Response, CredentialRedactor>();
+
+/** Uses the credential sent with this response's request, even after rotation or removal. */
+export function redactServerResponse(text: string, response: Response): string {
+  return responseRedactors.get(response)?.redact(text) ?? text;
+}
 
 /**
  * Fetch for one saved server, on Node's http/https rather than Chromium's network stack: certificates
@@ -100,6 +107,8 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
     });
 
     const status = response.statusCode ?? 0;
+    const redactor = credentialRedactor(credentials);
+    const scrub = (text: string) => redactor?.redact(text) ?? text;
     if (status < 200 || status > 599) {
       response.destroy();
       throw new TypeError(`${endpoint.label} answered with an invalid HTTP status (${status}).`);
@@ -110,9 +119,11 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
       const target = location && URL.canParse(location, url.href) ? new URL(location, url) : null;
       const crossOrigin = !target || target.origin !== endpoint.origin;
       throw new ServerRedirectError(
-        crossOrigin
-          ? `${endpoint.label} redirected to ${target?.origin ?? 'another address'}. Desktop does not follow redirects to another address, so its credentials stay with this server. Check the address.`
-          : `${endpoint.label} answered with a redirect to ${target.pathname}. Check the address, including any path.`,
+        scrub(
+          crossOrigin
+            ? `${endpoint.label} redirected to another address. Desktop does not follow redirects to another address, so its credentials stay with this server. Check the address.`
+            : `${endpoint.label} answered with a redirect. Check the address, including any path.`
+        ),
         crossOrigin
       );
     }
@@ -122,12 +133,50 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
     }
     const empty = NO_BODY.has(status) || init.method === 'HEAD';
     if (empty) response.resume();
-    return new Response(empty ? null : (Readable.toWeb(response) as ReadableStream<Uint8Array>), {
+    // Encoded error bodies cannot be safely scrubbed without decoding; omit them rather than trust
+    // a server-controlled content-encoding header to describe what consumers will actually parse.
+    const encoding = (response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
+    if (status >= 300 && redactor) {
+      let text: string | null = null;
+      if (!empty && encoding === 'identity') {
+        const read = await readCapped(response, ERROR_BODY_LIMIT);
+        text = redactor.redact(read.text);
+        // A credential cut at the limit could leave its start behind.
+        if (read.capped) text = `${text.slice(0, Math.max(0, text.length - (redactor.longest - 1)))}[truncated]`;
+      } else {
+        response.destroy();
+      }
+      if (init.signal?.aborted) throw init.signal.reason;
+      responseHeaders.delete('content-length');
+      responseHeaders.delete('content-encoding');
+      return new Response(text, { status, statusText: scrub(response.statusMessage ?? ''), headers: responseHeaders });
+    }
+    const result = new Response(empty ? null : (Readable.toWeb(response) as ReadableStream<Uint8Array>), {
       status,
-      statusText: response.statusMessage ?? '',
+      statusText: scrub(response.statusMessage ?? ''),
       headers: responseHeaders,
     });
+    if (redactor) responseRedactors.set(result, redactor);
+    return result;
   };
+}
+
+const ERROR_BODY_LIMIT = 1024 * 1024;
+
+async function readCapped(response: IncomingMessage, limit: number): Promise<{ text: string; capped: boolean }> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    for await (const chunk of response as AsyncIterable<Buffer>) {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > limit) break;
+    }
+  } catch {
+    // A body cut short still yields the status and whatever arrived.
+  }
+  response.destroy();
+  return { text: Buffer.concat(chunks).subarray(0, limit).toString('utf8'), capped: size > limit };
 }
 
 function plainHeaders(headers: RequestInit['headers']): Record<string, string> {

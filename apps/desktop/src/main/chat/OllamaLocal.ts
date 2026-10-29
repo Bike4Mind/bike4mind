@@ -197,6 +197,8 @@ export interface RemoteOllama {
   /** Adds the server's credentials and applies its transport rules; see createServerFetch. */
   fetch: FetchLike;
   hasCredentials(): boolean;
+  /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
+  redact: (text: string, response: Response) => string;
 }
 
 export class OllamaLocal {
@@ -408,13 +410,15 @@ export class OllamaLocal {
     for (let attempt = 0; ; attempt++) {
       // A fresh splitter per attempt: its state must not carry over from an abandoned reply.
       const sink = prefilled ? splitPrefilledReasoning(report) : report;
-      if (await readReply(body, sink)) return;
+      const server = this.server;
+      if (await readReply(body, sink, server ? text => server.redact(text, response) : undefined)) return;
       if (attempt === EMPTY_REPLY_RETRIES)
         throw new Error(
           `${model} ended its reply without writing anything. Send the message again or pick a larger model.`
         );
       const again = await send(sent);
       if (!again.ok || !again.body) throw await ollamaError(again, this.server);
+      response = again;
       body = again.body;
     }
   }
@@ -673,7 +677,8 @@ function toMessages(messages: CompletionMessage[]): OllamaMessage[] {
 /** False, with the final frame held back, when the model stopped without text, thinking or a tool call. */
 async function readReply(
   body: ReadableStream<Uint8Array>,
-  onEvent: (event: CompletionStreamEvent) => void
+  onEvent: (event: CompletionStreamEvent) => void,
+  redact: (text: string) => string = text => text
 ): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new StringDecoder('utf8');
@@ -687,7 +692,7 @@ async function readReply(
     else onEvent(event);
   };
   const consume = (line: string) => {
-    if (line.trim()) completed = emitLine(line, forward) || completed;
+    if (line.trim()) completed = emitLine(line, forward, redact) || completed;
   };
   try {
     while (true) {
@@ -707,7 +712,11 @@ async function readReply(
   return held === undefined;
 }
 
-function emitLine(line: string, onEvent: (event: CompletionStreamEvent) => void): boolean {
+function emitLine(
+  line: string,
+  onEvent: (event: CompletionStreamEvent) => void,
+  redact: (text: string) => string
+): boolean {
   if (!line.trim()) return false;
   let frame: unknown;
   try {
@@ -715,11 +724,15 @@ function emitLine(line: string, onEvent: (event: CompletionStreamEvent) => void)
   } catch {
     throw new Error('Ollama returned a malformed stream frame.');
   }
-  emitFrame(frame, onEvent);
+  emitFrame(frame, onEvent, redact);
   return !!frame && typeof frame === 'object' && 'done' in frame && frame.done === true;
 }
 
-function emitFrame(frame: unknown, onEvent: (event: CompletionStreamEvent) => void): void {
+function emitFrame(
+  frame: unknown,
+  onEvent: (event: CompletionStreamEvent) => void,
+  redact: (text: string) => string
+): void {
   if (!frame || typeof frame !== 'object') return;
   const raw = frame as {
     done?: unknown;
@@ -729,7 +742,7 @@ function emitFrame(frame: unknown, onEvent: (event: CompletionStreamEvent) => vo
     eval_count?: unknown;
     message?: { content?: unknown; thinking?: unknown; tool_calls?: unknown[] };
   };
-  if (typeof raw.error === 'string') throw new Error(raw.error);
+  if (typeof raw.error === 'string') throw new Error(redact(raw.error));
   if (typeof raw.message?.thinking === 'string' && raw.message.thinking)
     onEvent({ type: 'content', text: `<think>${raw.message.thinking}</think>` });
   if (typeof raw.message?.content === 'string' && raw.message.content)

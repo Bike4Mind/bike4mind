@@ -1,7 +1,14 @@
 import http, { type IncomingHttpHeaders } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createServerFetch, ServerRedirectError, ServerTransportError, type ServerFetchDeps } from './serverFetch';
+import {
+  createServerFetch,
+  redactServerResponse,
+  ServerRedirectError,
+  ServerTransportError,
+  type ServerFetchDeps,
+} from './serverFetch';
 
 const TOKEN = 'tok-secret-zz';
 
@@ -86,12 +93,27 @@ describe('createServerFetch', () => {
     const away = await failure(fetch(`${target.origin}/away`));
     expect(away).toBeInstanceOf(ServerRedirectError);
     expect((away as ServerRedirectError).crossOrigin).toBe(true);
-    expect(away.message).toContain(elsewhere.origin);
+    expect(away.message).toContain('another address');
     expect(elsewhere.seen).toHaveLength(0);
 
     const same = await failure(fetch(`${target.origin}/near`));
     expect(same).toBeInstanceOf(ServerRedirectError);
     expect((same as ServerRedirectError).crossOrigin).toBe(false);
+  });
+
+  it.each(['same-origin', 'cross-origin'])('does not quote encoded credentials in %s redirects', async kind => {
+    const secret = 'token/abc+123=';
+    const target = await serve((_req, res) => {
+      const path = `/${encodeURIComponent(secret)}`;
+      res.writeHead(302, { location: kind === 'same-origin' ? path : `https://${TOKEN}.example.test${path}` });
+      res.end();
+    });
+    const fetch = createServerFetch(endpoint(target.origin, { authorization: `Bearer ${secret}`, 'x-api-key': TOKEN }));
+    const error = await failure(fetch(`${target.origin}/`));
+    expect(error).toBeInstanceOf(ServerRedirectError);
+    expect(error.message).not.toContain(secret);
+    expect(error.message).not.toContain(encodeURIComponent(secret));
+    expect(error.message).not.toContain(TOKEN);
   });
 
   it('refuses plain http to a private address when there is a credential, and to a public one always', async () => {
@@ -167,6 +189,100 @@ describe('createServerFetch', () => {
     expect(error).toBeInstanceOf(TypeError);
     expect(error.message).toBe('fetch failed');
     expect(JSON.stringify({ message: error.message, cause: String(error.cause) })).not.toContain(TOKEN);
+  });
+
+  it('redacts the credential from an error body and status text the server echoes back', async () => {
+    const target = await serve((req, res) => {
+      const value = String(req.headers.authorization ?? req.headers['x-api-key']);
+      res.writeHead(req.url === '/401' ? 401 : 500, `Rejected ${value}`, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: `bad credential ${value}, token ${value.replace('Bearer ', '')}` }));
+    });
+    const bearer = createServerFetch(endpoint(target.origin));
+    const rejected = await bearer(`${target.origin}/401`);
+    expect(rejected.status).toBe(401);
+    expect(rejected.statusText).toBe('Rejected [redacted]');
+    expect(await rejected.json()).toEqual({ error: 'bad credential [redacted], token [redacted]' });
+
+    const header = createServerFetch(endpoint(target.origin, { 'x-api-key': 'k/ey"1' }));
+    const failed = await header(`${target.origin}/500`);
+    expect(failed.status).toBe(500);
+    const text = await failed.text();
+    expect(text).toBe(JSON.stringify({ error: 'bad credential [redacted], token [redacted]' }));
+  });
+
+  it('redacts a Go-escaped echo before the body is parsed', async () => {
+    const target = await serve((req, res) => {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({ error: `bad ${req.headers.authorization}` })
+          .replace(/&/g, '\\u0026')
+          .replace(/</g, '\\u003c')
+          .replace(/>/g, '\\u003e')
+      );
+    });
+    const fetch = createServerFetch(endpoint(target.origin, { authorization: 'Bearer tok&en<1>' }));
+    expect(await (await fetch(`${target.origin}/`)).json()).toEqual({ error: 'bad [redacted]' });
+  });
+
+  it.each([300, 305, 306])('redacts HTTP %i error bodies consumed by clients', async status => {
+    const target = await serve((_req, res) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: `bad ${TOKEN}` }));
+    });
+    const fetch = createServerFetch(endpoint(target.origin));
+    const response = await fetch(`${target.origin}/`);
+    expect(response.ok).toBe(false);
+    expect(await response.json()).toEqual({ error: 'bad [redacted]' });
+  });
+
+  it('drops a credential cut at the body limit and marks the body truncated', async () => {
+    const secret = 'sentinel-boundary-abcdef0123';
+    const target = await serve((_req, res) => {
+      res.writeHead(500, { 'content-type': 'text/plain' });
+      res.end(`${'x'.repeat(1024 * 1024 - 10)}${secret}tail`);
+    });
+    const fetch = createServerFetch(endpoint(target.origin, { 'x-api-key': secret }));
+    const text = await (await fetch(`${target.origin}/`)).text();
+    expect(text.endsWith('x[truncated]')).toBe(true);
+    expect(text).not.toContain(secret.slice(0, 10));
+  });
+
+  it('keeps an ordinary error body intact when the credential is a short word', async () => {
+    const target = await serve((_req, res) => {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end('{"error":"model failed to load"}');
+    });
+    const fetch = createServerFetch(endpoint(target.origin, { 'x-org': 'e' }));
+    expect(await (await fetch(`${target.origin}/`)).json()).toEqual({ error: 'model failed to load' });
+  });
+
+  it.each(['compressed', 'mislabeled'])('omits %s encoded error bodies and scrubs their status text', async kind => {
+    const text = JSON.stringify({ error: TOKEN });
+    const target = await serve((_req, res) => {
+      res.writeHead(500, `Rejected ${TOKEN}`, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+      res.end(kind === 'compressed' ? gzipSync(text) : text);
+    });
+    const fetch = createServerFetch(endpoint(target.origin));
+    const response = await fetch(`${target.origin}/`);
+    expect(response.status).toBe(500);
+    expect(response.statusText).toBe('Rejected [redacted]');
+    expect(response.headers.has('content-encoding')).toBe(false);
+    expect(await response.text()).toBe('');
+  });
+
+  it('keeps separate request redactors when credentials rotate or are removed', async () => {
+    const target = await serve(ok);
+    let credentials: Record<string, string> | null = { authorization: `Bearer ${TOKEN}` };
+    const fetch = createServerFetch({ origin: target.origin, label: 'gpu box', credentialHeaders: () => credentials });
+    const first = await fetch(`${target.origin}/`);
+    await first.text();
+    credentials = { authorization: 'Bearer replacement-secret' };
+    const second = await fetch(`${target.origin}/`);
+    await second.text();
+    credentials = null;
+    expect(redactServerResponse(`bad ${TOKEN}`, first)).toBe('bad [redacted]');
+    expect(redactServerResponse('bad replacement-secret', second)).toBe('bad [redacted]');
+    expect(redactServerResponse('ordinary reply', first)).toBe('ordinary reply');
   });
 
   it('reads the credential per request, so a change applies at once', async () => {
