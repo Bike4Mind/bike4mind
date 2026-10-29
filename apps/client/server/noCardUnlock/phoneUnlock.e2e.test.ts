@@ -215,6 +215,28 @@ describe('phone unlock start + verify', () => {
     expect(twilioCalls()).toEqual([]);
   });
 
+  it('does not spend the IP or network budget on a request the account cap refused', async () => {
+    const id = await seedUser();
+    const viaNetwork = (ip: string) => ({ headers: { 'x-real-ip': ip, 'cloudfront-viewer-asn': '64500' } });
+    for (let i = 0; i < 3; i++) {
+      await startPhoneUnlock(id, `+4477009003${i}0`, viaNetwork(`81.2.71.${i + 1}`));
+    }
+    const counters = () =>
+      Cache.find({ key: { $in: ['phone-unlock:send:asn:64500', 'phone-unlock:send:ip:81.2.71.9'] } }, 'key result')
+        .lean()
+        .then(rows => Object.fromEntries(rows.map(row => [row.key, row.result])));
+    const before = await counters();
+    expect(before).toEqual({ 'phone-unlock:send:asn:64500': { count: 3 } });
+
+    for (let i = 0; i < 5; i++) {
+      expect(await startPhoneUnlock(id, '+447700900399', viaNetwork('81.2.71.9'))).toEqual({
+        sent: false,
+        refusal: 'phone_rate_limited',
+      });
+    }
+    expect(await counters()).toEqual(before);
+  });
+
   it('caps sends per account and per source IP', async () => {
     const id = await seedUser();
     for (let i = 0; i < 3; i++) {

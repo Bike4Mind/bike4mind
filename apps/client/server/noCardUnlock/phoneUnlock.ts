@@ -83,8 +83,26 @@ async function bindPending(userId: string, phone: string): Promise<PhoneUnlockSt
 }
 
 /**
- * Order: free checks, then the send caps (so the blocklist and the claimed-number answers cannot be
- * probed without spending them), then the paid Lookup, then the paid SMS send.
+ * Narrowest scope first, stopping at the first refusal: each counter is spent only when every
+ * narrower one admitted the request, so one capped account cannot drain its IP's or network's budget.
+ */
+async function withinSendCaps(userId: string, req: ClientIpRequest, settings: NoCardUnlockSettings): Promise<boolean> {
+  const { asn } = getClientNetwork(req);
+  const caps: Array<[string, { limit: number; windowMs: number }]> = [
+    [`phone-unlock:send:user:${userId}`, PHONE_UNLOCK_SEND_LIMITS.perUser],
+    [`phone-unlock:send:ip:${otcIpBucket(getClientIp(req))}`, PHONE_UNLOCK_SEND_LIMITS.perIp],
+  ];
+  if (asn !== null) caps.push([`phone-unlock:send:asn:${asn}`, { limit: settings.phoneAsnDailyCap, windowMs: DAY_MS }]);
+  for (const [key, window] of caps) {
+    if (!(await withinLimit(key, window))) return false;
+  }
+  return true;
+}
+
+/**
+ * Order: free checks, then the send caps (so the blocklist answer cannot be probed without spending
+ * them), then the paid Lookup, then the paid SMS send. A number claimed by another account answers
+ * as sent without a send, so start never reveals a claim.
  */
 export async function startPhoneUnlock(
   userId: string,
@@ -110,15 +128,7 @@ export async function startPhoneUnlock(
   const credentials = twilioCredentials();
   if (!credentials) return refuse('disabled');
 
-  const { asn } = getClientNetwork(req);
-  const limits = [
-    withinLimit(`phone-unlock:send:user:${userId}`, PHONE_UNLOCK_SEND_LIMITS.perUser),
-    withinLimit(`phone-unlock:send:ip:${otcIpBucket(getClientIp(req))}`, PHONE_UNLOCK_SEND_LIMITS.perIp),
-    ...(asn === null
-      ? []
-      : [withinLimit(`phone-unlock:send:asn:${asn}`, { limit: settings.phoneAsnDailyCap, windowMs: DAY_MS })]),
-  ];
-  if ((await Promise.all(limits)).includes(false)) return refuse('phone_rate_limited');
+  if (!(await withinSendCaps(userId, req, settings))) return refuse('phone_rate_limited');
 
   if (isBlockedPhone(phone, settings.phoneBlockedPrefixes)) return refuse('phone_blocked');
   // A number another account claimed answers as sent but sends nothing, so start cannot be used to learn
