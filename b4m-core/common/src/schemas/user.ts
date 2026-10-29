@@ -249,6 +249,9 @@ export const selfUserResponseSchema = z.object({
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/)
         .optional(),
+      activity: z
+        .object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), ms: z.number().nonnegative(), lastAt: z.coerce.date() })
+        .optional(),
     })
     .optional(),
   // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.

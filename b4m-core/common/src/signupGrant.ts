@@ -37,6 +37,16 @@ export interface SignupGrant {
   dripCredits?: number;
   /** UTC day (YYYY-MM-DD) of the latest drip payout. */
   lastDripDay?: string;
+  /** Active-session time accrued on one UTC day, advanced by the server from heartbeat pings. */
+  activity?: { day: string; ms: number; lastAt: Date };
+}
+
+export const DEFAULT_SIGNUP_ACTIVE_SECONDS = 600;
+
+/** Zero, non-integer and out-of-range values fall back to the default rather than switching the drip off. */
+export function signupActiveSeconds(value: unknown): number {
+  const seconds = typeof value === 'string' && !value.trim() ? NaN : Number(value);
+  return Number.isInteger(seconds) && seconds >= 60 && seconds <= 7200 ? seconds : DEFAULT_SIGNUP_ACTIVE_SECONDS;
 }
 
 export function signupGrantRemaining(grant: SignupGrant): number {
