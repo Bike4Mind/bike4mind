@@ -13,6 +13,7 @@ import type { SkillMarketListingRef } from '@shared/skillMarket';
 import { isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
+import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { SkillMarketPanel } from './SkillMarketPanel';
@@ -342,11 +343,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    */
   const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
   const modelsInUse = useMemo<ModelsInUse>(() => {
-    const localName = (id: string | undefined) =>
-      catalog.models.find(model => model.id === id && isLocalBackend(model))?.name ?? null;
+    const inUse = (id: string | undefined) => {
+      const model = catalog.models.find(candidate => candidate.id === id && isLocalBackend(candidate));
+      return model ? { serverId: model.server?.id ?? LOCAL_SERVER_ID, name: model.name } : null;
+    };
     return {
-      active: localName(conversation.session?.model),
-      conversations: sessions.filter(session => !session.archived).flatMap(session => localName(session.model) ?? []),
+      active: inUse(conversation.session?.model),
+      conversations: sessions.filter(session => !session.archived).flatMap(session => inUse(session.model) ?? []),
     };
   }, [catalog.models, conversation.session?.model, sessions]);
   const block = composerBlock(
@@ -495,8 +498,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     async (text: string) => {
       const attached = draft.attachments;
       // Cleared before the await so the row does not sit under the composer while the turn is
-      // accepted; a rejected turn restores nothing, but its files are still on disk and named
-      // in the error.
+      // accepted; a rejected turn restores its text (see useConversation.send) but not its
+      // attachments.
       draft.clear();
       const accepted = await conversation.send(text, attached);
       // Main knows something this window did not: reread so the banner and Send gate catch up.

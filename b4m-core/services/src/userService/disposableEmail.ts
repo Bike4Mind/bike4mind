@@ -67,8 +67,10 @@ export const isAdminBlockedEmailDomain = async (
  * reject-tier source (REJECT_TIER_SOURCES). A refreshed-list hit never rejects an organization or
  * internal staff domain, since those lists change daily without review. The admin list applies
  * regardless of that toggle, which exists to work around a false positive in the lists. A failed
- * list read throws, so callers fail closed. Shared by registerUser and the free-credit eligibility check in
- * apps/client/server/auth/emailVerifiedGrants.ts (OAuth signup, email change) so they cannot drift.
+ * list read throws, so callers fail closed. Shared by registerUser, the OAuth signup gate in
+ * apps/client/server/utils/auth/verifyCallback.ts and the free-credit eligibility check in
+ * apps/client/server/auth/emailVerifiedGrants.ts (email change and admin signup-domain holds) so they
+ * cannot drift.
  */
 export const shouldBlockDisposableEmail = async (
   email: string,

@@ -34,14 +34,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-937 routes: 52 contracted, 9 aliases of another route, 199 with no static caller in `apps/client/app`.
+956 routes: 61 contracted, 9 aliases of another route, 207 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [...unmatchedApiPath] | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 223 | 0 | 207 | 7 | 0 | 9 | 30 |
+| admin | 228 | 0 | 207 | 12 | 0 | 9 | 30 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -59,7 +59,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| credits | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
+| credits | 4 | 0 | 1 | 3 | 0 | 0 | 0 |
 | data-lakes | 60 | 0 | 59 | 1 | 0 | 0 | 8 |
 | deep-agent | 5 | 0 | 3 | 2 | 0 | 0 | 0 |
 | documentation | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
@@ -125,7 +125,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | security | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
 | sessions | 30 | 1 | 28 | 2 | 0 | 0 | 4 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
-| skills | 19 | 0 | 3 | 16 | 0 | 0 | 0 |
+| skills | 21 | 0 | 3 | 18 | 0 | 0 | 0 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 15 | 0 | 7 | 1 | 0 | 7 | 7 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
@@ -136,11 +136,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | test | 4 | 0 | 0 | 0 | 0 | 4 | 4 |
 | tools | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | transforms | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
+| turnstile | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | usage | 2 | 0 | 1 | 0 | 0 | 1 | 1 |
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
-| users | 33 | 0 | 28 | 5 | 0 | 0 | 4 |
-| v1 | 50 | 46 | 44 | 0 | 0 | 6 | 39 |
+| users | 33 | 0 | 28 | 5 | 0 | 0 | 3 |
+| v1 | 59 | 55 | 53 | 0 | 0 | 6 | 48 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -337,6 +338,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/sessions/[id]/quests` | GET | jwt+key | `admin:*` | no | - | 0 |
 | `/api/admin/signup-anomaly` | GET | jwt | - | no | - | 1: `components/admin/Users/index.tsx` |
 | `/api/admin/signup-domain-holds` | GET, POST | jwt | `admin:*` | no | - | 1: `components/admin/SignupDomainHoldsTab.tsx` |
+| `/api/admin/signup-timeseries` | GET | jwt | - | no | - | 1: `components/admin/Signups/useSignupTimeseries.ts` |
 | `/api/admin/slack-app/create` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/CreateSlackAppModal.tsx` |
 | `/api/admin/slack-app/manifest-status` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
 | `/api/admin/slack-app/reconnect` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
@@ -381,9 +383,13 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/users/[userId]/grant-subscription` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
 | `/api/admin/users/[userId]/resend-email-change` | POST | jwt+key | `admin:*` | no | - | 2: `components/admin/EmailVerificationTab.tsx`, `components/admin/Users/Details/UserDetails.tsx` |
 | `/api/admin/users/[userId]/resend-verification` | POST | jwt+key | `admin:*` | no | - | 2: `components/admin/EmailVerificationTab.tsx`, `components/admin/Users/Details/UserDetails.tsx` |
+| `/api/admin/users/[userId]/sessions` | GET, DELETE | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserSessions.ts` |
+| `/api/admin/users/[userId]/sign-ins` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
+| `/api/admin/users/[userId]/signup-cluster` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
 | `/api/admin/users/[userId]/subscriptions` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
 | `/api/admin/users/[userId]/subscriptions/[subscriptionId]/credits` | PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
 | `/api/admin/users/[userId]/subscriptions/[subscriptionId]/remove` | DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
+| `/api/admin/users/[userId]/timeline` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
 | `/api/admin/users/[userId]/unlock-signup-grant` | POST | jwt | - | no | - | 1: `components/admin/Users/Details/Bike4MindUserDetails.tsx` |
 | `/api/admin/users/[userId]/unverify-email` | POST | jwt+key | `admin:*` | no | - | 2: `components/admin/EmailVerificationTab.tsx`, `components/admin/Users/Details/UserDetails.tsx` |
 | `/api/admin/users/[userId]/user-api-keys` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/userApiKeys.ts` |
@@ -597,6 +603,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/credits/balance` | GET | jwt | - | no | - | 1: `hooks/data/credits.ts` |
+| `/api/credits/no-card-unlock/github` | POST | jwt | - | no | - | 1: `hooks/data/noCardUnlock.ts` |
+| `/api/credits/no-card-unlock/work-email` | POST | jwt | - | no | - | 1: `hooks/data/noCardUnlock.ts` |
 | `/api/credits/transactions` | GET | jwt+key | - | no | - | 1: `hooks/data/credits.ts` |
 
 ### data-lakes
@@ -1341,6 +1349,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/skills/market/[id]/rating` | PUT | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/report` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/versions` | POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/bundles` | GET, POST | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/market/bundles/[id]` | PUT, DELETE | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/by-token/[token]` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/me` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/mine` | GET | jwt | - | no | - | 1: `hooks/data/skillMarket.ts` |
@@ -1411,7 +1421,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/subscribers` | GET | jwt+key | - | no | - | 1: `utils/subscriberAPICalls.ts` |
 | `/api/subscribers/[id]/delete` | DELETE | jwt+key | - | no | - | 1: `utils/subscriberAPICalls.ts` |
 | `/api/subscribers/create` | POST | handler | - | no | - | 1: `utils/subscriberAPICalls.ts` |
-| `/api/subscribers/generate-invite` | POST | jwt+key | - | no | - | 1: `components/admin/SubscribersTab.tsx` |
+| `/api/subscribers/generate-invite` | POST | jwt+key | - | no | - | 1: `components/admin/WaitlistTab.tsx` |
 | `/api/subscribers/waiting-count` | GET | jwt+key | - | no | - | 1: `utils/subscriberAPICalls.ts` |
 
 ### subscriptions
@@ -1456,6 +1466,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/transforms/batch` | POST | jwt+key | - | no | - | 0 |
 | `/api/transforms/batch/[id]` | GET | jwt+key | - | no | - | 0 |
+
+### turnstile
+
+| Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
+| --- | --- | --- | --- | --- | --- | --- |
+| `/api/turnstile/client-failure` | POST | handler | - | no | - | 1: `hooks/data/auth.ts` |
 
 ### usage
 
@@ -1506,7 +1522,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/users/[id]/organizations` | GET | jwt+key | - | no | - | 0 |
 | `/api/users/[id]/projects` | GET | jwt+key | - | no | - | 1: `hooks/data/projects.ts` |
 | `/api/users/[id]/recalculate-storage` | POST | jwt+key | - | no | - | 1: `components/admin/Users/Details/Bike4MindUserDetails.tsx` |
-| `/api/users/[id]/revoke-sessions` | POST | jwt+key | `admin:*` | no | - | 0 |
+| `/api/users/[id]/revoke-sessions` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminUserSessions.ts` |
 | `/api/users/[id]/slack-settings` | GET, PATCH | jwt+key | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubNotificationsSection.tsx`, `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
 | `/api/users/[id]/telemetry-export` | GET | jwt+key | - | no | - | 1: `components/ProfileModal/ExperimentalFeatureToggle.tsx` |
 | `/api/users/[id]/update` | PUT | jwt+key | - | no | - | 5: `components/AgentList/VoiceCustomizeModal.tsx`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx`, `components/Session/AISettings/AdvancedAIModal.tsx` +2 more |
@@ -1563,7 +1579,16 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/sessions` | GET, POST | jwt+key | GET: `notebooks:read`, `notebooks:write`; POST: `ai:generate`, `notebooks:write` | yes | - | 0 |
 | `/api/v1/sessions/[id]/clone` | POST | jwt+key | `notebooks:write` | yes | - | 0 |
 | `/api/v1/skills/market/[id]/claude-plugin.zip` | GET | jwt+key | `skills:read` | yes | - | 0 |
+| `/api/v1/skills/market/bundles/[id]/claude-plugin.zip` | GET | jwt+key | `skills:read` | yes | - | 0 |
 | `/api/v1/skills/market/claude-marketplace.json` | GET | jwt+key | `skills:read` | yes | - | 1: `components/SkillsManagement/ClaudeCodeMarketplaceTab.tsx` |
+| `/api/v1/skills/market/listings` | GET, POST | jwt+key | GET: `skills:read`, `skills:write`; POST: `skills:write` | yes | - | 0 |
+| `/api/v1/skills/market/listings/[id]` | GET, DELETE | jwt+key | GET: `skills:read`, `skills:write`; DELETE: `skills:write` | yes | - | 0 |
+| `/api/v1/skills/market/listings/[id]/import` | POST | jwt+key | `skills:write` | yes | - | 0 |
+| `/api/v1/skills/market/listings/[id]/versions` | POST | jwt+key | `skills:write` | yes | - | 0 |
+| `/api/v1/skills/market/listings/mine` | GET | jwt+key | `skills:write` | yes | - | 0 |
+| `/api/v1/skills/market/review-queue` | GET | jwt+key | `skills:review` | yes | - | 0 |
+| `/api/v1/skills/market/versions/[vid]/rescan` | POST | jwt+key | `skills:write` | yes | - | 0 |
+| `/api/v1/skills/market/versions/[vid]/review` | POST | jwt+key | `skills:review` | yes | - | 0 |
 | `/api/v1/text-refinements` | POST | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/transcriptions` | POST | jwt+key | `ai:generate` | yes | - | 0 |
 | `/api/v1/transcriptions/uploads` | POST | jwt+key | `ai:generate` | yes | - | 0 |

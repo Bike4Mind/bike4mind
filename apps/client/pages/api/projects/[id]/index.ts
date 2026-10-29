@@ -4,6 +4,7 @@ import { fabFileRepository, projectRepository, sessionRepository, userRepository
 import { projectService } from '@bike4mind/services';
 import { BadRequestError, UnprocessableEntityError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
+import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import {
   assertProjectsReadScope,
   assertProjectsWriteScope,
@@ -84,6 +85,9 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       },
     });
 
+    // Read before the delete: its cascade prunes the project's file list.
+    const cleanUpTargets = await projectRevokeCleanupTargets(project.id, undefined, req.logger);
+
     await projectService.deleteProject(
       req.user.id,
       { ...(req.query as any) },
@@ -96,6 +100,8 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         },
       }
     );
+
+    await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
 
     await logEvent(
       {

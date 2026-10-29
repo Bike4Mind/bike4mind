@@ -1,4 +1,4 @@
-import type { WorktreeRemoval } from './worktreeRemoval';
+import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -94,6 +94,12 @@ import type {
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type {
+  CuratedCheckResult,
+  CuratedList,
+  CuratedListSettings,
+  CuratedPullResult,
+  HfTokenResult,
+  HfTokenStatus,
   HubDetailResult,
   HubSearchRequest,
   HubSearchResult,
@@ -172,6 +178,9 @@ export const IPC_CHANNELS = {
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
   chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
+  chatListWorktrees: 'chat:list-worktrees',
+  chatRemoveWorktrees: 'chat:remove-worktrees',
+  chatRevealWorktree: 'chat:reveal-worktree',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
@@ -305,12 +314,28 @@ export const IPC_CHANNELS = {
   modelsListInstalled: 'models:list-installed',
   modelsSearch: 'models:search',
   modelsGetDetail: 'models:get-detail',
+  modelsListCurated: 'models:list-curated',
+  modelsGetCuratedPull: 'models:get-curated-pull',
+  modelsCheckCurated: 'models:check-curated',
+  /** Check now on the list itself: skips the 6 h throttle; the result arrives as modelsCuratedChanged. */
+  modelsCheckCuratedList: 'models:check-curated-list',
+  modelsCuratedSettings: 'models:curated-settings',
+  modelsCuratedSetEnabled: 'models:curated-set-enabled',
+  /** main -> renderer push; the curated list or its check status changed. */
+  modelsCuratedChanged: 'models:curated-changed',
   modelsListPulls: 'models:list-pulls',
   /** Starts a download; resolves when it finishes, fails or is cancelled. */
   modelsPull: 'models:pull',
   modelsCancelPull: 'models:cancel-pull',
+  /** Continues a pull paused by a dropped connection; resolves like `modelsPull`. */
+  modelsResumePull: 'models:resume-pull',
   modelsDismissPull: 'models:dismiss-pull',
   modelsRemove: 'models:remove',
+  /** Hugging Face sign-in: whether a token is saved, save one, forget it. None of them returns the token. */
+  modelsGetHfAccess: 'models:get-hf-access',
+  modelsSaveHfAccess: 'models:save-hf-access',
+  modelsClearHfAccess: 'models:clear-hf-access',
+  modelsHfAccessChanged: 'models:hf-access-changed',
   /** main -> renderer push of every pull in flight or failed. */
   modelsPullsChanged: 'models:pulls-changed',
   /** main -> renderer push: a pull finished or a model was removed. */
@@ -560,18 +585,36 @@ export interface DesktopApi {
     install(force: boolean): Promise<UpdateInstallResult>;
     onStateChanged(listener: (state: UpdateState) => void): () => void;
   };
+  /** The Models screen. `serverId` picks a saved model server; omitted means this computer. */
   models: {
-    getStatus(): Promise<ModelRuntimeStatus>;
-    listInstalled(): Promise<InstalledModelsResult>;
+    getStatus(serverId?: string): Promise<ModelRuntimeStatus>;
+    listInstalled(serverId?: string): Promise<InstalledModelsResult>;
     search(request: HubSearchRequest): Promise<HubSearchResult>;
     getDetail(repo: string): Promise<HubDetailResult>;
+    listCurated(serverId?: string): Promise<CuratedList>;
+    getCuratedPull(entryId: string, buildId: string, serverId?: string): Promise<CuratedPullResult>;
+    /** Checks an installed curated build against its review again, after Ollama could not describe it. */
+    checkCurated(entryId: string, buildId: string, serverId?: string): Promise<CuratedCheckResult>;
+    /** Checks for a newer curated list now. */
+    checkCuratedList(): Promise<void>;
+    getCuratedSettings(): Promise<CuratedListSettings>;
+    setCuratedEnabled(enabled: boolean): Promise<CuratedListSettings>;
+    onCuratedChanged(listener: () => void): () => void;
     listPulls(): Promise<ModelPull[]>;
     pull(request: ModelPullRequest): Promise<ModelPullResult>;
     cancelPull(key: string): Promise<void>;
+    resumePull(key: string): Promise<ModelPullResult>;
     dismissPull(key: string): Promise<void>;
-    remove(name: string): Promise<ModelRemoveResult>;
+    remove(name: string, serverId?: string): Promise<ModelRemoveResult>;
+    /** Whether a Hugging Face token is saved; the token itself never comes back to the renderer. */
+    getHfToken(): Promise<HfTokenStatus>;
+    /** Saves the token once Hugging Face accepts it. */
+    setHfToken(token: string): Promise<HfTokenResult>;
+    clearHfToken(): Promise<HfTokenResult>;
+    onHfTokenChanged(listener: (status: HfTokenStatus) => void): () => void;
     onPullsChanged(listener: (pulls: ModelPull[]) => void): () => void;
-    onInstalledChanged(listener: () => void): () => void;
+    /** Called with the id of the server (`local` for this computer) whose models changed. */
+    onInstalledChanged(listener: (serverId: string) => void): () => void;
   };
   auth: {
     getState(): Promise<AuthState>;
@@ -691,6 +734,12 @@ export interface DesktopApi {
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
     inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
+    listWorktrees(directory: string): Promise<AppWorktree[]>;
+    /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */
+    removeWorktrees(directory: string, paths?: string[]): Promise<WorktreeSweepItem[]>;
+    /** Reveals a currently listed worktree in the file manager; false when it is not listed. */
+    revealWorktree(directory: string, path: string): Promise<boolean>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */

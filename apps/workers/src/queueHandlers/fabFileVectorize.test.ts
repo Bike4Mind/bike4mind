@@ -153,6 +153,7 @@ vi.mock('@bike4mind/common', async () => {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
     getQuestErrorCode: actual.getQuestErrorCode,
+    isTerminalCreditRefusal: actual.isTerminalCreditRefusal,
     usdToCredits: actual.usdToCredits,
     // Pinned: settlement rounding is a coin flip.
     usdToCreditsStochastic: vi.fn(() => 1),
@@ -1572,6 +1573,21 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     expect(h.getVector).not.toHaveBeenCalled();
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'You do not have enough credits for file indexing.');
+  });
+
+  it('fails the file without a retry deferral, and consumes the message, on the free-tier daily cap', async () => {
+    const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+    const message = 'Daily free limit reached';
+    h.reserveRequestCredits.mockRejectedValue(
+      new actual.TooManyRequestsError(message, { errorCode: 'daily_free_limit_reached', retryAfter: 3600 })
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', message);
   });
 
   it('refunds the reservation when the provider call fails', async () => {

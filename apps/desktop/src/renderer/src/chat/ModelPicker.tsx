@@ -50,6 +50,38 @@ export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] 
   return [...groups.values()];
 }
 
+/** Newest release first; undated models (local, saved servers) follow, each run in its incoming order. */
+export function sortByRecency(models: readonly ChatModelOption[]): ChatModelOption[] {
+  return [...models].sort((a, b) => {
+    if (a.releaseDate && b.releaseDate)
+      return a.releaseDate < b.releaseDate ? 1 : a.releaseDate > b.releaseDate ? -1 : 0;
+    return a.releaseDate ? -1 : b.releaseDate ? 1 : 0;
+  });
+}
+
+/** A saved server's rows sit under its own heading, so they name no provider. */
+function providerLabel(model: ChatModelOption): string | undefined {
+  return model.server ? undefined : model.backend;
+}
+
+/**
+ * Each row's visible secondary line, keyed by model id. Unavailable reasons replace provider/id
+ * details so filtering and rendering agree even when a server goes down.
+ */
+export function rowDetails(models: readonly ChatModelOption[]): Map<string, string | undefined> {
+  const rowKey = (model: ChatModelOption) => `${model.server?.id ?? ''}\n${model.name}\n${providerLabel(model) ?? ''}`;
+  const counts = new Map<string, number>();
+  for (const model of models) counts.set(rowKey(model), (counts.get(rowKey(model)) ?? 0) + 1);
+  return new Map(
+    models.map(model => {
+      if (model.unavailable !== undefined) return [model.id, model.unavailable];
+      const provider = providerLabel(model);
+      if ((counts.get(rowKey(model)) ?? 0) < 2) return [model.id, provider];
+      return [model.id, provider ? `${provider} - ${model.id}` : model.id];
+    })
+  );
+}
+
 /** The first model row of the menu the filter box sits in - the one the query narrowed to. */
 function topMatch(filterInput: HTMLElement): HTMLElement | null {
   return (
@@ -130,11 +162,15 @@ export function ModelPicker({
   const unavailable = missing && !selecting;
   const serverDown = models.find(model => model.id === modelId)?.unavailable;
 
+  const details = useMemo(() => rowDetails(models), [models]);
   const matches = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    if (!query) return models;
-    return models.filter(model => model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query));
-  }, [models, filter]);
+    const sorted = sortByRecency(models);
+    if (!query) return sorted;
+    return sorted.filter(model =>
+      [model.name, details.get(model.id)].some(text => text?.toLowerCase().includes(query))
+    );
+  }, [models, details, filter]);
   const groups = useMemo(() => groupByServer(matches), [matches]);
 
   const label =
@@ -290,17 +326,19 @@ export function ModelPicker({
               >
                 <Stack sx={{ minWidth: 0 }}>
                   <Typography level="body-sm" noWrap>
-                    {model.id === modelId ? '• ' : ''}
+                    {model.id === modelId ? '\u2022 ' : ''}
                     {model.name}
                   </Typography>
-                  <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                    {model.unavailable ?? (
-                      <>
-                        {model.server ? '' : model.backend ? `${model.backend} - ` : ''}
-                        {model.id}
-                      </>
-                    )}
-                  </Typography>
+                  {details.get(model.id) && (
+                    <Typography
+                      level="body-xs"
+                      textColor="text.tertiary"
+                      noWrap
+                      data-testid="model-picker-option-detail"
+                    >
+                      {details.get(model.id)}
+                    </Typography>
+                  )}
                 </Stack>
               </MenuItem>
             ))}

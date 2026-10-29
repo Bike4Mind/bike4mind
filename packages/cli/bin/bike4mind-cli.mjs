@@ -19,6 +19,7 @@ import { dirname, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { splitEnvFlags } from './envFlags.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -30,28 +31,14 @@ const require = createRequire(import.meta.url);
 const { version: cliVersion } = require('../package.json');
 
 // --- API environment flags (--dev / --prod) ---
-// Intercept these BEFORE yargs parses argv. They're accepted with either a
-// single or double dash (e.g. `b4m -prod` and `b4m --prod` both work), but
-// single-dash multi-char tokens would otherwise be split into clustered short
-// flags by yargs (`-prod` -> `-p -r -o -d`, colliding with -p/--prompt). We pull
-// them out here, record the target, and strip them so yargs sees a clean argv.
-const ENV_FLAG_MAP = {
-  '--dev': 'dev', '-dev': 'dev', '--local': 'dev', '-local': 'dev',
-  '--prod': 'prod', '-prod': 'prod', '--production': 'prod', '-production': 'prod',
-};
-let envTarget = null;
-{
-  const cleaned = [];
-  for (const token of process.argv.slice(2)) {
-    if (Object.prototype.hasOwnProperty.call(ENV_FLAG_MAP, token)) {
-      envTarget = ENV_FLAG_MAP[token]; // last one wins
-    } else {
-      cleaned.push(token);
-    }
-  }
-  // Rebuild argv without the env tokens so yargs doesn't choke on them.
-  process.argv = [process.argv[0], process.argv[1], ...cleaned];
+// Intercept these BEFORE yargs parses argv (see envFlags.mjs) and strip them so
+// yargs sees a clean argv.
+const { cleaned: cleanedArgs, envTarget, envFlags, mcpServe, serveLocal } = splitEnvFlags(process.argv.slice(2));
+if (serveLocal && envTarget) {
+  process.stderr.write(`Error: mcp serve --local ignores the backend; drop ${envFlags.join(' ')}.\n`);
+  process.exit(1);
 }
+process.argv = [process.argv[0], process.argv[1], ...cleanedArgs];
 
 const argv = await yargs(hideBin(process.argv))
   // --dev / --prod are declared here ONLY so they appear in `--help`. The actual
@@ -93,7 +80,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .option('output-format', {
     type: 'string',
-    description: 'Output format when using -p: text (default), json, stream-json (NDJSON); json also applies to b4m models ls/search/show',
+    description: 'Output format when using -p: text (default), json, stream-json (NDJSON); json also applies to b4m models ls/search/show/curated',
     choices: ['text', 'json', 'stream-json'],
     default: 'text',
   })
@@ -204,6 +191,11 @@ const argv = await yargs(hideBin(process.argv))
             description: 'Serve over streamable HTTP instead of stdio',
             default: false,
           })
+          .option('local', {
+            type: 'boolean',
+            description: 'Serve only the local model tools (models_*), with no Bike4Mind backend. Stdio only',
+            default: false,
+          })
           .option('port', {
             type: 'number',
             description: 'Port for --http mode',
@@ -222,6 +214,7 @@ const argv = await yargs(hideBin(process.argv))
             description: 'Bearer token required by --http mode (overrides B4M_MCP_TOKEN; generated and printed when unset). Visible in process listings; prefer B4M_MCP_TOKEN',
           })
           .example('b4m mcp serve', 'Serve over stdio for Claude Desktop and other local clients')
+          .example('b4m mcp serve --local', 'Serve only the local model tools, without a backend')
           .example('b4m mcp serve --http --port 7000', 'Serve over streamable HTTP on port 7000');
       }, async () => {
         // Handled by external command handler
@@ -325,6 +318,9 @@ const argv = await yargs(hideBin(process.argv))
       }, async () => {
         // Handled by external command handler
       })
+      .command('curated', 'List the models Bike4Mind picked, with picks for this computer first', {}, async () => {
+        // Handled by external command handler
+      })
       .command('pull <ref>', 'Download a model after showing its size and license', (yargs) => {
         return yargs
           .positional('ref', {
@@ -339,6 +335,11 @@ const argv = await yargs(hideBin(process.argv))
           .option('accept-license', {
             type: 'boolean',
             description: 'Accept a non-permissive model license without a prompt',
+            default: false,
+          })
+          .option('force', {
+            type: 'boolean',
+            description: 'Download even when the fit check rates the model too large for this machine',
             default: false,
           })
           .example('b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M', 'Pull a Hugging Face GGUF build')
@@ -363,7 +364,7 @@ const argv = await yargs(hideBin(process.argv))
         // Handled by external command handler
       })
       .example('b4m models ls --ollama-host http://127.0.0.1:11434', 'Use and remember an Ollama host')
-      .demandCommand(1, 'You must provide a subcommand (ls, search, show, pull, rm, use)');
+      .demandCommand(1, 'You must provide a subcommand (ls, search, show, curated, pull, rm, use)');
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
@@ -501,7 +502,14 @@ if (envTarget) {
       ({ applyEnvironmentFlag } = await import('../dist/commands/envCommand.mjs'));
     }
 
-    await applyEnvironmentFlag(envTarget);
+    // On `mcp serve` stdout is the JSON-RPC stream, so the banner goes to stderr.
+    const log = console.log;
+    if (mcpServe) console.log = console.error;
+    try {
+      await applyEnvironmentFlag(envTarget);
+    } finally {
+      console.log = log;
+    }
   } catch (error) {
     console.error('Failed to switch API environment:', error.message);
     process.exit(1);

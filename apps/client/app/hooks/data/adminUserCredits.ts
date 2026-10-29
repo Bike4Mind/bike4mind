@@ -3,7 +3,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import {
   ADMIN_LEDGER_PAGE_SIZE,
   type AdminCreditSummary,
-  type AdminLedgerKind,
+  type AdminLedgerFilter,
   type AdminLedgerPage,
   type AdminRevokeAllApiKeysResponse,
   type AdminRotateApiKeyResponse,
@@ -12,13 +12,19 @@ import {
 const userPath = (userId: string) => `/api/admin/users/${encodeURIComponent(userId)}`;
 const keyPath = (keyId: string) => `/api/admin/user-api-keys/${encodeURIComponent(keyId)}`;
 
-/** The full credit ledger, newest first, one server page (cursor) at a time. */
-export const useAdminCreditLedger = (userId: string, kind: AdminLedgerKind | undefined) =>
+/** The filter as query params; unset fields are left out. */
+const filterParams = (filter: AdminLedgerFilter): Record<string, string> =>
+  Object.fromEntries(Object.entries(filter).filter((entry): entry is [string, string] => !!entry[1]));
+
+/**
+ * The credit ledger under `filter`, newest first, one server page (cursor) at a time. `enabled: false`
+ * holds the query while the filter is not one the server would accept (e.g. a reversed date range).
+ */
+export const useAdminCreditLedger = (userId: string, filter: AdminLedgerFilter, { enabled = true } = {}) =>
   useInfiniteQuery({
-    queryKey: ['admin', 'users', userId, 'credit-ledger', kind ?? 'all'],
+    queryKey: ['admin', 'users', userId, 'credit-ledger', filterParams(filter)],
     queryFn: async ({ pageParam }): Promise<AdminLedgerPage> => {
-      const params: Record<string, string> = { limit: String(ADMIN_LEDGER_PAGE_SIZE) };
-      if (kind) params.kind = kind;
+      const params: Record<string, string> = { ...filterParams(filter), limit: String(ADMIN_LEDGER_PAGE_SIZE) };
       if (pageParam) params.cursor = pageParam;
       const response = await api.get<AdminLedgerPage>(`${userPath(userId)}/credit-ledger`, { params });
       return response.data;
@@ -26,6 +32,7 @@ export const useAdminCreditLedger = (userId: string, kind: AdminLedgerKind | und
     getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
     initialPageParam: undefined as string | undefined,
     staleTime: 1000 * 30,
+    enabled,
   });
 
 export const useAdminCreditSummary = (userId: string) =>
@@ -46,16 +53,18 @@ export type CreditLedgerExport = { blob: Blob; fileName: string; truncated: bool
 /** Downloads the server-capped CSV for the given filter; the caller saves the blob. */
 export const fetchCreditLedgerExport = async (
   userId: string,
-  kind: AdminLedgerKind | undefined
+  filter: AdminLedgerFilter
 ): Promise<CreditLedgerExport> => {
   const response = await api.get<Blob>(`${userPath(userId)}/credit-ledger-export`, {
-    params: kind ? { kind } : {},
+    params: filterParams(filter),
     responseType: 'blob',
   });
   const disposition: unknown = response.headers['content-disposition'];
+  // Mirrors the name credit-ledger-export.ts sets, minus the day, for when the header is unreadable.
+  const narrowed = filter.model || filter.source || filter.from || filter.to ? '-filtered' : '';
   const fileName =
     (typeof disposition === 'string' ? disposition.match(/filename="(.+)"/)?.[1] : undefined) ??
-    `credits-${userId}-${kind ?? 'all'}.csv`;
+    `credits-${userId}-${filter.kind ?? 'all'}${narrowed}.csv`;
   // The server only knows it hit the cap after the body has started, so it marks that with a final line.
   const truncated = (await response.data.slice(-200).text()).includes(EXPORT_TRUNCATED_MARKER);
   return { blob: response.data, fileName, truncated };

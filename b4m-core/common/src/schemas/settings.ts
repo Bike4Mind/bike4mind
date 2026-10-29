@@ -556,6 +556,7 @@ export const SettingKeySchema = z.enum([
   'SlackFeedbackWebhookUrl',
   'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
+  'SlackSubscriptionsWebhookUrl',
   'SlackSecurityAlertsWebhookUrl',
 
   // Admin Audit Log alerting
@@ -2027,6 +2028,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'SlackLiveopsWebhookUrl', order: 5 },
       { key: 'SlackUserActivityWebhookUrl', order: 6 },
       { key: 'SlackEmailAuditWebhookUrl', order: 6.5 },
+      { key: 'SlackSubscriptionsWebhookUrl', order: 6.6 },
       { key: 'SlackFeedbackWebhookUrl', order: 6.75 },
       { key: 'SlackNonProdFeedbackWebhookUrl', order: 6.8 },
       { key: 'FeedbackSendEmailUsername', order: 7 },
@@ -2294,7 +2296,7 @@ export const API_SERVICE_GROUPS = {
   FREE_TIER_MODELS: {
     id: 'freeTierModelsService',
     name: 'Free-Tier Models',
-    description: 'Which text models accounts without a paid plan may call, on every surface',
+    description: 'Which models accounts without a paid plan may call across all modalities',
     icon: 'Security',
     settings: [
       { key: 'freeTierModelGateEnabled', order: 1 },
@@ -3501,6 +3503,17 @@ export const settingsMap = {
     order: 8,
     isSensitive: true,
   }),
+  SlackSubscriptionsWebhookUrl: makeStringSetting({
+    key: 'SlackSubscriptionsWebhookUrl',
+    name: 'Subscriptions Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL for subscription lifecycle posts: new paid subscriptions, plan changes, scheduled and reverted cancellations, ended subscriptions and first failed payments. Posts come from production only and carry internal IDs and admin links, never customer names or emails. Falls back to the default webhook URL when empty.',
+    category: 'Feedback',
+    group: API_SERVICE_GROUPS.FEEDBACK.id,
+    order: 6.6,
+    isSensitive: true,
+  }),
   SlackSecurityAlertsWebhookUrl: makeStringSetting({
     key: 'SlackSecurityAlertsWebhookUrl',
     name: 'Security Alerts Channel Webhook URL',
@@ -3838,7 +3851,7 @@ export const settingsMap = {
     // Self-host has no billing stack, so every account would read as free; the gate is hosted-only by default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description:
-      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) to the free-tier text models, on web chat, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
+      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) or a past credit purchase to the free-tier model allowlist across all modalities, on web chat, media generation, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 1,
@@ -3857,7 +3870,7 @@ export const settingsMap = {
       ChatModels.GEMINI_2_5_FLASH_LITE,
     ],
     description:
-      'Text model IDs free accounts may call while the Free-Tier Model Gate is on, one per line. The Default API Model is always allowed so a free account can still chat. A model missing here, including a newly added one, is paid-only.',
+      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line. Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. A model missing here, including a newly added one and the Default API Model, is paid-only. A free account that calls the chat or agent-execution API without a model starts on the first text model listed here that it can use.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 2,

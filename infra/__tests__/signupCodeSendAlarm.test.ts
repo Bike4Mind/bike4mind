@@ -51,6 +51,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('SIGNUP_CODE_SEND_ALARM_PER_HOUR', '12');
   vi.stubEnv('ENABLE_MONITORING', undefined);
+  vi.stubEnv('SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN', undefined);
   vi.stubGlobal('aws', { cloudwatch: { LogMetricFilter: resources.filter, MetricAlarm: resources.alarm } });
   resources.logGroup = { name: 'server-logs' };
   resources.topic = { arn: 'alarm-topic' };
@@ -89,6 +90,28 @@ describe('parseAlarmThreshold', () => {
 });
 
 describe('signup code send alarm wiring', () => {
+  it('counts each committed grant band and routes a configured review spike to both alarm channels', async () => {
+    vi.stubEnv('SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN', '7');
+    await loadAlarms();
+    for (const band of ['full', 'reduced', 'review']) {
+      expect(callFor(resources.filter, `signupGrant${band}Filter`)).toMatchObject({
+        pattern: `%\\x22message\\x22:\\x22signup-grant-assessed-${band}\\x22%`,
+        metricTransformation: { name: `SignupGrant_${band}`, namespace: 'test-app/production/Signup', value: '1' },
+      });
+    }
+    expect(callFor(resources.alarm, 'signupGrantReviewBurst')).toMatchObject({
+      metricName: 'SignupGrant_review',
+      threshold: 7,
+      period: 300,
+      alarmActions: ['alarm-topic', 'email-topic'],
+      okActions: ['alarm-topic', 'email-topic'],
+    });
+  });
+
+  it('leaves the review alarm off without private configuration', async () => {
+    await loadAlarms();
+    expect(callFor(resources.alarm, 'signupGrantReviewBurst')).toBeUndefined();
+  });
   it('counts dispatch messages, excluding request timing and spoofed metadata', async () => {
     await loadAlarms();
     expect(resources.filter).toHaveBeenCalledWith('signupCodeSendsFilter', {

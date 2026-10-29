@@ -3,7 +3,7 @@ import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
   isAbliteratedModel,
-  type InstalledModel,
+  loadCuratedManifest,
   type PullOptions,
 } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -19,12 +19,14 @@ import {
   CancelledError,
   NO_LICENSE,
   abortable,
+  buildTag,
   clean,
   formatBytes,
   hiddenAbliteratedMessage,
   hubAccessMessage,
+  licenseName,
   listInstalled,
-  normalizeModelName,
+  findInstalledModel,
   planPull,
   rankSearchHits,
   removeInstalled,
@@ -33,12 +35,15 @@ import {
   requireUnchangedManifest,
   resolveRuntimeTarget,
   runtimeLabel,
+  sameModelName,
   shortDigest,
   type HubClient,
+  type LicenseInfo,
   type ModelSourceDeps,
   type PullPlan,
   type RuntimeTarget,
 } from '../models/localModels.js';
+import { FIT_LABELS, fitForPlan, machineReader, type MachineReader, type ModelFit } from '../models/fit.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import { errorResult, toResult } from './tools.js';
 
@@ -46,6 +51,7 @@ type Extra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 export interface ModelToolsDeps extends Omit<ModelSourceDeps, 'signal'> {
   defaultModel: () => Promise<string | undefined>;
+  machine: MachineReader;
 }
 
 /** How long the user has to answer an elicitation prompt (ms). */
@@ -73,14 +79,22 @@ const pullShape = {
     .min(1)
     .max(300)
     .describe('An Ollama name (model[:tag]) or a Hugging Face GGUF repo (owner/repo[:quant], Q4_K_M by default)'),
+  force: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Go ahead when the fit check rates the model too large for this machine. Pass true only when the user, told the verdict, explicitly asks to download it anyway. It never skips the user approval.'
+    ),
 };
 
 const removeShape = {
   name: z.string().trim().min(1).max(300).describe('The installed model name, as models_list shows it'),
 };
 
+const baseLicense = (license: LicenseInfo) => (license.base ? [license.base] : []);
+
 /** What the user must see before approving a pull. */
-function pullSummary(plan: PullPlan) {
+function pullSummary(plan: PullPlan, fit: ModelFit) {
   const runtime = runtimeLabel(plan.target);
   if (plan.kind === 'ollama') {
     const { license } = plan;
@@ -91,17 +105,18 @@ function pullSummary(plan: PullPlan) {
       size: formatBytes(plan.manifest.sizeBytes),
       revision: null,
       digest: shortDigest(plan.manifest.digest),
-      licenses: [license.label],
-      license: { label: license.label, link: license.link, permissive: !license.restricted },
+      licenses: [license.label, ...baseLicense(license)],
+      license: { label: licenseName(license), link: license.link, permissive: !license.restricted },
       acknowledgementRequired: license.restricted,
       runtime,
+      fit,
     };
   }
   const { detail, build, license } = plan;
   return {
     source: 'huggingface' as const,
     model: plan.id,
-    quant: clean(build.quant),
+    label: clean(build.label),
     files: build.files.map(file => ({ path: clean(file.path), sizeBytes: file.sizeBytes })),
     sizeBytes: build.sizeBytes,
     size: formatBytes(build.sizeBytes),
@@ -110,11 +125,12 @@ function pullSummary(plan: PullPlan) {
       visionProjectorUpTo: formatBytes(plan.projectorBytes),
     }),
     revision: clean(detail.revision),
-    licenses: detail.licenses.map(clean),
-    license: { label: license.label, link: license.link, permissive: !license.restricted },
+    licenses: [...detail.licenses.map(clean), ...baseLicense(license)],
+    license: { label: licenseName(license), link: license.link, permissive: !license.restricted },
     acknowledgementRequired: license.restricted,
     gated: detail.gated,
     runtime,
+    fit,
     ...(isAbliteratedModel(detail) && { caution: 'This is an abliterated or uncensored build.' }),
     ...(detail.ollamaNeedsSshKey && {
       sshKeyNote: `Ollama downloads ${detail.private ? 'private' : 'gated'} repos with its own key: add ~/.ollama/id_ed25519.pub of the Ollama host at ${HUGGING_FACE_SSH_KEYS_URL} if you have not.`,
@@ -145,7 +161,8 @@ function licenseSentence(summary: PullSummary): string {
 
 function pullMessage(summary: PullSummary): string {
   return [
-    `Download ${summary.model}${'quant' in summary ? ` ${summary.quant}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
+    `Download ${summary.model}${'label' in summary ? ` ${summary.label}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
+    `Fit: ${FIT_LABELS[summary.fit.verdict]}. ${summary.fit.detail}`,
     ...('files' in summary ? [`File: ${summary.files.map(file => file.path).join(', ')}`] : []),
     ...(summary.revision ? [`Revision: ${summary.revision}`] : []),
     ...('digest' in summary ? [`Digest: ${summary.digest}`] : []),
@@ -181,18 +198,16 @@ function pullElicitation(summary: PullSummary): ElicitRequestFormParams {
 const shellWord = (word: string) => (/^[\w.:/@-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
 
 /** The `b4m models` command that does the same on the same runtime, asking the user in their terminal. */
-function terminalCommand(target: RuntimeTarget, subcommand: 'pull' | 'rm', subject: string): string {
+function terminalCommand(target: RuntimeTarget, subcommand: 'pull' | 'rm', subject: string, flags = ''): string {
   // A host from the server's environment is not in the user's shell; --ollama-host would save it to their config.
   const host = target.source === 'env' ? `B4M_OLLAMA_HOST=${shellWord(target.runtime.baseUrl)} ` : '';
-  return `${host}b4m models ${subcommand} ${shellWord(subject)}`;
+  return `${host}b4m models ${subcommand} ${shellWord(subject)}${flags}`;
 }
 
 /** The ref `b4m models pull` resolves to the same build. */
 function pullRef(plan: PullPlan): string {
   if (plan.kind === 'ollama') return plan.name;
-  const ref = plan.build.ollamaRef;
-  const tag = ref ? ref.slice(ref.lastIndexOf(':') + 1) : plan.build.quant;
-  return `${plan.detail.id}:${tag}`;
+  return `${plan.detail.id}:${buildTag(plan.build)}`;
 }
 
 function pullProgress(extra: Extra): PullOptions['onProgress'] {
@@ -217,14 +232,6 @@ function pullProgress(extra: Extra): PullOptions['onProgress'] {
   };
 }
 
-function findInstalled(models: InstalledModel[], name: string): InstalledModel | undefined {
-  const wanted = name.replace(/^library\//i, '');
-  return (
-    models.find(model => model.name === name || model.name === wanted) ??
-    models.find(model => model.name === `${wanted}:latest`)
-  );
-}
-
 export function localModelToolsDeps(configStore: ConfigStore | undefined): ModelToolsDeps {
   let hub: HubClient | undefined;
   return {
@@ -233,6 +240,8 @@ export function localModelToolsDeps(configStore: ConfigStore | undefined): Model
     resolveRuntime: async () =>
       resolveRuntimeTarget({ env: process.env.B4M_OLLAMA_HOST, config: (await configStore?.load())?.ollamaHost }),
     defaultModel: async () => (await configStore?.load())?.defaultModel,
+    machine: machineReader(),
+    curated: () => loadCuratedManifest(message => console.error(message)),
   };
 }
 
@@ -316,21 +325,33 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
     {
       title: 'Download a local model',
       description:
-        "Download a model to the user's local Ollama from an Ollama name (model[:tag]) or a Hugging Face GGUF repo (owner/repo[:quant], Q4_K_M by default). Nothing downloads without the user's own approval. When the client supports elicitation, the user is asked directly with the size, file, revision and every license, and a license that is not all permissive needs its own tick. Without elicitation nothing downloads: the result is that preview plus a `b4m models pull` command for the user to run in a terminal, where the CLI asks them. No argument of this tool approves a download. Gated repos return the steps to get access instead. Refs to hosts other than Hugging Face and Ollama are refused.",
+        "Download a model to the user's local Ollama from an Ollama name (model[:tag]) or a Hugging Face GGUF repo (owner/repo[:quant], Q4_K_M by default). Nothing downloads without the user's own approval. When the client supports elicitation, the user is asked directly with the size, file, revision and every license, and a license that is not all permissive needs its own tick. Without elicitation nothing downloads: the result is that preview plus a `b4m models pull` command for the user to run in a terminal, where the CLI asks them. No argument of this tool approves a download. Every preview carries a fit verdict for this machine (fits, tight, too-large or unknown); a too-large model is refused before the user is asked unless force is true, which only lets the user be asked. Gated repos return the steps to get access instead. Refs to hosts other than Hugging Face and Ollama are refused.",
       inputSchema: pullShape,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     (args, extra) =>
       run(async () => {
         const plan = await planPull(args.ref, sources(extra.signal), 'models_pull ref');
-        const summary = pullSummary(plan);
+        const fit = await abortable(fitForPlan(plan, deps.machine), extra.signal);
+        const summary = pullSummary(plan, fit);
+        const tooLarge = fit.verdict === 'too-large';
+        if (tooLarge && !args.force) {
+          return toResult({
+            status: 'too-large',
+            downloaded: false,
+            ...summary,
+            message: fit.gpuUnread
+              ? 'Nothing was downloaded: the fit check rates this model too large from system RAM alone, since the GPU could not be read. Tell the user that; if their GPU can hold it and they ask to download it anyway, call again with force: true.'
+              : 'Nothing was downloaded: the fit check rates this model too large for this machine. Tell the user, and suggest a smaller quant or model. Call again with force: true only if the user then asks to download it anyway.',
+          });
+        }
 
         if (!canElicit()) {
           return toResult({
             status: 'confirm-in-terminal',
             downloaded: false,
             ...summary,
-            command: terminalCommand(plan.target, 'pull', pullRef(plan)),
+            command: terminalCommand(plan.target, 'pull', pullRef(plan), tooLarge ? ' --force' : ''),
             userApproval:
               'Nothing was downloaded. This MCP client cannot ask the user, so the download has to be approved in a terminal: show the user the size and licenses above and give them the command. The CLI shows them again and asks before downloading' +
               (summary.acknowledgementRequired ? ', and asks them separately to accept the license.' : '.'),
@@ -398,7 +419,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
       run(async () => {
         const target: RuntimeTarget = await abortable(deps.resolveRuntime(), extra.signal);
         requireRemovable(target);
-        const model = findInstalled(await abortable(target.runtime.list(), extra.signal), args.name);
+        const model = findInstalledModel(await abortable(target.runtime.list(), extra.signal), args.name);
         if (!model)
           return errorResult(`No model named ${clean(args.name)} on ${runtimeLabel(target)}. See models_list.`);
         const summary = {
@@ -441,7 +462,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
 
         await removeInstalled(target, model.name, extra.signal);
         const defaultModel = await deps.defaultModel();
-        const wasDefault = !!defaultModel && normalizeModelName(defaultModel) === normalizeModelName(model.name);
+        const wasDefault = !!defaultModel && sameModelName(defaultModel, model.name);
         return toResult({ status: 'removed', removed: true, ...summary, wasDefault });
       })
   );

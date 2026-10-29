@@ -2,6 +2,7 @@ import {
   estimateVideoCostCredits,
   getVideoModelCapabilities,
   isVideoModelEnabled,
+  retiredVideoModelMessage,
   validateAgainstCapabilities,
   VideoGenerationRequestSchema,
   videoInputRef,
@@ -36,7 +37,17 @@ export async function createVideoJob(
     return { ok: false, status: 400, code: 'invalid_request', message };
   }
   const request = parsed.data;
+  // Replaying existing work must survive model retirement and other changes to new-job eligibility.
+  const owner = resolveJobOwner(input.user);
+  const replay = await findIdempotentReplay(
+    { kind: 'video', owner, idempotencyKey: input.idempotencyKey, request },
+    deps
+  );
+  if (replay) return replay;
   const caps = getVideoModelCapabilities(request.model);
+  const retired = retiredVideoModelMessage(request.model);
+  if (retired) return { ok: false, status: 422, code: 'model_unavailable', message: retired };
+  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
   if (!deps.providers.get(caps.provider)) {
     return {
       ok: false,
@@ -70,14 +81,6 @@ export async function createVideoJob(
     }
   }
 
-  const owner = resolveJobOwner(input.user);
-  const replay = await findIdempotentReplay(
-    { kind: 'video', owner, idempotencyKey: input.idempotencyKey, request },
-    deps
-  );
-  if (replay) return replay;
-  // After the replay lookup so a same-key retry still gets its job once the key is gone; otherwise a keyless
-  // provider would hold credits for a job that can only fail at submit.
   if (!isUsableApiKey(await deps.resolveApiKey(caps.provider, input.user.id))) {
     return {
       ok: false,

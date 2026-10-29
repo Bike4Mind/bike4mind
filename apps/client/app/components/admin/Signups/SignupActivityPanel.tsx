@@ -15,6 +15,7 @@ import {
 import {
   SIGNUP_SIGNAL_LABELS,
   SIGNUP_SIGNALS,
+  SIGNUP_TIMESERIES_RANGE_LABELS as RANGE_LABELS,
   SIGNUP_TIMESERIES_RANGES,
   type SignupTimeseriesBucket,
   type SignupTimeseriesRange,
@@ -23,13 +24,6 @@ import { adminSurface } from '../shared/adminStyles';
 import { DataTable } from '../shared/DataTable';
 import { SignupChart, type SignupChartMode } from './SignupChart';
 import { bucketWindow, formatBucketLabel, useSignupTimeseries } from './useSignupTimeseries';
-
-const RANGE_LABELS: Record<SignupTimeseriesRange, string> = {
-  '24h': 'Last 24 hours',
-  '7d': 'Last 7 days',
-  '30d': 'Last 30 days',
-  '90d': 'Last 90 days',
-};
 
 const topSignals = (bucket: SignupTimeseriesBucket) =>
   SIGNUP_SIGNALS.filter(signal => bucket.bySignal[signal] > 0)
@@ -43,11 +37,15 @@ const topSignals = (bucket: SignupTimeseriesBucket) =>
  * list to accounts created in it, where the existing review and bulk abuse tools take over.
  */
 export function SignupActivityPanel({
+  range,
+  onRangeChange,
   onSelectWindow,
 }: {
+  /** Owned by the Users tab, so the list's Verdict column classifies under the same range. */
+  range: SignupTimeseriesRange;
+  onRangeChange: (range: SignupTimeseriesRange) => void;
   onSelectWindow: (window: { createdFrom: string; createdTo: string }) => void;
 }) {
-  const [range, setRange] = useState<SignupTimeseriesRange>('7d');
   const [mode, setMode] = useState<SignupChartMode>('status');
   const [showBaseline, setShowBaseline] = useState(true);
   const [showTable, setShowTable] = useState(false);
@@ -72,7 +70,7 @@ export function SignupActivityPanel({
             aria-label="Time range"
             data-testid="users-signup-range"
             value={range}
-            onChange={(_, value) => value && setRange(value)}
+            onChange={(_, value) => value && onRangeChange(value)}
           >
             {SIGNUP_TIMESERIES_RANGES.map(option => (
               <Option key={option} value={option}>

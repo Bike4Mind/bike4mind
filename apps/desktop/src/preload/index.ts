@@ -28,7 +28,7 @@ import type {
   ModelServerUpdateInput,
   ModelServerView,
 } from '@shared/modelServers';
-import type { HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
+import type { HfTokenStatus, HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
 import {
   IPC_CHANNELS,
   type BrowserFreezeFrameRequest,
@@ -64,22 +64,44 @@ const api: DesktopApi = {
     },
   },
   models: {
-    getStatus: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus),
-    listInstalled: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled),
+    getStatus: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus, serverId),
+    listInstalled: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled, serverId),
     search: (request: HubSearchRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsSearch, request),
     getDetail: (repo: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo),
+    listCurated: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListCurated, serverId),
+    getCuratedPull: (entryId: string, buildId: string, serverId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsGetCuratedPull, entryId, buildId, serverId),
+    checkCurated: (entryId: string, buildId: string, serverId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCurated, entryId, buildId, serverId),
+    checkCuratedList: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCuratedList),
+    getCuratedSettings: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSettings),
+    setCuratedEnabled: (enabled: boolean) => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSetEnabled, enabled),
+    onCuratedChanged: listener => {
+      const handler = () => listener();
+      ipcRenderer.on(IPC_CHANNELS.modelsCuratedChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsCuratedChanged, handler);
+    },
     listPulls: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListPulls),
     pull: (request: ModelPullRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsPull, request),
     cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),
+    resumePull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsResumePull, key),
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
-    remove: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name),
+    remove: (name: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name, serverId),
+    getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
+    setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
+    clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),
+    onHfTokenChanged: listener => {
+      const handler = (_event: unknown, status: HfTokenStatus) => listener(status);
+      ipcRenderer.on(IPC_CHANNELS.modelsHfAccessChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsHfAccessChanged, handler);
+    },
     onPullsChanged: listener => {
       const handler = (_event: unknown, pulls: ModelPull[]) => listener(pulls);
       ipcRenderer.on(IPC_CHANNELS.modelsPullsChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsPullsChanged, handler);
     },
     onInstalledChanged: listener => {
-      const handler = () => listener();
+      const handler = (_event: unknown, serverId: string) => listener(serverId);
       ipcRenderer.on(IPC_CHANNELS.modelsInstalledChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsInstalledChanged, handler);
     },
@@ -167,6 +189,11 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId, removeWorktree),
     inspectWorktreeRemoval: (sessionId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatInspectWorktreeRemoval, sessionId),
+    listWorktrees: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListWorktrees, directory),
+    removeWorktrees: (directory: string, paths?: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRemoveWorktrees, directory, paths),
+    revealWorktree: (directory: string, path: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatRevealWorktree, directory, path),
     sendMessage: (request: SendMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatSendMessage, request),
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),

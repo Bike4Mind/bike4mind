@@ -501,7 +501,8 @@ export async function performWebSearch(
 
 export const webSearchTool: ToolDefinition = {
   name: 'web_search',
-  implementation: (context: ToolContext, config?: WebSearchToolConfig) => {
+  implementation: (context: ToolContext, rawConfig: unknown) => {
+    const config = rawConfig as WebSearchToolConfig | undefined;
     let searchCallCount = 0;
     let providersPromise: Promise<[WebSearchProvider | null, WebSearchProvider | null]> | undefined;
     return {

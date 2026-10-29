@@ -56,6 +56,13 @@ function renewsCondition(renews: NonNullable<AdminSubscriptionsFilter['renews']>
   return { ...live, periodEndsAt: { $gte: now, $lt: new Date(now.getTime() + RENEWS_WINDOW_MS[renews]) } };
 }
 
+// Stripe's canceled_at, stored verbatim on the row, is set when a cancel is requested; the Stripe
+// subscription-updated handler in apps/workers reads a pending cancel the same way.
+function cancelCondition(cancel: NonNullable<AdminSubscriptionsFilter['cancel']>, now: Date): Condition {
+  if (cancel === 'scheduled') return { status: { $nin: TERMINAL }, canceledAt: { $ne: null } };
+  return { canceledAt: { $gte: new Date(now.getTime() - CHURNED_WINDOW_MS) } };
+}
+
 export type SearchKind = 'subscriptionId' | 'customerId' | 'objectId' | 'text';
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
@@ -98,6 +105,7 @@ export function buildAdminSubscriptionsMatch(filter: AdminSubscriptionsFilter, c
   if (filter.ownerType) conditions.push({ ownerType: filter.ownerType });
   if (filter.source) conditions.push({ source: filter.source });
   if (filter.renews) conditions.push(renewsCondition(filter.renews, context.now));
+  if (filter.cancel) conditions.push(cancelCondition(filter.cancel, context.now));
   if (conditions.length === 0) return {};
   return conditions.length === 1 ? conditions[0] : { $and: conditions };
 }
