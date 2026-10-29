@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, FormControl, FormLabel, Input, Stack, Button } from '@mui/joy';
 import {
   DATE_PRESET_DAYS,
@@ -15,6 +15,33 @@ const PRESET_BUTTONS: Record<DatePresetDays, { label: string; testId: string }> 
   30: { label: 'Last 30 Days', testId: 'date-filter-preset-30-btn' },
 };
 
+/**
+ * The value a date input shows, updated on every keystroke. A parent that commits the change
+ * asynchronously (a router navigate) re-renders with the old value first, and React writing that
+ * back into the input resets the browser's year-typing buffer. So a prop change is only adopted
+ * while the input is not focused, and on blur.
+ */
+const useDateDraft = (value: string) => {
+  const [draft, setDraft] = useState(value);
+  const isFocused = useRef(false);
+
+  useEffect(() => {
+    if (!isFocused.current) setDraft(value);
+  }, [value]);
+
+  return {
+    draft,
+    setDraft,
+    onFocus: () => {
+      isFocused.current = true;
+    },
+    onBlur: () => {
+      isFocused.current = false;
+      setDraft(value);
+    },
+  };
+};
+
 interface DateFilterComponentProps {
   value: DateRange;
   onChange: (range: DateRange) => void;
@@ -27,6 +54,8 @@ interface DateFilterComponentProps {
 export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({ value, onChange }) => {
   const { startDate, endDate } = value;
   const activePreset = getActivePreset(value);
+  const startDraft = useDateDraft(startDate);
+  const endDraft = useDateDraft(endDate);
 
   return (
     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'flex-end' }}>
@@ -42,8 +71,13 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({ value,
           <FormLabel>Start Date</FormLabel>
           <Input
             type="date"
-            value={startDate}
-            onChange={event => onChange({ startDate: event.target.value, endDate })}
+            value={startDraft.draft}
+            onChange={event => {
+              startDraft.setDraft(event.target.value);
+              onChange({ startDate: event.target.value, endDate });
+            }}
+            onFocus={startDraft.onFocus}
+            onBlur={startDraft.onBlur}
             slotProps={{ input: { max: endDate || today(), 'data-testid': 'date-filter-start-input' } }}
           />
         </FormControl>
@@ -51,8 +85,13 @@ export const DateFilterComponent: React.FC<DateFilterComponentProps> = ({ value,
           <FormLabel>End Date</FormLabel>
           <Input
             type="date"
-            value={endDate}
-            onChange={event => onChange({ startDate, endDate: event.target.value })}
+            value={endDraft.draft}
+            onChange={event => {
+              endDraft.setDraft(event.target.value);
+              onChange({ startDate, endDate: event.target.value });
+            }}
+            onFocus={endDraft.onFocus}
+            onBlur={endDraft.onBlur}
             slotProps={{ input: { max: today(), min: startDate, 'data-testid': 'date-filter-end-input' } }}
           />
         </FormControl>

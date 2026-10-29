@@ -961,6 +961,17 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
           id: 'sub_deleted',
           canceled_at: 1700000000,
           metadata: { userId: 'user_xyz' },
+          // The fields stripeMirrorFields projects; a real deleted payload always carries them.
+          customer: 'cus_deleted',
+          currency: 'usd',
+          cancel_at_period_end: false,
+          cancel_at: null,
+          trial_end: null,
+          items: {
+            data: [
+              { price: { unit_amount: 2000, currency: 'usd', recurring: { interval: 'month', interval_count: 1 } } },
+            ],
+          },
         },
       },
     };

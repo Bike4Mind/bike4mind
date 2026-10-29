@@ -19,14 +19,14 @@ interface UseAnalyticsDataOptions {
  * own queries (useDailyReports, useWeeklyReports) and their own date ranges.
  */
 export function useAnalyticsData({ enabled = true }: UseAnalyticsDataOptions = {}) {
-  const { selectedOrganizations, excludedOrgs, dateFilters, userActivityFilters, metadataFilters, page, limit } =
+  const { selectedOrganizations, exclusions, dateFilters, userActivityFilters, metadataFilters, page, limit } =
     useAnalyticsStore();
 
   // Shared with the CSV export so the exported rows always match the grid.
   const userActivityRequest = buildUserActivityRequest({
     dateFilters,
     selectedOrganizations,
-    excludedOrgs,
+    exclusions,
     userActivityFilters,
     metadataFilters,
   });

@@ -2,23 +2,17 @@ import { METADATA_FIELD } from '@server/analytics/metadataFilterContract';
 import { isAllOrganizations } from './store';
 import type { AnalyticsState, MetadataFilter } from './types';
 
-/** Display names as denormalised onto CounterLog.userOrganization. */
-const EXCLUDABLE_ORG_NAMES: Record<string, string> = {
-  millionOnMars: 'Million on Mars',
-  unknown: 'Unknown',
-  personal: 'Personal',
-};
-
 export type UserActivityRequestState = Pick<
   AnalyticsState,
-  'dateFilters' | 'selectedOrganizations' | 'excludedOrgs' | 'userActivityFilters' | 'metadataFilters'
+  'dateFilters' | 'selectedOrganizations' | 'exclusions' | 'userActivityFilters' | 'metadataFilters'
 >;
 
 export interface UserActivityRequest {
   startDate: string;
   endDate: string;
   orgs: string[] | null;
-  excludeOrgs: string[];
+  excludeNoOrg: boolean;
+  excludeStaff: boolean;
   counterName?: string;
   userEmail?: string;
   metadataFilters?: MetadataFilter[];
@@ -28,13 +22,13 @@ export interface UserActivityRequest {
  * The single description of "which rows the user is asking for", shared by the grid query
  * and the CSV export so the exported file always matches what the grid shows.
  *
- * The exclusion checkboxes only apply while "All Organizations" is selected - that is also
- * the only time the UI enables them.
+ * "Exclude users without an org" only applies while "All Organizations" is selected: a specific
+ * selection already matches named orgs only. The staff exclusion applies to every selection.
  */
 export function buildUserActivityRequest({
   dateFilters,
   selectedOrganizations,
-  excludedOrgs,
+  exclusions,
   userActivityFilters,
   metadataFilters,
 }: UserActivityRequestState): UserActivityRequest {
@@ -53,11 +47,8 @@ export function buildUserActivityRequest({
     startDate: dateFilters.startDate,
     endDate: dateFilters.endDate,
     orgs: isAllSelected ? null : selectedOrganizations,
-    excludeOrgs: isAllSelected
-      ? Object.entries(excludedOrgs)
-          .filter(([, isExcluded]) => isExcluded)
-          .map(([key]) => EXCLUDABLE_ORG_NAMES[key] ?? key)
-      : [],
+    excludeNoOrg: isAllSelected && exclusions.noOrg,
+    excludeStaff: exclusions.staff,
     counterName: userActivityFilters.counterNameSearch || undefined,
     userEmail: userActivityFilters.userEmailSearch || undefined,
     metadataFilters: activeMetadataFilters.length ? activeMetadataFilters : undefined,

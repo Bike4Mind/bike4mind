@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { downloadFile, type DownloadOptions, type DownloadResult } from './download';
 import {
@@ -25,6 +26,30 @@ export const DEFAULT_HUGGING_FACE_ENDPOINT = 'https://huggingface.co';
 /** Registry host Ollama pulls Hugging Face GGUFs from, as `hf.co/<repo>:<quant>`. */
 export const OLLAMA_HUGGING_FACE_HOST = 'hf.co';
 
+/**
+ * Host Ollama pulls gated and private repos by. Ollama refuses to sign a pull whose auth realm (huggingface.co) is
+ * not the host it asked, and hf.co redirects there, so those refs use this host instead.
+ */
+export const OLLAMA_SIGNED_HUGGING_FACE_HOST = 'huggingface.co';
+
+/** The name Ollama pulls `ref` (as planned, `hf.co/...`) by: `huggingface.co/...` when the repo needs the SSH key. */
+export function ollamaPullRef(ref: string, needsSshKey: boolean): string {
+  return needsSshKey ? ref.replace(/^hf\.co\//, `${OLLAMA_SIGNED_HUGGING_FACE_HOST}/`) : ref;
+}
+
+/** Identity of an installed Ollama model: a model pulled as hf.co/x or huggingface.co/x is one model. */
+export function ollamaModelKey(name: string): string {
+  return name.toLowerCase().replace(/^huggingface\.co\//, `${OLLAMA_HUGGING_FACE_HOST}/`);
+}
+
+/** Every name an installed copy of the model `ref` points at may be listed under, lower case. */
+export function ollamaRefAliases(ref: string): string[] {
+  const key = ollamaModelKey(ref);
+  return key.startsWith(`${OLLAMA_HUGGING_FACE_HOST}/`)
+    ? [key, key.replace(/^hf\.co\//, `${OLLAMA_SIGNED_HUGGING_FACE_HOST}/`)]
+    : [key];
+}
+
 /** Manifest requests one `verifyOllamaRef` call may send. */
 export const MAX_VERIFY_TAGS = 4;
 
@@ -41,6 +66,11 @@ const MAX_REDIRECTS = 3;
 const MAX_TAGS = 30;
 const MAX_BASE_MODELS = 10;
 const MAX_LICENSES = 10;
+export const HUB_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 200;
+const DEFAULT_MAX_RATE_LIMIT_WAIT_MS = 5_000;
+const MAX_RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_BACKOFF_MS = 500;
 
 export type HubSort = 'downloads' | 'likes' | 'trending' | 'updated';
 
@@ -54,6 +84,11 @@ export interface HuggingFaceHubOptions {
   token?: string;
   /** Deadline per request (ms); a multi-page file listing gets it once per page. */
   requestTimeoutMs?: number;
+  /**
+   * Most a request waits in total before surfacing `HubRateLimitError`; it retries on 429 after `Retry-After`, and
+   * rejects at once when the wait asked for would pass this. Default 5000; 0 never retries.
+   */
+  maxRateLimitWaitMs?: number;
 }
 
 export interface HubSearchOptions {
@@ -63,6 +98,8 @@ export interface HubSearchOptions {
   limit?: number;
   /** `nextCursor` of the previous page, sent with the same query and sort. */
   cursor?: string;
+  /** Skip the 10-minute cache and store the fresh answer. */
+  refresh?: boolean;
   signal?: AbortSignal;
 }
 
@@ -98,6 +135,8 @@ export interface HubModelOptions {
    * Ollama refs always pull from `main`, so any other revision gets `ollamaRefIssue: 'pinned-revision'`.
    */
   revision?: string;
+  /** Skip the 10-minute cache and store the fresh answer; use it before acting on what a user reviewed. */
+  refresh?: boolean;
   signal?: AbortSignal;
 }
 
@@ -138,6 +177,11 @@ export interface HubGgufBuild {
   id: string;
   /** Upper-case quant label read from the file name, e.g. `Q4_K_M` or `UD-Q4_K_XL`; `Q4_K_L` and kin are ours. */
   quant: string | null;
+  /**
+   * What to show for the build and a tag that names it (see `findHubBuild`), unique ignoring case: `quant`, with the
+   * part of the file name that sets it apart when other builds share that quant (`QAD-Q4_0` next to `Q4_0`), else `id`.
+   */
+  label: string;
   /** The file, or every shard in order. */
   files: HubGgufFile[];
   sizeBytes: number;
@@ -146,8 +190,8 @@ export interface HubGgufBuild {
   complete: boolean;
   /**
    * `hf.co/<repo>:<tag>` as planned from the file list. The registry also skips some files the list cannot tell
-   * apart (draft and assistant models), and then the tag fails or falls through to a later file, so confirm with
-   * `HuggingFaceHub.verifyOllamaRef` before pulling.
+   * apart (drafts and assistant models not named as such), and then the tag fails or falls through to a later file,
+   * so confirm with `HuggingFaceHub.verifyOllamaRef` before pulling.
    */
   ollamaRef: string | null;
   ollamaRefIssue: OllamaRefIssue | null;
@@ -176,7 +220,7 @@ export interface HubModelDetail extends HubModelSummary {
    */
   canDownload: boolean | null;
   /**
-   * True for a gated or private repo. Ollama pulls from hf.co with its own SSH key and never sees `token`, so the
+   * True for a gated or private repo. Ollama downloads with its own SSH key and never sees `token`, so the
    * Ollama host's public key (`~/.ollama/id_ed25519.pub`) must first be added at `HUGGING_FACE_SSH_KEYS_URL`
    * (Hugging Face Hub docs, "Use Ollama with any GGUF Model on Hugging Face Hub").
    */
@@ -202,11 +246,18 @@ const QUANT_RE = new RegExp(
 
 // Ollama's tag rule (name.go): alphanumeric or `_` first, then `_ . -`, at most 80 characters.
 const OLLAMA_TAG_RE = /^[A-Za-z0-9_][\w.-]{0,79}$/;
+const OLLAMA_TAG_MAX = 80;
 const OLLAMA_NAME_PART_MAX = 80;
 const OLLAMA_MODEL_LAYER = 'application/vnd.ollama.image.model';
 const REGISTRY_MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json';
 
 const SHARD_RE = /-(\d{5})-of-(\d{5})\.gguf$/i;
+// Draft heads named so at the start of a folder or the stem, or the end of the stem. The registry skips drafts by GGUF
+// metadata, so a mid-name `-MTP-` build stays listed (GLM-4.5-Air-MTP is a full model); verifyOllamaRef catches sidecars.
+const DRAFT_PREFIX_RE = /^(?:mtp|dflash|dspark|eagle3)(?:[-_.]|$)/i;
+const DRAFT_SUFFIX_RE = /[-_.](?:mtp|dflash|dspark|eagle3)$/i;
+const IMATRIX_GGUF_RE = /(?:^|[-_.])imatrix(?:[-_.]|$)/i;
+const LABEL_TOKEN_RE = /[-_. ]+|[^-_. ]+/g;
 const REPO_ID_RE = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,95}$/;
 const REVISION_RE = /^[\w./-]{1,200}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
@@ -413,6 +464,19 @@ function hubEndpoint(endpoint: string): string {
   return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
 }
 
+/**
+ * Install-side guard: only `.gguf` files are fetched. Pickle formats (`.bin`, `.pt`, `.pth`, `.ckpt`) can run code
+ * when loaded, and safetensors installs are not supported.
+ */
+export function assertGgufFile(path: string): void {
+  const name = path.replace(/^.*\//, '');
+  if (!/\.gguf$/i.test(name))
+    throw new LocalRuntimeError(
+      `Only .gguf files can be installed; refusing ${JSON.stringify(name.slice(0, 100))}`,
+      'huggingface'
+    );
+}
+
 function assertRepoId(repo: string): void {
   if (!isHubRepoId(repo))
     throw new LocalRuntimeError('Invalid Hugging Face repo id; expected owner/name', 'huggingface');
@@ -467,6 +531,107 @@ function toGgufInfo(value: unknown): HubGgufInfo | null {
   return { architecture: architecture ?? null, contextLength: context_length ?? null, parameterCount: total ?? null };
 }
 
+const sameToken = (a: string | undefined, b: string | undefined) =>
+  a !== undefined && b !== undefined && a.toUpperCase() === b.toUpperCase();
+
+/** Each token list without the tokens all of them start with, then end with, trimmed of separators at either end. */
+function distinctMiddles(lists: string[][]): string[] {
+  const first = lists[0] ?? [];
+  const shortest = Math.min(...lists.map(list => list.length));
+  let start = 0;
+  while (start < shortest && lists.every(list => sameToken(list[start], first[start]))) start++;
+  let end = 0;
+  const fromEnd = (list: string[]) => list[list.length - 1 - end];
+  while (end < shortest - start && lists.every(list => sameToken(fromEnd(list), fromEnd(first)))) end++;
+  return lists.map(list =>
+    list
+      .slice(start, list.length - end)
+      .join('')
+      .replace(/^[-_. ]+|[-_. ]+$/g, '')
+  );
+}
+
+/** The text as a tag Ollama and `hf.co/<repo>:<tag>` parsers accept (OLLAMA_TAG_RE), `build` when nothing is left. */
+const tagSafe = (text: string, max = OLLAMA_TAG_MAX) =>
+  text
+    .replace(/[^A-Za-z0-9_.-]+/g, '-')
+    .replace(/^[-.]+/, '')
+    .slice(0, max)
+    .replace(/[-.]+$/, '') || 'build';
+
+/** The tag a build answers to: its planned ref's, else its label. `findHubBuild` resolves it back to the build. */
+export function hubBuildTag(build: Pick<HubGgufBuild, 'ollamaRef' | 'label'>): string {
+  return build.ollamaRef ? refTag(build.ollamaRef) : build.label;
+}
+
+const refTag = (ref: string) => ref.slice(ref.lastIndexOf(':') + 1);
+
+/**
+ * The build a tag names, ignoring case: its planned ref's tag, then its label, then its quant label. Labels never equal
+ * another build's ref tag, so every surface that resolves through this agrees.
+ */
+export function findHubBuild<T extends Pick<HubGgufBuild, 'ollamaRef' | 'label' | 'quant'>>(
+  builds: readonly T[],
+  tag: string
+): T | undefined {
+  const wanted = tag.toUpperCase();
+  const byQuant = builds.filter(build => build.quant?.toUpperCase() === wanted);
+  return (
+    builds.find(build => build.ollamaRef && hubBuildTag(build).toUpperCase() === wanted) ??
+    builds.find(build => build.label.toUpperCase() === wanted) ??
+    (byQuant.length === 1 ? byQuant[0] : undefined)
+  );
+}
+
+/** `HubGgufBuild.label` by build id: unique ignoring case, a valid tag, and never another build's ref tag. */
+function buildLabels(
+  builds: readonly Pick<HubGgufBuild, 'id' | 'quant' | 'files' | 'ollamaRef'>[]
+): Map<string, string> {
+  const labels = new Map<string, string>();
+  const byQuant = new Map<string, { id: string; before: string[]; after: string[] }[]>();
+  const tokens = (text: string) => text.match(LABEL_TOKEN_RE) ?? [];
+  for (const build of builds) {
+    const stem = ggufStem(build.files[0]?.path ?? build.id);
+    const at = build.quant ? stem.toUpperCase().lastIndexOf(build.quant) : -1;
+    if (!build.quant || at < 0) {
+      labels.set(build.id, tagSafe(build.quant ?? build.id));
+      continue;
+    }
+    const group = byQuant.get(build.quant) ?? [];
+    group.push({ id: build.id, before: tokens(stem.slice(0, at)), after: tokens(stem.slice(at + build.quant.length)) });
+    byQuant.set(build.quant, group);
+  }
+  for (const [quant, group] of byQuant) {
+    const before = distinctMiddles(group.map(entry => entry.before));
+    const after = distinctMiddles(group.map(entry => entry.after));
+    group.forEach((entry, i) => labels.set(entry.id, tagSafe([before[i], quant, after[i]].filter(Boolean).join('-'))));
+  }
+  const owners = new Map<string, string>();
+  for (const build of builds) if (build.ollamaRef) owners.set(refTag(build.ollamaRef).toUpperCase(), build.id);
+  const counts = new Map<string, number>();
+  for (const label of labels.values()) counts.set(label.toUpperCase(), (counts.get(label.toUpperCase()) ?? 0) + 1);
+  const clashes = (id: string, label: string) => {
+    const owner = owners.get(label.toUpperCase());
+    return owner ? owner !== id : (counts.get(label.toUpperCase()) ?? 0) > 1;
+  };
+  const clashing = [...labels].filter(([id, label]) => clashes(id, label));
+  for (const [id, label] of labels) if (!clashes(id, label)) owners.set(label.toUpperCase(), id);
+  // Each file's own name stays free for it, so no suffixed label lands on a tag that names another file.
+  for (const build of builds)
+    for (const own of [tagSafe(build.id), tagSafe(ggufStem(build.files[0]?.path ?? build.id))])
+      if (!owners.has(own.toUpperCase())) owners.set(own.toUpperCase(), build.id);
+  // The same file name in two folders, a merged file beside its own shards, or a label another build's ref claims:
+  // the path tells them apart.
+  const free = (id: string, label: string) => (owners.get(label.toUpperCase()) ?? id) === id;
+  for (const [id] of clashing) {
+    let label = tagSafe(id);
+    for (let n = 2; !free(id, label); n++) label = `${tagSafe(id, OLLAMA_TAG_MAX - String(n).length - 1)}-${n}`;
+    owners.set(label.toUpperCase(), id);
+    labels.set(id, label);
+  }
+  return labels;
+}
+
 function groupGgufFiles(
   repo: string,
   entries: TreeEntry[],
@@ -484,10 +649,15 @@ function groupGgufFiles(
       sha256: SHA256_RE.test(oid) ? oid : null,
       url: url(entry.path),
     };
-    if (/mmproj/i.test(entry.path.replace(/^.*\//, ''))) {
+    const name = entry.path.replace(/^.*\//, '');
+    if (/mmproj/i.test(name)) {
       projectors.push({ ...file, quant: ggufQuantLabel(entry.path) });
       continue;
     }
+    const stem = ggufStem(name);
+    const folders = entry.path.split('/').slice(0, -1);
+    if ([...folders, stem].some(part => DRAFT_PREFIX_RE.test(part)) || DRAFT_SUFFIX_RE.test(stem)) continue;
+    if (IMATRIX_GGUF_RE.test(stem) && !ggufQuantLabel(name)) continue;
     const shard = SHARD_RE.exec(entry.path);
     const id = shard ? entry.path.slice(0, shard.index) : entry.path.replace(/\.gguf$/i, '');
     const key = `${shard ? 'split' : 'single'}:${id}`;
@@ -513,32 +683,34 @@ function groupGgufFiles(
   });
   const plans = planOllamaTags(builds);
   const repoOk = ollamaAcceptsRepo(repo);
-  const planned = builds
-    .map((build): HubGgufBuild => {
-      const tag = plans.get(build.id)?.tags[0];
-      const issue: OllamaRefIssue | null = !build.complete
-        ? 'incomplete'
-        : build.split
-          ? 'split'
-          : !build.quant
-            ? 'no-quant-label'
-            : !repoOk
-              ? 'unsupported-name'
-              : !tag
-                ? [...REGISTRY_REJECTED_QUANTS].some(rejected => build.quant?.includes(rejected))
-                  ? 'unsupported-quant'
-                  : 'unsupported-name'
-                : pinned
-                  ? 'pinned-revision'
-                  : !plans.get(build.id)?.unique
-                    ? 'ambiguous'
-                    : null;
-      return {
-        ...build,
-        ollamaRef: issue || !tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`,
-        ollamaRefIssue: issue,
-      };
-    })
+  const withRefs = builds.map((build): Omit<HubGgufBuild, 'label'> => {
+    const tag = plans.get(build.id)?.tags[0];
+    const issue: OllamaRefIssue | null = !build.complete
+      ? 'incomplete'
+      : build.split
+        ? 'split'
+        : !build.quant
+          ? 'no-quant-label'
+          : !repoOk
+            ? 'unsupported-name'
+            : !tag
+              ? [...REGISTRY_REJECTED_QUANTS].some(rejected => build.quant?.includes(rejected))
+                ? 'unsupported-quant'
+                : 'unsupported-name'
+              : pinned
+                ? 'pinned-revision'
+                : !plans.get(build.id)?.unique
+                  ? 'ambiguous'
+                  : null;
+    return {
+      ...build,
+      ollamaRef: issue || !tag ? null : `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`,
+      ollamaRefIssue: issue,
+    };
+  });
+  const labels = buildLabels(withRefs);
+  const planned = withRefs
+    .map((build): HubGgufBuild => ({ ...build, label: labels.get(build.id) ?? tagSafe(build.id) }))
     .sort((a, b) => a.sizeBytes - b.sizeBytes || a.id.localeCompare(b.id));
   tagPlans.set(planned, plans);
   return { builds: planned, projectors };
@@ -565,6 +737,48 @@ function retryAfterMs(headers: Headers): number | null {
 }
 
 class BodyTooLargeError extends Error {}
+
+function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+// Shared by every client, so a new instance (say, after a token change) still hits; keys carry the endpoint and a
+// token hash, so one token's answers never reach another.
+const hubCache = new Map<string, { expires: number; value: unknown }>();
+
+function cacheGet<T>(key: string): T | undefined {
+  const entry = hubCache.get(key);
+  if (!entry) return undefined;
+  hubCache.delete(key);
+  if (entry.expires <= Date.now()) return undefined;
+  hubCache.set(key, entry);
+  return structuredClone(entry.value) as T;
+}
+
+function cachePut(key: string, value: unknown): void {
+  hubCache.delete(key);
+  hubCache.set(key, { expires: Date.now() + HUB_CACHE_TTL_MS, value: structuredClone(value) });
+  for (const oldest of hubCache.keys()) {
+    if (hubCache.size <= MAX_CACHE_ENTRIES) break;
+    hubCache.delete(oldest);
+  }
+}
+
+/** Drops every cached search and model answer, for every client. */
+export function clearHubCache(): void {
+  hubCache.clear();
+}
 
 async function readText(response: Response, maxBytes: number): Promise<string> {
   if (Number(response.headers.get('content-length')) > maxBytes) throw new BodyTooLargeError();
@@ -598,6 +812,8 @@ export class HuggingFaceHub {
   readonly #token: string | undefined;
   readonly #client: HttpClient;
   readonly #requestTimeoutMs: number;
+  readonly #cacheScope: string;
+  readonly #maxRateLimitWaitMs: number;
 
   constructor(options: HuggingFaceHubOptions = {}) {
     this.endpoint = hubEndpoint(options.endpoint ?? DEFAULT_HUGGING_FACE_ENDPOINT);
@@ -608,11 +824,14 @@ export class HuggingFaceHub {
     this.#token = options.token?.trim() || undefined;
     if (this.#token) assertHeaderValues({ authorization: `Bearer ${this.#token}` }, this.id);
     this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.#maxRateLimitWaitMs = options.maxRateLimitWaitMs ?? DEFAULT_MAX_RATE_LIMIT_WAIT_MS;
+    this.#cacheScope = `${this.endpoint}\n${this.#token ? `token:${createHash('sha256').update(this.#token).digest('hex')}` : 'anonymous'}`;
     this.#client = { runtimeId: this.id, baseUrl: this.endpoint, fetch: options.fetch ?? fetch };
   }
 
   /** One page of GGUF repos matching `query`. */
   async search(options: HubSearchOptions = {}): Promise<HubSearchPage> {
+    options.signal?.throwIfAborted();
     const requested = Number.isFinite(options.limit) ? Math.trunc(options.limit ?? 0) : DEFAULT_HUB_SEARCH_LIMIT;
     const limit = Math.min(Math.max(requested, 1), MAX_HUB_SEARCH_LIMIT);
     const params = new URLSearchParams({ filter: 'gguf', sort: SORT_PARAMS[options.sort ?? 'downloads'] });
@@ -621,16 +840,36 @@ export class HuggingFaceHub {
     params.set('limit', String(limit));
     for (const field of SUMMARY_FIELDS) params.append('expand[]', field);
     if (options.cursor) params.set('cursor', options.cursor);
+    const cacheKey = `${this.#cacheScope}\nsearch\n${params}`;
+    const cached = options.refresh ? undefined : cacheGet<HubSearchPage>(cacheKey);
+    if (cached) return cached;
     const { data, headers } = await this.#getJson(`/api/models?${params}`, z.array(z.unknown()), {
       signal: options.signal,
     });
-    return {
+    const page: HubSearchPage = {
       models: data.slice(0, limit).flatMap(raw => {
         const entry = modelEntrySchema.safeParse(raw);
         return entry.success && isHubRepoId(entry.data.id) ? [toSummary(entry.data)] : [];
       }),
       nextCursor: nextCursor(headers),
     };
+    cachePut(cacheKey, page);
+    return page;
+  }
+
+  /**
+   * Whether the Hub accepts the configured token, from `whoami-v2`; false without a token. Worth asking before
+   * keeping one: the Hub ignores a bad token on public reads, so it would otherwise only fail on a gated repo.
+   */
+  async checkToken(options: { signal?: AbortSignal } = {}): Promise<boolean> {
+    if (!this.#token) return false;
+    try {
+      await this.#getJson('/api/whoami-v2', z.object({}).passthrough(), { signal: options.signal });
+      return true;
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && error.status === 401) return false;
+      throw error;
+    }
   }
 
   /**
@@ -642,7 +881,17 @@ export class HuggingFaceHub {
     assertRepoId(repo);
     const requested = options.revision ?? 'main';
     assertRevision(requested);
-    const context = { signal: options.signal, repo, revision: requested };
+    options.signal?.throwIfAborted();
+    const cacheKey = `${this.#cacheScope}\nmodel\n${repo}\n${requested}`;
+    const cached = options.refresh ? undefined : cacheGet<HubModelDetail>(cacheKey);
+    if (cached) return cached;
+    const detail = await this.#fetchModel(repo, requested, options.signal);
+    cachePut(cacheKey, detail);
+    return detail;
+  }
+
+  async #fetchModel(repo: string, requested: string, signal: AbortSignal | undefined): Promise<HubModelDetail> {
+    const context = { signal, repo, revision: requested };
     const params = new URLSearchParams();
     for (const field of DETAIL_FIELDS) params.append('expand[]', field);
     const { data: info } = await this.#getJson(
@@ -656,7 +905,7 @@ export class HuggingFaceHub {
     // A renamed repo redirects to its new id, which is the one Ollama refs and resolve URLs need.
     const canonical = info.id;
     const revision = info.sha;
-    const tree = await this.#listTree(canonical, revision, options.signal);
+    const tree = await this.#listTree(canonical, revision, signal);
     const { builds, projectors } = groupGgufFiles(
       canonical,
       tree,
@@ -679,7 +928,7 @@ export class HuggingFaceHub {
       gguf: toGgufInfo(info.gguf),
       builds,
       projectors,
-      canDownload: await this.#canDownload(canonical, revision, summary.gated, probe?.path, options.signal),
+      canDownload: await this.#canDownload(canonical, revision, summary.gated, probe?.path, signal),
       ollamaNeedsSshKey: summary.gated !== false || summary.private,
     };
   }
@@ -690,16 +939,18 @@ export class HuggingFaceHub {
 
   /**
    * The Ollama ref that pulls exactly `build`'s file, asked of the registry itself (one manifest request per tag
-   * tried, at most `MAX_VERIFY_TAGS`); null when no tag does. Call it right before a pull: it also clears `ambiguous`
+   * tried, at most `MAX_VERIFY_TAGS`); null when no tag does. Gated and private repos come back by their
+   * `huggingface.co` name (see `ollamaPullRef`). Call it right before a pull: it also clears `ambiguous`
    * and `pinned-revision` builds whose file the registry serves byte for byte, and catches files the registry skips.
    * The pull itself carries no token; see `ollamaNeedsSshKey`.
    */
   async verifyOllamaRef(
-    detail: Pick<HubModelDetail, 'id' | 'builds'>,
+    detail: Pick<HubModelDetail, 'id' | 'builds'> & Partial<Pick<HubModelDetail, 'ollamaNeedsSshKey'>>,
     build: HubGgufBuild,
     options: { signal?: AbortSignal } = {}
   ): Promise<string | null> {
     assertRepoId(detail.id);
+    for (const file of build.files) assertGgufFile(file.path);
     const sha256 = build.files[0]?.sha256;
     if (build.split || !build.complete || !sha256 || !ollamaAcceptsRepo(detail.id)) return null;
     const plan = (tagPlans.get(detail.builds) ?? planOllamaTags(detail.builds)).get(build.id);
@@ -714,7 +965,8 @@ export class HuggingFaceHub {
         throw error;
       }
       const model = manifest.layers.find(layer => layer.mediaType === OLLAMA_MODEL_LAYER);
-      if (model?.digest === `sha256:${sha256}`) return `${OLLAMA_HUGGING_FACE_HOST}/${detail.id}:${tag}`;
+      if (model?.digest === `sha256:${sha256}`)
+        return ollamaPullRef(`${OLLAMA_HUGGING_FACE_HOST}/${detail.id}:${tag}`, detail.ollamaNeedsSshKey === true);
     }
     return null;
   }
@@ -725,6 +977,8 @@ export class HuggingFaceHub {
    * redirects to. An existing `destination` is never overwritten: it is verified, or `ModelFileConflictError`.
    */
   async download(file: HubGgufFile, destination: string, options: DownloadOptions = {}): Promise<DownloadResult> {
+    assertGgufFile(file.path);
+    assertGgufFile(URL.canParse(file.url) ? new URL(file.url).pathname : file.url);
     const origin = new URL(this.endpoint).origin;
     const resolved = file.url.startsWith(`${this.endpoint}/`)
       ? /^\/([^/]+\/[^/]+)\/resolve\/([^/]+)\//.exec(file.url.slice(this.endpoint.length))
@@ -819,6 +1073,8 @@ export class HuggingFaceHub {
     const signal = combinedSignal(context.signal, this.#requestTimeoutMs);
     const origin = new URL(this.endpoint).origin;
     let url = `${this.endpoint}${path}`;
+    let retries = 0;
+    let waitedMs = 0;
     for (let hop = 0; ; hop++) {
       let response: Response;
       try {
@@ -833,6 +1089,21 @@ export class HuggingFaceHub {
         });
       } catch (error) {
         throw this.#connectionError(shown, error, context.signal);
+      }
+      if (response.status === 429 && this.#maxRateLimitWaitMs > 0 && retries < MAX_RATE_LIMIT_RETRIES) {
+        const delay = retryAfterMs(response.headers) ?? RATE_LIMIT_BACKOFF_MS * 2 ** retries;
+        if (waitedMs + delay <= this.#maxRateLimitWaitMs) {
+          await response.body?.cancel().catch(() => undefined);
+          try {
+            await sleep(delay, signal);
+          } catch (error) {
+            throw this.#connectionError(shown, error, context.signal);
+          }
+          waitedMs += delay;
+          retries++;
+          hop--;
+          continue;
+        }
       }
       if (response.status < 300 || response.status >= 400) {
         if (!response.ok) throw await this.#httpError(response, shown, context);

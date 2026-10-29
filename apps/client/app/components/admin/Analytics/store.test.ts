@@ -41,9 +41,9 @@ describe('analytics store - page reset', () => {
     expect(page()).toBe(1);
   });
 
-  it('returns to the first page when an organization is excluded', () => {
+  it('returns to the first page when an exclusion is toggled', () => {
     onPage(4);
-    useAnalyticsStore.getState().toggleExcludedOrg('personal');
+    useAnalyticsStore.getState().toggleExclusion('staff');
     expect(page()).toBe(1);
   });
 

@@ -17,6 +17,7 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
 export const LLM_SPEND_PROVIDERS = ['anthropic', 'openai', 'bedrock', 'google', 'other'] as const;
 export const llmSpendNamespace = () => `${$app.name}/${$app.stage}/LLMSpend`;
 export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
+export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 2;
 const USAGE_MESSAGE = 'llm-usage-settled';
 
 export function llmSpendFilterPattern(value: 'usd' | 'outputTokens', byModel = false): string {
@@ -31,6 +32,12 @@ const spendThreshold = parseAlarmThreshold(
   'LLM_SPEND_ALARM_USD_PER_5MIN',
   process.env.LLM_SPEND_ALARM_USD_PER_5MIN,
   LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT
+);
+
+const youngAccountSpendThreshold = parseAlarmThreshold(
+  'YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR',
+  process.env.YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR,
+  YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT
 );
 
 let llmSpendDashboard: aws.cloudwatch.Dashboard | undefined;
@@ -130,6 +137,23 @@ if (isMonitoredStage) {
       value: '$.usd',
       unit: 'None',
     },
+  });
+
+  new aws.cloudwatch.MetricAlarm('youngAccountSpendRate', {
+    name: `${prefix}-young-account-spend-rate`,
+    alarmDescription:
+      'Estimated LLM spend per hour by accounts under 7 days old at or above the configured USD ceiling',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'EstimatedUsdYoungAccounts',
+    namespace: LLM_SPEND_NAMESPACE,
+    period: 3600,
+    statistic: 'Sum',
+    threshold: youngAccountSpendThreshold,
+    treatMissingData: 'notBreaching',
+    alarmActions: actions,
+    okActions: actions,
+    tags: { Application: 'LLMSpend', Severity: 'High' },
   });
 
   // Emitted by signupAlarms.ts (default region) and waf.ts (us-east-1, production with WAF only).

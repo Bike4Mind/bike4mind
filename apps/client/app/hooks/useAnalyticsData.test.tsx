@@ -28,7 +28,7 @@ describe('useAnalyticsData - user activity', () => {
     useAnalyticsStore.setState({
       activeSubTab: AnalyticsSubTab.UserActivity,
       selectedOrganizations: [ALL_VALUE],
-      excludedOrgs: { millionOnMars: false, unknown: false, personal: false },
+      exclusions: { noOrg: false, staff: false },
       userActivityFilters: { counterNameSearch: '', userEmailSearch: '' },
       metadataFilters: [],
       page: 1,
@@ -68,6 +68,18 @@ describe('useAnalyticsData - user activity', () => {
 
     await waitFor(() => expect(fetchCounterLogs).toHaveBeenCalled());
     expect(lastCall()).toMatchObject({ counterName: 'Login', userEmail: 'poy@' });
+  });
+
+  it('refetches with the exclusion flags when a checkbox is toggled', async () => {
+    const { rerender } = renderHook(() => useAnalyticsData(), { wrapper });
+    await waitFor(() => expect(fetchCounterLogs).toHaveBeenCalledTimes(1));
+    expect(lastCall()).toMatchObject({ excludeNoOrg: false, excludeStaff: false });
+
+    useAnalyticsStore.getState().toggleExclusion('staff');
+    rerender();
+
+    await waitFor(() => expect(fetchCounterLogs).toHaveBeenCalledTimes(2));
+    expect(lastCall()).toMatchObject({ excludeNoOrg: false, excludeStaff: true });
   });
 
   it('sends metadata filters to the server', async () => {

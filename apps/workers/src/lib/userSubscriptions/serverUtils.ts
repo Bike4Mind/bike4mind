@@ -11,6 +11,7 @@ import {
   SubscriptionOwnerType,
   SubscriptionSource,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { acquisitionFromStripeMetadata } from '@server/analytics/acquisition';
 
 import { Logger } from '@bike4mind/observability';
@@ -277,6 +278,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             periodEndsAt: dayjs.unix(periodEnd).toDate(),
             canceledAt: null,
             quantity: subscriptionQuantity,
+            ...stripeMirrorFields(subscription),
           });
           if (!flipped) {
             logger.warn(
@@ -312,6 +314,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             periodEndsAt: dayjs.unix(periodEnd).toDate(),
             canceledAt: null,
             quantity: subscriptionQuantity,
+            ...stripeMirrorFields(subscription),
             // Recorded at checkout (pages/api/organizations/subscriptions/subscribe.ts).
             ...(acquisition && { acquisition }),
           });
@@ -569,6 +572,7 @@ export const handleUserSubscriptionInvoice = async (
           periodEndsAt: dayjs.unix(item.current_period_end).toDate(),
           canceledAt: null,
           quantity: 1, // Always 1 for user subscriptions
+          ...stripeMirrorFields(subscription),
           // Recorded at checkout (pages/api/subscriptions/subscribe.ts); absent when the browser
           // carried no campaign touch.
           ...(acquisition && { acquisition }),

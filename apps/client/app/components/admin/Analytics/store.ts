@@ -22,10 +22,9 @@ export { DEFAULT_PAGE_SIZE };
 export const useAnalyticsStore = create<AnalyticsState>(set => ({
   activeSubTab: AnalyticsSubTab.UserActivity,
   selectedOrganizations: [ALL_VALUE],
-  excludedOrgs: {
-    millionOnMars: true,
-    unknown: true,
-    personal: true,
+  exclusions: {
+    noOrg: true,
+    staff: true,
   },
   dateFilters: getPresetRange(DEFAULT_PRESET_DAYS),
   userActivityFilters: {
@@ -39,11 +38,11 @@ export const useAnalyticsStore = create<AnalyticsState>(set => ({
   setActiveSubTab: tab => set({ activeSubTab: tab, page: 1 }),
   setSelectedOrganizations: orgs =>
     set({ selectedOrganizations: isAllOrganizations(orgs) ? [ALL_VALUE] : orgs, page: 1 }),
-  toggleExcludedOrg: key =>
+  toggleExclusion: key =>
     set(state => ({
-      excludedOrgs: {
-        ...state.excludedOrgs,
-        [key]: !state.excludedOrgs[key],
+      exclusions: {
+        ...state.exclusions,
+        [key]: !state.exclusions[key],
       },
       page: 1,
     })),
