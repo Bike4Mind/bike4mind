@@ -108,6 +108,12 @@ describe('createSignupRiskCollector', () => {
     expect(mockRecentDistinctSignups).toHaveBeenCalledWith(expect.objectContaining({ ip: null, asn: network.asn }));
   });
 
+  it('rejects when the trace count fails, so the grant is retried', async () => {
+    counts({ ipSignups: 0, prefixSignups: 0 }, 0);
+    mockTraceCounts.mockRejectedValue(new Error('timeout'));
+    await expect(createSignupRiskCollector(network)(user())).rejects.toThrow('timeout');
+  });
+
   it('leaves every signal missing when no network is known', async () => {
     expect(await createSignupRiskCollector(null)(user())).toEqual({});
     expect(mockRecentDistinctSignups).not.toHaveBeenCalled();
@@ -162,6 +168,27 @@ describe('isSignupNetworkOverLimit', () => {
     mockRecentDistinctSignups.mockRejectedValue(new Error('timeout'));
     expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('counts live signups only when the trace count fails, and warns', async () => {
+    settings({ maxSignupsPerIpPerDay: '2' });
+    mockTraceCounts.mockRejectedValue(new Error('timeout'));
+    counts({ ipSignups: 2, prefixSignups: 0 }, null);
+    expect(await isSignupNetworkOverLimit(network, logger)).toBe(true);
+    counts({ ipSignups: 1, prefixSignups: 0 }, null);
+    logger.warn.mockReset();
+    expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[signup-limits] Signup trace count failed; counting live signups only',
+      expect.any(Error)
+    );
+  });
+
+  it('still fails open when the live count fails alongside the trace count', async () => {
+    settings({ maxSignupsPerIpPerDay: '1' });
+    mockTraceCounts.mockRejectedValue(new Error('timeout'));
+    mockRecentDistinctSignups.mockRejectedValue(new Error('timeout'));
+    expect(await isSignupNetworkOverLimit(network, logger)).toBe(false);
   });
 
   it('ignores a malformed cap', async () => {

@@ -69,21 +69,29 @@ async function countRecentSignups(input: {
   userId?: string;
   at: Date;
   windows: { ip: boolean; prefix: boolean; asn: boolean };
+  // When set, a failed trace count is logged and skipped (live signups only) instead of thrown.
+  traceFallback?: WarnLogger;
 }): Promise<SignupCounts> {
-  const { network, userId, at, windows } = input;
+  const { network, userId, at, windows, traceFallback } = input;
   const hashes = hashSignupNetwork(network.ip);
   const scan = async (ms: number, scope: { ip: string | null; asn: number | null; prefix?: boolean }) => {
     const since = new Date(at.getTime() - ms);
     const [live, deleted] = await Promise.all([
       authEventRepository.recentDistinctSignups({ userId, since, until: at, ...scope, maxRows: MAX_COUNTED_ROWS }),
-      signupTraceRepository.recentDistinctSignups({
-        since,
-        until: at,
-        ipHash: scope.ip === null ? null : hashes.ipHash,
-        prefixHash: scope.ip === null || scope.prefix === false ? null : hashes.prefixHash,
-        asn: scope.asn,
-        maxRows: MAX_COUNTED_ROWS,
-      }),
+      signupTraceRepository
+        .recentDistinctSignups({
+          since,
+          until: at,
+          ipHash: scope.ip === null ? null : hashes.ipHash,
+          prefixHash: scope.ip === null || scope.prefix === false ? null : hashes.prefixHash,
+          asn: scope.asn,
+          maxRows: MAX_COUNTED_ROWS,
+        })
+        .catch((error: unknown): SignupCounts => {
+          if (!traceFallback) throw error;
+          traceFallback.warn('[signup-limits] Signup trace count failed; counting live signups only', error);
+          return { ipSignups: 0, prefixSignups: 0, asnSignups: 0 };
+        }),
     ]);
     return {
       ipSignups: addCounts(live.ipSignups, deleted.ipSignups),
@@ -156,6 +164,7 @@ export async function isSignupNetworkOverLimit(network: SignupNetwork, logger: W
       network,
       at: new Date(),
       windows: { ip: ipLimit > 0, prefix: false, asn: asnLimit > 0 },
+      traceFallback: logger,
     });
     // With a usable ip/asn a null count means the scan was truncated, i.e. far over any cap.
     const overIp = ipLimit > 0 && !!network.ip && isIP(network.ip) > 0 && (ipSignups ?? Infinity) >= ipLimit;
