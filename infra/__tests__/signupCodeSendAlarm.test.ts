@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseAlarmThreshold, parseSignupCodeSendAlarmThreshold } from '../signupAlarmThreshold';
-import { SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE } from '../../b4m-core/common/src/signupGrant';
 
 const resources = vi.hoisted(() => {
   function output<T>(value: T) {
@@ -277,6 +276,9 @@ describe('signup code send alarm wiring', () => {
     expect(readFileSync(new URL('../index.ts', import.meta.url), 'utf8')).toContain("export * from './signupAlarms';");
   });
 });
+
+// Pinned in b4m-core/common/src/signupGrant.test.ts too; infra cannot import common, so change both together.
+const SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE = 'signup-grant-protections-off';
 
 describe('signup grant protection gap alarm wiring', () => {
   it('counts the message the grant path logs and nothing spoofed through other fields', async () => {
