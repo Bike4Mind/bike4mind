@@ -194,6 +194,10 @@ export const organizationSeatUsage = (org: {
   return { used, seats: org.seats, full: used >= org.seats };
 };
 
+/** Why an add is refused when `organizationSeatUsage(org).full`; shared by the admin dialog and route. */
+export const organizationSeatsFullMessage = (name: string, seats: number): string =>
+  `${name} uses ${seats === 1 ? 'its only paid seat' : `all ${seats} paid seats`}. Raise the seat count on its profile before adding anyone.`;
+
 export type OrganizationMemberRole = 'owner' | 'manager' | 'member';
 
 /**

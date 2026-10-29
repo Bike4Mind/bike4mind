@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import {
   organizationMemberRole,
   organizationSeatUsage,
+  organizationSeatsFullMessage,
   type IOrganizationDocument,
   type OrganizationMemberRole,
 } from '@bike4mind/common';
@@ -22,9 +23,7 @@ const undoReason = (reason: string) => `Undo: ${reason}`.slice(0, 500);
 
 export const seatBlockedReason = (org: MembershipOrg): string | null => {
   const { seats, full } = organizationSeatUsage(org);
-  return full
-    ? `${org.name} uses all ${seats} paid seats. Raise the seat count on its profile before adding anyone.`
-    : null;
+  return full ? organizationSeatsFullMessage(org.name, seats) : null;
 };
 
 /** Personal orgs are left out: they belong to one person and take no members. */

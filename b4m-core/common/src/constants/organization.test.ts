@@ -6,6 +6,7 @@ import {
   isOrgOwnerOrCurrentAdmin,
   organizationMemberRole,
   organizationSeatUsage,
+  organizationSeatsFullMessage,
 } from './organization';
 
 describe('isOrgOwnerOrCurrentAdmin', () => {
@@ -152,6 +153,20 @@ describe('organizationSeatUsage', () => {
 
   it('treats a missing roster as the owner alone', () => {
     expect(organizationSeatUsage({ users: null, seats: 1 })).toEqual({ used: 1, seats: 1, full: true });
+  });
+});
+
+describe('organizationSeatsFullMessage', () => {
+  it('says "its only paid seat" for a one-seat org', () => {
+    expect(organizationSeatsFullMessage('Acme', 1)).toBe(
+      'Acme uses its only paid seat. Raise the seat count on its profile before adding anyone.'
+    );
+  });
+
+  it('counts the seats otherwise', () => {
+    expect(organizationSeatsFullMessage('Acme', 3)).toBe(
+      'Acme uses all 3 paid seats. Raise the seat count on its profile before adding anyone.'
+    );
   });
 });
 

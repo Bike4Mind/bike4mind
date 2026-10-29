@@ -7,6 +7,7 @@ import {
   UnprocessableEntityError,
   organizationMemberRole,
   organizationSeatUsage,
+  organizationSeatsFullMessage,
 } from '@bike4mind/common';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
@@ -35,9 +36,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:mod
     if (role) throw new ConflictError(`They are already a member of ${organization.name}.`);
     const seats = organizationSeatUsage(organization);
     if (seats.full) {
-      throw new UnprocessableEntityError(
-        `${organization.name} uses all ${seats.seats} paid seats. Raise the seat count on its profile before adding anyone.`
-      );
+      throw new UnprocessableEntityError(organizationSeatsFullMessage(organization.name, seats.seats));
     }
 
     const { user } = await organizationService.addMember(
