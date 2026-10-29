@@ -24,7 +24,12 @@ const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
 const extraTextModels = vi.hoisted(() => [] as ModelInfo[]);
 const favoriteModelIds = vi.hoisted(() => new Set<string>());
 // Paid-only models served in /api/models' lockedModels; reset in the locked-models describe.
-const locked = vi.hoisted(() => ({ models: [] as ModelInfo[], billingEnabled: true, openView: vi.fn() }));
+const locked = vi.hoisted(() => ({
+  models: [] as ModelInfo[],
+  billingEnabled: true,
+  openView: vi.fn(),
+  noAccessibleModels: false,
+}));
 const adminSettings = vi.hoisted(() => ({
   recommendedModelIds: [] as string[],
   DefaultAPIModel: undefined as string | undefined,
@@ -63,9 +68,9 @@ vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
 
 vi.mock('@client/app/hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
-    accessibleModels: [textModel, imageModel, ...extraTextModels],
-    accessibleTextModels: [textModel, ...extraTextModels],
-    accessibleImageModels: [imageModel],
+    accessibleModels: locked.noAccessibleModels ? [] : [textModel, imageModel, ...extraTextModels],
+    accessibleTextModels: locked.noAccessibleModels ? [] : [textModel, ...extraTextModels],
+    accessibleImageModels: locked.noAccessibleModels ? [] : [imageModel],
     accessibleVideoModels: [],
     lockedModels: locked.models,
     isLoading: false,
@@ -840,11 +845,13 @@ describe('ModelSelection locked (paid-only) models', () => {
   beforeEach(() => {
     locked.models = [paidModel];
     locked.billingEnabled = true;
+    locked.noAccessibleModels = false;
     locked.openView.mockClear();
   });
 
   afterEach(() => {
     locked.models = [];
+    locked.noAccessibleModels = false;
   });
 
   it('renders a locked row that cannot select the model', () => {
@@ -903,6 +910,22 @@ describe('ModelSelection locked (paid-only) models', () => {
     await waitFor(() => expect(screen.queryByTestId('locked-model-row-paid-text-model')).toBeNull());
     expect(screen.getByTestId('locked-model-row-paid-opus')).toBeInTheDocument();
     expect(screen.queryByTestId('model-selection-no-results')).toBeNull();
+  });
+
+  it('shows the locked group instead of the no-access message when only locked models exist', () => {
+    locked.noAccessibleModels = true;
+    renderSelection({});
+
+    expect(screen.getByTestId('locked-model-row-paid-text-model')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-selection-no-access')).toBeNull();
+  });
+
+  it('shows the no-access message when there are neither accessible nor locked models', () => {
+    locked.noAccessibleModels = true;
+    locked.models = [];
+    renderSelection({});
+
+    expect(screen.getByTestId('model-selection-no-access')).toBeInTheDocument();
   });
 
   it('collapses locked twins and drops disabled locked models', () => {

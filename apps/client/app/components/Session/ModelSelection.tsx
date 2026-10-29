@@ -1513,7 +1513,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       {/* Models Grid */}
       {/* No access to any models */}
       {!hasVisibleModels && lockedPickerModels.length === 0 && !debouncedSearchQuery && (
-        <Box sx={{ padding: '32px', textAlign: 'center' }}>
+        <Box data-testid="model-selection-no-access" sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-md" sx={{ color: 'text.primary', fontWeight: 500, mb: 1 }}>
             You don&apos;t have access to any AI models.
           </Typography>
