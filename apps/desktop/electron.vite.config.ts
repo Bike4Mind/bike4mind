@@ -86,7 +86,10 @@ export default defineConfig(({ mode }) => {
       // The signed curated models list is baked the same way; empty means the bundled list only. The test keys
       // need B4M_CURATED_DEV_KEYS=1 in the shell (never `.env`); see curatedBuildInfo for the release gate.
       define: {
-        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(baked(mode, 'B4M_DEFAULT_API_URL') || PRODUCTION_API_URL),
+        // Not in development: an empty default there lets a source run fall back to Local Dev.
+        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(
+          baked(mode, 'B4M_DEFAULT_API_URL') || (mode === 'development' ? '' : PRODUCTION_API_URL)
+        ),
         'process.env.B4M_UPDATE_FEED_URL': JSON.stringify(baked(mode, 'B4M_UPDATE_FEED_URL')),
         'process.env.B4M_CURATED_MANIFEST_URL': JSON.stringify(curatedUrl),
         __B4M_CURATED_DEV_KEYS__: JSON.stringify(curatedDevKeys),

@@ -412,7 +412,8 @@ GitHub Releases, then rerun the workflow on corrected `main` to publish a new ve
 environment, so there is nothing to read at runtime.
 
 When nothing supplies it, the build uses `https://app.bike4mind.com` (`PRODUCTION_API_URL` in
-`electron.vite.config.ts`), so every build signs in to production with nothing to type. A
+`electron.vite.config.ts`), so every build signs in to production with nothing to type. The
+exception is `pnpm dev`, which bakes nothing and so starts on Local Dev (`http://localhost:3000`). A
 fork that runs its own backend overrides it, highest precedence first:
 
 ```bash
@@ -718,7 +719,7 @@ token.
 
 `B4M_DEFAULT_API_URL` is baked into the main bundle at build time (see the `define` block in
 `electron.vite.config.ts`), exactly as the CLI bakes it via tsdown, and falls back to
-`https://app.bike4mind.com` when no build supplies it.
+`https://app.bike4mind.com` when no build supplies it (except in `pnpm dev`, which starts on Local Dev).
 
 Routing uses hash history. A packaged build loads the renderer over `file://`, which has no
 origin for the History API to push against, so hash history is the one mode that behaves

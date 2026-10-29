@@ -74,6 +74,12 @@ describe('desktop build environment', () => {
     expect(process.env[API_VARIABLE]).toBe('');
   });
 
+  it('bakes no backend in development so a source run falls back to Local Dev', () => {
+    const define = config({ command: 'serve', mode: 'development' }).main?.define;
+
+    expect(define?.[`process.env.${API_VARIABLE}`]).toBe(JSON.stringify(''));
+  });
+
   it('keeps an explicitly empty feed disabled even when local files provide a feed', () => {
     vi.stubEnv(FEED_VARIABLE, '');
     vi.mocked(loadEnv).mockReturnValue({ [FEED_VARIABLE]: 'https://updates.example.com' });

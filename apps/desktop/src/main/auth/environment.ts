@@ -54,7 +54,8 @@ function labelFor(endpoint: Extract<ApiEndpoint, { status: 'configured' }>): str
  * Turn a user's picker choice into a concrete endpoint, or report that none resolves.
  *
  * `devFallback` is `!app.isPackaged`: when no baked default is available, a source run uses
- * the local server while a packaged build stays unconfigured. Normal builds bake Production.
+ * the local server while a packaged build stays unconfigured. Non-development builds bake
+ * Production; `pnpm dev` bakes nothing unless a value is supplied, so it reaches Local Dev.
  */
 export function resolveEnvironment(
   selection: EnvironmentSelection | undefined,
