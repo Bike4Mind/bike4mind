@@ -85,6 +85,14 @@ export interface LicenseInfo {
   plural?: boolean;
   /** The base model's license when the Curated list records it as not permissive. */
   base?: string;
+  /** The Curated list's license for the model when it records that as not permissive but the source reads permissive. */
+  listed?: string;
+}
+
+/** The licenses to accept, by name; `label` stays the source's own, which the pre-download recheck compares. */
+export function licenseName(license: LicenseInfo): string {
+  const own = license.listed ?? license.label;
+  return license.base ? `${own} and base model ${license.base}` : own;
 }
 
 export interface HubPullPlan {
@@ -439,10 +447,12 @@ function withCuratedLicense<T extends LicenseInfo>(license: T, ref: string, deps
   if (!curated) return license;
   const { entry } = curated;
   const base = entry.license.base.class === 'permissive' ? undefined : clean(entry.license.base.id);
+  const listed = !license.restricted && entry.license.class !== 'permissive' ? clean(entry.license.id) : undefined;
   return {
     ...license,
     restricted: license.restricted || !isPermissiveEntry(entry),
     ...(base && { base, plural: true }),
+    ...(listed && { listed }),
   };
 }
 

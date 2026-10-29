@@ -726,6 +726,22 @@ describe('models curated', () => {
     expect(permissive.questions).toEqual([expect.stringMatching(/^Download .*\? \[y\/N\] $/)]);
   });
 
+  it("names the list's license when it is restricted but the registry's text reads permissive", async () => {
+    const manifest = bundled();
+    const [entry] = manifest.entries;
+    const ref = curatedSource(entry.builds[0]).ollamaRef;
+    entry.license.class = 'restricted-commercial';
+    entry.license.id = 'gemma';
+
+    const asked = harness({ answers: [true, true], curated: () => manifest });
+    expect(await runModelsCommand('pull', { _: [], ref }, asked.deps)).toBe(0);
+    expect(asked.lines).toContain('License:  Apache-2.0');
+    expect(asked.lines).toContain(
+      'This model is under the gemma license, which is not a permissive open-source license.'
+    );
+    expect(asked.questions[0]).toBe('Do you accept the gemma license? [y/N] ');
+  });
+
   it('tags tool support from the catalog', async () => {
     const manifest = bundled();
     const [first, second] = manifest.entries;

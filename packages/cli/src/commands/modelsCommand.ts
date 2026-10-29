@@ -35,6 +35,7 @@ import {
   hiddenAbliteratedMessage,
   hubAccessMessage,
   licenseFor,
+  licenseName,
   listInstalled,
   normalizeModelName,
   pickBuild,
@@ -519,7 +520,7 @@ async function acceptLicense(license: LicenseInfo, deps: ModelsDeps, opts: Model
   if (!license.restricted) return true;
   const declared = license.label !== NO_LICENSE || license.base !== undefined;
   const noun = license.plural ? 'licenses' : 'license';
-  const named = license.base ? `${license.label} and base model ${license.base}` : license.label;
+  const named = licenseName(license);
   deps.log('');
   deps.log(
     declared
