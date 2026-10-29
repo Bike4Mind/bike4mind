@@ -348,3 +348,50 @@ describe('adminSubscriptionsExportPage', () => {
     expect(tied).toEqual([...tied].sort().reverse());
   });
 });
+
+describe('cancel filter', () => {
+  const seedCancels = async () => {
+    const userId = String((await seedUser('jane'))._id);
+    await seedSubscription(userId, { subscriptionId: 'sub_live', status: 'active' });
+    await seedSubscription(userId, {
+      subscriptionId: 'sub_scheduled',
+      status: 'active',
+      canceledAt: new Date(NOW.getTime() - 2 * DAY),
+    });
+    await seedSubscription(userId, {
+      subscriptionId: 'sub_churned',
+      status: 'canceled',
+      canceledAt: new Date(NOW.getTime() - 5 * DAY),
+    });
+    await seedSubscription(userId, {
+      subscriptionId: 'sub_churned_long_ago',
+      status: 'canceled',
+      canceledAt: new Date(NOW.getTime() - 60 * DAY),
+    });
+  };
+  const subscriptionIds = (rows: { subscriptionId: string }[]) => rows.map(row => row.subscriptionId).sort();
+
+  it('lists a scheduled cancel that has not ended yet', async () => {
+    await seedCancels();
+
+    const result = await listAdminSubscriptions({ ...params, cancel: 'scheduled' }, NOW);
+
+    expect(subscriptionIds(result.subscriptions)).toEqual(['sub_scheduled']);
+  });
+
+  it('lists status canceled plus last30 as exactly the rows summary.views.churned counts', async () => {
+    await seedCancels();
+
+    const churned = await listAdminSubscriptions({ ...params, status: ['canceled'], cancel: 'last30' }, NOW);
+    const summary = await adminSubscriptionsSummary({}, NOW);
+
+    expect(subscriptionIds(churned.subscriptions)).toEqual(['sub_churned']);
+    expect(summary.views.churned).toBe(churned.total);
+  });
+
+  it('counts a cancel filter through the summary total', async () => {
+    await seedCancels();
+
+    expect((await adminSubscriptionsSummary({ cancel: 'scheduled' }, NOW)).total).toBe(1);
+  });
+});

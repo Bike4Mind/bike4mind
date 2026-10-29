@@ -21,6 +21,8 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StripeEvents } from '@server/utils/eventBus';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { postSubscriptionChangesToSlack } from '@server/integrations/slack/subscriptionLifecycle';
+import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { sendToClient } from '@server/websocket/utils';
 import dayjs from 'dayjs';
@@ -166,6 +168,7 @@ export const handler = withEventContext(async (event, logger) => {
   // failures, so once the write commits nothing can skip these. Never throws.
   if (owned && before) {
     await emitSubscriptionChangeEvents(before, subscription);
+    await postSubscriptionChangesToSlack(before, subscription);
   }
 
   // sendToClient calls must be outside the transaction to avoid
@@ -220,11 +223,6 @@ export const handler = withEventContext(async (event, logger) => {
   }
 });
 
-/** Whether a subscription is set to cancel at the end of its period, and is not over yet. */
-function cancelIsPending(status: string, canceling: boolean): boolean {
-  return canceling && status !== 'canceled';
-}
-
 /**
  * The lifecycle events one subscription update carries, read off the row its write replaced and
  * Stripe's state after it: a move to another price, and a period-end cancel being set or
@@ -249,10 +247,11 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
     const toPriceId = subscription.items.data[0]?.price.id;
     const version = rowTimestamps(before).updatedAt?.toISOString() ?? 'unversioned';
     const sends: Array<Promise<unknown>> = [];
+    const { plan, cancel } = detectSubscriptionChanges(before, subscription);
 
-    if (toPriceId && before.priceId && toPriceId !== before.priceId) {
-      const from = planDetails(before.priceId);
-      const to = planDetails(toPriceId);
+    if (plan) {
+      const from = planDetails(plan.fromPriceId);
+      const to = planDetails(plan.toPriceId);
       sends.push(
         emitBillingEvent({
           user,
@@ -263,24 +262,17 @@ async function emitSubscriptionChangeEvents(before: ISubscription, subscription:
             toPlan: to.plan,
             ...(from.interval && { fromInterval: from.interval }),
             ...(to.interval && { toInterval: to.interval }),
-            direction: planChangeDirection(before.priceId, toPriceId),
+            direction: planChangeDirection(plan.fromPriceId, plan.toPriceId),
           },
         })
       );
     }
 
-    // Before and after are read off the same field, Stripe's canceled_at, which the row stores
-    // verbatim: set when a cancel is requested, and the signal this handler's invoice cleanup
-    // below also acts on. Comparing it with itself, rather than the row's copy with Stripe's
-    // cancel_at_period_end, means a field the two disagree on cannot fire a transition on every
-    // later update; the worst a disagreement can do is miss one.
-    const wasPending = cancelIsPending(before.status, before.canceledAt != null);
-    const isPending = cancelIsPending(subscription.status, subscription.canceled_at != null);
-    if (wasPending !== isPending && subscription.status !== 'canceled') {
+    if (cancel) {
       sends.push(
         emitBillingEvent({
           user,
-          event: isPending ? 'subscription_cancel_scheduled' : 'subscription_cancel_reverted',
+          event: cancel === 'scheduled' ? 'subscription_cancel_scheduled' : 'subscription_cancel_reverted',
           occurrence: `${subscription.id}:cancel:${version}`,
           metadata: { ...planDetails(toPriceId ?? before.priceId) },
         })
