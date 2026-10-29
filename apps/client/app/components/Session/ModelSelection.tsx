@@ -918,21 +918,28 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     openBillingView('plans');
   }, [onSelectionComplete, openBillingView]);
 
-  // Locked models are text only (the free-tier gate never locks other types), so they show on the text list.
-  const showsTextModels = showAllModels || (modelFilter !== 'video' && !imageModel);
+  // The free-tier gate locks every modality, so the locked group follows the type the list shows
+  // (same choice as `availableModels` above).
+  const shownLockedType: ModelInfo['type'] | null = showAllModels
+    ? null
+    : modelFilter === 'video'
+      ? 'video'
+      : imageModel
+        ? 'image'
+        : 'text';
   const lockedPickerModels = useMemo(() => {
-    if (!showsTextModels || !lockedModels) return [];
+    if (!lockedModels) return [];
     const searchLower = debouncedSearchQuery.toLowerCase();
     const shown = lockedModels.filter(
       candidate =>
-        candidate.type === 'text' &&
+        (shownLockedType === null || candidate.type === shownLockedType) &&
         !isModelDeprecated(candidate) &&
         !EXCLUDED_MODEL_IDS.includes(candidate.id) &&
         modelMatchesSearch(candidate, searchLower)
     );
     // Same dedupe as the main list: drops disabled models (no plan unlocks them) and collapses twins.
     return sortModelsForPicker(dedupeModelsForPicker(shown, new Set(), model));
-  }, [showsTextModels, lockedModels, debouncedSearchQuery, model]);
+  }, [shownLockedType, lockedModels, debouncedSearchQuery, model]);
 
   const handleModelSelect = useCallback(
     (selectedModel: ModelInfo) => {

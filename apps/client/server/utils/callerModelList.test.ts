@@ -121,10 +121,10 @@ describe('getCallerModelList free-tier gate', () => {
     expect(await listedIds()).toEqual(['priced', 'image-model']);
   });
 
-  it('moves paid-only text models to lockedModels, marked locked, for a free user', async () => {
+  it('moves paid-only models of any modality to lockedModels, marked locked, for a free user', async () => {
     const list = await callerList(makeUser());
 
-    expect(list.lockedModels.map(model => model.id)).toEqual(['free']);
+    expect(list.lockedModels.map(model => model.id)).toEqual(['free', 'image-model']);
     expect(list.lockedModels.every(model => model.access?.locked === true)).toBe(true);
     expect(list.lockedModels[0].access?.reason).toBe('requires_paid_plan');
     expect(list.models.some(model => model.access)).toBe(false);
