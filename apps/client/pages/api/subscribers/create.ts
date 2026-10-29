@@ -5,30 +5,66 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { requireTurnstile } from '@server/middlewares/requireTurnstile';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
-import { ipSubject } from '@server/utils/otcLimits';
+import { ipSubject, otcLimitOf } from '@server/utils/otcLimits';
+import { SUBSCRIBER_LIMITS, reserveSubscriberAlert } from '@server/utils/subscriberLimits';
 import * as z from 'zod';
 
 // One body for every outcome. It also stops an anonymous caller receiving the stored
 // Subscriber document, which the 201 used to return in full.
 const SIGNUP_ACK = { message: 'Thanks -- you are on the list.' } as const;
 
-const HOUR_MS = 60 * 60 * 1000;
+const MONGO_DUPLICATE_KEY = 11000;
+
+/**
+ * Caller-supplied text for a Slack code span. Slack still parses `<...>` control sequences there, so
+ * `&`, `<` and `>` are entity-escaped; the span itself stops mentions and bare links from rendering.
+ * A backtick would close the span early and a newline would break it, so both are replaced.
+ */
+function slackCodeText(value: string): string {
+  const text = value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/`/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `\`${text}\``;
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === MONGO_DUPLICATE_KEY;
+}
+
+const { perIp, perIpDaily } = SUBSCRIBER_LIMITS;
 
 // Every accepted signup stores a row and pages the team on Slack, and nothing proves who is asking,
 // so the source is bounded the same way as a sign-in code request: a bot challenge first, then
-// per-IP caps keyed like OTC_LIMITS (IPv6 by /64). Sized for a shared office NAT, where a handful
-// of real people may sign up from one address in a day.
+// per-IP caps keyed like OTC_LIMITS (IPv6 by /64). Both caps are admin-lowerable (see subscriberLimits.ts).
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   .use(requireTurnstile(TURNSTILE_ACTION_SUBSCRIBE))
-  .use(rateLimit({ bucket: 'subscribers-create-hourly', subject: ipSubject, limit: 10, windowMs: HOUR_MS }))
-  .use(rateLimit({ bucket: 'subscribers-create-daily', subject: ipSubject, limit: 30, windowMs: 24 * HOUR_MS }))
+  .use(
+    rateLimit({
+      bucket: 'subscribers-create-short',
+      subject: ipSubject,
+      limit: () => otcLimitOf(perIp),
+      windowMs: perIp.windowMs,
+    })
+  )
+  .use(
+    rateLimit({
+      bucket: 'subscribers-create-daily',
+      subject: ipSubject,
+      limit: () => otcLimitOf(perIpDaily),
+      windowMs: perIpDaily.windowMs,
+    })
+  )
   .post(async (req, res) => {
     const validatedBody = z
       .object({
-        firstName: z.string().min(1).max(50),
-        lastName: z.string().min(1).max(50),
-        email: z.string().email(),
+        firstName: z.string().trim().min(1).max(50),
+        lastName: z.string().trim().min(1).max(50),
+        email: z.string().trim().toLowerCase().email(),
         source: z.enum(SUBSCRIBER_SOURCES).default('subscribe_page'),
       })
       .parse(req.body);
@@ -42,25 +78,41 @@ const handler = baseApi({ auth: false })
       return res.status(201).json(SIGNUP_ACK);
     }
 
-    await Subscriber.create(validatedBody);
+    try {
+      await Subscriber.create(validatedBody);
+    } catch (error) {
+      // email is unique across soft-deleted rows too, and two concurrent signups can race the check
+      // above. Either way the address is already stored; a 500 here would reveal that.
+      if (isDuplicateKeyError(error)) return res.status(201).json(SIGNUP_ACK);
+      throw error;
+    }
 
     try {
-      const brand = process.env.APP_NAME || '';
-      const blockedSignupNote =
-        validatedBody.source === 'subscribe_page'
-          ? ''
-          : `\nThey tried to sign up while registration was closed (source: \`${validatedBody.source}\`).\n`;
-      const slackMessage = `🎯 **New Subscriber Alert!**
+      const alert = await reserveSubscriberAlert();
+      if (alert.action === 'pause') {
+        await postMessageToSlack(
+          `New subscriber alerts are paused until ${alert.resumesAt.toISOString()} because of volume. ` +
+            'New signups are still saved; see *Admin Panel > Subscribers*.'
+        );
+      } else if (alert.action === 'post') {
+        const brand = process.env.APP_NAME || '';
+        const blockedSignupNote =
+          validatedBody.source === 'subscribe_page'
+            ? ''
+            : `\nThey tried to sign up while registration was closed (source: \`${validatedBody.source}\`).\n`;
+        const name = slackCodeText(`${validatedBody.firstName} ${validatedBody.lastName}`);
+        const slackMessage = `\u{1F3AF} *New Subscriber Alert!*
 
-📧 **${validatedBody.firstName} ${validatedBody.lastName}** (${validatedBody.email}) just requested an invite code!
+\u{1F4E7} ${name} (${slackCodeText(validatedBody.email)}) just requested an invite code!
 ${blockedSignupNote}
-👋 They're waiting at the door and ready to join${brand ? ` ${brand}` : ''}. Time to roll out the red carpet!
+\u{1F44B} They're waiting at the door and ready to join${brand ? ` ${brand}` : ''}. Time to roll out the red carpet!
 
-🎟️ An admin can generate their invite code with custom credits and storage in the admin panel.
+\u{1F39F}\u{FE0F} An admin can generate their invite code with custom credits and storage in the admin panel.
 
-📍 *Admin Panel > Subscribers* to convert them to a user.`;
+\u{1F4CD} *Admin Panel > Subscribers* to convert them to a user.`;
 
-      await postMessageToSlack(slackMessage);
+        await postMessageToSlack(slackMessage);
+      }
     } catch (slackError) {
       // Don't fail the request if the Slack notification fails
       console.error('Failed to send Slack notification for new subscriber:', slackError);

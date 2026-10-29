@@ -1,7 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { ISubscriberDocument, SubscriberSource } from '@bike4mind/common';
 import { PaginatedResponse } from '@bike4mind/common';
-import axios from 'axios';
 
 export const createSubscriber = async (data: {
   firstName: string;
@@ -10,7 +9,7 @@ export const createSubscriber = async (data: {
   source?: SubscriberSource;
   turnstileToken?: string;
 }) => {
-  const response = await axios.post('/api/subscribers/create', data);
+  const response = await api.post('/api/subscribers/create', data);
   return response.data;
 };
 
