@@ -49,7 +49,8 @@ alarm episode.
 ### Large grant with protections off
 
 The Next.js server log group also emits `signup-grant-protections-off` when a pending free-credit
-grant is released while the largest configured grant (the flat grant, or the staged signup plus
+grant release is attempted (the log is written before the release is withheld, deduplicated or
+paid, so it marks the configuration, not a payout) while the largest configured grant (the flat grant, or the staged signup plus
 unlock total) is above 100 credits and any of these is still at its default: the signup risk policy
 (`enabled`), `maxSignupsPerIpPerDay`, `maxSignupsPerAsnPerHour`, `signupBurstAutoHold`. The log carries
 the largest grant and the protection keys that are off, nothing about the account. The metric is
