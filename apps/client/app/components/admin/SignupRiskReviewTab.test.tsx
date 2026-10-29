@@ -16,12 +16,14 @@ const m = vi.hoisted(() => ({
   navigate: vi.fn(),
   openProfile: vi.fn(),
   bulkAbuse: vi.fn(),
+  reset: vi.fn(),
 }));
 vi.mock('@client/app/hooks/data/signupRiskReviews', () => ({
   useSignupRiskReviews: m.useSignupRiskReviews,
   useSignupRiskReviewDecision: () => ({
     mutate: m.mutate,
     mutateAsync: m.mutateAsync,
+    reset: m.reset,
     isPending: false,
     error: null,
   }),
@@ -196,6 +198,15 @@ describe('SignupRiskReviewTab', () => {
 
     expect(screen.getByTestId('signup-risk-failed').textContent).toContain('1 account could not be approved');
     expect(screen.getByTestId('undo-toast-message').textContent).toBe('Approved 1 account');
+  });
+
+  it('clears a stale decision error when the approve dialog opens', () => {
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+    fireEvent.click(screen.getByTestId('signup-risk-approve-u1'));
+
+    expect(m.reset).toHaveBeenCalled();
   });
 
   it('offers no undo when every account was already decided elsewhere', async () => {
