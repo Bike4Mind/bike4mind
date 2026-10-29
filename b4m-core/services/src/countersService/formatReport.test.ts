@@ -188,3 +188,21 @@ describe('formatCustomSlackMessage - most active users leaderboard', () => {
     expect(message).toContain('_No user activity recorded in the last 24 hours_');
   });
 });
+
+describe('formatCustomSlackMessage - model names', () => {
+  it('escapes Slack control characters in model names', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: {
+        totalUniqueUsers: 0,
+        internalUsers: 0,
+        externalUsers: 0,
+        topUsers: [],
+        topModels: [{ modelName: 'custom <!channel>', count: 3 }],
+      },
+    });
+
+    expect(message).toContain('custom &lt;!channel&gt;');
+    expect(message).not.toContain('<!channel>');
+  });
+});

@@ -5,7 +5,14 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserTags } from '@client/app/hooks/data/user';
 import { useAdminUserTagsUpdate } from './useAdminUserTagsUpdate';
 import ProductAccess from '../../ProductAccess';
-import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, SegmentedControl, useUndoToast } from '../../../shared';
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  ChangePreview,
+  SegmentedControl,
+  undoAdminReason,
+  useUndoToast,
+} from '../../../shared';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
 import type { ProfileDialogProps } from './profileActions';
 import { USER_ROLE_LABELS, displayName, isManagedTag, tagsForRole, userRole, type UserRole } from '../userProfileModel';
@@ -60,7 +67,7 @@ export const ChangeRoleDialog: React.FC<ProfileDialogProps> = ({ user, onClose, 
         update({
           isAdmin: user.isAdmin,
           tags,
-          ...(adminChanges && { roleChangeReason: `Undo: ${reason}`.slice(0, 500) }),
+          ...(adminChanges && { roleChangeReason: undoAdminReason(reason) }),
         }),
       onViewAudit: onAudit,
     });

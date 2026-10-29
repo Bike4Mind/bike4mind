@@ -1,84 +1,18 @@
 import { isIP } from 'node:net';
-import { type INetworkMeta, type IUserDocument, TooManyRequestsError } from '@bike4mind/common';
-import { adminSettingsRepository, authEventRepository } from '@bike4mind/database';
-import type { userService } from '@bike4mind/services';
+import { TooManyRequestsError } from '@bike4mind/common';
+import { adminSettingsRepository } from '@bike4mind/database';
+import { countRecentSignups, type SignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSignals';
 import { SIGNUP_LIMITED_MESSAGE } from '@server/utils/auth/oauthFailureReason';
 
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-// A bigger result set is reported as unknown (null), never as a low count. The limit settings'
-// max (settings.ts) must stay at or below this; the gate treats a truncated count as over.
-export const MAX_COUNTED_ROWS = 5_000;
-// recentDistinctSignups refuses windows reaching past the AuthEvent TTL (90 days); an anchor older
-// than this would put the 24h window (plus a day of slack) outside it.
-const OLDEST_ANCHOR_MS = 88 * DAY_MS;
+export {
+  createSignupRiskCollector,
+  hashSignupNetwork,
+  retainDeletedSignupTraces,
+  SIGNUP_NETWORK_WINDOWS,
+  MAX_COUNTED_ROWS,
+} from '@bike4mind/server-utils/auth/signupNetworkSignals';
 
-/** The windows the risk policy's `ipSignups`/`prefixSignups` (24h) and `asnSignups` (1h) count over. */
-export const SIGNUP_NETWORK_WINDOWS = { ipMs: DAY_MS, asnMs: HOUR_MS } as const;
-
-type SignupNetwork = Pick<INetworkMeta, 'ip' | 'asn' | 'isDatacenter'>;
 type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
-
-type SignupCounts = { ipSignups: number | null; prefixSignups: number | null; asnSignups: number | null };
-
-// The 24h window scans only ip (plus /24 when asked) and the 1h window only ASN, and a caller skips
-// any window or /24 count it would not read, so no scan runs whose count is thrown away.
-async function countRecentSignups(input: {
-  network: SignupNetwork;
-  userId?: string;
-  at: Date;
-  windows: { ip: boolean; prefix: boolean; asn: boolean };
-}): Promise<SignupCounts> {
-  const { network, userId, at, windows } = input;
-  const scan = (ms: number, scope: { ip: string | null; asn: number | null; prefix?: boolean }) =>
-    authEventRepository.recentDistinctSignups({
-      userId,
-      since: new Date(at.getTime() - ms),
-      until: at,
-      ...scope,
-      maxRows: MAX_COUNTED_ROWS,
-    });
-  const [day, hour] = await Promise.all([
-    windows.ip ? scan(SIGNUP_NETWORK_WINDOWS.ipMs, { ip: network.ip, asn: null, prefix: windows.prefix }) : null,
-    windows.asn ? scan(SIGNUP_NETWORK_WINDOWS.asnMs, { ip: null, asn: network.asn }) : null,
-  ]);
-  return {
-    ipSignups: day?.ipSignups ?? null,
-    prefixSignups: day?.prefixSignups ?? null,
-    asnSignups: hour?.asnSignups ?? null,
-  };
-}
-
-function recordedAnchor(capturedAt: Date | undefined): Date | null {
-  if (!capturedAt) return null;
-  const time = new Date(capturedAt).getTime();
-  const now = Date.now();
-  if (!Number.isFinite(time) || time < now - OLDEST_ANCHOR_MS) return null;
-  return new Date(Math.min(time, now));
-}
-
-/**
- * The staged grant's network signals: the datacenter flag plus how many OTHER accounts signed up
- * from the same IP, IPv4 /24 and ASN shortly before this one. `network` is this request's network
- * on a live signup; without it the account's recorded signupMeta is used, anchored at its capture
- * time. No network at all leaves every signal missing, which the risk policy treats as configured;
- * a signupMeta with no capture time, or one older than AuthEvent retention, leaves the counts missing.
- */
-export function createSignupRiskCollector(network?: SignupNetwork | null) {
-  return async (user: IUserDocument): Promise<userService.SignupRiskSignals> => {
-    const source = network ?? user.signupMeta ?? null;
-    if (!source) return {};
-    const at = network ? new Date() : recordedAnchor(user.signupMeta?.capturedAt);
-    if (!at) return { datacenter: source.isDatacenter };
-    const counts = await countRecentSignups({
-      network: source,
-      userId: user.id,
-      at,
-      windows: { ip: true, prefix: true, asn: true },
-    });
-    return { datacenter: source.isDatacenter, ...counts };
-  };
-}
 
 async function readLimit(key: 'maxSignupsPerIpPerDay' | 'maxSignupsPerAsnPerHour'): Promise<number> {
   const value = Number((await adminSettingsRepository.findBySettingName(key))?.settingValue ?? 0);
@@ -103,6 +37,7 @@ export async function isSignupNetworkOverLimit(network: SignupNetwork, logger: W
       network,
       at: new Date(),
       windows: { ip: ipLimit > 0, prefix: false, asn: asnLimit > 0 },
+      traceFallback: logger,
     });
     // With a usable ip/asn a null count means the scan was truncated, i.e. far over any cap.
     const overIp = ipLimit > 0 && !!network.ip && isIP(network.ip) > 0 && (ipSignups ?? Infinity) >= ipLimit;
