@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { Sheet, Stack, LinearProgress, Box, Grid, Tabs, TabList, Tab } from '@mui/joy';
 import DescriptionIcon from '@mui/icons-material/Description';
 import PeopleIcon from '@mui/icons-material/People';
@@ -12,7 +12,11 @@ import { useAnalyticsStore } from './store';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
 const AnalyticsTab: React.FC = () => {
-  const { activeSubTab, setActiveSubTab } = useAnalyticsStore();
+  const { activeSubTab, setActiveSubTab, refreshDefaultDateFilters } = useAnalyticsStore();
+
+  useEffect(() => {
+    refreshDefaultDateFilters();
+  }, [refreshDefaultDateFilters]);
 
   const isUserActivity = activeSubTab === AnalyticsSubTab.UserActivity;
   // The report tabs own their queries; the grid query only runs while its tab is showing.

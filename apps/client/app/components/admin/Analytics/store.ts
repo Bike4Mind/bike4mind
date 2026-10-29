@@ -27,6 +27,7 @@ export const useAnalyticsStore = create<AnalyticsState>(set => ({
     staff: true,
   },
   dateFilters: getPresetRange(DEFAULT_PRESET_DAYS),
+  isDefaultDateRange: true,
   userActivityFilters: {
     counterNameSearch: '',
     userEmailSearch: '',
@@ -46,7 +47,16 @@ export const useAnalyticsStore = create<AnalyticsState>(set => ({
       },
       page: 1,
     })),
-  setDateFilters: filters => set({ dateFilters: filters, page: 1 }),
+  setDateFilters: filters => set({ dateFilters: filters, isDefaultDateRange: false, page: 1 }),
+  // The default above is computed once at module load; re-anchor it to today so a long-lived
+  // SPA does not keep a "Last 7 Days" that ends yesterday.
+  refreshDefaultDateFilters: () =>
+    set(state => {
+      if (!state.isDefaultDateRange) return state;
+      const fresh = getPresetRange(DEFAULT_PRESET_DAYS);
+      const unchanged = fresh.startDate === state.dateFilters.startDate && fresh.endDate === state.dateFilters.endDate;
+      return unchanged ? state : { dateFilters: fresh, page: 1 };
+    }),
   setUserActivityFilters: filters =>
     set(state => ({
       userActivityFilters: {
