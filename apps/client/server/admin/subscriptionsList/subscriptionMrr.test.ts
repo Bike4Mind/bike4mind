@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SUBSCRIPTION_STATUS_FILTERS } from '@client/app/utils/adminSubscriptionsFilter';
 import {
   MRR_MATCH,
+  billedIntervalOf,
   monthsPerPeriod,
   mrrGroupStages,
   mrrTotal,
@@ -26,6 +27,23 @@ const group = (overrides: Partial<MrrGroup['_id']>, billed: number, count = 1): 
   _id: { currency: 'usd', interval: 'month', intervalCount: 1, priced: true, ...overrides },
   billed,
   count,
+});
+
+describe('billedIntervalOf', () => {
+  it('keeps a Stripe interval and its count', () => {
+    expect(billedIntervalOf('month', 3)).toEqual({ interval: 'month', intervalCount: 3 });
+  });
+
+  it('reads a missing or zero count as 1', () => {
+    expect(billedIntervalOf('year', null)).toEqual({ interval: 'year', intervalCount: 1 });
+    expect(billedIntervalOf('year', 0)).toEqual({ interval: 'year', intervalCount: 1 });
+  });
+
+  it('has none for a missing interval or a value Stripe does not use', () => {
+    expect(billedIntervalOf(undefined, 1)).toBeNull();
+    expect(billedIntervalOf('fortnight', 1)).toBeNull();
+    expect(billedIntervalOf('constructor', 1)).toBeNull();
+  });
 });
 
 describe('monthsPerPeriod', () => {

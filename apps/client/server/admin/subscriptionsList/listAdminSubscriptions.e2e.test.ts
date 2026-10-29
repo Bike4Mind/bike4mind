@@ -417,6 +417,17 @@ describe('MRR', () => {
       sub_eur: { amount: 1800, currency: 'eur' },
     });
   });
+
+  it('carries the mirrored billing interval, and none for a row written before the mirror', async () => {
+    await seedBilling();
+
+    const result = await listAdminSubscriptions(params, NOW);
+    const intervalOf = Object.fromEntries(result.subscriptions.map(row => [row.subscriptionId, row.billedInterval]));
+
+    expect(intervalOf.sub_yearly).toEqual({ interval: 'year', intervalCount: 1 });
+    expect(intervalOf.sub_monthly).toEqual({ interval: 'month', intervalCount: 1 });
+    expect(intervalOf.sub_unsynced).toBeNull();
+  });
 });
 
 describe('adminSubscriptionsExportPage', () => {

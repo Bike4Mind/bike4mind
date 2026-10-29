@@ -3,8 +3,10 @@ import { Building2 } from 'lucide-react';
 import {
   MRR_CURRENCY,
   countsTowardMrr,
+  type AdminSubscriptionPlan,
   type AdminSubscriptionRow,
   type AdminSubscriptionsSortField,
+  type BilledInterval,
 } from '@client/app/utils/adminSubscriptionsFilter';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import type { DataColumn } from '../shared/DataTable';
@@ -17,7 +19,27 @@ import { COMPED_DISPLAY, isCompedRow, subscriptionStatusDisplay } from './subscr
 
 const DAY_MS = 86_400_000;
 
-const INTERVAL_LABELS: Record<string, string> = { monthly: 'Monthly', yearly: 'Yearly' };
+const CATALOG_INTERVAL_LABELS: Record<NonNullable<AdminSubscriptionPlan['interval']>, string> = {
+  monthly: 'Monthly',
+  yearly: 'Yearly',
+};
+
+const BILLED_INTERVAL_LABELS: Record<BilledInterval, { single: string; plural: string }> = {
+  day: { single: 'Daily', plural: 'days' },
+  week: { single: 'Weekly', plural: 'weeks' },
+  month: { single: 'Monthly', plural: 'months' },
+  year: { single: 'Yearly', plural: 'years' },
+};
+
+/** "Yearly", "Every 3 months": what Stripe bills, else the catalog plan's interval for a row with none mirrored. */
+export function planIntervalLabel(row: Pick<AdminSubscriptionRow, 'billedInterval' | 'plan'>): string | null {
+  const billed = row.billedInterval;
+  if (billed) {
+    const labels = BILLED_INTERVAL_LABELS[billed.interval];
+    return billed.intervalCount === 1 ? labels.single : `Every ${billed.intervalCount} ${labels.plural}`;
+  }
+  return row.plan.interval ? CATALOG_INTERVAL_LABELS[row.plan.interval] : null;
+}
 
 /** Columns sortable on the server map to these fields. */
 export const SUBSCRIPTIONS_SORT_COLUMNS: Record<string, AdminSubscriptionsSortField> = {
@@ -187,20 +209,34 @@ export function subscriptionsColumns({
       id: 'plan',
       label: 'Plan',
       width: '9rem',
-      render: row => (
-        <Box sx={{ minWidth: 0 }}>
-          {row.plan.name ? (
-            <Typography level="body-sm" noWrap sx={{ color: 'admin.ink' }}>
-              {row.plan.name}
-            </Typography>
-          ) : (
-            <StatusChip tone="warn" label="Unknown price" data-testid={`admin-subscriptions-unknown-price-${row.id}`} />
-          )}
-          {row.plan.interval && (
-            <Typography sx={{ color: 'admin.inkMuted', fontSize: 12 }}>{INTERVAL_LABELS[row.plan.interval]}</Typography>
-          )}
-        </Box>
-      ),
+      render: row => {
+        const interval = planIntervalLabel(row);
+        return (
+          <Box sx={{ minWidth: 0 }}>
+            {row.plan.name ? (
+              <Typography level="body-sm" noWrap sx={{ color: 'admin.ink' }}>
+                {row.plan.name}
+              </Typography>
+            ) : (
+              <Box component="span" title="Price ID not in the plan catalog" sx={{ display: 'inline-flex' }}>
+                <StatusChip
+                  tone="warn"
+                  label="Unknown plan"
+                  data-testid={`admin-subscriptions-unknown-plan-${row.id}`}
+                />
+              </Box>
+            )}
+            {interval && (
+              <Typography
+                sx={{ color: 'admin.inkMuted', fontSize: 12 }}
+                data-testid={`admin-subscriptions-interval-${row.id}`}
+              >
+                {interval}
+              </Typography>
+            )}
+          </Box>
+        );
+      },
     },
     {
       id: 'status',

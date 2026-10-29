@@ -25,7 +25,7 @@ import {
   viewConditions,
   type PlanCatalog,
 } from './adminSubscriptionsQuery';
-import { mrrGroupStages, mrrTotal, subscriptionMrr, type MrrGroup } from './subscriptionMrr';
+import { billedIntervalOf, mrrGroupStages, mrrTotal, subscriptionMrr, type MrrGroup } from './subscriptionMrr';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 const LIST_MAX_TIME_MS = 10_000;
@@ -196,6 +196,7 @@ export async function toAdminSubscriptionRows(
     ownerId: doc.ownerId,
     owner: owners.get(`${doc.ownerType}:${doc.ownerId}`) ?? null,
     plan: planOf(doc.priceId, catalog),
+    billedInterval: billedIntervalOf(doc.interval, doc.intervalCount),
     status: doc.status,
     source: doc.source ?? 'stripe',
     quantity: doc.quantity,

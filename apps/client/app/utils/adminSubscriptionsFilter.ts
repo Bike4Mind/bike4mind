@@ -139,6 +139,13 @@ export type AdminSubscriptionOwner =
       billingOwnerId: string | null;
     };
 
+/** Stripe's recurring price intervals, as mirrored on a Subscription row. */
+export const BILLED_INTERVALS = ['day', 'week', 'month', 'year'] as const;
+export type BilledInterval = (typeof BILLED_INTERVALS)[number];
+
+/** How often Stripe bills the row: every `intervalCount` (at least 1) `interval`s. */
+export type AdminSubscriptionBilledInterval = { interval: BilledInterval; intervalCount: number };
+
 /** A row's contribution to MRR: the billed amount per month, in minor units of `currency`, rounded. */
 export type AdminSubscriptionMrr = { amount: number; currency: string };
 
@@ -150,6 +157,8 @@ export type AdminSubscriptionRow = {
   /** `null` when the owner record is gone. */
   owner: AdminSubscriptionOwner | null;
   plan: AdminSubscriptionPlan;
+  /** Mirrored from Stripe; `null` on comps and on rows not synced yet, which fall back to `plan.interval`. */
+  billedInterval: AdminSubscriptionBilledInterval | null;
   status: string;
   source: (typeof SUBSCRIPTION_SOURCE_FILTERS)[number];
   quantity: number;

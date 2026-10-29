@@ -42,6 +42,7 @@ const row = (overrides: Partial<AdminSubscriptionRow> = {}): AdminSubscriptionRo
     stripeCustomerId: 'cus_1',
   },
   plan: { priceId: 'price_pro', name: 'Professional', interval: 'monthly' },
+  billedInterval: { interval: 'month', intervalCount: 1 },
   status: 'active',
   source: 'stripe',
   quantity: 1,
@@ -67,6 +68,7 @@ const compedRow = row({
     stripeCustomerId: null,
   },
   source: 'admin_grant',
+  billedInterval: null,
   mrr: null,
 });
 
@@ -144,6 +146,31 @@ describe('AdminSubscriptions', () => {
     expect(within(comped).getByTestId('admin-subscriptions-comped-s2').textContent).toBe('Comped');
     expect(within(comped).queryByText(/\$/)).toBeNull();
     expect(screen.queryByTestId('admin-subscriptions-comped-s1')).toBeNull();
+  });
+
+  describe('Plan', () => {
+    it('labels the interval from what Stripe bills, over the catalog plan', async () => {
+      listRows = [
+        row({ billedInterval: { interval: 'year', intervalCount: 1 } }),
+        row({ id: 's3', ownerId: 'u3', billedInterval: { interval: 'month', intervalCount: 3 } }),
+        row({ id: 's4', ownerId: 'u4', billedInterval: null }),
+      ];
+      renderTab();
+      expect((await screen.findByTestId('admin-subscriptions-interval-s1')).textContent).toBe('Yearly');
+      expect(screen.getByTestId('admin-subscriptions-interval-s3').textContent).toBe('Every 3 months');
+      expect(screen.getByTestId('admin-subscriptions-interval-s4').textContent).toBe('Monthly');
+    });
+
+    it('marks a price the catalog does not know as an unknown plan, with its billed interval and amount', async () => {
+      listRows = [row({ plan: { priceId: 'price_legacy', name: null, interval: null } })];
+      renderTab();
+      const chip = await screen.findByTestId('admin-subscriptions-unknown-plan-s1');
+      expect(chip.textContent).toBe('Unknown plan');
+      expect(chip.closest('[title]')?.getAttribute('title')).toBe('Price ID not in the plan catalog');
+      expect(screen.getByTestId('admin-subscriptions-interval-s1').textContent).toBe('Monthly');
+      expect(screen.getByTestId('admin-subscriptions-mrr-s1').textContent).toBe('$19.00');
+      expect(screen.queryByText('Unknown price')).toBeNull();
+    });
   });
 
   describe('MRR', () => {

@@ -83,7 +83,7 @@ export function SubscriptionsToolbar({
       ...[...SUBSCRIPTION_PLANS, TEAM_PLAN]
         .filter(plan => plan.priceId)
         .map(plan => ({ value: plan.priceId, label: plan.name })),
-      { value: UNKNOWN_PLAN_FILTER, label: 'Unknown price' },
+      { value: UNKNOWN_PLAN_FILTER, label: 'Unknown plan' },
     ],
     []
   );
