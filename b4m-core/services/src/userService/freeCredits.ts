@@ -32,7 +32,7 @@ export type FreeCreditAdapters = {
   reason: string;
   /** Network signals for a staged grant's first assessment; without it only signupMeta is read. */
   collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
-  /** Admin overrides pay a held grant without drawing the daily signup grant budget. */
+  /** Admin overrides and a card unlock of a held tranche pay without drawing the daily signup grant budget. */
   bypassBudget?: boolean;
 };
 
