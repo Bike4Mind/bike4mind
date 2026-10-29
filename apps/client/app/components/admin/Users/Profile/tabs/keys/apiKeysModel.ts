@@ -45,11 +45,17 @@ export function describeKeyAccess(access: AdminApiKeyAccess): { tone: AdminStatu
         label: 'Allowed',
         text: 'This user has an active paid subscription, so their personal API keys work.',
       };
+    case 'credit_purchase':
+      return {
+        tone: 'good',
+        label: 'Allowed',
+        text: 'This user has bought credits, so their personal API keys work without a subscription.',
+      };
     case 'no_paid_subscription':
       return {
         tone: 'warn',
         label: 'Blocked',
-        text: `API keys need an active paid subscription and this user has none, so their personal keys are refused. ${ADMIN_KEYS_STILL_WORK}`,
+        text: `API keys need an active paid subscription or a credit purchase and this user has neither, so their personal keys are refused. ${ADMIN_KEYS_STILL_WORK}`,
       };
     case 'disabled':
       return {
