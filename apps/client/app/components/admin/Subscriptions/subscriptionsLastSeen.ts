@@ -53,7 +53,8 @@ export const isNewSince = (createdAt: string | null | undefined, since: string |
 /**
  * Whether a Stripe-billed subscription started after this browser last opened the tab. Polls only
  * while `enabled` and mounted (the admin sidebar). The first run on a browser stores the newest row's
- * createdAt as the baseline, so neither existing subscriptions nor browser clock skew light the dot.
+ * createdAt as the baseline, so existing subscriptions never light the dot. Later visits store the
+ * browser's clock (useSubscriptionsSeenOnOpen), so skew there can still shift the cutoff.
  */
 export function useNewSubscriptionsDot(enabled: boolean): boolean {
   const lastSeen = useSubscriptionsLastSeen(state => state.lastSeen);

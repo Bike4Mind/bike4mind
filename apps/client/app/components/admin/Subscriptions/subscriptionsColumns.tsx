@@ -39,7 +39,7 @@ export function formatRelativeDay(value: string, now: Date): string {
 export const formatUtc = (value: string) => `${new Date(value).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
 const Dash = ({ title }: { title?: string }) => (
-  <Typography component="span" sx={{ color: 'admin.inkMuted' }} aria-label={title ?? 'None'} title={title}>
+  <Typography component="span" role="img" sx={{ color: 'admin.inkMuted' }} aria-label={title ?? 'None'} title={title}>
     {'\u2014'}
   </Typography>
 );
