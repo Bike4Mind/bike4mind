@@ -153,6 +153,11 @@ export type HeldReleaseCronResult = {
   scanned: number;
   released: number;
   creditsPaid: number;
+  /** Still held for a reason other than the budget, e.g. a blocked or revoked account. */
+  withheld: number;
+  /** No longer held when reached. */
+  skipped: number;
+  failed: number;
   stoppedOnBudget: boolean;
 };
 
@@ -167,24 +172,32 @@ export async function releaseHeldGrantsAgainstBudget(
   options: { maxUsers: number; pageSize?: number }
 ): Promise<HeldReleaseCronResult> {
   const pageSize = options.pageSize ?? 50;
-  const result: HeldReleaseCronResult = { scanned: 0, released: 0, creditsPaid: 0, stoppedOnBudget: false };
+  const result: HeldReleaseCronResult = {
+    scanned: 0,
+    released: 0,
+    creditsPaid: 0,
+    withheld: 0,
+    skipped: 0,
+    failed: 0,
+    stoppedOnBudget: false,
+  };
   let afterId: string | undefined;
   while (result.scanned < options.maxUsers) {
     const ids = await adapters.listHeldIds({ afterId, limit: Math.min(pageSize, options.maxUsers - result.scanned) });
     if (!ids.length) break;
     for (const id of ids) {
       result.scanned++;
-      const user = await adapters.grant.db.users.findById(id);
-      if (!user || !user.emailVerified || accountBlockReasons(user).length || isAiAccessRevoked(user)) continue;
       const { entry, budgetExhausted } = await releaseHeldGrant(id, adapters, false);
-      if (entry.outcome === 'released') {
-        result.released++;
-        result.creditsPaid += entry.credits;
-      }
       if (budgetExhausted) {
         result.stoppedOnBudget = true;
         return result;
       }
+      if (entry.outcome === 'released') {
+        result.released++;
+        result.creditsPaid += entry.credits;
+      } else if (entry.outcome === 'withheld') result.withheld++;
+      else if (entry.outcome === 'not_held') result.skipped++;
+      else result.failed++;
     }
     afterId = ids[ids.length - 1];
   }
