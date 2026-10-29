@@ -125,7 +125,10 @@ concurrency guard. Domain lookup failures keep the assessment pending for retry.
 Only a real, server-verified Turnstile pass is carried through signed OTC tokens
 or browser-bound OAuth state and stored in `signupMeta` before the first grant.
 Skipped checks, public test secrets, fail-open outages and legacy accounts leave
-the challenge observation unknown. Account-age, first-key and early-spend signals
+the challenge observation unknown. OTC proof is single-use (the pending token is
+consumed), but OAuth proof is per-flow: the signed state is not consumed, so a
+callback that replays the same state within its 5-minute TTL is stamped with the
+same pass. Weight OAuth proof accordingly. Account-age, first-key and early-spend signals
 remain in the separate young-account rescorer; future activity cannot be known at
 the initial grant.
 
