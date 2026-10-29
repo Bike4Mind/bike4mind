@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
@@ -24,9 +24,10 @@ const QuerySchema = z.object({
  * timeout so that receipt handles remain valid while the admin reviews
  * and decides whether to replay individual messages.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const result = QuerySchema.safeParse(req.query);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid query parameters');

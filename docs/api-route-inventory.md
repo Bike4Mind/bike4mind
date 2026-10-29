@@ -34,14 +34,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-960 routes: 61 contracted, 9 aliases of another route, 207 with no static caller in `apps/client/app`.
+957 routes: 61 contracted, 9 aliases of another route, 207 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [...unmatchedApiPath] | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 231 | 0 | 207 | 15 | 0 | 9 | 30 |
+| admin | 228 | 0 | 207 | 12 | 0 | 9 | 30 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -373,7 +373,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/usage-margin` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/components/MarginDashboard.tsx` |
 | `/api/admin/user-api-keys/[id]/rate-limit` | PATCH | jwt+key | `admin:*` | no | - | 0 |
 | `/api/admin/user-api-keys/[id]/reset-rate-limit` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/userApiKeys.ts` |
-| `/api/admin/users` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
 | `/api/admin/users/[userId]/activity` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminUserActivity.ts` |
 | `/api/admin/users/[userId]/api-key-trust` | POST | jwt | - | no | - | 1: `components/admin/Users/Details/UserDetails.tsx` |
 | `/api/admin/users/[userId]/compliance` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/userCompliance.ts` |
@@ -396,8 +395,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/users/[userId]/user-api-keys` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/userApiKeys.ts` |
 | `/api/admin/users/[userId]/verify-email` | POST | jwt+key | `admin:*` | no | - | 2: `components/admin/EmailVerificationTab.tsx`, `components/admin/Users/Details/UserDetails.tsx` |
 | `/api/admin/users/email-verification` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
-| `/api/admin/users/export` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/exportUsersCsv.ts` |
-| `/api/admin/users/summary` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
 | `/api/admin/voice-agents` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
 | `/api/admin/voice-agents/[id]` | GET, PATCH, DELETE | jwt+key | `admin:*` | no | - | 1: `components/admin/VoiceSettingsTab.tsx` |
 | `/api/admin/webhook-logs` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/webhookAuditLogs.ts` |
@@ -1508,7 +1505,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/api/users` | GET | jwt+key | - | no | - | 1: `utils/userAPICalls.tsx` |
+| `/api/users` | GET | jwt+key | - | no | - | 2: `components/admin/Users/exportUsersCsv.ts`, `utils/userAPICalls.tsx` |
 | `/api/users/[id]` | GET | jwt+key | - | no | - | 3: `components/admin/Users/Views/FullUsersView.tsx`, `hooks/data/user.ts`, `routes/auth/success.tsx` |
 | `/api/users/[id]/activities` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/[id]/agents` | GET | jwt+key | - | no | - | 1: `components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx` |
