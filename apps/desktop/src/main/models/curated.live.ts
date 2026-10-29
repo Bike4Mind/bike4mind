@@ -1,9 +1,9 @@
-import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers } from '@bike4mind/local-models';
+import { HuggingFaceHub, OllamaRuntime, curatedOllamaBlocked, ollamaLibraryLayers } from '@bike4mind/local-models';
 import { HubManifestSchema } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import bundled from '../../../../../catalog/model-hub/curated-v2.json';
-import { installedReviewed, ollamaBlocked, servesReviewed } from './ModelHubService';
+import { installedReviewed, servesReviewed } from './ModelHubService';
 
 // Registry-only by default. Pull mode downloads weights but never removes or rewrites catalog pins.
 const mode = z.enum(['registry', 'installed', 'pull']).parse(process.env.CURATED_CHECK ?? 'registry');
@@ -46,7 +46,7 @@ describe.sequential(`bundled curated builds (${mode})`, () => {
 
       const health = await runtime.health();
       expect(health.ok, health.error ?? 'Ollama is unavailable').toBe(true);
-      expect(ollamaBlocked(build, health.version), `${id}: unsupported Ollama version`).toBeNull();
+      expect(curatedOllamaBlocked(build, health.version), `${id}: unsupported Ollama version`).toBeNull();
       console.info(`${id}: Ollama ${health.version}; declared minimum ${build.runtimeMin?.ollama}; ref ${ref}`);
       if (mode === 'pull') await runtime.pull(ref, source.kind === 'library' ? { runner: 'llamacpp' } : {});
       const inspection = await runtime.inspect(ref, { tags: false, timeoutMs: 30_000 });

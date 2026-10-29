@@ -1554,6 +1554,9 @@ importers:
 
   b4m-core/local-models:
     dependencies:
+      '@bike4mind/common':
+        specifier: workspace:*
+        version: link:../common
       zod:
         specifier: ^4.6.6
         version: 4.6.6
