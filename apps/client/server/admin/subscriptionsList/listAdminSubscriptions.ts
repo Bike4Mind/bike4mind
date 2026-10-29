@@ -290,6 +290,9 @@ export async function adminSubscriptionsExportPage(
         $or: [
           { createdAt: { $lt: after.createdAt } },
           { createdAt: after.createdAt, _id: { $lt: new mongoose.Types.ObjectId(after.id) } },
+          // $lt on a Date never matches a missing createdAt, so a dated cursor must reach the undated tail
+          // explicitly. A null cursor is already inside that tail and must not restart it.
+          ...(after.createdAt ? [{ createdAt: null }] : []),
         ],
       }
     : null;

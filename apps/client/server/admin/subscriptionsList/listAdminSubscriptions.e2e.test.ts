@@ -514,6 +514,20 @@ describe('adminSubscriptionsExportPage', () => {
     expect(all[0].createdAt).not.toBeNull();
     expect(all.slice(1).map(row => row.id)).toEqual([...legacyIds].sort().reverse());
   });
+
+  it('reaches the undated tail from a cursor on a dated row', async () => {
+    const user = await seedUser('jane');
+    await seedSubscription(String(user._id), { createdAt: new Date(NOW.getTime() - DAY) });
+    await seedSubscription(String(user._id), { createdAt: new Date(NOW.getTime() - 2 * DAY) });
+    const legacyIds = [await seedLegacySubscription(String(user._id)), await seedLegacySubscription(String(user._id))];
+    const { match } = await adminSubscriptionsMatch({}, NOW, catalog);
+
+    const first = await adminSubscriptionsExportPage(match, null, 2, catalog);
+    const rest = await adminSubscriptionsExportPage(match, cursorOf(first[first.length - 1]), 5, catalog);
+
+    expect(first.every(row => row.createdAt !== null)).toBe(true);
+    expect(rest.map(row => row.id)).toEqual([...legacyIds].sort().reverse());
+  });
 });
 
 describe('cancel filter', () => {
