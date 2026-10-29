@@ -642,6 +642,53 @@ describe('ModelsScreen curated', () => {
     expect(q('models-curated-error')).toBeNull();
   });
 
+  it.each([false, true])('keeps a failed recheck dismissed (finishes after dismissal: %s)', async afterDismiss => {
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    let finish: (() => void) | undefined;
+    calls.checkCurated.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finish = () => {
+            if (bridge.pulls.length > 0) {
+              bridge.pulls = [failedE4B(error)];
+              pushPulls(bridge.pulls);
+            }
+            resolve({ ok: false, error });
+          };
+        })
+    );
+    calls.dismissPull.mockImplementationOnce(() => {
+      bridge.pulls = [];
+      pushPulls([]);
+    });
+    await pullFails(failedE4B(error));
+    await click(q('models-curated-check-again-btn'));
+    if (!afterDismiss) await act(async () => finish?.());
+
+    await click(q('models-pull-dismiss-btn'));
+    if (afterDismiss) await act(async () => finish?.());
+    await flush();
+
+    expect(q('models-pull-list')).toBeNull();
+    expect(q('models-curated-error')).toBeNull();
+    expect(q('models-curated-check-again-btn')).toBeNull();
+  });
+
+  it('clears a recheck IPC failure when its pull is dismissed', async () => {
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    calls.checkCurated.mockRejectedValueOnce(new Error('IPC unavailable'));
+    calls.dismissPull.mockImplementationOnce(() => {
+      bridge.pulls = [];
+      pushPulls([]);
+    });
+    await pullFails(failedE4B(error));
+    await click(q('models-curated-check-again-btn'));
+    await click(q('models-pull-dismiss-btn'));
+
+    expect(q('models-pull-list')).toBeNull();
+    expect(q('models-curated-error')).toBeNull();
+  });
+
   it('downloads nothing when the dialog is dismissed', async () => {
     await mount(undefined, 'curated');
     await click(entryButton('gemma-4-e4b', 'qat-q4-0'));

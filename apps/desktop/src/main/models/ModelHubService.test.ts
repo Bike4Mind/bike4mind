@@ -250,6 +250,19 @@ const request = {
 };
 
 describe('curated draft integrity', () => {
+  it('rejects every adapter while accepting absent or empty adapter lists', async () => {
+    const reviewed = curatedBuilds()[0];
+    const inspection = await harness().runtime.inspect(refOf(reviewed));
+    for (const adapterBlobs of [undefined, [], [SHA], [null], [SHA, SHA]]) {
+      expect(
+        installedReviewed(
+          { ...inspection, contents: inspection.contents && { ...inspection.contents, adapterBlobs } },
+          reviewed
+        )
+      ).toBe(!adapterBlobs?.length);
+    }
+  });
+
   it('requires exactly the reviewed draft and rejects missing, changed, unreadable or duplicate drafts', async () => {
     const reviewed = curatedBuilds().find(build => pinsOf(build)?.draft);
     if (!reviewed) throw new Error('the bundled list lost its draft build');
@@ -1455,6 +1468,11 @@ describe('ModelHubService curated library pulls', () => {
 
   it.each([
     ['another license', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, license: 'x' } })],
+    ['an adapter', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, adapterBlobs: [SHA] } })],
+    [
+      'an unreadable adapter',
+      (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, adapterBlobs: [null] } }),
+    ],
     ['no license', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, license: null } })],
     ['other weights', (b: ModelInspection) => ({ ...b, contents: b.contents && { ...b.contents, modelBlob: SHA } })],
     [
@@ -1492,6 +1510,18 @@ describe('ModelHubService curated library pulls', () => {
     expect(runtime.remove).toHaveBeenCalledWith(REF);
     expect(installedChanged).toHaveBeenCalledTimes(1);
     expect(service.pulls()).toMatchObject([{ phase: 'failed', error: { kind: 'upstream-changed' } }]);
+  });
+
+  it('preserves an existing tag when its installed model has an unreviewed adapter', async () => {
+    const setup = harness();
+    setup.runtime.list.mockResolvedValueOnce([(await setup.runtime.inspect(REF)).model]);
+    const result = await pulledAs(setup, base => ({
+      ...base,
+      contents: base.contents && { ...base.contents, adapterBlobs: [SHA] },
+    }));
+    expect(result).toMatchObject({ ok: false, error: { kind: 'upstream-changed' }, listed: true });
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+    expect(setup.service.pulls()).toMatchObject([{ phase: 'failed', error: { kind: 'upstream-changed' } }]);
   });
 
   it.each([

@@ -251,6 +251,7 @@ import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-
 import RestoreLegacyXlsMimeType from './20260921235946_restore-legacy-xls-mime-type';
 import EnsureUserAdminListIndexes from './20260921236000_ensure-user-admin-list-indexes';
 import EnsureAdminSavedViewIndexes from './20260921236100_ensure-admin-saved-view-indexes';
+import EnsureSubscriptionAdminListIndexes from './20260921236200_ensure-subscription-admin-list-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -437,6 +438,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureUserAdminListIndexes,
   EnsureCreditTransactionBalanceEventIndex,
   EnsureAdminSavedViewIndexes,
+  EnsureSubscriptionAdminListIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];
