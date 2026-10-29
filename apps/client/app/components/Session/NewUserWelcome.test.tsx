@@ -171,7 +171,7 @@ describe('NewUserWelcome', () => {
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
   });
 
-  it('does not promise the maximum staged credits or answers before eligibility is assessed', () => {
+  it('does not promise the maximum staged credits or answers before the tranche is assessed', () => {
     state.balance = 0;
     state.emailVerified = false;
     state.signupGrant = {
@@ -183,7 +183,7 @@ describe('NewUserWelcome', () => {
     };
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-credits')).toHaveTextContent(
-      'Verify your email to unlock up to 10,000 credits, subject to eligibility checks.'
+      'Verify your email to unlock up to 10,000 credits now. The rest unlocks all at once when you subscribe, or all at once when you verify a card.'
     );
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
   });

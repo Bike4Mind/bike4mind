@@ -31,7 +31,8 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
 vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
-  readRefreshCookieWithSource: () => ({ token: 'cookie-refresh-token', legacy: false }),
+  readRefreshCookie: () => 'cookie-refresh-token',
+  readAdminReturnCookie: () => null,
   setRefreshCookie: (...a: unknown[]) => mockSetCookie(...a),
 }));
 vi.mock('@server/auth/tokenGenerator', () => ({
