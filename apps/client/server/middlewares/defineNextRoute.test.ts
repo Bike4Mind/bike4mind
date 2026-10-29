@@ -11,7 +11,7 @@
  * branches (`jwtOnly`, `public`, empty `scopes`) have no reachable input anywhere in
  * the repo. These local fixture contracts exercise them.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
@@ -435,6 +435,101 @@ describe('nextRouteForContract', () => {
       const { req, res } = fire({ apiKey: 'b4m_live_x' });
       await route(req, res);
       expect(res.getHeader('Deprecation')).toBeUndefined();
+    });
+  });
+
+  describe('response schema', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('strips an undeclared field outside production, naming it in a warning', async () => {
+      vi.stubEnv('NODE_ENV', 'test');
+      validKey([ApiKeyScope.AI_CHAT]);
+      let warn: ReturnType<typeof vi.spyOn> | undefined;
+      const route = nextRouteForContract(makeContract()).post((req, res) => {
+        warn = vi.spyOn(req.logger, 'warn');
+        res.json({ ok: true, passwordHash: 'secret' });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ ok: true });
+      expect(warn).toHaveBeenCalledWith('[contract] fixtureOp response 200 sends undeclared fields: passwordHash');
+    });
+
+    it('logs undeclared nested and array fields in production but sends the body unchanged', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      validKey([ApiKeyScope.AI_CHAT]);
+      const NestedSchema = z.object({ ok: z.boolean(), items: z.array(z.object({ id: z.string() })) });
+      let warn: ReturnType<typeof vi.spyOn> | undefined;
+      const route = nextRouteForContract(
+        makeContract({ responses: { 200: { description: 'ok', schema: NestedSchema } } })
+      ).post((req, res) => {
+        warn = vi.spyOn(req.logger, 'warn');
+        res.json({
+          ok: true,
+          items: [
+            { id: 'a', secret: 1 },
+            { id: 'b', secret: 2 },
+          ],
+          debug: 'x',
+          unset: undefined,
+        });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({
+        ok: true,
+        items: [
+          { id: 'a', secret: 1 },
+          { id: 'b', secret: 2 },
+        ],
+        debug: 'x',
+      });
+      expect(warn).toHaveBeenCalledWith(
+        '[contract] fixtureOp response 200 sends undeclared fields: items[].secret, debug'
+      );
+    });
+
+    it('leaves undeclared fields on an error body, which errorHandler assembles from additionalInfo', async () => {
+      vi.stubEnv('NODE_ENV', 'test');
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(
+        makeContract({ responses: { 429: { description: 'limited', schema: z.object({ error: z.string() }) } } })
+      ).post((_req, res) => res.status(429).json({ error: 'slow down', errorCode: 'token_rate_limit_exceeded' }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(res._getJSONData()).toEqual({ error: 'slow down', errorCode: 'token_rate_limit_exceeded' });
+    });
+
+    it('sends the body unchanged and warns when it does not match the schema', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      validKey([ApiKeyScope.AI_CHAT]);
+      let warn: ReturnType<typeof vi.spyOn> | undefined;
+      const route = nextRouteForContract(makeContract()).post((req, res) => {
+        warn = vi.spyOn(req.logger, 'warn');
+        res.json({ ok: 'yes', extra: 1 });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ ok: 'yes', extra: 1 });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('fixtureOp response 200 violates schema'));
+    });
+
+    it('leaves a status with no declared schema (raw body) untouched', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(
+        makeContract({ responses: { 200: { description: 'ok', schema: OkSchema }, 202: { description: 'raw' } } })
+      ).post((_req, res) => res.status(202).json({ anything: 'goes' }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(202);
+      expect(res._getJSONData()).toEqual({ anything: 'goes' });
     });
   });
 

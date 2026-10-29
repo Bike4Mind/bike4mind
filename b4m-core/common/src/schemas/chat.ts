@@ -223,6 +223,20 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
 // Must stay in sync with `ToolPayload` in utils/toolPayloads.ts.
 const ToolPayloadSchema = z.object({ type: z.string(), payload: z.unknown() });
 
+// Mirrors SystemPromptTextDisclosure (services/src/llm/systemPromptDisclosure.ts); keep in sync.
+const SystemPromptTextDisclosureSchema = z.object({
+  blocks: z.array(
+    z.object({
+      source: SystemPromptDetailSchema.shape.source,
+      name: z.string(),
+      text: z.string().optional(),
+      redacted: z.boolean(),
+      placement: z.enum(['system', 'user_turn', 'mixed']),
+    })
+  ),
+  sizeCapped: z.boolean(),
+});
+
 /**
  * The completed-turn body POST /api/chat returns with `wait: true`. Like the ACK it is
  * assembled inline in apps/client/pages/api/chat.ts and MUST stay in sync with that
@@ -234,11 +248,11 @@ export const ChatWaitResponseSchema = ChatAckSchema.extend({
   response: z.string().nullable(),
   responses: z.array(z.string()),
   toolPayloads: z.array(ToolPayloadSchema),
-  // ISO string on the wire; Date too because defineNextRoute's non-prod response check runs
+  // ISO string on the wire; Date too because defineNextRoute's response check runs
   // before JSON serialization. Not z.coerce.date(): that documents the field as nullable.
   createdAt: z.union([z.string().datetime(), z.date()]),
   promptDetails: z.array(SystemPromptDetailSchema).optional(),
-  promptText: z.string().optional(),
+  promptText: SystemPromptTextDisclosureSchema.optional(),
   performance: z.object({
     total_ms: z.number(),
     phases: z.record(z.string(), z.number()),
