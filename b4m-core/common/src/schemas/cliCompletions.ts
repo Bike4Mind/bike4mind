@@ -232,6 +232,12 @@ export const CompletionRequestSchema = z.object({
         .describe(
           'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
         ),
+      cacheTtl: z
+        .enum(['5m', '1h'])
+        .optional()
+        .describe(
+          'Prompt-cache lifetime for this request, where the server places cache breakpoints (Claude on the direct Anthropic API or Bedrock, when the request comes from the CLI or Desktop app). `5m` (the default) writes at 1.25x the input rate; `1h` writes at 2x and keeps the cached prefix for an hour between requests. Reads cost the same either way. Models without 1-hour caching ignore `1h` and keep `5m`.'
+        ),
     })
     .optional(),
 });
@@ -285,6 +291,10 @@ const CompletionUsageSchema = z.object({
     ),
   cacheReadInputTokens: z.number().optional(),
   cacheCreationInputTokens: z.number().optional(),
+  cacheWrite1hInputTokens: z
+    .number()
+    .optional()
+    .describe('The part of cacheCreationInputTokens written with the 1-hour TTL. Absent when there were none.'),
 });
 
 const CompletionMetaEventSchema = z.object({

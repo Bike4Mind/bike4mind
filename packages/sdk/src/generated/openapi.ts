@@ -1800,6 +1800,11 @@ export interface components {
       lakeScopeExplicit?: boolean;
       /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       lastUsedModel?: string | null;
       /** Format: date-time */
       firstCreated: string;
@@ -1823,6 +1828,11 @@ export interface components {
       lakeScopeExplicit?: boolean;
       /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       lastUsedModel?: string | null;
       /** Format: date-time */
       firstCreated: string;
@@ -1852,6 +1862,11 @@ export interface components {
       lakeScope?: string[] | null;
       /** @description Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content, including when every lake is in scope; the session's attached files still reach the model and stay searchable by its knowledge-base tools. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. A 1-hour cache costs more to write and the same to read; it applies only on models that support it, and other models keep the 5-minute cache. Omit to leave it unchanged.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       /** @description Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also appended to every project that contains this session, granting every member of that project access to those files. This propagation is append-only and cannot be undone through the UI - pass false if newly-attached files should not be shared with the project. */
       propagateToProjects?: boolean;
     };
@@ -1876,6 +1891,11 @@ export interface components {
       lakeScopeExplicit?: boolean;
       /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       lastUsedModel?: string | null;
       /** Format: date-time */
       firstCreated: string;
@@ -1973,6 +1993,8 @@ export interface components {
             reasoningTokens?: number;
             cacheReadInputTokens?: number;
             cacheCreationInputTokens?: number;
+            /** @description The part of cacheCreationInputTokens written with the 1-hour TTL. Absent when there were none. */
+            cacheWrite1hInputTokens?: number;
           };
           credits?: {
             used?: number;
@@ -2209,6 +2231,11 @@ export interface components {
           enabled: boolean;
           budget_tokens?: number;
         };
+        /**
+         * @description Prompt-cache lifetime for this request, where the server places cache breakpoints (Claude on the direct Anthropic API or Bedrock, when the request comes from the CLI or Desktop app). `5m` (the default) writes at 1.25x the input rate; `1h` writes at 2x and keeps the cached prefix for an hour between requests. Reads cost the same either way. Models without 1-hour caching ignore `1h` and keep `5m`.
+         * @enum {string}
+         */
+        cacheTtl?: '5m' | '1h';
       };
     };
     /**
@@ -3908,6 +3935,11 @@ export interface components {
       lakeScopeExplicit?: boolean;
       /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
       includeLibraryFiles?: boolean;
+      /**
+       * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+       * @enum {string}
+       */
+      promptCacheTtl?: '5m' | '1h';
       lastUsedModel?: string | null;
       /** Format: date-time */
       firstCreated: string;
@@ -3977,6 +4009,11 @@ export interface components {
         lakeScopeExplicit?: boolean;
         /** @description Whether the session grounds on your own library alongside its lakes. Absent when never set. */
         includeLibraryFiles?: boolean;
+        /**
+         * @description The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+         * @enum {string}
+         */
+        promptCacheTtl?: '5m' | '1h';
         lastUsedModel?: string | null;
         /** Format: date-time */
         firstCreated: string;

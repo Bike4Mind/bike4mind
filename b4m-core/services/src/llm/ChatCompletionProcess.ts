@@ -16,6 +16,12 @@ import {
   getTextModelCost,
   getTurnsCost,
   buildUsagePriceStamp,
+  DEFAULT_PROMPT_CACHE_TTL,
+  type PromptCacheTtl,
+  resolvePromptCacheTtl,
+  withRequestTtlWrites,
+  oneHourWritesOf,
+  sumOneHourCacheWrites,
   CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
@@ -4817,15 +4823,22 @@ export class ChatCompletionProcess {
       let stopSignalSent = false;
       const actualTokenUsage: Pick<
         CompletionInfo,
-        'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens' | 'turnUsage'
+        | 'inputTokens'
+        | 'outputTokens'
+        | 'cacheReadInputTokens'
+        | 'cacheCreationInputTokens'
+        | 'cacheWrite1hInputTokens'
+        | 'turnUsage'
       > & { stopReason?: string } = {
         inputTokens: undefined,
         outputTokens: undefined,
         cacheReadInputTokens: undefined,
         cacheCreationInputTokens: undefined,
+        cacheWrite1hInputTokens: undefined,
         turnUsage: undefined,
         stopReason: undefined,
       };
+      let cacheTtlForSettlement: PromptCacheTtl = DEFAULT_PROMPT_CACHE_TTL;
       if (this.reservationBasis) this.reservationBasis.reported = actualTokenUsage;
 
       if (THROTTLE_INTERVAL) {
@@ -5262,6 +5275,11 @@ export class ChatCompletionProcess {
               assistant: outboundMessages.filter(m => m.role === 'assistant').length,
             };
 
+            const roundCacheTtl = resolvePromptCacheTtl({
+              model: currentModel,
+              chatTtl: session.promptCacheTtl,
+              userDefaultTtl: this.user.preferences?.promptCacheTtl,
+            });
             const cacheStrategy: ICacheStrategy = {
               enableCaching: messageCount >= 2, // Enable caching for multi-turn conversations
               cacheSystemPrompt: true, // Always cache system prompts
@@ -5269,9 +5287,13 @@ export class ChatCompletionProcess {
               // A flagged history message already closes the cached prefix; asking the adapter for
               // its own end-of-array anchor would cache the current turn as well.
               cacheConversationHistory: !historyAnchorMarked && messageCount >= 2, // Cache history for multi-turn
-              cacheTTL: '5m', // Use 5-minute TTL for active conversations
+              // One TTL for every breakpoint: a 1h marker may not follow a 5m one, and the head
+              // must outlive the history it prefixes or a 1h history entry has nothing to extend.
+              cacheTTL: roundCacheTtl,
               conversationId: quest.id, // Use quest ID for xAI cache affinity
             };
+            quest.promptMeta!.tokenUsage = { ...quest.promptMeta!.tokenUsage, promptCacheTtl: roundCacheTtl };
+            cacheTtlForSettlement = roundCacheTtl;
 
             // Log cache strategy decision with structured metadata
             this.logger.info('[PromptCache] Strategy determined', {
@@ -5526,7 +5548,10 @@ export class ChatCompletionProcess {
                   actualTokenUsage.cacheReadInputTokens = completionInfo.cacheReadInputTokens;
                 if (completionInfo?.cacheCreationInputTokens != null)
                   actualTokenUsage.cacheCreationInputTokens = completionInfo.cacheCreationInputTokens;
-                if (completionInfo?.turnUsage?.length) actualTokenUsage.turnUsage = completionInfo.turnUsage;
+                if (completionInfo?.cacheWrite1hInputTokens != null)
+                  actualTokenUsage.cacheWrite1hInputTokens = completionInfo.cacheWrite1hInputTokens;
+                if (completionInfo?.turnUsage?.length)
+                  actualTokenUsage.turnUsage = withRequestTtlWrites(completionInfo.turnUsage, cacheTtlForSettlement);
                 // stopReason follows the same preserve-last-non-null contract as token
                 // counts. Previously this field was overwritten by every callback (via
                 // the whole-object replace), so a tail callback emitting undefined would
@@ -6320,6 +6345,15 @@ export class ChatCompletionProcess {
         // Provider-basis only: the local fallback deliberately never bills cache creation,
         // so recording a value there would imply a charge that was not made.
         const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
+        const cacheWrite1hInputTokens = !hasProviderUsage
+          ? 0
+          : actualTokenUsage.turnUsage?.length
+            ? sumOneHourCacheWrites(actualTokenUsage.turnUsage)
+            : oneHourWritesOf(
+                cacheCreationInputTokens,
+                actualTokenUsage.cacheWrite1hInputTokens,
+                cacheTtlForSettlement
+              );
         const estimatedCost = hasProviderUsage
           ? actualTokenUsage.turnUsage?.length
             ? getTurnsCost(currentModel, actualTokenUsage.turnUsage)
@@ -6329,7 +6363,8 @@ export class ChatCompletionProcess {
                 settledOutputTokens,
                 cacheReadInputTokens,
                 cacheCreationInputTokens,
-                settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
+                settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens,
+                cacheWrite1hInputTokens
               )
           : getTextModelCost(
               currentModel,
@@ -6355,6 +6390,7 @@ export class ChatCompletionProcess {
           actualOutputTokens: actualTokenUsage?.outputTokens,
           cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined,
           cacheCreationInputTokens: cacheCreationInputTokens > 0 ? cacheCreationInputTokens : undefined,
+          cacheWrite1hInputTokens: cacheWrite1hInputTokens > 0 ? cacheWrite1hInputTokens : undefined,
           settledBasis,
           estimatedCost,
           creditsUsed: textCreditsUsed,
@@ -6542,6 +6578,7 @@ export class ChatCompletionProcess {
               ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
               : localInputTokens,
             localEstimate: !hasProviderUsage,
+            cacheWrite1hTokens: cacheWrite1hInputTokens,
           });
 
           // Dual-write usage event: ties frozen COGS to credits debited
