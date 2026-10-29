@@ -32,11 +32,11 @@ export class HuggingFaceTokenStore {
 
   async set(token: string): Promise<void> {
     await (this.#ready ??= this.#load());
-    this.#token = token;
     const document: TokenDocument = this.persisted()
       ? { version: 1, token: this.cipher.encryptString(token).toString('base64') }
       : { version: 1 };
     await this.file.write(JSON.stringify(document));
+    this.#token = token;
   }
 
   async clear(): Promise<void> {
