@@ -223,6 +223,7 @@ describe('OllamaLocal', () => {
       label: 'gpu box',
       fetch,
       hasCredentials: () => true,
+      redact: text => text,
     });
     const error = await server.listModels().catch((err: unknown) => err);
     expect(error).toBeInstanceOf(ServerForbiddenError);
