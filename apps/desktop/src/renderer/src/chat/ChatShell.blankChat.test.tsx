@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
+import type { AuthState } from '@shared/auth';
 import type { ChatMessage, ChatSession, ChatSessionSummary, CreationTool } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -130,19 +131,24 @@ afterEach(() => {
   root = null;
   host = null;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
-async function openBlankSession() {
-  host = document.createElement('div');
-  document.body.appendChild(host);
-  root = createRoot(host);
+async function renderShell(auth?: AuthState) {
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ChatShell />
+        <ChatShell key={auth?.user?.id} auth={auth} />
       </CssVarsProvider>
     );
   });
+}
+
+async function openBlankSession(auth?: AuthState) {
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await renderShell(auth);
   await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-session-item"]')?.click());
   await act(async () => undefined);
 }
@@ -151,6 +157,46 @@ const cards = () => [...document.querySelectorAll<HTMLButtonElement>('[data-test
 const composer = () => document.querySelector<HTMLTextAreaElement>('[data-testid="chat-composer-input"]');
 
 describe('the blank chat', () => {
+  it('shows the text cards with a diagnostic when loading creation tools fails', async () => {
+    stubBridge({ tools: ALL_TOOLS });
+    const error = new Error('IPC unavailable');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    listCreationTools.mockRejectedValueOnce(error);
+    await openBlankSession();
+
+    expect(cards().map(card => card.dataset.category)).toEqual(['write', 'ask']);
+    expect(warning).toHaveBeenCalledWith('Could not load creation tools', error);
+  });
+
+  it('does not show the previous signed-in account media cards after a remount', async () => {
+    const auth = (id: string): AuthState => ({
+      status: 'signed-in',
+      environment: { preset: 'hosted', url: 'https://example.com', label: 'Production' },
+      hostedAvailable: true,
+      storage: 'available',
+      busy: 'idle',
+      user: { id },
+    });
+    stubBridge({ tools: ALL_TOOLS });
+    await openBlankSession(auth('account-1'));
+    expect(cards().some(card => card.dataset.category === 'video')).toBe(true);
+
+    let resolve: (tools: CreationTool[]) => void = () => {
+      throw new Error('Promise not initialized');
+    };
+    listCreationTools.mockImplementationOnce(
+      () =>
+        new Promise<CreationTool[]>(complete => {
+          resolve = complete;
+        })
+    );
+    await renderShell(auth('account-2'));
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-session-item"]')?.click());
+    expect(cards()).toHaveLength(0);
+    await act(async () => resolve([]));
+    expect(cards().map(card => card.dataset.category)).toEqual(['write', 'ask']);
+  });
+
   it('renders a card for each offered category', async () => {
     stubBridge({ tools: ALL_TOOLS });
     await openBlankSession();

@@ -7,11 +7,9 @@ const NONE: CreationTool[] = [];
 const cache = new Map<string, CreationTool[]>();
 
 /**
- * The generation tools a Chat turn on `model` would be offered, or null until main has answered
- * once for this account. Asked again only when a blank chat is shown (`sessionId`) or its model
- * changes, never on render: main answers from the same short caches the next turn reads, and the
- * last answer stays on screen while it does. A local model is never offered one, so it costs no
- * round trip at all.
+ * Generation tools for this account and model, or null until main answers. Refresh on opening
+ * a blank chat or changing its model, retaining only the same account/model's cached answer.
+ * Local models need no lookup; a failed read falls back to text cards and retries on next opening.
  */
 export function useCreationTools(
   account: string,
@@ -20,28 +18,34 @@ export function useCreationTools(
 ): CreationTool[] | null {
   const local = !!model && isLocalModel(model);
   const key = `${account}\n${model ?? ''}`;
-  const [last, setLast] = useState<{ account: string; tools: CreationTool[] } | null>(null);
+  const [last, setLast] = useState<{ key: string; tools: CreationTool[] } | null>(null);
 
   useEffect(() => {
     if (sessionId === null || !model || local) return;
     let live = true;
-    window.b4m.chat
-      .listCreationTools(model)
-      .then(next => {
+    const load = async () => {
+      try {
+        const next = await window.b4m.chat.listCreationTools(model);
+        if (!live) return;
         const previous = cache.get(key);
         const tools = previous && sameTools(previous, next) ? previous : next;
         cache.set(key, tools);
-        if (live)
-          setLast(current => (current?.account === account && current.tools === tools ? current : { account, tools }));
-      })
-      .catch(() => undefined);
+        setLast(current => (current?.key === key && current.tools === tools ? current : { key, tools }));
+      } catch (error: unknown) {
+        if (!live) return;
+        console.warn('Could not load creation tools', error);
+        cache.delete(key);
+        setLast({ key, tools: NONE });
+      }
+    };
+    void load();
     return () => {
       live = false;
     };
   }, [account, key, local, model, sessionId]);
 
   if (local) return NONE;
-  return cache.get(key) ?? (last?.account === account ? last.tools : null);
+  return cache.get(key) ?? (last?.key === key ? last.tools : null);
 }
 
 function sameTools(a: readonly CreationTool[], b: readonly CreationTool[]): boolean {

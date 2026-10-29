@@ -237,11 +237,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
   const blankChatId =
-    !opening && activeId && conversation.session?.mode === 'chat' && conversation.messages.length === 0
+    screen === 'conversation' &&
+    !opening &&
+    activeId &&
+    conversation.session?.mode === 'chat' &&
+    conversation.messages.length === 0
       ? activeId
       : null;
   const creationTools = useCreationTools(
-    `${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}`,
+    `${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}:${auth?.user?.id ?? 'device-local'}`,
     blankChatId,
     conversation.session?.model
   );
