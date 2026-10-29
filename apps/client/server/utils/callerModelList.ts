@@ -93,7 +93,7 @@ async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument 
   }
   if (!allowedModels) return list;
   if (await holdsPaidPlan(user)) return list;
-  const models = list.models.filter(model => isFreeTierModel(model.id, model, allowedModels));
+  const models = list.models.filter(model => isFreeTierModel(model.id, allowedModels));
   const offeredIds = new Set<string>(models.map(model => model.id));
   // An upgrade offer pointing at a paid-only model would only lead to a refusal.
   return { models, supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)) };

@@ -111,7 +111,13 @@ describe('getCallerModelList free-tier gate', () => {
     mocks.loadFreeTierAllowedModels.mockResolvedValue(allowed);
   });
 
-  it('keeps only allowlisted text models and non-text models for a free user', async () => {
+  it('keeps only allowlisted models of any modality for a free user', async () => {
+    expect(await listedIds()).toEqual(['priced']);
+  });
+
+  it('lists explicitly allowlisted media for a free user', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['priced', 'image-model']));
+
     expect(await listedIds()).toEqual(['priced', 'image-model']);
   });
 
@@ -151,7 +157,7 @@ describe('getCallerModelList free-tier gate', () => {
     const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
     mocks.getUserEntitlements.mockRejectedValue(new Error('subscription db down'));
 
-    expect(await listedIds()).toEqual(['priced', 'image-model']);
+    expect(await listedIds()).toEqual(['priced']);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('entitlement read failed'), expect.anything());
     warn.mockRestore();
   });

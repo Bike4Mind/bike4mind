@@ -23,7 +23,7 @@ export type ModelAdmissionInput = {
   enforceCredits?: boolean;
   /**
    * The free-tier allowlist from loadFreeTierAllowedModels; undefined when the gate is off. While set,
-   * a text model outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
+   * a model of any modality outside it needs the PAID_PLAN_ENTITLEMENT_KEY entitlement (admins and developers exempt).
    */
   freeTierAllowedModels?: ReadonlySet<string>;
 };
@@ -53,8 +53,9 @@ export async function loadModelConfigurations(
 }
 
 /**
- * Free-tier text models in admin order, or undefined when the gate is off; a read failure propagates. The Default API
- * Model is not added (see resolveCallerDefaultModel in apps/client/server/utils/callerModelList.ts).
+ * The models a free account may call, across all modalities and in admin order, or undefined when the gate is off.
+ * A read failure propagates: this gate fails closed. The Default API Model is not added (see
+ * resolveCallerDefaultModel in apps/client/server/utils/callerModelList.ts).
  */
 export async function loadFreeTierAllowedModels(
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>
@@ -79,15 +80,10 @@ export function isFreeTierExempt(user: Pick<ModelAdmissionInput['user'], 'isAdmi
 }
 
 /**
- * Whether a free account may call the model. Only text models are gated; an id missing from the catalog
- * (`model` undefined) is gated as text so the gate never opens on an unknown model.
+ * Whether a free account may call the model, regardless of modality or catalog presence.
  */
-export function isFreeTierModel(
-  modelId: string,
-  model: Pick<ModelInfo, 'type'> | undefined,
-  allowedModels: ReadonlySet<string>
-): boolean {
-  return (model !== undefined && model.type !== 'text') || allowedModels.has(modelId);
+export function isFreeTierModel(modelId: string, allowedModels: ReadonlySet<string>): boolean {
+  return allowedModels.has(modelId);
 }
 
 /** A text model with no usable per-token price settles at $0, so it cannot run while credits are enforced. */
@@ -121,9 +117,9 @@ export function createModelAdmission({
       return [];
     }));
 
-  const requiresPaidPlan = async (modelId: string, model: ModelInfo | undefined): Promise<boolean> => {
+  const requiresPaidPlan = async (modelId: string): Promise<boolean> => {
     if (!freeTierAllowedModels || isFreeTierExempt(user)) return false;
-    if (isFreeTierModel(modelId, model, freeTierAllowedModels)) return false;
+    if (isFreeTierModel(modelId, freeTierAllowedModels)) return false;
     return !(await resolveEntitlements()).includes(PAID_PLAN_ENTITLEMENT_KEY);
   };
 
@@ -146,7 +142,7 @@ export function createModelAdmission({
         return new ForbiddenError(`Model "${modelId}" is not accessible and no fallback available`);
       }
     }
-    if (await requiresPaidPlan(modelId, model)) {
+    if (await requiresPaidPlan(modelId)) {
       if (entitlementReadFailed) {
         return new ServiceUnavailableError(`Could not verify your plan for model "${modelId}". Please try again.`);
       }

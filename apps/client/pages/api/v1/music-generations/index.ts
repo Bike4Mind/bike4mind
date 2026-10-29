@@ -23,6 +23,7 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateMusicJobDeps } from '@server/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
@@ -66,7 +67,7 @@ const createRouter = nextRouteForContract(createMusicGenerationContract, {
   const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
   const result = await createMusicJob(
     {
-      user: { id: req.user.id, organizationId },
+      user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),

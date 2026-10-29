@@ -138,8 +138,8 @@ export const registerUser = async (
   }
 
   // anti-sybil: refuse throwaway inboxes at the chokepoint every credit-bearing
-  // registration flows through. The self-serve OAuth signup grant (verifyCallback.ts) applies
-  // the same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
+  // registration flows through. Self-serve OAuth signup (verifyCallback.ts) refuses on the
+  // same shouldBlockDisposableEmail gate; Okta/SAML signup and admin user creation grant no
   // flat credits. Registration-only - OTC sign-in for existing accounts never reaches this
   // function, so grandfathered users on such domains are unaffected.
   if (

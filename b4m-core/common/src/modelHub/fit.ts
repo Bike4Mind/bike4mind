@@ -641,3 +641,65 @@ export function contextOptions(input: Omit<FitInput, 'context'>): Array<FitPlan 
       return p ? { ...p, fits: true } : { ...planner.unfit(context), fits: false };
     });
 }
+
+// Ceiling on the num_ctx llm-adapters ollamaBackend.ts requests: advertised windows (262K on qwen3.5) outgrow a
+// dev box's KV cache. Override with OLLAMA_MAX_NUM_CTX.
+export const DEFAULT_MAX_NUM_CTX = 32768;
+
+/** The num_ctx the Ollama backend requests for a model reporting a `reported`-token window. */
+export function ollamaNumCtx(reported: number): number {
+  const configuredCap = Number(process.env.OLLAMA_MAX_NUM_CTX);
+  const cap = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : DEFAULT_MAX_NUM_CTX;
+  return Math.min(reported, cap);
+}
+
+export type SizeFitLevel = 'fits' | 'tight' | 'too-large';
+
+export interface SizeFit {
+  level: SizeFitLevel;
+  /** The file plus the compute buffers at `context`; the KV cache is not in it, since the size gives no shape. */
+  needBytes: number;
+  budgetBytes: number;
+  /** Bytes past the budget, margin included; 0 when it all fits. */
+  offloadBytes: number;
+  cpuOnly: boolean;
+  context: number;
+}
+
+// A size-only estimate fits only when this much of the budget is left for context memory.
+const SIZE_HEADROOM = 0.8;
+// computeBufferBytes bounds compute from the bytes per layer; current GGUFs run 24 to 64 layers, and fewer is larger.
+const SIZE_ONLY_LAYERS = 24;
+
+/** One token-wide attention layer: compute gets the context's mask, and the cache it cannot size stays out. */
+const sizeOnlyArch = (context: number): ModelArch => ({
+  contextMax: context,
+  blockCount: SIZE_ONLY_LAYERS,
+  full: { layers: 1, kvHeads: 1, keyLength: 1, valueLength: 1 },
+  mtpLayers: 0,
+});
+
+/**
+ * A rough Ollama verdict from a download's size alone, for a model whose layer shapes are unknown: the compute
+ * and margin terms on top of the file, with headroom for the context memory it cannot size.
+ */
+export function estimateFitFromSize(sizeBytes: number, hardware: HardwareProfile, context: number): SizeFit {
+  const tokens = Math.max(1, Math.round(context));
+  const { gpu: budgetBytes, ramPool, cpuOnly } = memoryBudgets(hardware);
+  const computeBytes = computeBufferBytes(
+    { arch: sizeOnlyArch(tokens), weightsBytes: sizeBytes },
+    tokens,
+    ollamaUbatch(tokens),
+    { memoryKind: cpuOnly ? 'cpu' : hardware.memoryKind }
+  );
+  const needBytes = sizeBytes + computeBytes;
+  const plannedBytes = needBytes + fitMarginBytes(hardware);
+  const over = plannedBytes - budgetBytes;
+  const base = { needBytes, budgetBytes, offloadBytes: Math.max(0, over), cpuOnly, context: tokens };
+  // Only weights move to RAM in a layer split.
+  if (over > 0) {
+    const level = cpuOnly || over > ramPool || over > sizeBytes ? 'too-large' : 'tight';
+    return { ...base, level };
+  }
+  return { ...base, level: plannedBytes > budgetBytes * SIZE_HEADROOM ? 'tight' : 'fits' };
+}
