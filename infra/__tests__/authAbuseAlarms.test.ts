@@ -12,6 +12,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { oauthSignupsRefusedMetricName } from '../authAbuseMetric';
 import { messageFilterPattern } from '../logMessageFilterPattern';
+import { matchesMessageFilterPattern } from './helpers/matchesMessageFilterPattern';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (p: string) => readFileSync(path.join(REPO_ROOT, p), 'utf8');
@@ -23,9 +24,8 @@ describe('oauth signups refused alarm', () => {
       "req.logger?.info('oauth-signup-refused')"
     );
     expect(ALARMS).toContain("pattern: messageFilterPattern('oauth-signup-refused')");
-    // A `%...%` pattern is a CloudWatch regex; JS reads \x22 the same way.
-    const expression = new RegExp(messageFilterPattern('oauth-signup-refused').slice(1, -1));
-    const matches = (line: string) => expression.test(line);
+    const pattern = messageFilterPattern('oauth-signup-refused');
+    const matches = (line: string) => matchesMessageFilterPattern(pattern, line);
     const line = (fields: Record<string, string>) =>
       `2026-01-01T00:00:00.000Z\tc0ffee\tINFO\t${JSON.stringify({ severity: 'info', message: 'oauth-ip-rate-limited', ...fields })}`;
 
