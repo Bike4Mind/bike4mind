@@ -11,6 +11,14 @@ beforeEach(async () => {
 });
 
 const newPairId = () => new mongoose.Types.ObjectId().toHexString();
+const longAgo = new Date(0);
+
+/** Claims the served row and records the outcome against that claim, as the vote path does. */
+async function settle(userId: string, pairId: string, outcome: Parameters<typeof repo.recordVote>[3]) {
+  const claimedAt = new Date();
+  await repo.claim(userId, pairId, claimedAt, longAgo);
+  return repo.recordVote(userId, pairId, claimedAt, outcome);
+}
 
 const rejected = { credited: false as const, rejectReason: 'unqualified' as const };
 const outcomeAt = (votedAt: Date) => ({
@@ -24,14 +32,14 @@ const outcomeAt = (votedAt: Date) => ({
 /** Serves and votes one pair for a user, returning the voted row. */
 async function castVote(
   userId: string,
-  vote: Partial<Parameters<typeof repo.recordVote>[2]> & { isGold?: boolean } = {}
+  vote: Partial<Parameters<typeof repo.recordVote>[3]> & { isGold?: boolean } = {}
 ) {
   const pairId = newPairId();
   const { isGold = false, ...outcome } = vote;
   await repo.serve({ userId, pairId, swapped: false, isGold });
   const { rejectReason: _unused, ...base } = outcomeAt(new Date());
   const merged = outcome.credited ? { ...base, ...outcome } : { ...base, ...rejected, ...outcome };
-  return repo.recordVote(userId, pairId, merged as Parameters<typeof repo.recordVote>[2]);
+  return settle(userId, pairId, merged as Parameters<typeof repo.recordVote>[3]);
 }
 
 describe('arenaVoteRepository outstanding-pair invariant', () => {
@@ -46,7 +54,7 @@ describe('arenaVoteRepository outstanding-pair invariant', () => {
   it('allows another outstanding pair once the first is voted', async () => {
     const pairId = newPairId();
     await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
-    await repo.recordVote('u1', pairId, outcomeAt(new Date()));
+    await settle('u1', pairId, outcomeAt(new Date()));
     const next = await repo.serve({ userId: 'u1', pairId: newPairId(), swapped: false, isGold: false });
     expect(next).not.toBeNull();
   });
@@ -60,7 +68,7 @@ describe('arenaVoteRepository outstanding-pair invariant', () => {
   it('refuses serving the same pair to the same user twice', async () => {
     const pairId = newPairId();
     await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
-    await repo.recordVote('u1', pairId, outcomeAt(new Date()));
+    await settle('u1', pairId, outcomeAt(new Date()));
     expect(await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false })).toBeNull();
   });
 
@@ -68,8 +76,29 @@ describe('arenaVoteRepository outstanding-pair invariant', () => {
     const pairId = newPairId();
     await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
     const outcome = outcomeAt(new Date());
-    expect(await repo.recordVote('u1', pairId, outcome)).not.toBeNull();
-    expect(await repo.recordVote('u1', pairId, outcome)).toBeNull();
+    expect(await settle('u1', pairId, outcome)).not.toBeNull();
+    expect(await settle('u1', pairId, outcome)).toBeNull();
+  });
+
+  it('grants one live claim and refuses to record without it', async () => {
+    const pairId = newPairId();
+    await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
+    const first = new Date('2026-03-02T10:00:00Z');
+    const second = new Date('2026-03-02T10:00:01Z');
+    expect(await repo.claim('u1', pairId, first, new Date('2026-03-02T09:59:00Z'))).not.toBeNull();
+    expect(await repo.claim('u1', pairId, second, new Date('2026-03-02T09:59:01Z'))).toBeNull();
+    expect(await repo.recordVote('u1', pairId, second, outcomeAt(second))).toBeNull();
+    expect(await repo.recordVote('u1', pairId, first, outcomeAt(first))).not.toBeNull();
+  });
+
+  it('lets a retry take over a stale claim', async () => {
+    const pairId = newPairId();
+    await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
+    const crashed = new Date('2026-03-02T10:00:00Z');
+    const retry = new Date('2026-03-02T10:02:00Z');
+    await repo.claim('u1', pairId, crashed, new Date('2026-03-02T09:59:00Z'));
+    expect(await repo.claim('u1', pairId, retry, new Date('2026-03-02T10:01:00Z'))).not.toBeNull();
+    expect(await repo.recordVote('u1', pairId, crashed, outcomeAt(crashed))).toBeNull();
   });
 });
 

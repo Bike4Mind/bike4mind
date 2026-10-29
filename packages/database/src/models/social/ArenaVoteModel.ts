@@ -11,6 +11,8 @@ export interface IArenaVoteDocument extends IMongoDocument {
   swapped: boolean;
   status: ArenaVoteStatus;
   servedAt: Date;
+  /** Set by the one submit that won the right to judge this row; see `claim`. */
+  claimedAt?: Date;
   /** Canonical pair order: already un-swapped. */
   choice?: ArenaChoice;
   votedAt?: Date;
@@ -29,6 +31,7 @@ const ArenaVoteSchema = new Schema<IArenaVoteDocument>(
     swapped: { type: Boolean, required: true },
     status: { type: String, enum: ['served', 'voted'], required: true },
     servedAt: { type: Date, required: true },
+    claimedAt: { type: Date },
     choice: { type: String, enum: ['a', 'b', 'tie'] },
     votedAt: { type: Date },
     responseMs: { type: Number },
@@ -118,13 +121,37 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
   }
 
   /**
-   * Atomically flips the outstanding row to voted with its judged outcome; null when this pair is
-   * not outstanding for the user. Judging must happen before this call: the row stays 'served',
-   * holding the one-outstanding lock, until the outcome is final.
+   * Claims the outstanding row for judging, so concurrent submits of one pair cannot each judge it
+   * differently and pay. Returns null when another submit holds a live claim or the row is settled.
+   * A claim older than `staleBefore` is taken over, so a crashed submit does not strand the row.
    */
-  async recordVote(userId: string, pairId: string, outcome: ArenaVoteOutcome): Promise<IArenaVoteDocument | null> {
+  async claim(userId: string, pairId: string, claimedAt: Date, staleBefore: Date): Promise<IArenaVoteDocument | null> {
+    const claimed = await this.model.findOneAndUpdate(
+      {
+        userId,
+        pairId,
+        status: 'served',
+        $or: [{ claimedAt: { $exists: false } }, { claimedAt: null }, { claimedAt: { $lt: staleBefore } }],
+      },
+      { $set: { claimedAt } },
+      { new: true }
+    );
+    return claimed?.toObject() ?? null;
+  }
+
+  /**
+   * Atomically flips the claimed row to voted with its judged outcome; null when the claim was lost
+   * or the row already settled. The row stays 'served', holding the one-outstanding lock, until the
+   * outcome is final.
+   */
+  async recordVote(
+    userId: string,
+    pairId: string,
+    claimedAt: Date,
+    outcome: ArenaVoteOutcome
+  ): Promise<IArenaVoteDocument | null> {
     const updated = await this.model.findOneAndUpdate(
-      { userId, pairId, status: 'served' },
+      { userId, pairId, status: 'served', claimedAt },
       { $set: { status: 'voted', ...outcome } },
       { new: true }
     );

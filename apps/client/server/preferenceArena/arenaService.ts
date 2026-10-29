@@ -40,6 +40,7 @@ export type ArenaServiceDeps = {
     | 'findForPair'
     | 'seenPairIds'
     | 'serve'
+    | 'claim'
     | 'recordVote'
     | 'goldRecord'
     | 'countCreditedSince'
@@ -59,6 +60,9 @@ export type ArenaServiceDeps = {
   now?: () => Date;
   random?: () => number;
 };
+
+/** A claim older than this is presumed crashed and may be taken over by a retry. */
+const CLAIM_STALE_MS = 60_000;
 
 const opposite = (choice: ArenaChoice): ArenaChoice => (choice === 'a' ? 'b' : choice === 'b' ? 'a' : 'tie');
 
@@ -184,7 +188,15 @@ export function createArenaService(deps: ArenaServiceDeps) {
       throw new NotFoundError('Pair is no longer available');
     }
 
+    // One submit wins the claim and alone judges, pays and records: two racing submits judged
+    // differently (one too fast, one on time) would otherwise pay without the row saying so.
     const votedAt = now();
+    const claimed = await votes.claim(userId, pairId, votedAt, new Date(votedAt.getTime() - CLAIM_STALE_MS));
+    if (!claimed) {
+      const settled = await votes.findForPair(userId, pairId);
+      return { creditsAwarded: settled?.status === 'voted' ? settled.creditsAwarded : 0 };
+    }
+
     const responseMs = Math.max(0, votedAt.getTime() - row.servedAt.getTime());
     const choice = row.swapped ? opposite(request.choice) : request.choice;
     const goldCorrect = pair.goldChoice ? choice === pair.goldChoice : null;
@@ -215,10 +227,20 @@ export function createArenaService(deps: ArenaServiceDeps) {
       outcome = { credited: false, rejectReason: 'grant_failed' };
     }
 
-    const recorded = await votes.recordVote(userId, pairId, { choice, votedAt, responseMs, goldCorrect, ...outcome });
+    const recorded = await votes.recordVote(userId, pairId, votedAt, {
+      choice,
+      votedAt,
+      responseMs,
+      goldCorrect,
+      ...outcome,
+    });
     if (recorded) return { creditsAwarded: recorded.creditsAwarded };
-    // A concurrent submit of this vote settled it first. Both grants share the vote's transaction id,
-    // so the ledger paid once.
+    // Only a stale-claim takeover gets here; both claimants share the vote's transaction id, so the
+    // ledger paid once.
+    logger.error('[preference-arena] vote claim was taken over before recording', undefined, {
+      userId,
+      voteId: row.id,
+    });
     const settled = await votes.findForPair(userId, pairId);
     return { creditsAwarded: settled?.creditsAwarded ?? 0 };
   }

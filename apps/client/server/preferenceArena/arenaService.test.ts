@@ -55,7 +55,8 @@ function build(over: { user?: ArenaUser | null; settings?: Partial<PreferenceAre
     findForPair: vi.fn().mockResolvedValue(servedRow()),
     seenPairIds: vi.fn().mockResolvedValue([]),
     serve: vi.fn().mockImplementation(async data => servedRow(data)),
-    recordVote: vi.fn().mockImplementation(async (_u, _p, outcome) => servedRow({ ...outcome, status: 'voted' })),
+    claim: vi.fn().mockImplementation(async (_u, _p, claimedAt) => servedRow({ claimedAt })),
+    recordVote: vi.fn().mockImplementation(async (_u, _p, _c, outcome) => servedRow({ ...outcome, status: 'voted' })),
     goldRecord: vi.fn().mockResolvedValue({ answered: 3, correct: 3 }),
     countCreditedSince: vi.fn().mockResolvedValue(0),
     creditsEarned: vi.fn().mockResolvedValue(0),
@@ -177,12 +178,14 @@ describe('submitVote', () => {
     expect(votes.recordVote).toHaveBeenCalledWith(
       'u1',
       'aaaaaaaaaaaaaaaaaaaaaaaa',
+      new Date('2026-01-01T00:00:10Z'),
       expect.objectContaining({ choice: 'b', responseMs: 10_000 })
     );
     await service.submitVote('u1', { ...vote, choice: 'tie' });
     expect(votes.recordVote).toHaveBeenLastCalledWith(
       'u1',
       expect.any(String),
+      new Date('2026-01-01T00:00:10Z'),
       expect.objectContaining({ choice: 'tie' })
     );
   });
@@ -204,6 +207,7 @@ describe('submitVote', () => {
     expect(votes.recordVote).toHaveBeenCalledWith(
       'u1',
       'aaaaaaaaaaaaaaaaaaaaaaaa',
+      new Date('2026-01-01T00:00:10Z'),
       expect.objectContaining({ credited: true, creditsAwarded: 2 })
     );
   });
@@ -242,6 +246,7 @@ describe('submitVote', () => {
     expect(votes.recordVote).toHaveBeenCalledWith(
       'u1',
       expect.any(String),
+      new Date('2026-01-01T00:00:10Z'),
       expect.objectContaining({ goldCorrect: false, credited: false, rejectReason: 'gold_missed' })
     );
   });
@@ -254,18 +259,65 @@ describe('submitVote', () => {
     expect(addCredits).not.toHaveBeenCalled();
   });
 
-  it('returns the settled award when a concurrent submit of the same vote won the race', async () => {
+  it('claims the row before judging and records against that claim', async () => {
+    const { service, votes } = build();
+    await service.submitVote('u1', vote);
+    const claimedAt = new Date('2026-01-01T00:00:10Z');
+    expect(votes.claim).toHaveBeenCalledWith(
+      'u1',
+      'aaaaaaaaaaaaaaaaaaaaaaaa',
+      claimedAt,
+      new Date('2025-12-31T23:59:10Z')
+    );
+    expect(votes.claim.mock.invocationCallOrder[0]).toBeLessThan(votes.goldRecord.mock.invocationCallOrder[0]);
+  });
+
+  it('neither judges nor pays when a concurrent submit holds the claim', async () => {
     const { service, votes, addCredits } = build();
+    votes.claim.mockResolvedValue(null);
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 0 });
+    expect(votes.goldRecord).not.toHaveBeenCalled();
+    expect(addCredits).not.toHaveBeenCalled();
+    expect(votes.recordVote).not.toHaveBeenCalled();
+  });
+
+  it('returns the settled award when a concurrent submit already recorded the vote', async () => {
+    const { service, votes, addCredits } = build();
+    votes.claim.mockResolvedValue(null);
+    votes.findForPair
+      .mockResolvedValueOnce(servedRow())
+      .mockResolvedValueOnce(servedRow({ status: 'voted', creditsAwarded: 2 }));
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
+    expect(addCredits).not.toHaveBeenCalled();
+  });
+
+  it('logs a claim taken over before recording and returns the settled award', async () => {
+    const { service, votes, logger } = build();
     votes.recordVote.mockResolvedValue(null);
     votes.findForPair
       .mockResolvedValueOnce(servedRow())
       .mockResolvedValueOnce(servedRow({ status: 'voted', creditsAwarded: 2 }));
     expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
-    // The losing grant reuses the winner's transaction id, which the ledger turns into a no-op.
-    expect(addCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ transactionId: 'arena-vote:vote1' }),
-      expect.anything()
-    );
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('passes the rater cap counts to the judge', async () => {
+    const daily = build({ settings: { dailyVoteCap: 3 } });
+    daily.votes.countCreditedSince.mockResolvedValue(3);
+    expect(await daily.service.submitVote('u1', vote)).toEqual({ creditsAwarded: 0 });
+    expect(daily.addCredits).not.toHaveBeenCalled();
+
+    const lifetime = build({ settings: { lifetimeCreditCap: 5 } });
+    lifetime.votes.creditsEarned.mockResolvedValue(4);
+    expect(await lifetime.service.submitVote('u1', vote)).toEqual({ creditsAwarded: 1 });
+  });
+
+  it('refuses a rater blocked or unverified after the pair was served', async () => {
+    for (const user of [{ ...verifiedUser, isBanned: true }, { emailVerified: true }]) {
+      const { service, addCredits } = build({ user });
+      await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(ForbiddenError);
+      expect(addCredits).not.toHaveBeenCalled();
+    }
   });
 
   it('swallows a grant failure, logs it and awards nothing', async () => {
@@ -276,6 +328,7 @@ describe('submitVote', () => {
     expect(votes.recordVote).toHaveBeenCalledWith(
       'u1',
       expect.any(String),
+      new Date('2026-01-01T00:00:10Z'),
       expect.objectContaining({ credited: false, rejectReason: 'grant_failed' })
     );
   });

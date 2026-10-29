@@ -90,9 +90,9 @@ describe('isArenaVerifiedUser', () => {
 
   it('rejects a grant that is not unlocked or was unlocked by a non-proving method', () => {
     expect(isArenaVerifiedUser({ ...verified, signupGrant: { stage: 'locked' as never } })).toBe(false);
-    expect(isArenaVerifiedUser({ ...verified, signupGrant: { stage: 'unlocked', unlockedBy: 'admin' as never } })).toBe(
-      false
-    );
+    for (const unlockedBy of ['admin', 'activity', 'org_invite'] as const) {
+      expect(isArenaVerifiedUser({ ...verified, signupGrant: { stage: 'unlocked', unlockedBy } })).toBe(false);
+    }
   });
 });
 
