@@ -151,9 +151,10 @@ async function releaseTicket(ticket: IWorkItem, logger: Logger): Promise<void> {
 async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<void> {
   // ponytail: a crash between this claim and setExecution strands the ticket in_progress with no run;
   // the owner moves it back by hand. Add a sweep if that is ever seen.
-  const ticket = await claimNextTicket(loop);
+  let ticket: IWorkItem | null = null;
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
+    ticket = await claimNextTicket(loop);
     result = await startAgentExecution(
       {
         userId: loop.userId,

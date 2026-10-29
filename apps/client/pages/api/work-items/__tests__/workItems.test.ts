@@ -523,4 +523,23 @@ describe('loop tickets through the work-items routes', () => {
       expect.objectContaining({ loopId: null, stage: null, statusReason: null, executionId: null })
     );
   });
+
+  it('loopId: null reopens a running ticket and is a 404 with EnableLoops off', async () => {
+    repo.findByIdForUser.mockResolvedValue(
+      item({ loopId: LOOP, stage: 'doing', status: 'in_progress', executionId: 'e1' })
+    );
+    await call('item', 'patch', { query: { id: OID_A }, body: { loopId: null } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({ loopId: null, executionId: null, status: 'open' })
+    );
+
+    repo.updateForUser.mockClear();
+    settings.EnableLoops = false;
+    await expect(call('item', 'patch', { query: { id: OID_A }, body: { loopId: null } }).result).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
 });

@@ -67,7 +67,17 @@ const handler = baseApi()
     const movesLoop = body.loopId !== undefined && body.loopId !== existing.loopId;
     let loop: ILoop | undefined;
     if (body.loopId === null) {
-      if (existing.loopId) Object.assign(patch, { loopId: null, stage: null, statusReason: null, executionId: null });
+      if (existing.loopId) {
+        await assertLoopTicketAccess(req, existing.loopId);
+        // A detached ticket leaves its loop's run behind, so it can't stay in_progress under it.
+        Object.assign(patch, {
+          loopId: null,
+          stage: null,
+          statusReason: null,
+          executionId: null,
+          ...(existing.status === 'in_progress' && status === undefined && { status: 'open' }),
+        });
+      }
     } else if (body.loopId !== undefined || existing.loopId) {
       loop = await assertLoopTicketAccess(req, body.loopId ?? existing.loopId);
     }
