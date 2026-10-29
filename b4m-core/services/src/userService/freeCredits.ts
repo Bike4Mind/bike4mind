@@ -10,7 +10,7 @@ import {
   type SignupProtection,
 } from '@bike4mind/common';
 import { addCredits, DuplicateCreditTransactionError } from '../creditService';
-import type { SignupRiskSignals } from './signupRisk';
+import type { SignupRiskBand, SignupRiskSignals } from './signupRisk';
 import { releaseSignupTranche } from './stagedSignupGrant';
 import { protectSignupCredits } from './signupProtection';
 import { reserveSignupGrantBudget } from './signupGrantBudget';
@@ -34,6 +34,8 @@ export type FreeCreditAdapters = {
   collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
   /** Admin overrides and a card unlock of a held tranche pay without drawing the daily signup grant budget. */
   bypassBudget?: boolean;
+  /** Called only after the first staged assessment commits, including a zero-credit hold. */
+  emitRiskBand?: (band: SignupRiskBand) => Promise<void>;
 };
 
 type FreeCreditLogger = { error: (message: string, ...args: unknown[]) => void };
@@ -84,10 +86,11 @@ const legacyOtcRegisterTransactionId = (userId: string) => `otc-register-grant:$
  */
 export const grantFreeCredits = async (
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
-  { db, reason, collectRiskSignals, bypassBudget }: FreeCreditAdapters
+  { db, reason, collectRiskSignals, bypassBudget, emitRiskBand }: FreeCreditAdapters
 ): Promise<GrantFreeCreditsResult> => {
   const persisted = await db.users.findById(user.id);
-  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason, collectRiskSignals, bypassBudget });
+  if (persisted?.signupGrant)
+    return releaseSignupTranche(user.id, { db, reason, collectRiskSignals, bypassBudget, emitRiskBand });
   if (await protectSignupCredits(user.id, db)) {
     const alreadyGranted = await db.creditTransactions.findOne({
       transactionId: { $in: [`verify-grant:${user.id}`, legacyOtcRegisterTransactionId(user.id)] },

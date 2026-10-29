@@ -69,6 +69,9 @@ vi.mock('@server/auth/signupNetworkLimits', () => ({
   assertSignupNetworkWithinLimits: (...a: any[]) => mockAssertSignupNetworkWithinLimits(...a),
   createSignupRiskCollector: () => mockSignupRiskCollector,
 }));
+vi.mock('@bike4mind/server-utils/auth/signupGrantRisk', () => ({
+  createSignupGrantRiskCollector: () => mockSignupRiskCollector,
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
   isE2EEnabled: () => false,
@@ -576,6 +579,28 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(mockRegisterViaOTC).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ collectRiskSignals: mockSignupRiskCollector })
+    );
+  });
+
+  it.each([true, null, 'true'])('persists only a literal signed challenge pass (%s) before granting', async proof => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    mockJwtVerify.mockReturnValue({
+      email: NON_DOMAIN_EMAIL,
+      attempts: 0,
+      exp: Math.floor(Date.now() / 1000) + 600,
+      jti: 'jti-1',
+      challengeVerified: proof,
+    });
+    Object.assign(req.body, { challengeVerified: true });
+    await handler(req, res);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        signupMeta: expect.objectContaining({
+          challengeVerified: proof === true ? true : null,
+          capturedAt: expect.any(Date),
+        }),
+      })
     );
   });
 

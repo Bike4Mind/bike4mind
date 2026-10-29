@@ -11,7 +11,7 @@ import { userService } from '@bike4mind/services';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { applySignupDomainGrant, type SignupDomainGrantResult } from '@server/entitlements/signupDomainGrant';
 import type { SeatCeilingRaiseTrigger } from '@server/organizations/notifySeatCeilingRaised';
-import { createSignupRiskCollector } from './signupNetworkLimits';
+import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 
 /**
  * The grants an EXISTING account earns the moment its email is proven. Every path that flips
@@ -88,8 +88,11 @@ export async function releaseVerifiedPendingFreeCredits(
         },
         reason,
         logger,
-        collectRiskSignals: createSignupRiskCollector(signupNetwork),
+        collectRiskSignals: createSignupGrantRiskCollector(signupNetwork),
         bypassBudget: options.bypassBudget,
+        emitRiskBand: async band => {
+          logger.info(`signup-grant-assessed-${band}`);
+        },
       }
     );
   } catch (error) {

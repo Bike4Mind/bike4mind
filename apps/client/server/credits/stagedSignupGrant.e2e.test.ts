@@ -82,6 +82,69 @@ async function createUser(enrolled = true) {
   });
 }
 
+describe('committed grant band telemetry', () => {
+  it.each([
+    ['full', false, 0, 12],
+    ['reduced', true, 0, 6],
+    ['review', true, 2, 0],
+  ] as const)(
+    'emits %s once after committing, including zero-credit holds',
+    async (band, datacenter, ipSignups, credits) => {
+      const user = await createUser();
+      const policy = {
+        enabled: true,
+        version: 'synthetic',
+        reducedAt: 4,
+        reviewAt: 8,
+        reducedFraction: 0.5,
+        rules: [
+          { signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 4, missing: 'review', missingWeight: 0 },
+          { signal: 'ipSignups', comparison: 'gte', threshold: 2, weight: 4, missing: 'review', missingWeight: 0 },
+        ],
+      };
+      const observedState: { band: string | undefined; credits: number | null | undefined }[] = [];
+      const emitRiskBand = vi.fn(async () => {
+        const persisted = await User.findById(user.id);
+        observedState.push({ band: persisted?.signupGrantAssessment?.band, credits: persisted?.currentCredits });
+      });
+      const observed = {
+        ...adapters,
+        db: {
+          ...adapters.db,
+          adminSettings: {
+            ...adminSettings,
+            findBySettingName: async () => ({ settingValue: JSON.stringify(policy) }),
+          },
+        },
+        collectRiskSignals: async () => ({ datacenter, ipSignups }),
+        emitRiskBand,
+      };
+      await userService.grantFreeCredits({ id: user.id }, observed);
+      await userService.grantFreeCredits({ id: user.id }, observed);
+      expect(emitRiskBand).toHaveBeenCalledExactlyOnceWith(band);
+      expect(observedState).toEqual([{ band, credits }]);
+    }
+  );
+
+  it('does not emit for a rolled-back assessment and tolerates telemetry failure after commit', async () => {
+    const user = await createUser();
+    const emitRiskBand = vi.fn(async () => {
+      throw new Error('telemetry unavailable');
+    });
+    const update = vi.spyOn(userRepository, 'update').mockRejectedValueOnce(new Error('write unavailable'));
+    await expect(userService.releaseSignupTranche(user.id, { ...adapters, emitRiskBand })).rejects.toThrow(
+      'write unavailable'
+    );
+    expect(emitRiskBand).not.toHaveBeenCalled();
+    update.mockRestore();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect((await userService.releaseSignupTranche(user.id, { ...adapters, emitRiskBand })).creditsGranted).toBe(12);
+    expect((await userService.releaseSignupTranche(user.id, { ...adapters, emitRiskBand })).creditsGranted).toBe(0);
+    expect(emitRiskBand).toHaveBeenCalledExactlyOnceWith('full');
+    expect(warning).toHaveBeenCalledWith('[signup-risk] Band telemetry failed after grant commit');
+  });
+});
+
 function heldAdapters() {
   const review: SignupDomainReview = {
     domain: 'example.test',

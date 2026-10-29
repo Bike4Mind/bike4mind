@@ -54,7 +54,7 @@ beforeEach(() => {
 
 describe('SignupActivityPanel', () => {
   it('summarizes legit and suspected counts and switches the breakdown', () => {
-    wrap(<SignupActivityPanel onSelectWindow={vi.fn()} />);
+    wrap(<SignupActivityPanel range="7d" onRangeChange={vi.fn()} onSelectWindow={vi.fn()} />);
     expect(screen.getByTestId('users-signup-summary').textContent).toContain('4 likely legit, 26 suspected');
     expect(screen.getByTestId('users-signup-chart').textContent).toBe('status');
     fireEvent.click(screen.getByTestId('users-signup-mode-signals'));
@@ -63,7 +63,7 @@ describe('SignupActivityPanel', () => {
 
   it('filters the user list to a period from the table view', () => {
     const onSelectWindow = vi.fn();
-    wrap(<SignupActivityPanel onSelectWindow={onSelectWindow} />);
+    wrap(<SignupActivityPanel range="7d" onRangeChange={vi.fn()} onSelectWindow={onSelectWindow} />);
     fireEvent.click(screen.getByTestId('users-signup-table-toggle'));
     expect(screen.queryByTestId('users-signup-bucket-filter-2026-03-10T11:00:00.000Z')).toBeNull();
     fireEvent.click(screen.getByTestId('users-signup-bucket-filter-2026-03-10T12:00:00.000Z'));
@@ -73,6 +73,11 @@ describe('SignupActivityPanel', () => {
     });
   });
 
+  it('charts the range its owner passes in', () => {
+    wrap(<SignupActivityPanel range="90d" onRangeChange={vi.fn()} onSelectWindow={vi.fn()} />);
+    expect(mocks.useSignupTimeseries).toHaveBeenCalledWith('90d');
+  });
+
   it('says when the classification scan was capped', () => {
     mocks.useSignupTimeseries.mockReturnValue({
       data: { ...series, truncated: true },
@@ -80,7 +85,7 @@ describe('SignupActivityPanel', () => {
       isError: false,
       refetch: vi.fn(),
     });
-    wrap(<SignupActivityPanel onSelectWindow={vi.fn()} />);
+    wrap(<SignupActivityPanel range="7d" onRangeChange={vi.fn()} onSelectWindow={vi.fn()} />);
     expect(screen.getByTestId('users-signup-panel').textContent).toContain('Only the newest signups');
   });
 });
@@ -89,7 +94,7 @@ describe('SignupActivityPanel load failure', () => {
   it('shows an alert and retries the request', () => {
     const refetch = vi.fn();
     mocks.useSignupTimeseries.mockReturnValue({ data: undefined, isLoading: false, isError: true, refetch });
-    wrap(<SignupActivityPanel onSelectWindow={vi.fn()} />);
+    wrap(<SignupActivityPanel range="7d" onRangeChange={vi.fn()} onSelectWindow={vi.fn()} />);
     expect(screen.getByTestId('users-signup-panel').textContent).toContain('Could not load signups.');
     fireEvent.click(screen.getByTestId('users-signup-retry-btn'));
     expect(refetch).toHaveBeenCalled();
