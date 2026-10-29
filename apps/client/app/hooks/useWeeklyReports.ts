@@ -46,6 +46,8 @@ export function useWeeklyReports(selectedWeeks: WeekRange[]) {
   return useQuery<WeeklyReport[]>({
     queryKey: ['weekly-reports', selectedWeeks],
     queryFn: async () => {
+      // A manual refetch() ignores `enabled`, so zero weeks still reaches here.
+      if (selectedWeeks.length === 0) return [];
       const results: WeekResult[] = [];
       // Sequential on purpose: each week runs an LLM insights pass on the server.
       for (const week of selectedWeeks) {

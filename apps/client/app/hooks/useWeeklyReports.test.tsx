@@ -30,6 +30,16 @@ describe('useWeeklyReports', () => {
     expect(fetchCounterLogs).not.toHaveBeenCalled();
   });
 
+  it('resolves to no reports when refetched with no week selected', async () => {
+    const { result } = renderHook(() => useWeeklyReports([]), { wrapper });
+
+    const refetched = await result.current.refetch();
+
+    expect(refetched.isError).toBe(false);
+    expect(refetched.data).toEqual([]);
+    expect(fetchCounterLogs).not.toHaveBeenCalled();
+  });
+
   it('rejects when every selected week failed, so the tab can show its error card', async () => {
     fetchCounterLogs.mockRejectedValue(new Error('Request failed with status code 502'));
 
