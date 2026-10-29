@@ -19,6 +19,8 @@ import {
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  Collection,
+  PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
@@ -658,7 +660,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     userId: string,
     options: { page: number; limit: number; search: string; type?: CollectionType },
     deps: { findSessionIdsByUserId: (userId: string) => Promise<string[]> }
-  ) {
+  ): Promise<PaginatedResponse<Collection>> {
     const { page, limit, search, type } = options;
 
     const { pipeline, facetStages } = await buildCollectionSearchPipeline(
@@ -718,6 +720,15 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
     if (!before) return 0;
     return Math.min(credits, Math.max(before.currentCredits ?? 0, 0));
+  }
+
+  /** Debits `credits` in one atomic update only when the balance covers all of it; false leaves it untouched. */
+  async decrementCreditsIfCovered(userId: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, currentCredits: { $gte: credits } },
+      { $inc: { currentCredits: -credits } }
+    );
+    return result.modifiedCount === 1;
   }
 
   async incrementCurrentStorage(userId: string, count: number): Promise<void> {
@@ -863,7 +874,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
-    const settled = ['approved', 'banned'];
+    const preservedStates = ['pending', 'approved', 'banned'];
     await this.model.updateOne({ _id: userId }, [
       {
         $set: {
@@ -874,7 +885,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
             computedAt: riskScore.computedAt,
             reviewState: {
               $cond: [
-                { $in: [{ $ifNull: ['$riskScore.reviewState', 'none'] }, settled] },
+                { $in: [{ $ifNull: ['$riskScore.reviewState', 'none'] }, preservedStates] },
                 '$riskScore.reviewState',
                 riskScore.reviewState,
               ],
@@ -971,6 +982,7 @@ const SignupMetaSchema = new Schema(
   {
     ...NETWORK_META_FIELDS,
     capturedAt: { type: Date, required: true },
+    challengeVerified: { type: Boolean, default: undefined },
   },
   { _id: false }
 );
@@ -1023,6 +1035,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
     signupGrantAssessment: { type: Schema.Types.Mixed, default: undefined },
+    signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
+    // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
+    signupGrantHeldAt: { type: Date },
     signupGrant: {
       type: new Schema(
         {
@@ -1033,6 +1048,13 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
           unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
           unlockedOrgId: { type: String },
+          dripCredits: { type: Number, min: 0 },
+          lastDripDay: { type: String },
+          lastDripPeriod: { type: String },
+          activity: {
+            type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
@@ -1422,6 +1444,11 @@ UserSchema.index({ 'signupGrantAssessment.band': 1 }, { sparse: true, name: 'use
 // Serves findPendingRiskReviews (the signup risk review queue). Name and keys must match migration
 // 20260921235956 byte-for-byte.
 UserSchema.index({ 'riskScore.reviewState': 1, 'riskScore.score': -1 }, { name: 'user_riskScore_review' });
+// Serves the held-grants admin list and release sweep, and the activity drip held-tranche existence check.
+UserSchema.index(
+  { signupGrantHeldReason: 1, _id: 1 },
+  { partialFilterExpression: { signupGrantHeldReason: { $type: 'string' } }, name: 'user_signupGrantHeldReason' }
+);
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

@@ -6,6 +6,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const h = vi.hoisted(() => ({ pathname: '/new' }));
 
 vi.mock('@tanstack/react-router', () => ({ useLocation: () => ({ pathname: h.pathname }) }));
+vi.mock('@client/app/hooks/useSignupGrantHeartbeat', () => ({ useSignupGrantHeartbeat: () => {} }));
 vi.mock('./Sidenav', () => ({ default: () => <nav aria-label="Sidebar" data-testid="sidenav-marker" /> }));
 vi.mock('./Header', () => ({ default: () => <header data-testid="header-marker" /> }));
 vi.mock('../../Knowledge/KnowledgeModal', () => ({ default: () => null }));

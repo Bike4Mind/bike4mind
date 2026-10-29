@@ -39,12 +39,6 @@ export const ADMIN_RETURN_COOKIE_NAME = 'b4m_rt_admin';
 const HOST_PREFIX = '__Host-';
 const LEGACY_COOKIE_PATH = '/api';
 
-/** Any subdomain can write the bare name, so it is honored only for sessions that predate the prefix,
- *  and not at all after the second date. The cutoff must not precede the production deploy, or
- *  sessions created in between are logged out on their next refresh. */
-export const LEGACY_REFRESH_COOKIE_SESSION_CUTOFF = new Date('2026-10-30T00:00:00Z');
-export const LEGACY_REFRESH_COOKIE_ACCEPTED_UNTIL = new Date('2026-11-30T00:00:00Z');
-
 /**
  * Bounds a mobile session, so it tracks the AuthSession lifetime (30d), not the access-token TTL.
  * MUST STAY IN SYNC with DEFAULT_REFRESH_TTL_MS in
@@ -109,44 +103,23 @@ function expireCookie(res: Response, baseName: string): void {
   expireLegacyCookie(res, baseName);
 }
 
-function readCookieValues(req: Pick<Request, 'headers'>, name: string): string[] {
+/** Minimal cookie-header parser (same pattern as publishGateToken / analyticsMiddleware). */
+export function readCookie(req: Pick<Request, 'headers'>, name: string): string | null {
   const header = req.headers.cookie;
-  if (!header) return [];
-  const values: string[] = [];
+  if (!header) return null;
   for (const part of header.split(';')) {
     const eq = part.indexOf('=');
     if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === name) values.push(part.slice(eq + 1).trim());
+    if (part.slice(0, eq).trim() === name) {
+      const value = part.slice(eq + 1).trim();
+      return value.length > 0 ? value : null;
+    }
   }
-  return values;
-}
-
-/** Minimal cookie-header parser (same pattern as publishGateToken / analyticsMiddleware). */
-export function readCookie(req: Pick<Request, 'headers'>, name: string): string | null {
-  const [value] = readCookieValues(req, name);
-  return value ? value : null;
-}
-
-export interface SessionCookieRead {
-  token: string;
-  /** Came from the bare name; the caller must check LEGACY_REFRESH_COOKIE_SESSION_CUTOFF. */
-  legacy: boolean;
-}
-
-function readSessionCookie(req: Pick<Request, 'headers'>, baseName: string): SessionCookieRead | null {
-  const name = sessionCookieName(baseName);
-  const current = readCookie(req, name);
-  if (current) return { token: current, legacy: false };
-  if (name === baseName || Date.now() >= LEGACY_REFRESH_COOKIE_ACCEPTED_UNTIL.getTime()) return null;
-  const legacy = readCookieValues(req, baseName);
-  return legacy.length === 1 && legacy[0] ? { token: legacy[0], legacy: true } : null;
+  return null;
 }
 
 export const setRefreshCookie = (res: Response, token: string): void => setCookie(res, REFRESH_COOKIE_NAME, token);
 export const clearRefreshCookie = (res: Response): void => expireCookie(res, REFRESH_COOKIE_NAME);
-/** Includes the bare-name fallback; only the refresh route, which checks the session's age, uses it. */
-export const readRefreshCookieWithSource = (req: Pick<Request, 'headers'>): SessionCookieRead | null =>
-  readSessionCookie(req, REFRESH_COOKIE_NAME);
 export const readRefreshCookie = (req: Pick<Request, 'headers'>): string | null =>
   readCookie(req, sessionCookieName(REFRESH_COOKIE_NAME));
 

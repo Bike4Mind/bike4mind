@@ -13,6 +13,7 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { respond } from '@server/utils/respond';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
@@ -22,6 +23,7 @@ import {
   IWebhookSubscriptionRequest,
   IWebhookSubscriptionResponse,
   IWebhookSubscriptionDocument,
+  webhookSubscriptionResponseSchema,
 } from '@bike4mind/common';
 
 /**
@@ -71,7 +73,7 @@ const handler = baseApi()
 
       const response = formatSubscriptionResponse(subscription, org?.name);
 
-      return res.status(200).json(response);
+      return respond(res, webhookSubscriptionResponseSchema, response);
     })
   )
   // PUT - Update subscription
@@ -150,7 +152,7 @@ const handler = baseApi()
 
         const response = formatSubscriptionResponse(updatedSubscription, org?.name);
 
-        return res.status(200).json(response);
+        return respond(res, webhookSubscriptionResponseSchema, response);
       }
     )
   )

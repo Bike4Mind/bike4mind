@@ -70,6 +70,13 @@ async function orgHasPaidPlan(organizationId: string): Promise<boolean> {
 
 type ApiKeyAccessBasis = AdminApiKeyAccess['basis'];
 
+/** Pass the user document itself: a projection without `lastCreditsPurchasedAt` refuses a credit buyer. */
+export type ApiKeyAccessUser = RateTierUser & { lastCreditsPurchasedAt?: Date | null };
+
+// The same "ever bought" signal that grants plan:paid (server/entitlements/index.ts) and
+// hasPaidStanding (userApiKeyService/trust.ts).
+const hasBoughtCredits = (user: ApiKeyAccessUser): boolean => Boolean(user.lastCreditsPurchasedAt);
+
 /** The paid-mode subscription check shared by the gate and the admin description of it. */
 async function hasPaidApiKeyAccess(
   user: RateTierUser,
@@ -95,10 +102,11 @@ async function hasPaidApiKeyAccess(
 
 /**
  * Admins, developers and trusted admin-provisioned keys bypass the switch. Paid access includes
- * standalone plans and org seats. Read failures propagate so clients get a retryable 5xx.
+ * standalone plans, org seats and a past credit purchase. Read failures propagate so clients get a
+ * retryable 5xx.
  */
 export async function isApiKeyAccessAllowed(
-  user: RateTierUser,
+  user: ApiKeyAccessUser,
   billing?: ApiKeyBillingRef,
   req?: ActiveSubscriptionsRequest
 ): Promise<boolean> {
@@ -108,7 +116,7 @@ export async function isApiKeyAccessAllowed(
   if (mode === 'all') return true;
   if (mode === 'disabled') return false;
 
-  return hasPaidApiKeyAccess(user, billing, req);
+  return hasBoughtCredits(user) || hasPaidApiKeyAccess(user, billing, req);
 }
 
 /**
@@ -116,20 +124,21 @@ export async function isApiKeyAccessAllowed(
  * isApiKeyAccessAllowed for a key with no billing ref (a user's own standalone access); an
  * org-billed or admin-provisioned key can still pass where `allowed` is false.
  */
-export async function describeApiKeyAccess(user: RateTierUser): Promise<AdminApiKeyAccess> {
+export async function describeApiKeyAccess(user: ApiKeyAccessUser): Promise<AdminApiKeyAccess> {
   const mode = await readMode();
   const bypass = (basis: ApiKeyAccessBasis): AdminApiKeyAccess => ({ mode, allowed: true, basis });
   if (user.isAdmin) return bypass('admin');
   if (hasDeveloperUserTag(user.tags)) return bypass('developer');
   if (mode === 'all') return bypass('open_to_all');
   if (mode === 'disabled') return { mode, allowed: false, basis: 'disabled' };
+  if (hasBoughtCredits(user)) return bypass('credit_purchase');
 
   const paid = await hasPaidApiKeyAccess(user);
   return { mode, allowed: paid, basis: paid ? 'paid_subscription' : 'no_paid_subscription' };
 }
 
 export async function assertApiKeyAccessAllowed(
-  user: RateTierUser,
+  user: ApiKeyAccessUser,
   billing?: ApiKeyBillingRef,
   req?: ActiveSubscriptionsRequest
 ): Promise<void> {
@@ -151,7 +160,7 @@ function isDeviceClientSession(session: { createdVia?: string; clientId?: string
  * including browser tokens and legacy sidless tokens. Session metadata comes from the server.
  */
 export async function assertCliSessionAllowed(
-  user: RateTierUser,
+  user: ApiKeyAccessUser,
   sid: string | undefined,
   options: { requireApiAccess?: boolean } = {}
 ): Promise<void> {
