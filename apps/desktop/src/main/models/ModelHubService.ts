@@ -8,6 +8,8 @@ import {
   RuntimeHttpError,
   isAbliteratedModel,
   isHubRepoId,
+  ollamaPullRef,
+  ollamaRefAliases,
   type HubGgufBuild,
   type HubModelDetail,
   type HubModelSummary,
@@ -22,6 +24,9 @@ import {
 import {
   licenseKind,
   pullKey,
+  type HfTokenResult,
+  type HfTokenStatus,
+  type HubAccess,
   type HubBuildView,
   type HubDetailResult,
   type HubModelCard,
@@ -56,10 +61,18 @@ export interface ModelHubPort {
   search(options: HubSearchOptions): Promise<HubSearchPage>;
   getModel(repo: string, options?: { signal?: AbortSignal; refresh?: boolean }): Promise<HubModelDetail>;
   verifyOllamaRef(
-    detail: Pick<HubModelDetail, 'id' | 'builds'>,
+    detail: Pick<HubModelDetail, 'id' | 'builds' | 'ollamaNeedsSshKey'>,
     build: HubGgufBuild,
     options?: { signal?: AbortSignal }
   ): Promise<string | null>;
+  checkToken(options?: { signal?: AbortSignal }): Promise<boolean>;
+}
+
+export interface HubTokenPort {
+  persisted(): boolean;
+  get(): Promise<string | null>;
+  set(token: string): Promise<void>;
+  clear(): Promise<void>;
 }
 
 /**
@@ -77,7 +90,9 @@ export interface ModelHubServiceDeps {
   runtime: ModelRuntimePort;
   /** A saved model server by id; null when none is saved under it. */
   server?: (id: string) => ModelHubServer | null;
-  hub: ModelHubPort;
+  /** A Hub client sending `token`, if any; it must only ever be pointed at Hugging Face itself. */
+  createHub: (token: string | null) => ModelHubPort;
+  tokens: HubTokenPort;
   onPullsChanged: (pulls: ModelPull[]) => void;
   onInstalledChanged: (serverId: string) => void;
   /** True while a download to a saved server runs: that server's Ollama stops it if this computer sleeps. */
@@ -94,6 +109,9 @@ interface Target extends ModelHubServer {
   local: boolean;
 }
 
+// Printable ASCII with no spaces: anything else cannot be sent as a header and is not a Hub token.
+const TOKEN_RE = /^[\x21-\x7e]{8,256}$/;
+
 interface PullEntry {
   view: ModelPull;
   controller: AbortController;
@@ -105,12 +123,20 @@ interface PullEntry {
 
 const SERVER_GONE = 'That model server is no longer saved. Pick another under Models.';
 
+interface HubSession {
+  hub: ModelHubPort;
+  token: boolean;
+}
+
 function hubError(kind: ModelHubErrorKind, message: string, retryAfterMs?: number | null): ModelHubError {
   return retryAfterMs === undefined ? { kind, message } : { kind, message, retryAfterMs };
 }
 
-/** Maps local-models errors, which never carry the Hugging Face token, onto what the screen explains. */
-export function toModelHubError(error: unknown): ModelHubError {
+/**
+ * Maps local-models errors, which never carry the Hugging Face token, onto what the screen explains. `tokenSent`:
+ * the request carried the saved token, so a refusal is about that token.
+ */
+export function toModelHubError(error: unknown, tokenSent = false): ModelHubError {
   if (error instanceof ServerCredentialsError) return hubError('credentials', error.message);
   if (error instanceof ServerUnreachableError) return hubError('runtime-unavailable', error.message);
   if (error instanceof ServerTransportError || error instanceof ServerRedirectError)
@@ -124,11 +150,23 @@ export function toModelHubError(error: unknown): ModelHubError {
   if (error instanceof HubRateLimitError)
     return hubError('rate-limited', 'Hugging Face is rate limiting this computer.', error.retryAfterMs);
   if (error instanceof HubAccessError)
-    return hubError('gated', 'Hugging Face refused access to this repo. Request access on its page first.');
+    return tokenSent
+      ? hubError(
+          'token-rejected',
+          'Hugging Face refused your token for this repo: it is invalid or lacks access. Request access on the repo ' +
+            'page, or replace the token.'
+        )
+      : hubError('gated', 'Hugging Face refused access to this repo. Request access on its page first.');
   if (error instanceof ModelNotFoundError)
-    return fromHub
-      ? hubError('not-found', `Hugging Face has no public repo named ${error.model}.`)
-      : hubError('not-found', `Ollama has no model named ${error.model}.`);
+    return !fromHub
+      ? hubError('not-found', `Ollama has no model named ${error.model}.`)
+      : tokenSent
+        ? hubError(
+            'not-found',
+            `Hugging Face has no repo named ${error.model} that your token can read. The repo may not exist, or the ` +
+              'token is invalid or lacks access to it.'
+          )
+        : hubError('not-found', `Hugging Face has no public repo named ${error.model}.`);
   if (error instanceof RuntimeConnectionError)
     return fromHub
       ? hubError('hub-unreachable', 'Could not reach Hugging Face. Check your connection and try again.')
@@ -180,12 +218,18 @@ function manageRefusal(target: Target): ModelHubError | null {
   return null;
 }
 
-/**
- * The name Ollama pulls a gated or private repo by. Ollama refuses to sign a pull whose auth realm (huggingface.co)
- * is not the host it asked (hf.co redirects there), so these are pulled by their huggingface.co name instead.
- */
-export function signedPullRef(ref: string): string {
-  return ref.replace(/^hf\.co\//, 'huggingface.co/');
+/** Ollama answers a gated or private pull its own key cannot sign with the registry's 401 or 403. */
+function pullAuthError(error: unknown, target: Target): ModelHubError | null {
+  if (!(error instanceof LocalRuntimeError) || error.runtimeId.startsWith('huggingface')) return null;
+  if (!/: pull model manifest: 40[13]\b/.test(error.message)) return null;
+  const key = target.local
+    ? "add Ollama's public key (usually ~/.ollama/id_ed25519.pub)"
+    : `add the public key of Ollama on ${target.name}, not this computer's,`;
+  return hubError(
+    'gated',
+    `Hugging Face refused Ollama's download. Ollama signs in with its own key, not your token: ${key} at ` +
+      'huggingface.co/settings/keys on the account that has access, then download again.'
+  );
 }
 
 function toCard(model: HubModelSummary): HubModelCard {
@@ -202,17 +246,25 @@ function toCard(model: HubModelSummary): HubModelCard {
   };
 }
 
-function blockedReason(detail: HubModelDetail, build: HubGgufBuild): string | null {
+function blockedReason(detail: HubModelDetail, build: HubGgufBuild, tokenSent: boolean): string | null {
   if (build.split) return 'Split into several files, which Ollama cannot pull from Hugging Face.';
   if (!build.complete) return 'Some of its files are missing from the repo.';
   if (build.ollamaRefIssue === 'no-quant-label') return 'Its file name has no quant label Ollama can pull by.';
   if (build.ollamaRefIssue === 'unsupported-name') return "Its repo or file name breaks Ollama's naming rules.";
   if (build.ollamaRefIssue === 'unsupported-quant') return 'Ollama cannot pull this quant from Hugging Face yet.';
   if (!build.files[0]?.sha256)
-    return detail.ollamaNeedsSshKey
-      ? 'Needs access: Hugging Face hides this file until your account is granted access.'
-      : 'Hugging Face lists no checksum for this file, so the download cannot be verified.';
+    return !detail.ollamaNeedsSshKey
+      ? 'Hugging Face lists no checksum for this file, so the download cannot be verified.'
+      : tokenSent
+        ? 'Needs access: your Hugging Face token cannot read this file yet. Request access on the repo page.'
+        : 'Needs access: add a Hugging Face token from an account that has been granted access.';
   return null;
+}
+
+function hubAccess(detail: HubModelDetail, tokenSent: boolean): HubAccess {
+  if (!tokenSent) return 'no-token';
+  if (detail.canDownload === null) return 'unknown';
+  return detail.canDownload ? 'granted' : 'denied';
 }
 
 /** An unparseable card link falls back to the repo page. */
@@ -227,13 +279,14 @@ function licenseUrl(endpoint: string, detail: HubModelDetail): string {
   return candidate && URL.canParse(candidate) ? candidate : `${endpoint}/${detail.id}`;
 }
 
-function toView(endpoint: string, detail: HubModelDetail): HubModelView {
+function toView(endpoint: string, detail: HubModelDetail, tokenSent: boolean): HubModelView {
   const builds: HubBuildView[] = detail.builds.map(build => ({
     id: build.id,
-    quant: build.quant,
+    label: build.label,
     sizeBytes: build.sizeBytes,
-    ollamaRef: build.ollamaRef && detail.ollamaNeedsSshKey ? signedPullRef(build.ollamaRef) : build.ollamaRef,
-    blockedReason: blockedReason(detail, build),
+    ollamaRef: build.ollamaRef && ollamaPullRef(build.ollamaRef, detail.ollamaNeedsSshKey),
+    installedNames: build.ollamaRef ? ollamaRefAliases(build.ollamaRef) : [],
+    blockedReason: blockedReason(detail, build, tokenSent),
   }));
   const url = licenseUrl(endpoint, detail);
   return {
@@ -248,6 +301,7 @@ function toView(endpoint: string, detail: HubModelDetail): HubModelView {
     builds,
     projectorBytes: detail.projectors.length ? Math.max(...detail.projectors.map(entry => entry.sizeBytes)) : null,
     needsAccess: detail.ollamaNeedsSshKey,
+    hubAccess: hubAccess(detail, tokenSent),
   };
 }
 
@@ -269,6 +323,8 @@ export class ModelHubService {
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #awake = false;
   #disposed = false;
+  #session: Promise<HubSession> | null = null;
+  #tokenMutation: Promise<unknown> = Promise.resolve();
 
   constructor(deps: ModelHubServiceDeps) {
     this.#deps = deps;
@@ -286,6 +342,83 @@ export class ModelHubService {
       };
     const server = this.#deps.server?.(serverId);
     return server ? { ...server, id: serverId, local: false } : null;
+  }
+
+  #hub(): Promise<HubSession> {
+    if (!this.#session) {
+      const session = this.#deps.tokens
+        .get()
+        .then(token => ({ hub: this.#deps.createHub(token), token: token !== null }));
+      this.#session = session;
+      void session.catch(() => {
+        if (this.#session === session) this.#session = null;
+      });
+    }
+    return this.#session;
+  }
+
+  #mutateToken(operation: () => Promise<HfTokenResult>): Promise<HfTokenResult> {
+    const result = this.#tokenMutation.then(operation);
+    this.#tokenMutation = result.catch(() => undefined);
+    return result;
+  }
+
+  async tokenStatus(): Promise<HfTokenStatus> {
+    return { set: (await this.#hub()).token, persisted: this.#deps.tokens.persisted() };
+  }
+
+  /** Keeps `raw` only once Hugging Face has accepted it; searches and reads after that send it. */
+  setToken(raw: string): Promise<HfTokenResult> {
+    return this.#mutateToken(() => this.#setToken(raw));
+  }
+
+  async #setToken(raw: string): Promise<HfTokenResult> {
+    const token = raw.trim();
+    const malformed = hubError(
+      'token-rejected',
+      'That is not a Hugging Face token. Copy it again from huggingface.co/settings/tokens.'
+    );
+    if (!TOKEN_RE.test(token)) return { ok: false, error: malformed };
+    let hub: ModelHubPort;
+    try {
+      hub = this.#deps.createHub(token);
+    } catch {
+      return { ok: false, error: malformed };
+    }
+    try {
+      if (!(await hub.checkToken()))
+        return {
+          ok: false,
+          error: hubError(
+            'token-rejected',
+            'Hugging Face did not accept this token. Check that you copied all of it and that it has not been revoked.'
+          ),
+        };
+    } catch (error) {
+      return { ok: false, error: toModelHubError(error) };
+    }
+    try {
+      await this.#deps.tokens.set(token);
+    } catch {
+      return { ok: false, error: hubError('failed', 'Could not save the token. Try again.') };
+    }
+    this.#session = Promise.resolve({ hub, token: true });
+    return { ok: true, status: await this.tokenStatus() };
+  }
+
+  /** The session only forgets the token once the stored one is gone, so a failed removal still shows it as set. */
+  clearToken(): Promise<HfTokenResult> {
+    return this.#mutateToken(() => this.#clearToken());
+  }
+
+  async #clearToken(): Promise<HfTokenResult> {
+    try {
+      await this.#deps.tokens.clear();
+    } catch {
+      return { ok: false, error: hubError('failed', 'Could not remove the token. Try again.') };
+    }
+    this.#session = Promise.resolve({ hub: this.#deps.createHub(null), token: false });
+    return { ok: true, status: await this.tokenStatus() };
   }
 
   async status(serverId?: string): Promise<ModelRuntimeStatus> {
@@ -333,8 +466,12 @@ export class ModelHubService {
   }
 
   async search(request: HubSearchRequest): Promise<HubSearchResult> {
+    let token = false;
     try {
-      const page = await this.#deps.hub.search({
+      const session = await this.#hub();
+      token = session.token;
+      const { hub } = session;
+      const page = await hub.search({
         query: request.query,
         cursor: request.cursor ?? undefined,
         sort: 'downloads',
@@ -342,15 +479,22 @@ export class ModelHubService {
       });
       return { ok: true, models: page.models.map(toCard), nextCursor: page.nextCursor };
     } catch (error) {
-      return { ok: false, error: toModelHubError(error) };
+      return { ok: false, error: toModelHubError(error, token) };
     }
   }
 
   async detail(repo: string): Promise<HubDetailResult> {
+    let token = false;
     try {
-      return { ok: true, model: toView(this.#deps.hub.endpoint, await this.#deps.hub.getModel(repo)) };
+      const session = await this.#hub();
+      token = session.token;
+      const { hub } = session;
+      let found = await hub.getModel(repo);
+      // A cached denial would outlive an access grant by up to the cache TTL; re-ask before saying "cannot read".
+      if (token && hubAccess(found, token) === 'denied') found = await hub.getModel(repo, { refresh: true });
+      return { ok: true, model: toView(hub.endpoint, found, token) };
     } catch (error) {
-      return { ok: false, error: toModelHubError(error) };
+      return { ok: false, error: toModelHubError(error, token) };
     }
   }
 
@@ -383,7 +527,7 @@ export class ModelHubService {
         serverName: target.name,
         repo: request.repo,
         buildId: request.buildId,
-        quant: null,
+        label: null,
         ref: null,
         phase: 'verifying',
         completedBytes: 0,
@@ -400,22 +544,26 @@ export class ModelHubService {
       return { ok: false, error: entry.stopped ?? error, listed: false };
     };
 
+    let token = false;
     let ref: string | null;
     try {
+      const session = await this.#hub();
+      token = session.token;
+      const { hub } = session;
       // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
-      const detail = await this.#deps.hub.getModel(request.repo, { refresh: true });
+      const detail = await hub.getModel(request.repo, { refresh: true });
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       const build = detail.builds.find((candidate: HubGgufBuild) => candidate.id === request.buildId);
       if (!build) return refuse(hubError('not-found', 'That build is no longer in this repo.'));
       if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)
         return refuse(hubError('changed', 'This repo changed since you reviewed it. Review it again, then download.'));
-      const reason = blockedReason(detail, build);
+      const reason = blockedReason(detail, build, token);
       if (reason) return refuse(hubError('cannot-pull', reason));
       if (licenseKind(detail.licenses) === 'restricted' && !request.acceptLicense)
         return refuse(hubError('license-required', 'Accept the license before downloading.'));
       if (detail.ollamaNeedsSshKey && !request.confirmAccess)
         return refuse(hubError('access-required', 'Confirm the Hugging Face access steps before downloading.'));
-      entry.view = { ...entry.view, quant: build.quant, expectedBytes: build.sizeBytes };
+      entry.view = { ...entry.view, label: build.label, expectedBytes: build.sizeBytes };
 
       const health = await target.runtime.health();
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
@@ -431,11 +579,10 @@ export class ModelHubService {
           )
         );
       // The registry serves the first file whose name ends with the tag; only its manifest proves which one.
-      ref = await this.#deps.hub.verifyOllamaRef(detail, build, { signal: controller.signal });
-      if (ref && detail.ollamaNeedsSshKey) ref = signedPullRef(ref);
+      ref = await hub.verifyOllamaRef(detail, build, { signal: controller.signal });
     } catch (error) {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
-      return this.#fail(key, entry, toModelHubError(error));
+      return this.#fail(key, entry, toModelHubError(error, token));
     }
     if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
     if (!ref)
@@ -491,7 +638,14 @@ export class ModelHubService {
         return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
       }
       if (!target.local && error instanceof ServerUnreachableError) return this.#pause(key, entry, target);
-      return this.#fail(key, entry, pullEofError(error, ref) ?? diskFullError(error, target) ?? toModelHubError(error));
+      return this.#fail(
+        key,
+        entry,
+        pullEofError(error, ref) ??
+          pullAuthError(error, target) ??
+          diskFullError(error, target) ??
+          toModelHubError(error)
+      );
     }
     this.#drop(key, entry);
     this.#deps.onInstalledChanged(target.id);

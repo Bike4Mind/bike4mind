@@ -5,7 +5,7 @@ import type { ModelHubService } from './ModelHubService';
 
 const MAX_TEXT = 512;
 
-function text(value: unknown): string | null {
+export function text(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_TEXT ? value : null;
 }
 
@@ -16,7 +16,7 @@ function server(value: unknown): { id: string | undefined } | null {
   return id ? { id } : null;
 }
 
-const invalid = { ok: false, error: { kind: 'invalid', message: 'Invalid request.' } } as const;
+export const invalid = { ok: false, error: { kind: 'invalid', message: 'Invalid request.' } } as const;
 
 const invalidStatus = {
   reachable: false,

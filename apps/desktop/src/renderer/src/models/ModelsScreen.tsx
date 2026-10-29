@@ -106,7 +106,7 @@ function PullRow({ pull }: { pull: ModelPull }) {
       <Stack direction="row" alignItems="center" spacing={1}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography level="body-sm" fontFamily="code" noWrap>
-            {pull.repo} {pull.quant ?? ''}
+            {pull.repo} {pull.label ?? ''}
             {remote && (
               <Typography fontFamily="body" textColor="text.tertiary">
                 {' '}
@@ -169,7 +169,7 @@ function PullRow({ pull }: { pull: ModelPull }) {
         <LinearProgress
           determinate={pull.phase === 'downloading' || paused}
           value={pullPercent(pull)}
-          aria-label={`Download of ${pull.repo} ${pull.quant ?? pull.buildId}`}
+          aria-label={`Download of ${pull.repo} ${pull.label ?? pull.buildId}`}
           aria-valuetext={pullLabel(pull)}
           sx={{ mt: 1 }}
           data-testid="models-pull-progress"

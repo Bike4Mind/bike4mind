@@ -175,7 +175,9 @@ export class ResearchModeService {
         await Promise.race([
           llm.complete(
             config.model,
-            messages,
+            // Each configuration gets its own copy: backends append their tool rounds in place, in
+            // their own provider's shape, and the configurations run in parallel.
+            [...messages],
             options,
             async (rawTexts: (string | null | undefined)[], rawInfo?: any) => {
               for (const text of rawTexts) streamedChars += text?.length ?? 0;

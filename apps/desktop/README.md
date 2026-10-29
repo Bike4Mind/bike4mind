@@ -43,6 +43,36 @@ Electron against it with HMR.
 | `pnpm test`           | vitest                                             |
 | `pnpm package`        | Installers for the host platform, into `release/`  |
 
+## Private and gated Hugging Face models
+
+In Models > Explore, choose Add token and enter a Hugging Face read token from
+[huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Desktop checks it
+before saving. Replace changes the token; Remove deletes it. The token is sent only to
+Hugging Face, and stays in the main process after you submit it.
+
+Desktop encrypts the saved token with the OS secret store. Without secure storage, including
+Linux's `basic_text` backend, it keeps the token only until you quit. The token row says
+whether it is saved for this run or across restarts.
+
+Ollama downloads the files itself using its own SSH key. For private or gated repos, grant
+your Hugging Face account access and register Ollama's public key (usually
+`~/.ollama/id_ed25519.pub`) at
+[huggingface.co/settings/keys](https://huggingface.co/settings/keys). The token checks Hub
+access; it does not give Ollama access. Desktop, CLI and MCP use `huggingface.co/...` for
+these pulls and recognize installed models under either Hugging Face hostname.
+
+Show abliterated models is off by default and is remembered on this computer across restarts.
+
+### Troubleshooting Hugging Face access
+
+- Token rejected: check that the token is complete, has not been revoked, and can read the repo.
+- Token cannot read the file: request gated access on the repo page, or grant the token access
+  to the private repo, then check again.
+- Ollama download refused: register Ollama's public key on the account with repo access.
+- Saved token could not be read: check access to Desktop's user-data folder, then select Retry.
+- Save or Remove failed: the previous token remains active. Resolve the storage error and retry.
+- Token missing after restart: check whether the token row said it was kept only until quit.
+
 ## Images in conversations
 
 Right-click an image in a sent message or tool result to open its menu. From the keyboard,

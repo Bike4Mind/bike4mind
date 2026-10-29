@@ -7,15 +7,17 @@ vi.mock('@client/app/contexts/UserContext', () => ({ useUser: vi.fn() }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({ useAccessToken: vi.fn() }));
 
 const getMock = vi.fn();
+const postMock = vi.fn();
 const solveMock = vi.fn();
 vi.mock('@client/app/utils/turnstile', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/utils/turnstile')>()),
   getTurnstileToken: (...args: unknown[]) => solveMock(...args),
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: (...args: unknown[]) => getMock(...args), post: () => Promise.resolve() },
+  api: { get: (...args: unknown[]) => getMock(...args), post: (...args: unknown[]) => postMock(...args) },
 }));
 
+import { TurnstileCancelledError } from '@client/app/utils/turnstile';
 import { oauthStartProvider, oauthStartUrl, useStartOAuthSignIn } from './auth';
 
 const wrapper = ({ children }: { children: React.ReactNode }) => {
@@ -28,6 +30,7 @@ const location = { href: '', search: '' };
 beforeEach(() => {
   vi.resetAllMocks();
   getMock.mockResolvedValue({ data: { turnstileSiteKey: '' } });
+  postMock.mockResolvedValue({ data: undefined });
   location.href = '';
   location.search = '';
   vi.stubGlobal('location', location);
@@ -87,6 +90,56 @@ describe('useStartOAuthSignIn', () => {
     getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
     solveMock.mockRejectedValue(new Error('turnstile-unavailable'));
     await expect(start('/api/auth/google')).rejects.toThrow(/verification check/i);
+    expect(location.href).toBe('');
+    expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', expect.anything());
+  });
+
+  it('ignores a second start while the first challenge is still open', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    let solve: (token: string) => void = () => {};
+    solveMock.mockReturnValueOnce(new Promise(resolve => (solve = resolve))).mockResolvedValueOnce('tok-2');
+    const { result } = renderHook(() => useStartOAuthSignIn(), { wrapper });
+    const first = result.current('/api/auth/google');
+    await vi.waitFor(() => expect(solveMock).toHaveBeenCalledTimes(1));
+    await result.current('/api/auth/google');
+    expect(solveMock).toHaveBeenCalledTimes(1);
+    solve('tok-1');
+    await first;
+    expect(location.href).toBe('/api/auth/google?turnstileToken=tok-1');
+    await result.current('/api/auth/github');
+    expect(solveMock).toHaveBeenCalledTimes(1);
+    expect(location.href).toBe('/api/auth/google?turnstileToken=tok-1');
+  });
+
+  it('allows another start once a challenge has failed', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValueOnce(new TurnstileCancelledError()).mockResolvedValueOnce('tok');
+    const { result } = renderHook(() => useStartOAuthSignIn(), { wrapper });
+    await expect(result.current('/api/auth/google')).rejects.toThrow(/cancelled/i);
+    await result.current('/api/auth/google');
+    expect(location.href).toBe('/api/auth/google?turnstileToken=tok');
+  });
+
+  it('allows another start once the page is restored from the back/forward cache', async () => {
+    const { result } = renderHook(() => useStartOAuthSignIn(), { wrapper });
+    await result.current('/api/auth/google');
+    expect(location.href).toBe('/api/auth/google');
+    location.href = '';
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+    await result.current('/api/auth/github');
+    expect(location.href).toBe('');
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    await result.current('/api/auth/github');
+    expect(location.href).toBe('/api/auth/github');
+  });
+
+  it('rejects a cancelled challenge without reporting it or navigating', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new TurnstileCancelledError());
+    const rejection = await start('/api/auth/google').catch((error: Error) => error);
+    expect(rejection.message).toContain('Verification cancelled');
+    expect(rejection.message).not.toContain('refresh');
+    expect(postMock).not.toHaveBeenCalled();
     expect(location.href).toBe('');
   });
 });

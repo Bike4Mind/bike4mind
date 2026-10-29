@@ -1,5 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { systemPromptRepository } from '@bike4mind/database';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 
@@ -53,6 +54,13 @@ const handler = adminApi({
         message: 'Failed to delete the database override.',
       });
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.system_prompt.reset',
+      target: { kind: 'settings', id: promptId, displayName: defaultPrompt.name },
+      summary: `reset system prompt ${promptId} to code default`,
+      details: { previousVersion: dbPrompt.version, historyPreserved: result.historyPreserved },
+    });
 
     return res.status(200).json({
       success: true,

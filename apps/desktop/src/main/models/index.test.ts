@@ -1,19 +1,34 @@
 import { IPC_CHANNELS } from '@shared/ipc';
+import type { HfTokenResult } from '@shared/models';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelHubServiceDeps } from './ModelHubService';
 
+type Handler = (event: { sender: { id: number } }, value?: unknown) => unknown;
 const electron = vi.hoisted(() => ({
+  handlers: new Map<string, Handler>(),
+  app: { getPath: () => '/unused/test-user-data' },
   ipcMain: { handle: vi.fn() },
   powerSaveBlocker: { start: vi.fn(() => 7), stop: vi.fn() },
+  safeStorage: {},
 }));
-const send = vi.hoisted(() => vi.fn());
-const service = vi.hoisted(() => ({ deps: null as ModelHubServiceDeps | null, serverChanged: vi.fn() }));
+const { origin, other } = vi.hoisted(() => ({
+  origin: { webContents: { id: 1, send: vi.fn() } },
+  other: { webContents: { id: 2, send: vi.fn() } },
+}));
+const service = vi.hoisted(() => ({
+  deps: null as ModelHubServiceDeps | null,
+  serverChanged: vi.fn(),
+  setToken: vi.fn(),
+  clearToken: vi.fn(),
+}));
 
 vi.mock('electron', () => electron);
-vi.mock('../windows', () => ({ appWindows: () => [{ webContents: { send } }] }));
+vi.mock('../windows', () => ({ appWindows: () => [origin, other] }));
 vi.mock('./ModelHubService', () => ({
   ModelHubService: class {
     serverChanged = service.serverChanged;
+    setToken = service.setToken;
+    clearToken = service.clearToken;
     constructor(deps: ModelHubServiceDeps) {
       service.deps = deps;
     }
@@ -41,12 +56,17 @@ function setup() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  electron.handlers.clear();
+  electron.ipcMain.handle.mockImplementation((channel: string, handler: Handler) => {
+    electron.handlers.set(channel, handler);
+  });
   service.deps = null;
 });
 
 describe('registerModels', () => {
   it('announces a changed server once, right away, with its id', async () => {
     const { deps } = setup();
+    const send = origin.webContents.send;
     deps.onInstalledChanged('srv1');
     expect(send.mock.calls).toEqual([[IPC_CHANNELS.modelsInstalledChanged, 'srv1']]);
     deps.onInstalledChanged('local');
@@ -75,4 +95,37 @@ describe('registerModels', () => {
     saved('srv1');
     expect(service.serverChanged).toHaveBeenCalledWith('srv1');
   });
+});
+
+describe('Models credential IPC', () => {
+  it.each([
+    [IPC_CHANNELS.modelsSaveHfAccess, true],
+    [IPC_CHANNELS.modelsClearHfAccess, false],
+  ])('broadcasts only the successful status to other windows for %s', async (channel, set) => {
+    const result: HfTokenResult = { ok: true, status: { set, persisted: true } };
+    service.setToken.mockResolvedValue(result);
+    service.clearToken.mockResolvedValue(result);
+    setup();
+    const response = await electron.handlers.get(channel)?.({ sender: { id: 1 } }, 'hf_secret_never_broadcast');
+    expect(response).toEqual(result);
+    expect(origin.webContents.send).not.toHaveBeenCalled();
+    expect(other.webContents.send).toHaveBeenCalledExactlyOnceWith(IPC_CHANNELS.modelsHfAccessChanged, result.status);
+    expect(JSON.stringify(other.webContents.send.mock.calls)).not.toContain('hf_secret_never_broadcast');
+    if (set) expect(service.setToken).toHaveBeenCalledWith('hf_secret_never_broadcast');
+  });
+
+  it.each([IPC_CHANNELS.modelsSaveHfAccess, IPC_CHANNELS.modelsClearHfAccess])(
+    'does not broadcast a failed mutation for %s',
+    async channel => {
+      const result: HfTokenResult = { ok: false, error: { kind: 'failed', message: 'Could not write.' } };
+      service.setToken.mockResolvedValue(result);
+      service.clearToken.mockResolvedValue(result);
+      setup();
+      expect(await electron.handlers.get(channel)?.({ sender: { id: 1 } }, 'hf_secret_never_broadcast')).toEqual(
+        result
+      );
+      expect(origin.webContents.send).not.toHaveBeenCalled();
+      expect(other.webContents.send).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { copyFile, readFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
@@ -77,7 +77,8 @@ import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService, type ChatServiceDeps } from './ChatService';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
-import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
+import { McpServerStore } from './mcp/McpServerStore';
+import { privateFile } from '../privateFile';
 import { MediaApiClient } from './media/MediaApiClient';
 import { MediaStore } from './media/MediaStore';
 import { VideoJobScheduler } from './media/VideoJobScheduler';
@@ -276,22 +277,6 @@ export interface RegisteredChat {
 }
 
 /**
- * The MCP config file, written the same way the auth vault is: mode 0600 and write-then-rename,
- * because a crash mid-write would otherwise leave a truncated list of servers.
- */
-function mcpStoreFile(path: string): StoreFile {
-  return {
-    read: () => readFile(path, 'utf8').catch(() => null),
-    write: async contents => {
-      await mkdir(dirname(path), { recursive: true });
-      const temporary = `${path}.tmp`;
-      await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
-      await rename(temporary, path);
-    },
-  };
-}
-
-/**
  * The pane rectangle, or null for anything that is not one.
  *
  * Checked rather than trusted even though the renderer is ours: these numbers go straight to
@@ -457,7 +442,7 @@ export function registerChat(
   const localSizing = localContextSizing({ setting: () => localContext.read() });
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
-    store: new ModelServerStore(safeStorage, mcpStoreFile(join(userData, 'model-servers.json')), logger),
+    store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
     logger,
     changed: servers => {
       models.forgetLocal();
@@ -572,7 +557,7 @@ export function registerChat(
   // safeStorage for the same reason as the auth vault: an env variable holding an API key and a
   // header holding a bearer token are credentials, and neither goes to plain JSON in userData.
   const mcp = new McpManager(
-    new McpServerStore(safeStorage, mcpStoreFile(join(userData, 'mcp-servers.json')), logger),
+    new McpServerStore(safeStorage, privateFile(join(userData, 'mcp-servers.json')), logger),
     logger,
     (state: McpServersState) => send(IPC_CHANNELS.mcpServersChanged, state)
   );
@@ -912,6 +897,36 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
     if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
     return service.inspectSessionWorktreeRemoval(sessionId);
+  });
+  // Only a repository the user already has a conversation or recent folder for is ever touched.
+  const knownRepository = async (directory: string) => {
+    const recent = await recentFolders.list();
+    if (
+      !(await service.isKnownRepository(
+        directory,
+        recent.map(folder => folder.path)
+      ))
+    ) {
+      throw new Error('Unknown project directory');
+    }
+  };
+  ipcMain.handle(IPC_CHANNELS.chatListWorktrees, async (_event, directory: unknown) => {
+    if (typeof directory !== 'string') throw new Error('Invalid project directory');
+    await knownRepository(directory);
+    return service.listWorktrees(directory);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRemoveWorktrees, async (_event, directory: unknown, paths: unknown) => {
+    if (typeof directory !== 'string') throw new Error('Invalid project directory');
+    if (paths !== undefined && (!Array.isArray(paths) || !paths.every(path => typeof path === 'string'))) {
+      throw new Error('Invalid worktree list');
+    }
+    await knownRepository(directory);
+    return service.removeWorktrees(directory, paths);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRevealWorktree, async (_event, directory: unknown, path: unknown) => {
+    if (typeof directory !== 'string' || typeof path !== 'string') throw new Error('Invalid worktree');
+    await knownRepository(directory);
+    return service.revealWorktree(directory, path, listed => shell.showItemInFolder(listed));
   });
   ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {
     if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {

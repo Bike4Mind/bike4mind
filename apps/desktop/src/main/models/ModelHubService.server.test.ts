@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
-import { ModelHubService, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
+import { ModelHubService, type HubTokenPort, type ModelHubPort, type ModelRuntimePort } from './ModelHubService';
 
 const TOKEN = 'tok-secret-zz';
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -108,6 +108,7 @@ function detail(): HubModelDetail {
   const build: HubGgufBuild = {
     id: 'q4',
     quant: 'Q4_K_M',
+    label: 'Q4_K_M',
     files: [{ path: 'q4_k_m.gguf', sizeBytes: TOTAL, sha256: 'a'.repeat(64), url: 'https://x' }],
     sizeBytes: TOTAL,
     split: false,
@@ -143,7 +144,15 @@ const hub = {
   search: async () => ({ models: [], nextCursor: null }),
   getModel: async () => detail(),
   verifyOllamaRef: async () => REF,
+  checkToken: async () => true,
 } satisfies ModelHubPort;
+
+const noToken: HubTokenPort = {
+  persisted: () => true,
+  get: async () => null,
+  set: async () => undefined,
+  clear: async () => undefined,
+};
 
 const unusedLocal: ModelRuntimePort = {
   baseUrl: 'http://127.0.0.1:11434',
@@ -198,7 +207,8 @@ async function setup(
         },
       };
     },
-    hub,
+    createHub: () => hub,
+    tokens: noToken,
     onPullsChanged: () => undefined,
     onInstalledChanged: installedChanged,
     keepAwake,

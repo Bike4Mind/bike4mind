@@ -27,12 +27,14 @@ function setup(management: ModelServerManagement) {
   const service = new ModelHubService({
     runtime: local,
     server: id => (id === 'gpu' ? { name: 'gpu box', management, runtime: remote } : null),
-    hub: {
+    createHub: () => ({
       endpoint: 'https://huggingface.co',
       search: async () => ({ models: [], nextCursor: null }),
       getModel,
       verifyOllamaRef: async () => null,
-    },
+      checkToken: async () => true,
+    }),
+    tokens: { persisted: () => true, get: async () => null, set: async () => undefined, clear: async () => undefined },
     onPullsChanged: () => undefined,
     onInstalledChanged: () => undefined,
   });

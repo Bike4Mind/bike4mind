@@ -5,12 +5,15 @@ import { LOCAL_SERVER_ID, type ModelServerManagement } from './modelServers';
 export type { ModelServerManagement };
 
 export const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
+export const HUGGING_FACE_TOKENS_URL = 'https://huggingface.co/settings/tokens';
+export const HUGGING_FACE_SSH_KEYS_URL = 'https://huggingface.co/settings/keys';
 
 export type ModelHubErrorKind =
   | 'runtime-unavailable'
   | 'hub-unreachable'
   | 'rate-limited'
   | 'gated'
+  | 'token-rejected'
   | 'not-found'
   | 'unverified'
   | 'license-required'
@@ -92,10 +95,13 @@ export type LicenseKind = 'permissive' | 'restricted';
 
 export interface HubBuildView {
   id: string;
-  quant: string | null;
+  /** Unique within the repo: the quant, plus what sets the file apart when other builds share it (`QAD-Q4_0`). */
+  label: string;
   sizeBytes: number;
-  /** The `hf.co/...` name Ollama would list it under, as planned from the file list. */
+  /** The name Ollama would list it under, as planned from the file list: `hf.co/...`, or `huggingface.co/...` when gated or private. */
   ollamaRef: string | null;
+  /** Lower-case names an installed copy of this build may be listed under: the repo can be pulled as hf.co or huggingface.co. */
+  installedNames: string[];
   /** Why the build cannot be pulled; null when it can be offered (the registry check still runs first). */
   blockedReason: string | null;
 }
@@ -115,7 +121,23 @@ export interface HubModelView extends HubModelCard {
   projectorBytes: number | null;
   /** Gated or private: Ollama needs its SSH key on the user's Hugging Face account. */
   needsAccess: boolean;
+  /**
+   * For a gated or private repo, what the saved Hugging Face token can read: `no-token` without one, `granted` when
+   * its files are readable, `denied` when the Hub refused it, `unknown` when there was no file to try.
+   */
+  hubAccess: HubAccess;
 }
+
+export type HubAccess = 'no-token' | 'granted' | 'denied' | 'unknown';
+
+/** Only whether a token is saved ever reaches the renderer, never the token. */
+export interface HfTokenStatus {
+  set: boolean;
+  /** False with no OS keychain: the token lasts until the app quits. */
+  persisted: boolean;
+}
+
+export type HfTokenResult = { ok: true; status: HfTokenStatus } | { ok: false; error: ModelHubError };
 
 export type HubDetailResult = { ok: true; model: HubModelView } | { ok: false; error: ModelHubError };
 
@@ -140,7 +162,8 @@ export interface ModelPull {
   serverName: string;
   repo: string;
   buildId: string;
-  quant: string | null;
+  /** The build's `HubBuildView.label`; null until main has read the build. */
+  label: string | null;
   ref: string | null;
   phase: ModelPullPhase;
   completedBytes: number;
