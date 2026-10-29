@@ -4,6 +4,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
 
+vi.mock('../subscription/CardVerificationCard', () => ({ CardVerificationCard: () => null }));
+
 vi.mock('./SessionCreditsButtons', () => ({
   SECONDARY_CREDIT_BUTTON_PROPS: { variant: 'outlined', color: 'neutral' },
   SubscribeButton: ({ label = 'Subscribe' }: { label?: string }) => (

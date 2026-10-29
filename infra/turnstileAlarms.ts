@@ -81,4 +81,10 @@ if (isMonitoredStage) {
     'TurnstileMisconfigured',
     'Turnstile rejected the server configuration in the last hour, so challenged sign-ins are failing'
   );
+  watchEvent(
+    'card-verification-failure-spike',
+    'cardVerificationFailureSpike',
+    'CardVerificationFailureSpike',
+    'The server reported a card verification failure spike under its private alert policy'
+  );
 }

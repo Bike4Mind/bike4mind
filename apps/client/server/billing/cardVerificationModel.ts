@@ -14,6 +14,10 @@ export interface CardVerificationRecord {
   state: 'pending' | 'verified' | 'granted' | 'refused';
   detached: boolean;
   createdAt?: Date;
+  ipDigest?: string;
+  asn?: string;
+  entry?: 'exhaustion' | 'billing';
+  notifiedAt?: Date;
 }
 
 const schema = new mongoose.Schema<CardVerificationRecord>(
@@ -30,12 +34,17 @@ const schema = new mongoose.Schema<CardVerificationRecord>(
     saveCard: { type: Boolean, required: true, immutable: true },
     state: { type: String, enum: ['pending', 'verified', 'granted', 'refused'], required: true },
     detached: { type: Boolean, required: true },
+    ipDigest: String,
+    asn: String,
+    entry: { type: String, enum: ['exhaustion', 'billing'] },
+    notifiedAt: Date,
   },
   { timestamps: true, strict: 'throw' }
 );
 
 schema.index({ verificationId: 1 }, { unique: true });
 schema.index({ userId: 1, state: 1 });
+schema.index({ setupIntentId: 1 }, { unique: true, partialFilterExpression: { setupIntentId: { $type: 'string' } } });
 
 export const CardVerification =
   (mongoose.models.CardVerification as mongoose.Model<CardVerificationRecord> | undefined) ??

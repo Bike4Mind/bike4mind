@@ -16,6 +16,8 @@ export type CardVerificationContext = {
   turnstileToken: unknown;
   ip: string;
   asn: string;
+  ipDigest?: string;
+  entry?: 'exhaustion' | 'billing';
 };
 
 export interface CardVerificationGuards {
@@ -78,6 +80,9 @@ export async function beginCardVerification(
     saveCard: saveCard === true,
     state: 'pending',
     detached: false,
+    ipDigest: context.ipDigest,
+    asn: context.asn,
+    entry: context.entry,
   };
   await CardVerification.create(record);
   return resumeCardVerificationSetup(record.verificationId, context.userId, deps);
@@ -121,6 +126,7 @@ export async function resumeCardVerificationSetup(
           customer: customer.id,
           usage: 'on_session',
           payment_method_types: ['card'],
+          payment_method_options: { card: { request_three_d_secure: 'any' } },
           metadata: metadata(record),
         },
         { idempotencyKey: `card-verification:setup:${verificationId}` }
@@ -201,7 +207,11 @@ export async function completeCardVerification(
         { verificationId, state: 'pending' },
         { $set: { state: 'refused', paymentMethodId } }
       );
-      await removeVerificationCard(verificationId, userId, deps);
+      try {
+        await deps.guards.recordFailure(intent, record);
+      } finally {
+        await removeVerificationCard(verificationId, userId, deps);
+      }
       throw new CardVerificationRefused(supported ? 'risk_refused' : 'unsupported_card');
     }
     const identityDigest = createHmac('sha256', policy.identityKey)

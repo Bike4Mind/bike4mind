@@ -7,6 +7,7 @@ import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { isCancellableSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { getBrandName } from '@client/config/general';
 import { SubscribeButton, SessionCreditsButton, SECONDARY_CREDIT_BUTTON_PROPS } from './SessionCreditsButtons';
+import { CardVerificationCard } from '../subscription/CardVerificationCard';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -112,5 +113,10 @@ export function CreditOfferActions({ moment }: CreditOfferActionsProps) {
     : hasPlan
       ? { kind: 'subscriber' }
       : { kind: 'unsubscribed' };
-  return <CreditOfferActionsView moment={moment} account={account} />;
+  return (
+    <>
+      {moment === 'out' && !isOrgAccount && <CardVerificationCard entry="exhaustion" />}
+      <CreditOfferActionsView moment={moment} account={account} />
+    </>
+  );
 }

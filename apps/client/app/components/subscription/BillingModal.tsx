@@ -20,6 +20,7 @@ import { CreditsSection } from './CreditsSection';
 import CreditsExplanation from './CreditsExplanation';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 import { NoCardUnlockCard } from './NoCardUnlockCard';
+import { CardVerificationCard } from './CardVerificationCard';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
@@ -428,6 +429,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
                   : plansFirst
                     ? [plansSection, creditsSection]
                     : [creditsSection, plansSection]}
+                {!isOrgAccount && <CardVerificationCard />}
                 <NoCardUnlockCard />
               </>
             ) : (

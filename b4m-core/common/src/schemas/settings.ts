@@ -491,6 +491,8 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'cardUnlockEnabled',
+  'cardUnlockCredits',
   'noCardUnlockEnabled',
   'noCardUnlockGithubCredits',
   'noCardUnlockWorkEmailCredits',
@@ -4370,6 +4372,22 @@ export const settingsMap = {
     defaultValue: 0,
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
+    category: 'Users',
+  }),
+  cardUnlockEnabled: makeBooleanSetting({
+    key: 'cardUnlockEnabled',
+    name: 'Card Verification Credit Unlock',
+    defaultValue: false,
+    description: 'Offer a no-charge card verification grant only when the server verification defenses are configured.',
+    category: 'Users',
+  }),
+  cardUnlockCredits: makeNumberSetting({
+    key: 'cardUnlockCredits',
+    name: 'Card Verification Credits',
+    defaultValue: 30000,
+    min: 1,
+    int: true,
+    description: 'Additional promotional credits granted once per eligible account and verified card identity.',
     category: 'Users',
   }),
   noCardUnlockEnabled: makeBooleanSetting({

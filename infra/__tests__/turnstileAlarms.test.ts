@@ -131,6 +131,23 @@ describe('turnstile policy alarm wiring', () => {
     expect(resources.alarm).not.toHaveBeenCalled();
   });
 
+  it('routes the verification spike event to the same alarm destinations', async () => {
+    await loadAlarms();
+    expect(resources.filter).toHaveBeenCalledWith(
+      'cardVerificationFailureSpikeFilter',
+      expect.objectContaining({
+        pattern: '%\\x22message\\x22:\\x22card-verification-failure-spike\\x22%',
+      })
+    );
+    expect(resources.alarm).toHaveBeenCalledWith(
+      'cardVerificationFailureSpike',
+      expect.objectContaining({
+        alarmActions: ['alarm-topic', 'email-topic'],
+        okActions: ['alarm-topic', 'email-topic'],
+      })
+    );
+  });
+
   it('allows a preview to opt in to monitoring', async () => {
     vi.stubEnv('ENABLE_MONITORING', 'true');
     await loadAlarms('preview');

@@ -30,6 +30,7 @@ export * from './dlqAlarms';
 export * from './mailAlarms';
 export * from './signupAlarms';
 export * from './turnstileAlarms';
+export * from './cardVerificationRecovery';
 export * from './accountCreationAlarms';
 export * from './analyticsRollup';
 export * from './llmSpend';

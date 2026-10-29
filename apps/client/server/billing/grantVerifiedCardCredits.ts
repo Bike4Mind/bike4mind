@@ -29,8 +29,10 @@ export async function grantVerifiedCardCredits(
       if (!current || !['verified', 'granted'].includes(current.state)) throw new Error('Verification state changed');
       const existing = await creditTransactionRepository.findOne({ transactionId });
       if (existing) {
-        if (existing.ownerId !== userId || existing.metadata?.verificationId !== verificationId)
+        if (existing.ownerId !== userId || existing.metadata?.verificationId !== verificationId) {
+          await CardVerification.updateOne({ verificationId, state: 'verified' }, { $set: { state: 'refused' } });
           return 'refused' as const;
+        }
         return 'already_granted' as const;
       }
       if (!(await eligible(userId))) throw new Error('Account is not eligible for a verification grant');

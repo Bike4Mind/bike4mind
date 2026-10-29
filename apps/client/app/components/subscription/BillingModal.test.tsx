@@ -48,6 +48,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('./NoCardUnlockCard', () => ({ NoCardUnlockCard: () => <div data-testid="no-card-unlock-card" /> }));
+vi.mock('./CardVerificationCard', () => ({ CardVerificationCard: () => <div data-testid="card-verification-card" /> }));
 vi.mock('./CreditsExplanation', () => ({
   default: () => <div data-testid="credits-explanation" />,
 }));
