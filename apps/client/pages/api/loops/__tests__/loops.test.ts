@@ -300,6 +300,12 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(repo.updateForUser.mock.calls[0][2].nextRunAt).toEqual(new Date(lastRunAt.getTime() + 60 * 60_000));
   });
 
+  it('keeps the next run of a live loop when an edit resends the same interval', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', lastRunAt: new Date() }));
+    await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed', intervalMinutes: 15 } }).result;
+    expect(repo.updateForUser.mock.calls[0][2]).not.toHaveProperty('nextRunAt');
+  });
+
   it('clears agentId and budgetCreditsPerDay with null', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ agentId: 'a1', budgetCreditsPerDay: 5 }));
     await call('item', 'patch', { query: { id: OID }, body: { agentId: null, budgetCreditsPerDay: null } }).result;
