@@ -58,4 +58,12 @@ describe('admin credit ledger requests', () => {
     });
     expect(file).toMatchObject({ fileName: 'credits-u1-usage-filtered-2026-01-03.csv', truncated: false });
   });
+
+  it('marks a narrowed export in the fallback file name when the header is missing', async () => {
+    get.mockResolvedValue({ data: new Blob(['Time\n']), headers: {} });
+
+    expect((await fetchCreditLedgerExport('u1', FILTER)).fileName).toBe('credits-u1-usage-filtered.csv');
+    expect((await fetchCreditLedgerExport('u1', { kind: 'usage' })).fileName).toBe('credits-u1-usage.csv');
+    expect((await fetchCreditLedgerExport('u1', {})).fileName).toBe('credits-u1-all.csv');
+  });
 });

@@ -60,9 +60,11 @@ export const fetchCreditLedgerExport = async (
     responseType: 'blob',
   });
   const disposition: unknown = response.headers['content-disposition'];
+  // Mirrors the name credit-ledger-export.ts sets, minus the day, for when the header is unreadable.
+  const narrowed = filter.model || filter.source || filter.from || filter.to ? '-filtered' : '';
   const fileName =
     (typeof disposition === 'string' ? disposition.match(/filename="(.+)"/)?.[1] : undefined) ??
-    `credits-${userId}-${filter.kind ?? 'all'}.csv`;
+    `credits-${userId}-${filter.kind ?? 'all'}${narrowed}.csv`;
   // The server only knows it hit the cap after the body has started, so it marks that with a final line.
   const truncated = (await response.data.slice(-200).text()).includes(EXPORT_TRUNCATED_MARKER);
   return { blob: response.data, fileName, truncated };
