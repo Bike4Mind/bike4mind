@@ -9,6 +9,7 @@ const { mocks } = vi.hoisted(() => ({
     loadFreeTierAllowedModels: vi.fn(),
     getUserEntitlements: vi.fn(),
     findAdminSetting: vi.fn(),
+    cacheFindOne: vi.fn(),
   },
 }));
 
@@ -33,7 +34,7 @@ vi.mock('@server/entitlements', () => ({
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { findOne: (...a: unknown[]) => mocks.findAdminSetting(...a) },
-  cacheRepository: { findOne: vi.fn(async () => null), createOrUpdate: vi.fn(async () => undefined) },
+  cacheRepository: { findOne: (...a: unknown[]) => mocks.cacheFindOne(...a), createOrUpdate: vi.fn(async () => undefined) },
 }));
 // The real getSettingsValue, so the setting is parsed exactly as production parses it.
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -76,6 +77,7 @@ beforeEach(() => {
   mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
   mocks.getUserEntitlements.mockResolvedValue(['base']);
   mocks.findAdminSetting.mockResolvedValue(null);
+  mocks.cacheFindOne.mockResolvedValue(null);
 });
 
 describe('getCallerModelList unpriced text models', () => {
@@ -128,6 +130,18 @@ describe('getCallerModelList free-tier gate', () => {
     expect(list.lockedModels.every(model => model.access?.locked === true)).toBe(true);
     expect(list.lockedModels[0].access?.reason).toBe('requires_paid_plan');
     expect(list.models.some(model => model.access)).toBe(false);
+  });
+
+  it('splits a cached list without lockedModels for a free user, without recomputing', async () => {
+    mocks.cacheFindOne.mockResolvedValue({ result: { models: [priced, free, image], supersededModels: [] } });
+    mocks.getAvailableModels.mockClear();
+
+    const list = await callerList(makeUser());
+
+    expect(list.models.map(model => model.id)).toEqual(['priced']);
+    expect(list.lockedModels.map(model => model.id)).toEqual(['free', 'image-model']);
+    expect(list.lockedModels.every(model => model.access?.locked === true)).toBe(true);
+    expect(mocks.getAvailableModels).not.toHaveBeenCalled();
   });
 
   it.each([
