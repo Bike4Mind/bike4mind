@@ -510,7 +510,12 @@ jobs:
         env:
           E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
           E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
-        run: python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+          E2E_PREVIEW_SEED: ${{ secrets.E2E_CLEANUP_SECRET_PREVIEW }}
+          STAGE: ${{ steps.config.outputs.stage }}
+        # A preview run sent its derived value, not the staging secret, so scrub that one.
+        run: |
+          case "$STAGE" in pr[0-9]*) . .github/scripts/derive-preview-e2e-secret.sh "$STAGE" ;; esac
+          python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
 
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
