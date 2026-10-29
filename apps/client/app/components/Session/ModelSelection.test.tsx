@@ -67,6 +67,7 @@ vi.mock('@client/app/hooks/useAccessibleModels', () => ({
     accessibleTextModels: [textModel, ...extraTextModels],
     accessibleImageModels: [imageModel],
     accessibleVideoModels: [],
+    lockedModels: locked.models,
     isLoading: false,
   }),
 }));

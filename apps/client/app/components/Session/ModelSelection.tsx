@@ -35,7 +35,7 @@ import { dedupeModelsForPicker, splitModelsByRoute } from '@client/app/utils/pic
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { adminTabToSlug } from '@client/app/components/admin/adminTabSlugs';
-import { useLockedModels, useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
 import LockedModelsSection from './LockedModelsSection';
@@ -695,9 +695,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     accessibleTextModels,
     accessibleImageModels,
     accessibleVideoModels,
+    lockedModels,
     isLoading: isConfigsLoading,
   } = useAccessibleModels();
-  const { data: lockedModels } = useLockedModels();
   const { openView: openBillingView } = useBillingView();
   // The billing modal only mounts with credits enforced (BillingDeepLinkModals), so the CTA would open nothing otherwise.
   const isBillingEnabled = !!useGetSettingsValue('enforceCredits');
