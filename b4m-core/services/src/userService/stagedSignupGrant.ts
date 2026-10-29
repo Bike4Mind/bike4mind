@@ -28,8 +28,12 @@ type DripEvidence = { drip: { day: string; dailyCredits: number; maxCredits: num
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
-/** Card verification and admin releases are never throttled by the daily signup grant budget. */
-const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = new Set(['card_verified', 'admin']);
+/** Card verification, subscription and admin releases are never throttled by the daily signup grant budget. */
+const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = new Set([
+  'card_verified',
+  'subscription',
+  'admin',
+]);
 
 class InboxGrantClaimDeniedError extends Error {}
 
@@ -240,7 +244,7 @@ export const unlockSignupGrant = (
   if (!validator || (reason === 'admin' && !adapters.audit)) return Promise.resolve(noGrant());
   const unlock = () =>
     releaseStage(userId, 'signup', reason, async user => (user.emailVerified ? validator(user) : false), adapters);
-  if (reason !== 'card_verified') return unlock();
+  if (reason !== 'card_verified' && reason !== 'subscription') return unlock();
   return unlockWithHeldTranche(userId, adapters, unlock);
 };
 

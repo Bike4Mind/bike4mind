@@ -6,6 +6,7 @@ import {
   handleOrganizationSubscriptionInvoice,
 } from '@workers/lib/userSubscriptions/serverUtils';
 import { handler } from './invoicePaymentSucceeded';
+import { unlockSignupGrantFromSubscription } from '@server/credits/subscriptionUnlock';
 import { emitProductEvent } from '@server/analytics/emitActiveEvent';
 import { stableEventId } from '@server/analytics/signupEvents';
 import { userRepository } from '@bike4mind/database';
@@ -53,6 +54,10 @@ vi.mock('@server/analytics/emitActiveEvent', () => ({
   HOST_PRODUCT_ID: 'bike4mind',
   emitProductEvent: vi.fn().mockResolvedValue(undefined),
   ingestKeyFor: (p: string) => (p === 'widgets' || p === 'gadgets' ? 'key' : undefined),
+}));
+
+vi.mock('@server/credits/subscriptionUnlock', () => ({
+  unlockSignupGrantFromSubscription: vi.fn().mockResolvedValue({ creditsGranted: 0, currentCredits: null }),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -313,5 +318,43 @@ describe('invoicePaymentSucceeded - new paid subscription Slack post', () => {
     await expect(run()).rejects.toThrow('write failed');
 
     expect(postNewPaidSubscriptionToSlack).not.toHaveBeenCalled();
+  });
+});
+
+describe('invoicePaymentSucceeded - signup grant unblock', () => {
+  const stubInvoice = (amountPaid: number) => {
+    (stripe.invoices.retrieve as any).mockResolvedValue({ id: 'in_1', amount_paid: amountPaid, currency: 'usd' });
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      buildSub({ userId: 'u1', stage: 'test', ownerType: 'User' })
+    );
+  };
+  beforeEach(() => vi.clearAllMocks());
+
+  it('releases the signup grant on a paid invoice', async () => {
+    stubInvoice(2000);
+    await run();
+    expect(unlockSignupGrantFromSubscription).toHaveBeenCalledWith('u1');
+  });
+
+  it.each([[0], [undefined as unknown as number]])('does not release on a $0 invoice (%s)', async amount => {
+    stubInvoice(amount);
+    await run();
+    expect(unlockSignupGrantFromSubscription).not.toHaveBeenCalled();
+  });
+
+  it('does not release for an organization subscription', async () => {
+    (stripe.invoices.retrieve as any).mockResolvedValue({ id: 'in_1', amount_paid: 2000, currency: 'usd' });
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      buildSub({ userId: 'u1', stage: 'test', ownerType: 'Organization', organizationId: 'o1' })
+    );
+    await run();
+    expect(unlockSignupGrantFromSubscription).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the handler when the release throws', async () => {
+    stubInvoice(2000);
+    vi.mocked(unlockSignupGrantFromSubscription).mockRejectedValueOnce(new Error('boom'));
+    await expect(run()).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
   });
 });

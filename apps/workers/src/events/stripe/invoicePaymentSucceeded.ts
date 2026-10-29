@@ -12,6 +12,7 @@ import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { withEventContext } from '@workers/utils/eventContext';
 import { postNewPaidSubscriptionToSlack } from '@server/integrations/slack/subscriptionLifecycle';
 import { emitPurchaseEvents } from '@server/analytics/signupEvents';
+import { unlockSignupGrantFromSubscription } from '@server/credits/subscriptionUnlock';
 
 export const handler = withEventContext(async (event, logger) => {
   const { invoiceId, subscriptionId } = StripeEvents.InvoicePaymentSucceeded.schema.parse(event.properties);
@@ -95,6 +96,15 @@ export const handler = withEventContext(async (event, logger) => {
       logger.warn(`Purchase not reported to Overwatch: payer lookup failed for invoice ${invoiceId}`, {
         error,
       });
+    }
+    // A $0 invoice (card verification, full-discount coupon) is not a paid subscription. Non-throwing:
+    // a retry of this handler would re-run credit granting.
+    if (invoice.amount_paid > 0) {
+      try {
+        await unlockSignupGrantFromSubscription(metadata.userId);
+      } catch (error) {
+        logger.error(`Signup grant not released for invoice ${invoiceId}`, { error });
+      }
     }
     await emitPurchaseEvents({
       user: payer,

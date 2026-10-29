@@ -218,4 +218,35 @@ describe('signup activity drip', () => {
     expect(await spentToday()).toBe(0);
     expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 1000 });
   });
+
+  it('releases the full remainder on a subscription outside an exhausted budget, once', async () => {
+    config.signupGrantDailyBudget = '1000';
+    const user = await createSignupStageUser(0);
+    const spent = await spentToday();
+    expect(spent).toBe(1000);
+    const subscribe = () =>
+      userService.unlockSignupGrant(user.id, 'subscription', {
+        ...adapters,
+        validators: { subscription: async current => current.emailVerified },
+      });
+    expect((await subscribe()).creditsGranted).toBe(9000);
+    expect(await creditsOf(user.id)).toBe(10000);
+    expect(await spentToday()).toBe(spent);
+    expect((await User.findById(user.id))?.signupGrant?.stage).toBe('unlocked');
+    expect((await subscribe()).creditsGranted).toBe(0);
+  });
+
+  it('pays a budget-held tranche first when the account subscribes', async () => {
+    config.signupGrantDailyBudget = '1000';
+    await createSignupStageUser(0);
+    const held = await createUser(1);
+    await userService.releaseSignupTranche(held.id, adapters);
+    expect((await User.findById(held.id))?.signupGrantHeldReason).toBe('budget_exhausted');
+    const result = await userService.unlockSignupGrant(held.id, 'subscription', {
+      ...adapters,
+      validators: { subscription: async current => current.emailVerified },
+    });
+    expect(result.creditsGranted).toBe(10000);
+    expect(await spentToday()).toBe(1000);
+  });
 });
