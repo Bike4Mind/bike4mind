@@ -1252,6 +1252,14 @@
             "type": "boolean",
             "description": "Whether the session grounds on your own library alongside its lakes. Absent when never set."
           },
+          "promptCacheTtl": {
+            "type": "string",
+            "enum": [
+              "5m",
+              "1h"
+            ],
+            "description": "The chat's prompt-cache lifetime. Absent when never set, which follows your default."
+          },
           "lastUsedModel": {
             "type": [
               "string",
@@ -1337,6 +1345,14 @@
             "type": "boolean",
             "description": "Whether the session grounds on your own library alongside its lakes. Absent when never set."
           },
+          "promptCacheTtl": {
+            "type": "string",
+            "enum": [
+              "5m",
+              "1h"
+            ],
+            "description": "The chat's prompt-cache lifetime. Absent when never set, which follows your default."
+          },
           "lastUsedModel": {
             "type": [
               "string",
@@ -1421,6 +1437,14 @@
           "includeLibraryFiles": {
             "type": "boolean",
             "description": "Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content, including when every lake is in scope; the session's attached files still reach the model and stay searchable by its knowledge-base tools. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on."
+          },
+          "promptCacheTtl": {
+            "type": "string",
+            "enum": [
+              "5m",
+              "1h"
+            ],
+            "description": "How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. A 1-hour cache costs more to write and the same to read; it applies only on models that support it, and other models keep the 5-minute cache. Omit to leave it unchanged."
           },
           "propagateToProjects": {
             "type": "boolean",
@@ -1510,6 +1534,14 @@
           "includeLibraryFiles": {
             "type": "boolean",
             "description": "Whether the session grounds on your own library alongside its lakes. Absent when never set."
+          },
+          "promptCacheTtl": {
+            "type": "string",
+            "enum": [
+              "5m",
+              "1h"
+            ],
+            "description": "The chat's prompt-cache lifetime. Absent when never set, which follows your default."
           },
           "lastUsedModel": {
             "type": [
@@ -1725,6 +1757,10 @@
                   },
                   "cacheCreationInputTokens": {
                     "type": "number"
+                  },
+                  "cacheWrite1hInputTokens": {
+                    "type": "number",
+                    "description": "The part of cacheCreationInputTokens written with the 1-hour TTL. Absent when there were none."
                   }
                 }
               },
@@ -2390,6 +2426,14 @@
                   "enabled"
                 ],
                 "description": "Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking."
+              },
+              "cacheTtl": {
+                "type": "string",
+                "enum": [
+                  "5m",
+                  "1h"
+                ],
+                "description": "Prompt-cache lifetime for this request, where the server places cache breakpoints (Claude on the direct Anthropic API or Bedrock, when the request comes from the CLI or Desktop app). `5m` (the default) writes at 1.25x the input rate; `1h` writes at 2x and keeps the cached prefix for an hour between requests. Reads cost the same either way. Models without 1-hour caching ignore `1h` and keep `5m`."
               }
             }
           }
@@ -6657,6 +6701,14 @@
             "type": "boolean",
             "description": "Whether the session grounds on your own library alongside its lakes. Absent when never set."
           },
+          "promptCacheTtl": {
+            "type": "string",
+            "enum": [
+              "5m",
+              "1h"
+            ],
+            "description": "The chat's prompt-cache lifetime. Absent when never set, which follows your default."
+          },
           "lastUsedModel": {
             "type": [
               "string",
@@ -6892,6 +6944,14 @@
                 "includeLibraryFiles": {
                   "type": "boolean",
                   "description": "Whether the session grounds on your own library alongside its lakes. Absent when never set."
+                },
+                "promptCacheTtl": {
+                  "type": "string",
+                  "enum": [
+                    "5m",
+                    "1h"
+                  ],
+                  "description": "The chat's prompt-cache lifetime. Absent when never set, which follows your default."
                 },
                 "lastUsedModel": {
                   "type": [
