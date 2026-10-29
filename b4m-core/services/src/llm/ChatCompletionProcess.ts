@@ -5,6 +5,7 @@ import {
   IMessage,
   IUserDocument,
   LLMEvents,
+  ISessionDocument,
   IOrganizationDocument,
   Permission,
   SettingKey,
@@ -1958,8 +1959,7 @@ export class ChatCompletionProcess {
     /** Pre-fetched quest from invoke; avoids redundant DB read for wait=true path */
     prefetchedQuest?: IChatHistoryItemDocument;
     /** Pre-fetched session from invoke; avoids redundant DB read for wait=true path */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    prefetchedSession?: any;
+    prefetchedSession?: ISessionDocument | null;
     /** Pre-fetched organization from invoke; avoids redundant DB read for wait=true path */
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
