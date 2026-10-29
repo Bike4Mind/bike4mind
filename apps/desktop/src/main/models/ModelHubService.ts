@@ -53,7 +53,7 @@ export interface ModelRuntimePort {
 export interface ModelHubPort {
   readonly endpoint: string;
   search(options: HubSearchOptions): Promise<HubSearchPage>;
-  getModel(repo: string, options?: { signal?: AbortSignal }): Promise<HubModelDetail>;
+  getModel(repo: string, options?: { signal?: AbortSignal; refresh?: boolean }): Promise<HubModelDetail>;
   verifyOllamaRef(
     detail: Pick<HubModelDetail, 'id' | 'builds' | 'ollamaNeedsSshKey'>,
     build: HubGgufBuild,
@@ -435,7 +435,7 @@ export class ModelHubService {
       token = session.token;
       const { hub } = session;
       // Read fresh: a card edit (say, a new license) is a new commit, and it must still be the one the dialog showed.
-      const detail = await hub.getModel(request.repo);
+      const detail = await hub.getModel(request.repo, { refresh: true });
       const build = detail.builds.find((candidate: HubGgufBuild) => candidate.id === request.buildId);
       if (!build) return refuse(hubError('not-found', 'That build is no longer in this repo.'));
       if (detail.revision !== request.revision || build.sizeBytes !== request.sizeBytes)
