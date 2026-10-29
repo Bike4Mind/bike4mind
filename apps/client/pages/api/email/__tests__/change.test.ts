@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   requestEmailChange: vi.fn(),
   publish: vi.fn(),
+  logAuditEvent: vi.fn(),
+  logAuthAudit: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -30,7 +32,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { requestEmailChange: h.requestEmailChange } }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
+// logAuditEvent writes a CounterLog row; an own email change must never reach it.
+vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: h.logAuditEvent }));
+vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 
 process.env.APP_URL = 'https://app.test';
 await import('../change');
@@ -91,5 +95,19 @@ describe('POST /api/email/change templates', () => {
       expect.objectContaining({ userId: 'user-1', newEmail: 'new@x.com' }),
       expect.anything()
     );
+  });
+
+  it('records the request in the user auth audit log, not CounterLog', async () => {
+    h.requestEmailChange.mockResolvedValue(undefined);
+    const req = { body: { newEmail }, user, ip: '127.0.0.1', headers: {}, logger: { error: vi.fn() } };
+
+    await h.handler!(req, { json: vi.fn() });
+
+    expect(h.logAuthAudit).toHaveBeenCalledWith(req, {
+      userId: 'user-1',
+      event: 'email_change_requested',
+      metadata: { oldEmail: user.email, newEmail },
+    });
+    expect(h.logAuditEvent).not.toHaveBeenCalled();
   });
 });

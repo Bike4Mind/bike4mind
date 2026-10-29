@@ -31,6 +31,8 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="local-context"');
     expect(html).toContain('settings-local-context-select');
     expect(html).toContain('settings-clear-history-btn');
+    expect(html).toContain('data-entry="curated-list"');
+    expect(html).toContain('settings-curated-source-switch');
     expect(html).not.toContain('data-entry="permissions"');
     expect(html).not.toContain('data-entry="claude-import"');
   });
@@ -60,6 +62,7 @@ describe('the Settings screen', () => {
   });
 
   it('only takes known page names from the route', () => {
+    expect(isSettingsSection('worktrees')).toBe(true);
     expect(isSettingsSection('import')).toBe(true);
     expect(isSettingsSection('billing')).toBe(false);
     expect(isSettingsSection(undefined)).toBe(false);

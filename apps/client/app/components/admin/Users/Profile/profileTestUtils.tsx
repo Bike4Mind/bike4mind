@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { userQueryKey } from '@client/app/hooks/data/user';
 import { UndoToastProvider } from '../../shared';
 import type { AdminUserProfile } from './userProfileModel';
 
@@ -41,4 +42,24 @@ export const buildProfile = (overrides: Partial<AdminUserProfile> = {}): AdminUs
     lastActiveAt: new Date('2026-10-20T00:00:00Z'),
   };
   return { ...base, ...overrides } as AdminUserProfile;
+};
+
+/**
+ * Serves `buildProfile` through the `['users', id]` query, as UserProfilePage does via `useGetUser`, so a
+ * dialog's refetch reaches its `user` prop. `fetchCredits` answers each fetch, the mount's first.
+ */
+export const LiveProfile = ({
+  fetchCredits,
+  children,
+}: {
+  fetchCredits: () => Promise<number>;
+  children: (user: AdminUserProfile) => ReactNode;
+}) => {
+  const user = buildProfile();
+  const query = useQuery({
+    queryKey: userQueryKey(user.id),
+    queryFn: async () => ({ ...user, currentCredits: await fetchCredits() }),
+    staleTime: Infinity,
+  });
+  return query.data ? <>{children(query.data)}</> : null;
 };

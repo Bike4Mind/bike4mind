@@ -116,6 +116,11 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'abuse.bulk.revoke_sessions': { category: 'identity', severity: 'notice', write: 'strict' },
   'abuse.bulk.clawback': { category: 'credits', severity: 'notice', write: 'strict' },
   'abuse.bulk.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // Signup risk review (apps/client/pages/api/admin/signup-risk-reviews.ts): one strict entry per user,
+  // written in that user's transaction. reopened is the undo of approved.
+  'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
   // Users-list bulk actions (apps/client/pages/api/admin/users/bulk/*): one strict entry per changed
   // user, written in that user's transaction, plus a bestEffort summary per batch.
   'user.bulk.executed': { category: 'account', severity: 'notice', write: 'bestEffort' },
@@ -279,6 +284,20 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
+
+  // Handler coverage: system prompts and agent ops
+  'settings.system_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_saved': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_switched': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.reset': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.version_added': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.seeded': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.version_activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

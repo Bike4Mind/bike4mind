@@ -5,6 +5,8 @@ import {
   ADMIN_MODEL_LOGS_TAB_SLUG,
   ADMIN_ORGANIZATIONS_TAB_SLUG,
   ADMIN_SETTINGS_TAB_SLUG,
+  ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
+  ADMIN_SUBSCRIPTIONS_TAB_SLUG,
   ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
 } from './adminTabParams';
 
@@ -31,7 +33,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.WorldTime]: 'world-time',
   [AdminTab.Analysts]: 'analysts',
   [AdminTab.Subscribers]: 'subscribers',
-  [AdminTab.Subscriptions]: 'subscriptions',
+  [AdminTab.Subscriptions]: ADMIN_SUBSCRIPTIONS_TAB_SLUG,
   [AdminTab.Organizations]: ADMIN_ORGANIZATIONS_TAB_SLUG,
   [AdminTab.CreditAnalytics]: 'credit-analytics',
   [AdminTab.SecretsRotation]: 'secrets-rotation',
@@ -74,6 +76,7 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.PublishedPages]: 'published-pages',
   [AdminTab.PartnerSignupRules]: 'partner-signup-rules',
   [AdminTab.SignupDomainHolds]: 'signup-domain-holds',
+  [AdminTab.SignupRiskReview]: ADMIN_SIGNUP_RISK_REVIEW_TAB_SLUG,
   [AdminTab.EmbedKeys]: 'embed-keys',
   [AdminTab.ModelLifecycle]: 'model-lifecycle',
   [AdminTab.PrReport]: 'pr-report',

@@ -2,7 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { LlamaServerVersionError, LocalRuntimeError, ModelIncompleteError, ModelNotFoundError } from './errors';
 import { GgufModelStore, type StoredGgufModel } from './ggufStore';
-import { HuggingFaceHub, isHubRepoId } from './huggingface';
+import { HuggingFaceHub, findHubBuild, hubBuildTag, isHubRepoId } from './huggingface';
 import {
   LLAMA_SERVER_FLASH_ATTN_VALUE_BUILD,
   findLlamaServer,
@@ -158,18 +158,18 @@ export class LlamaServerRuntime implements LocalRuntime {
   }
 
   /**
-   * Downloads the build of `ref` (see `parseLlamaServerPullRef`) whose quant label matches, ignoring case. Only this
-   * explicit call downloads. The model then lists as `<repo>/<path in repo>`.
+   * Downloads the build of `ref` (see `parseLlamaServerPullRef`) its tag names, resolved as `findHubBuild` does. Only
+   * this explicit call downloads. The model then lists as `<repo>/<path in repo>`.
    */
   async pull(ref: string, opts: PullOptions = {}): Promise<void> {
     const { repo, quant } = parseLlamaServerPullRef(ref);
     this.#hub ??= new HuggingFaceHub({ fetch: this.#options.fetch });
     const detail = await this.#hub.getModel(repo, { signal: opts.signal });
-    const build = detail.builds.find(entry => entry.quant?.toUpperCase() === quant.toUpperCase());
+    const build = findHubBuild(detail.builds, quant);
     if (!build) {
-      const quants = [...new Set(detail.builds.flatMap(entry => (entry.quant ? [entry.quant] : [])))];
+      const tags = detail.builds.map(hubBuildTag);
       throw new ModelNotFoundError(this.id, ref, {
-        cause: new Error(`${repo} offers ${quants.length > 0 ? quants.join(', ') : 'no labelled quants'}`),
+        cause: new Error(`${repo} offers ${tags.length > 0 ? tags.join(', ') : 'no GGUF builds'}`),
       });
     }
     if (!build.complete) throw new ModelIncompleteError(this.id, ref, []);

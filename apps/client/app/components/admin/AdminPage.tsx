@@ -64,6 +64,7 @@ const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
 const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: false });
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
+const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
 const PreferenceArenaTab = dynamic(() => import('./PreferenceArenaTab'), { ssr: false });
@@ -190,6 +191,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.Subscribers}>{activeTab === AdminTab.Subscribers && <SubscribersTab />}</TabPanel>
           <TabPanel value={AdminTab.SignupDomainHolds} sx={{ padding: 0 }}>
             {activeTab === AdminTab.SignupDomainHolds && <SignupDomainHoldsTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SignupRiskReview} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.SignupRiskReview && <SignupRiskReviewTab />}
           </TabPanel>
           <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
             {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}

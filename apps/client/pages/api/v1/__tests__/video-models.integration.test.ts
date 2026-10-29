@@ -1,4 +1,8 @@
 // @vitest-environment node
+vi.mock('@server/billing/assertMediaModelAdmission', () => ({
+  filterAdmittedMediaModels: vi.fn(async (_user: unknown, models: unknown[]) => models),
+}));
+
 /**
  * Integration test for GET /api/v1/video-models through the real next-connect chain
  * (nextRouteForContract -> apiKeyAuth -> scope check -> validation -> handler). The domain (createVideoJob)

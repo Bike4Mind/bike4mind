@@ -82,17 +82,22 @@ The **Recent activity** button shows a panel of recent user activity across the 
 
 Each user has a full-page profile at `/admin/users/<userId>`, opened by clicking the user's row in the Users tab or **Open profile** in the row menu. It is admin-only, like the rest of the admin panel. The **Users** button at the top returns to the Users tab.
 
-The header shows the user's name, email, and avatar; badges for email verification, banned, moderated, super admin, user level, organization, and signup method; the created and last-active dates; and the quick actions **Login as User**, **Send Message**, **Grant Subscription**, and **Update** (shown once there are changes to save).
+The header shows the user's name, email, avatar, account status, user level, organization, signup method, and created and last-active dates. **Adjust credits** and **Suspend** are quick actions; **More** contains the other account actions.
 
-The page has three tabs. The selected tab is kept in the URL as `?tab=activity` or `?tab=admin` (Overview is the default and has no parameter), so a link can open a specific tab.
+To edit the user's name or email, open **More > Edit profile**. The username is displayed read-only. Change the fields in the modal and click **Save Changes**. Wait for the success notification before closing the modal; the profile header refreshes after a successful save. If saving fails, keep the modal open, correct any validation error, and retry.
+
+The page has six tabs. The selected tab is kept in the URL, for example `?tab=activity` or `?tab=admin` (Overview is the default and has no parameter), so a link can open a specific tab.
 
 | Tab | Contents |
 |-----|----------|
-| **Overview** | The editable sections (User Details, Roles, Product Access, Subscription, B4M Settings, Activity & Profile), laid out two per row on wide screens and one per row on narrow ones |
+| **Overview** | Account details, access, subscription, recent activity, and internal notes |
 | **Activity** | The user's recent activity |
-| **Admin** | The **Danger zone**: Ban, Moderate, Delete, and Compliance (see [Admin Actions](#admin-actions-ban-moderate-delete)) |
+| **Credits** | Credit ledger and spending |
+| **API keys** | The user's API keys |
+| **Sign-ins** | Sign-in history and sessions |
+| **Admin log** | Administrative actions recorded for the user |
 
-Unsaved edits are kept when you switch tabs. If you try to leave the page with unsaved edits (another link, the browser Back button, or closing the tab), you are asked to confirm, and the in-app prompt lists the fields that would be discarded.
+Use **More** for role, product-access, subscription, compliance, restriction, and deletion actions (see [Admin Actions](#admin-actions-ban-moderate-delete)).
 
 Old links of the form `/admin?userId=<userId>` redirect to the user's profile page. An unknown or malformed user id shows **User not found**; any other loading error shows a retry button.
 
