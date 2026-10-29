@@ -1822,6 +1822,7 @@ async function processExecution(
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
       user: user as IUserDocument,
+      getEntitlements: () => getUserEntitlements(user),
       logger,
       thinkingVisibility,
       // The run's active account, already membership-checked at start; lake-creating tools scope to it.
@@ -3998,6 +3999,7 @@ async function processSubagentDispatch(
     const toolDeps: ToolBuilderDeps = {
       userId: child.userId,
       user: user as IUserDocument,
+      getEntitlements: () => getUserEntitlements(user),
       logger,
       thinkingVisibility,
       organizationId: child.organizationId,

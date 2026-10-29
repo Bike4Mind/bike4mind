@@ -1,7 +1,9 @@
+import { createHmac } from 'node:crypto';
 import { isIP } from 'node:net';
 import { type INetworkMeta, type IUserDocument, TooManyRequestsError } from '@bike4mind/common';
-import { adminSettingsRepository, authEventRepository } from '@bike4mind/database';
+import { adminSettingsRepository, authEventRepository, signupTraceRepository } from '@bike4mind/database';
 import type { userService } from '@bike4mind/services';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { SIGNUP_LIMITED_MESSAGE } from '@server/utils/auth/oauthFailureReason';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -21,6 +23,48 @@ type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
 
 type SignupCounts = { ipSignups: number | null; prefixSignups: number | null; asnSignups: number | null };
 
+// Its own key, derived from the JWT secret, so no trace hash is ever computed under the signing key.
+// Memoized lazily (Config is not read at import). Rotating JWT_SECRET orphans existing traces, so
+// the counts under-count until their 2-day TTL drops them.
+let cachedTraceKey: Buffer | undefined;
+const traceKey = () => (cachedTraceKey ??= createHmac('sha256', Config.JWT_SECRET).update('signup-trace/v1').digest());
+const traceHash = (value: string) => createHmac('sha256', traceKey()).update(value).digest('hex');
+
+/** The SignupTrace keys for an IP: exact address, plus the /24 for IPv4 (as recentDistinctSignups counts it). */
+export function hashSignupNetwork(ip: string | null): { ipHash: string | null; prefixHash: string | null } {
+  const version = ip === null ? 0 : isIP(ip);
+  if (!ip || !version) return { ipHash: null, prefixHash: null };
+  const prefix = version === 4 ? ip.slice(0, ip.lastIndexOf('.') + 1) : null;
+  return { ipHash: traceHash(`ip:${ip}`), prefixHash: prefix ? traceHash(`prefix:${prefix}`) : null };
+}
+
+/**
+ * Before an account's AuthEvent rows are purged, keep its signups from the last 24h (the longest
+ * count window) as hashed SignupTraces, so deleting accounts does not reset the network counts.
+ * Throws on failure; the caller decides whether that blocks the purge.
+ */
+export async function retainDeletedSignupTraces(userId: string): Promise<number> {
+  const signups = await authEventRepository.findSignupsSince(
+    userId,
+    new Date(Date.now() - SIGNUP_NETWORK_WINDOWS.ipMs)
+  );
+  const accountHash = traceHash(`account:${userId}`);
+  await signupTraceRepository.retain(
+    signups.map(signup => ({
+      accountHash,
+      signedUpAt: signup.createdAt,
+      asn: signup.asn,
+      ...hashSignupNetwork(signup.ip),
+    }))
+  );
+  return signups.length;
+}
+
+// Live accounts (AuthEvent) plus deleted ones (SignupTrace). Both are asked under the same
+// conditions, so a null from either is a truncated scan or a count nobody asked for: null overall.
+const addCounts = (live: number | null, deleted: number | null) =>
+  live === null || deleted === null ? null : live + deleted;
+
 // The 24h window scans only ip (plus /24 when asked) and the 1h window only ASN, and a caller skips
 // any window or /24 count it would not read, so no scan runs whose count is thrown away.
 async function countRecentSignups(input: {
@@ -28,16 +72,36 @@ async function countRecentSignups(input: {
   userId?: string;
   at: Date;
   windows: { ip: boolean; prefix: boolean; asn: boolean };
+  // When set, a failed trace count is logged and skipped (live signups only) instead of thrown.
+  traceFallback?: WarnLogger;
 }): Promise<SignupCounts> {
-  const { network, userId, at, windows } = input;
-  const scan = (ms: number, scope: { ip: string | null; asn: number | null; prefix?: boolean }) =>
-    authEventRepository.recentDistinctSignups({
-      userId,
-      since: new Date(at.getTime() - ms),
-      until: at,
-      ...scope,
-      maxRows: MAX_COUNTED_ROWS,
-    });
+  const { network, userId, at, windows, traceFallback } = input;
+  const hashes = hashSignupNetwork(network.ip);
+  const scan = async (ms: number, scope: { ip: string | null; asn: number | null; prefix?: boolean }) => {
+    const since = new Date(at.getTime() - ms);
+    const [live, deleted] = await Promise.all([
+      authEventRepository.recentDistinctSignups({ userId, since, until: at, ...scope, maxRows: MAX_COUNTED_ROWS }),
+      signupTraceRepository
+        .recentDistinctSignups({
+          since,
+          until: at,
+          ipHash: scope.ip === null ? null : hashes.ipHash,
+          prefixHash: scope.ip === null || scope.prefix === false ? null : hashes.prefixHash,
+          asn: scope.asn,
+          maxRows: MAX_COUNTED_ROWS,
+        })
+        .catch((error: unknown): SignupCounts => {
+          if (!traceFallback) throw error;
+          traceFallback.warn('[signup-limits] Signup trace count failed; counting live signups only', error);
+          return { ipSignups: 0, prefixSignups: 0, asnSignups: 0 };
+        }),
+    ]);
+    return {
+      ipSignups: addCounts(live.ipSignups, deleted.ipSignups),
+      prefixSignups: addCounts(live.prefixSignups, deleted.prefixSignups),
+      asnSignups: addCounts(live.asnSignups, deleted.asnSignups),
+    };
+  };
   const [day, hour] = await Promise.all([
     windows.ip ? scan(SIGNUP_NETWORK_WINDOWS.ipMs, { ip: network.ip, asn: null, prefix: windows.prefix }) : null,
     windows.asn ? scan(SIGNUP_NETWORK_WINDOWS.asnMs, { ip: null, asn: network.asn }) : null,
@@ -103,6 +167,7 @@ export async function isSignupNetworkOverLimit(network: SignupNetwork, logger: W
       network,
       at: new Date(),
       windows: { ip: ipLimit > 0, prefix: false, asn: asnLimit > 0 },
+      traceFallback: logger,
     });
     // With a usable ip/asn a null count means the scan was truncated, i.e. far over any cap.
     const overIp = ipLimit > 0 && !!network.ip && isIP(network.ip) > 0 && (ipSignups ?? Infinity) >= ipLimit;

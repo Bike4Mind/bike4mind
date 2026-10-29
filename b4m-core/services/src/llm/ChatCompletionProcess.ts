@@ -3401,6 +3401,11 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        getEntitlements: async () => {
+          const { keys, resolved } = await this.resolveEntitlementKeys();
+          if (!resolved) throw new Error('entitlement resolution failed');
+          return keys;
+        },
         authOrigin: parsedBody.authOrigin,
         apiKeyId: parsedBody.apiKeyId,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files

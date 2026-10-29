@@ -108,6 +108,7 @@ export * from './schemas/curation';
 export * from './schemas/imageModerationIncident';
 export * from './schemas/releaseNotes';
 export * from './schemas/bulkAbuse';
+export * from './schemas/signupRiskReview';
 export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/teamPlanSettings';
