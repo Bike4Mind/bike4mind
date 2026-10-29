@@ -257,7 +257,7 @@ interface CIData {
 }
 
 export function buildCIFailedBlocks(data: CIData): BlockTemplateResult {
-  const commitInfo = data.commitMessage ? `\nCommit: _${escapeSlackLine(data.commitMessage.split('\n')[0])}_` : '';
+  const commitInfo = data.commitMessage ? `\nCommit: ${escapeSlackLine(data.commitMessage.split('\n')[0])}` : '';
 
   return {
     text: escapeSlackText(`[${data.repo}] CI failed: ${data.workflowName} on ${data.branch}`),
@@ -596,7 +596,7 @@ interface PRReviewCommentData {
 
 export function buildPRReviewCommentBlocks(data: PRReviewCommentData): BlockTemplateResult {
   const bodyPreview = escapeSlackLine(truncate(data.commentBody, 200));
-  const escapedPath = escapeSlackLine(data.path);
+  const escapedPath = escapeSlackCode(data.path);
 
   return {
     text: escapeSlackText(`[${data.repo}] ${data.commenter} commented on PR #${data.prNumber}: ${data.prTitle}`),
@@ -609,7 +609,7 @@ export function buildPRReviewCommentBlocks(data: PRReviewCommentData): BlockTemp
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${escapeSlackLine(data.commenter)}* commented on *<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>*\n_${escapedPath}_\n> ${bodyPreview}`,
+          text: `*${escapeSlackLine(data.commenter)}* commented on *<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>*\n`${escapedPath}`\n> ${bodyPreview}`,
         },
       },
       {

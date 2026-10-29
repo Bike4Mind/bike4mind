@@ -33,6 +33,6 @@ describe('GitHub block templates escaping', () => {
     const section = result.blocks[1] as { text: { text: string } };
     expect(section.text.text).toContain('|CI &lt;x&gt;>');
     expect(section.text.text).toContain('`a\u02CBb`');
-    expect(section.text.text).toContain('Commit: _first &lt;!channel&gt;_');
+    expect(section.text.text).toContain('Commit: first &lt;!channel&gt;');
   });
 });
