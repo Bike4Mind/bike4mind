@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST, formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD } from '../pricing';
+import { LARGE_SIGNUP_GRANT_CREDITS } from '../signupGrant';
 import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -4072,7 +4073,8 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits released after email verification for newly enrolled staged accounts. Migrated from the installed default grant without increasing it.',
+      'Credits released after email verification for newly enrolled staged accounts. Migrated from the installed default grant without increasing it.' +
+      ` Raising the total signup grant (signup plus unlock credits) above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.`,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4084,7 +4086,8 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Maximum additional credits available after server-validated unlocks. Stronger evidence pays only the cumulative difference. Does not enable a verification flow.',
+      'Maximum additional credits available after server-validated unlocks. Stronger evidence pays only the cumulative difference. Does not enable a verification flow.' +
+      ` Raising the total signup grant (signup plus unlock credits) above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.`,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4171,7 +4174,8 @@ export const settingsMap = {
     name: 'Default Free Credits',
     defaultValue: 0,
     description:
-      'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
+      'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.' +
+      ` Raising this grant above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.`,
     category: 'Users',
   }),
   noCardUnlockEnabled: makeBooleanSetting({
