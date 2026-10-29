@@ -45,15 +45,15 @@ Each row provides two actions:
 
 ## Generate Invite Dialog
 
-When generating an invite, a dialog opens with a required reason (choose a preset such as "Waitlist invite" and add an optional note) and the following fields:
+When generating an invite, a dialog opens with a required reason (choose a preset such as "Approved from the waitlist queue" and add an optional note; the reason is not recorded yet) and the following fields:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| **Starting Credits (Tokens)** | 500 | The number of credits to grant the new user upon registration. Adjustable in increments of 100. |
-| **Starting Storage** | 1000 MB | The amount of storage space to allocate to the new user. Adjustable in increments of 100 MB. |
-| **Email Message** | Default welcome message | An optional custom email body to send with the invite. If left blank, a default welcome message is used that includes the credit and storage information. |
+| **Starting credits** | 500 | The number of credits to grant the new user upon registration. Adjustable in increments of 100. |
+| **Starting storage** | 1000 MB | The amount of storage space to allocate to the new user. Adjustable in increments of 100 MB. |
+| **Email message** | Default welcome message | An optional custom email body to send with the invite. If left blank, a default welcome message is used that includes the credit and storage information. |
 
-Upon clicking **Generate and send invite**, the system creates an invite code, associates it with the person, and sends an email with the code and welcome message. A success confirmation is displayed before the dialog closes.
+Upon clicking **Generate and send invite**, the system creates an invite code, associates it with the person, and sends an email with the code and welcome message. On success, the dialog closes and a confirmation toast appears. If the invite code is generated but the email fails to send, the dialog stays open and shows the code so you can copy it and share it another way.
 
 ## Pagination
 
