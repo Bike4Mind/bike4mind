@@ -105,22 +105,28 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
 
       const updatedUserIds: string[] = [];
       const skippedUserIds: string[] = [];
+      const failedUserIds: string[] = [];
       for (const userId of userIds) {
-        // A strict audit entry rides in the same transaction, so an unrecorded decision rolls back.
-        const moved = await withTransaction(async () => {
-          if (!(await userRepository.setRiskReviewState(userId, transition.from, transition.to))) return false;
-          await recordAdminActionFromRequest(req, {
-            action: transition.action,
-            target: await userAuditTarget(userId),
-            summary: transition.summary,
-            reason,
-            changes: [{ field: 'riskScore.reviewState', before: transition.from, after: transition.to }],
+        try {
+          // A strict audit entry rides in the same transaction, so an unrecorded decision rolls back.
+          const moved = await withTransaction(async () => {
+            if (!(await userRepository.setRiskReviewState(userId, transition.from, transition.to))) return false;
+            await recordAdminActionFromRequest(req, {
+              action: transition.action,
+              target: await userAuditTarget(userId),
+              summary: transition.summary,
+              reason,
+              changes: [{ field: 'riskScore.reviewState', before: transition.from, after: transition.to }],
+            });
+            return true;
           });
-          return true;
-        });
-        (moved ? updatedUserIds : skippedUserIds).push(userId);
+          (moved ? updatedUserIds : skippedUserIds).push(userId);
+        } catch (error) {
+          req.logger.error('Signup risk review decision failed for user', { userId, error });
+          failedUserIds.push(userId);
+        }
       }
-      respond(res, signupRiskReviewDecisionResultSchema, { updatedUserIds, skippedUserIds });
+      respond(res, signupRiskReviewDecisionResultSchema, { updatedUserIds, skippedUserIds, failedUserIds });
     })
   );
 

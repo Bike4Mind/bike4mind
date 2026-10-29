@@ -49,5 +49,7 @@ export const signupRiskReviewDecisionResultSchema = z.object({
   updatedUserIds: z.array(z.string()),
   /** Users skipped because their review was no longer in the expected state. */
   skippedUserIds: z.array(z.string()),
+  /** Users whose transaction failed and rolled back; the rest of the batch still ran. */
+  failedUserIds: z.array(z.string()),
 });
 export type SignupRiskReviewDecisionResult = z.infer<typeof signupRiskReviewDecisionResultSchema>;

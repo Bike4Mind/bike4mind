@@ -104,6 +104,7 @@ export const SignupRiskReviewTab: React.FC = () => {
   const [selection, setSelection] = useState<AdminSelection>({ mode: 'explicit', ids: [] });
   const [approving, setApproving] = useState<SignupRiskReviewRow[] | null>(null);
   const [suspending, setSuspending] = useState<string[] | null>(null);
+  const [failedCount, setFailedCount] = useState(0);
   const [now] = useState(() => Date.now());
 
   const rows = useMemo(() => reviews.data?.data ?? [], [reviews.data]);
@@ -141,6 +142,7 @@ export const SignupRiskReviewTab: React.FC = () => {
           setApproving(null);
           clearSelection();
           const approved = result.updatedUserIds;
+          setFailedCount(result.failedUserIds.length);
           if (approved.length === 0) return;
           showUndo({
             message: `Approved ${plural(approved.length, 'account')}`,
@@ -278,6 +280,12 @@ export const SignupRiskReviewTab: React.FC = () => {
       {reviews.data?.truncated && (
         <Alert color="warning" data-testid="signup-risk-truncated">
           Showing the {SIGNUP_RISK_REVIEW_LIST_LIMIT.toLocaleString()} highest scores. Decide these to see the rest.
+        </Alert>
+      )}
+      {failedCount > 0 && (
+        <Alert color="warning" data-testid="signup-risk-failed">
+          {plural(failedCount, 'account')} could not be approved and {failedCount === 1 ? 'was' : 'were'} left in the
+          queue. Try again.
         </Alert>
       )}
       {decision.error && !approving && (

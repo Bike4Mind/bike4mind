@@ -163,7 +163,24 @@ describe('signup risk review queue', () => {
       reason: REASON,
       changes: [{ field: 'riskScore.reviewState', before: 'pending', after: 'approved' }],
     });
-    expect(res._getJSONData()).toEqual({ updatedUserIds: [USER_A], skippedUserIds: [USER_B] });
+    expect(res._getJSONData()).toEqual({ updatedUserIds: [USER_A], skippedUserIds: [USER_B], failedUserIds: [] });
+  });
+
+  it('keeps going when one account fails and reports it', async () => {
+    const USER_C = '3'.repeat(24);
+    h.setState.mockImplementation(async (userId: string) => {
+      if (userId === USER_B) throw new Error('transaction aborted');
+      return true;
+    });
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A, USER_B, USER_C], reason: REASON });
+    const error = vi.fn();
+    Object.assign(req, { logger: { error } });
+
+    await h.handlers.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ updatedUserIds: [USER_A, USER_C], skippedUserIds: [], failedUserIds: [USER_B] });
+    expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ userId: USER_B }));
   });
 
   it('reopens an approval back into the queue', async () => {
