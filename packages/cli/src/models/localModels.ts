@@ -436,7 +436,11 @@ export async function planPull(
   if (parsed.kind === 'ollama') return planOllamaPull(parsed.name, deps);
 
   const hub = deps.hub();
-  const detail = await hub.getModel(parsed.repo, { signal: deps.signal });
+  let detail = await hub.getModel(parsed.repo, { signal: deps.signal });
+  // A cached refusal can outlive an access grant in a long-lived MCP session.
+  if (detail.gated && detail.canDownload !== true) {
+    detail = await hub.getModel(parsed.repo, { signal: deps.signal, refresh: true });
+  }
   const id = clean(detail.id);
   if (detail.gated && detail.canDownload !== true) throw new Error(gatedMessage(id, hub.endpoint));
 
