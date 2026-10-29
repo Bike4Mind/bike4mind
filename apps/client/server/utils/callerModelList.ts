@@ -13,6 +13,7 @@ import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind
 import {
   getImageModelCapabilities,
   isImageModel,
+  isModelDeprecated,
   PAID_PLAN_ENTITLEMENT_KEY,
   type IUserDocument,
   type ModelAccessLock,
@@ -85,9 +86,9 @@ async function holdsPaidPlan(user: IUserDocument): Promise<boolean> {
 /**
  * Same free-tier rule createModelAdmission refuses at call time (llm/modelAdmission.ts), applied after the
  * cache so a plan change or a gate toggle shows on the next load. Paid-only models move from `models` to
- * `lockedModels`. An anonymous caller is left unfiltered: it cannot call a model, so this list is not a gate
- * for it. A failed allowlist read also lists unfiltered: the picker is not the gate, call-time admission
- * still enforces.
+ * `lockedModels`; disabled and retired ones are dropped, since no upgrade unlocks them. An anonymous caller
+ * is left unfiltered: it cannot call a model, so this list is not a gate for it. A failed allowlist read
+ * also lists unfiltered: the picker is not the gate, call-time admission still enforces.
  */
 async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument | null): Promise<CallerModelList> {
   const unfiltered = { ...list, lockedModels: [] };
@@ -105,7 +106,7 @@ async function withoutPaidOnlyModels(list: CatalogModelList, user: IUserDocument
   const lockedModels: ModelInfo[] = [];
   for (const model of list.models) {
     if (isFreeTierModel(model.id, allowedModels)) models.push(model);
-    else lockedModels.push({ ...model, access: PAID_PLAN_LOCK });
+    else if (!model.disabled && !isModelDeprecated(model)) lockedModels.push({ ...model, access: PAID_PLAN_LOCK });
   }
   const offeredIds = new Set<string>(models.map(model => model.id));
   // An upgrade offer pointing at a paid-only model would only lead to a refusal.

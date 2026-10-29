@@ -34,7 +34,10 @@ vi.mock('@server/entitlements', () => ({
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { findOne: (...a: unknown[]) => mocks.findAdminSetting(...a) },
-  cacheRepository: { findOne: (...a: unknown[]) => mocks.cacheFindOne(...a), createOrUpdate: vi.fn(async () => undefined) },
+  cacheRepository: {
+    findOne: (...a: unknown[]) => mocks.cacheFindOne(...a),
+    createOrUpdate: vi.fn(async () => undefined),
+  },
 }));
 // The real getSettingsValue, so the setting is parsed exactly as production parses it.
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -142,6 +145,17 @@ describe('getCallerModelList free-tier gate', () => {
     expect(list.lockedModels.map(model => model.id)).toEqual(['free', 'image-model']);
     expect(list.lockedModels.every(model => model.access?.locked === true)).toBe(true);
     expect(mocks.getAvailableModels).not.toHaveBeenCalled();
+  });
+
+  it('leaves disabled and retired models out of lockedModels, since no upgrade unlocks them', async () => {
+    const disabled = textModel('disabled-model', { disabled: true });
+    const retired = textModel('retired-model', { deprecationDate: '2000-01-01' });
+    mocks.getAvailableModels.mockResolvedValue([priced, free, disabled, retired]);
+
+    const list = await callerList(makeUser());
+
+    expect(list.models.map(model => model.id)).toEqual(['priced']);
+    expect(list.lockedModels.map(model => model.id)).toEqual(['free']);
   });
 
   it.each([
