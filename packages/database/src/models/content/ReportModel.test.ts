@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { ACTIVITY_REPORT_VERSION } from '@bike4mind/common';
+import { WEEKLY_ACTIVITY_REPORT_VERSION } from '@bike4mind/common';
 import { WeeklyReport, weeklyReportRepository } from './ReportModel';
 
 let mongod: MongoMemoryServer;
@@ -32,7 +32,7 @@ describe('WeeklyReportRepository report versioning', () => {
 
     const stored = await weeklyReportRepository.findByDateRange(START, END);
     expect(stored).toEqual(
-      expect.objectContaining({ report: 'full-week report', reportVersion: ACTIVITY_REPORT_VERSION })
+      expect.objectContaining({ report: 'full-week report', reportVersion: WEEKLY_ACTIVITY_REPORT_VERSION })
     );
     await expect(WeeklyReport.countDocuments({ startDate: START, endDate: END })).resolves.toBe(1);
   });

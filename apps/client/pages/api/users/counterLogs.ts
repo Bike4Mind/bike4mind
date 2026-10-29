@@ -1,4 +1,11 @@
-import { ACTIVITY_REPORT_VERSION, ApiKeyScope, Permission, dayjs, type CompletionSource } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  DAILY_ACTIVITY_REPORT_VERSION,
+  Permission,
+  WEEKLY_ACTIVITY_REPORT_VERSION,
+  dayjs,
+  type CompletionSource,
+} from '@bike4mind/common';
 import {
   CounterLog,
   DailyReport,
@@ -160,8 +167,10 @@ const reportCacheTtlMs = (endDate: string): number =>
   endDate >= dayjs().format('YYYY-MM-DD') ? CURRENT_DAY_REPORT_CACHE_TTL_MS : REPORT_CACHE_TTL_MS;
 
 // A stored report from before versioning (or from an older format) reads as absent and is rebuilt.
-const isCurrentReportVersion = (stored: { reportVersion?: number | null } | null | undefined): boolean =>
-  (stored?.reportVersion ?? 0) >= ACTIVITY_REPORT_VERSION;
+const isCurrentReportVersion = (
+  stored: { reportVersion?: number | null } | null | undefined,
+  requiredVersion: number
+): boolean => (stored?.reportVersion ?? 0) >= requiredVersion;
 
 interface WeeklyReportData {
   weekStart: string;
@@ -391,7 +400,7 @@ const generateWeeklyReportResponse = async (
 ): Promise<{ reports: Array<{ startDate: string; endDate: string; report: string; aiInsights?: string | null }> }> => {
   try {
     const cachedReport = await weeklyReportRepository.findByDateRange(startDate, endDate);
-    if (cachedReport && isCurrentReportVersion(cachedReport)) {
+    if (cachedReport && isCurrentReportVersion(cachedReport, WEEKLY_ACTIVITY_REPORT_VERSION)) {
       return {
         reports: [
           {
@@ -601,7 +610,10 @@ const generateDailyReportResponse = async (
   const datesNeedingProcessing = allDates.filter(date => {
     const isHistoricalDate = dayjs(date).isBefore(today, 'day');
     const cachedReport = cachedReportsMap.get(date);
-    return (!isHistoricalDate || !isCurrentReportVersion(cachedReport)) && datesWithData.has(date);
+    return (
+      (!isHistoricalDate || !isCurrentReportVersion(cachedReport, DAILY_ACTIVITY_REPORT_VERSION)) &&
+      datesWithData.has(date)
+    );
   });
 
   if (datesNeedingProcessing.length > 0) {
@@ -614,7 +626,7 @@ const generateDailyReportResponse = async (
       const isHistoricalDate = dayjs(date).isBefore(today, 'day');
       const cachedReport = cachedReportsMap.get(date);
 
-      if (isHistoricalDate && cachedReport && isCurrentReportVersion(cachedReport)) {
+      if (isHistoricalDate && cachedReport && isCurrentReportVersion(cachedReport, DAILY_ACTIVITY_REPORT_VERSION)) {
         reports.push({
           date,
           report: cachedReport.report,
