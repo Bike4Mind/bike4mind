@@ -318,7 +318,7 @@ export class OllamaRuntime implements LocalRuntime {
       arm();
       const response = await send(this.client, '/api/pull', {
         method: 'POST',
-        body: { model: ref, stream: true },
+        body: { model: ref, stream: true, ...(opts.runner ? { runner: opts.runner } : {}) },
         signal,
       });
       if (!response.body) throw new RuntimeProtocolError(`${this.id} /api/pull returned no body`, this.id);
