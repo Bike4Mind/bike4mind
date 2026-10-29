@@ -67,3 +67,19 @@ describe('UserApiKeyRepository.findFirstCreatedAtByUserId', () => {
     );
   });
 });
+
+describe('UserApiKeyRepository.countCreatedByUserIds', () => {
+  it('counts every key each user created, disabled and deleted included', async () => {
+    await createKey('u1', new Date('2026-10-20T00:00:00Z'));
+    await createKey('u1', new Date('2026-10-21T00:00:00Z'), { status: ApiKeyStatus.DISABLED });
+    const deleted = await createKey('u2', new Date('2026-10-21T00:00:00Z'));
+    await UserApiKey.collection.updateOne({ _id: deleted._id }, { $set: { deletedAt: new Date() } });
+    await createKey('other', new Date('2026-10-21T00:00:00Z'));
+
+    await expect(userApiKeyRepository.countCreatedByUserIds(['u1', 'u2', 'none'])).resolves.toEqual({ u1: 2, u2: 1 });
+  });
+
+  it('returns nothing for no users', async () => {
+    await expect(userApiKeyRepository.countCreatedByUserIds([])).resolves.toEqual({});
+  });
+});

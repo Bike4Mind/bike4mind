@@ -65,11 +65,12 @@ export type VideoJobDeps = {
 };
 
 export type CreateVideoJobDeps = VideoJobDeps & {
+  assertModelAdmission(userId: string, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
 };
 
 export type CreateVideoJobInput = {
-  user: { id: string; organizationId: string | null };
+  user: { id: string; organizationId: string | null; adminRoleWithheld?: boolean };
   /** Untrusted: parsed and validated by createVideoJob. */
   request: unknown;
   source: GenerationJobSource;
