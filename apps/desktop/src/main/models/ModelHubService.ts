@@ -925,6 +925,8 @@ export class ModelHubService {
     this.#push(true);
     try {
       await this.#deps.runtime.pull(ref, {
+        // Pins are the GGUF child of a library manifest list; Apple Silicon Ollama would otherwise pick MLX.
+        ...(curated && libraryOf(curated.build) ? { runner: 'llamacpp' } : {}),
         signal: controller.signal,
         onProgress: (progress: PullProgress) => {
           const phase = phaseOf(progress.status);
