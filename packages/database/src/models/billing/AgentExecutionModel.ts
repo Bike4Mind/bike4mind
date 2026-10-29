@@ -1140,6 +1140,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   /**
+   * Credits per loop over its top-level runs (children already roll up into their parent), keyed by
+   * loop id. `sessionIds` are the loops' notebooks: they narrow the scan to the {sessionId, status}
+   * index, while `loopId` leaves out any chat a user starts by hand in a loop's notebook.
+   */
+  async sumCreditsByLoop(loopIds: string[], sessionIds: string[]): Promise<Record<string, number>> {
+    if (loopIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      { $match: { sessionId: { $in: sessionIds }, loopId: { $in: loopIds }, parentExecutionId: null } },
+      { $group: { _id: '$loopId', credits: { $sum: '$totalCreditsUsed' } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [row._id, row.credits]));
+  }
+
+  /**
    * Find background children spawned by a parent execution. Used by the abort cascade
    * to propagate aborts from the parent to its background children. Returns only
    * children that are still in an active status.

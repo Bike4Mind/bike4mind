@@ -59,6 +59,40 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('sumCreditsByLoop', () => {
+    it('sums each loop over its top-level runs only', async () => {
+      const [sessionA, sessionB] = ['sa', 'sb'];
+      const parent = await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', totalCreditsUsed: 10 })
+      );
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', totalCreditsUsed: 5 })
+      );
+      // A child's credits already roll up into its parent.
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionA, loopId: 'loopA', parentExecutionId: parent.id, totalCreditsUsed: 99 })
+      );
+      // A hand-started chat in the loop's notebook carries no loopId.
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId: sessionA, totalCreditsUsed: 50 }));
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: sessionB, loopId: 'loopB', totalCreditsUsed: 7 })
+      );
+      // Same loop id outside the requested notebooks.
+      await agentExecutionRepository.create(
+        makeBaseExecution({ sessionId: 'other', loopId: 'loopA', totalCreditsUsed: 1000 })
+      );
+
+      expect(await agentExecutionRepository.sumCreditsByLoop(['loopA', 'loopB'], [sessionA, sessionB])).toEqual({
+        loopA: 15,
+        loopB: 7,
+      });
+    });
+
+    it('returns nothing for no loops', async () => {
+      expect(await agentExecutionRepository.sumCreditsByLoop([], [])).toEqual({});
+    });
+  });
+
   describe('countActiveByUserId', () => {
     it('counts top-level executions in any active status', async () => {
       const userId = new mongoose.Types.ObjectId().toString();

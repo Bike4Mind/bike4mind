@@ -43,8 +43,10 @@ const tickets = vi.hoisted(() => ({
   findManyByIdsForUser: vi.fn(),
 }));
 const settings = vi.hoisted(() => ({ EnableLoops: true as unknown }));
+const executions = vi.hoisted(() => ({ sumCreditsByLoop: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   loopRepository: repo,
+  agentExecutionRepository: executions,
   workItemRepository: tickets,
   adminSettingsRepository: {
     getSettingsValue: async (key: string) => settings[key as 'EnableLoops'],
@@ -100,6 +102,7 @@ const validBody = { name: 'Digest', goal: 'Summarize the inbox', intervalMinutes
 beforeEach(() => {
   vi.clearAllMocks();
   settings.EnableLoops = true;
+  executions.sumCreditsByLoop.mockResolvedValue({});
   getOrCreateSession.mockResolvedValue({ sessionId: 's-new' });
   resolveDefaultChatModel.mockResolvedValue({ model: 'default-model' });
   repo.create.mockImplementation(async (doc: Record<string, unknown>) => ({ id: OID, ...doc }));
@@ -186,6 +189,27 @@ describe('POST /api/loops', () => {
       'not a member'
     );
     expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET creditsUsed', () => {
+  it('adds each loop its credits in one aggregate, 0 when it has none', async () => {
+    repo.listForUser.mockResolvedValue([loop(), loop({ id: 'other', sessionId: 's2' })]);
+    executions.sumCreditsByLoop.mockResolvedValue({ [OID]: 42 });
+    const { res, result } = call('collection', 'get');
+    await result;
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledTimes(1);
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID, 'other'], ['s1', 's2']);
+    expect(res._getJSONData().map((l: { creditsUsed: number }) => l.creditsUsed)).toEqual([42, 0]);
+  });
+
+  it('adds the credits to a single loop', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    executions.sumCreditsByLoop.mockResolvedValue({ [OID]: 9 });
+    const { res, result } = call('item', 'get', { query: { id: OID } });
+    await result;
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID], ['s1']);
+    expect(res._getJSONData().creditsUsed).toBe(9);
   });
 });
 
