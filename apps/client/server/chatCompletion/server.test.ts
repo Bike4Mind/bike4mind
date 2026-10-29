@@ -478,6 +478,9 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(params.db.usageEvents).toBeDefined();
     expect(typeof params.requestId).toBe('string');
     expect(text).toContain('data: [DONE]');
+    await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalled());
+    // Let the socket close after finish; the row must still be written exactly once.
+    await new Promise(resolve => setTimeout(resolve, 50));
     expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
     expect(mockLogApiKeyUsage).toHaveBeenCalledWith({
       keyId: 'key1',
@@ -551,6 +554,30 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       controller.abort();
       execution.resolve();
     }
+  });
+
+  it('counts a caller that disconnects before any response as 499', async () => {
+    const controller = new AbortController();
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockImplementationOnce(() => new Promise(() => {}));
+
+    const request = fetch(`${baseUrl}/api/ai/v1/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_test' },
+      body: JSON.stringify(VALID_COMPLETION),
+      signal: controller.signal,
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(mockAuth.checkApiKeyRateLimitOrThrow).toHaveBeenCalled());
+    controller.abort();
+    await request;
+
+    await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1));
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(expect.objectContaining({ keyId: 'key1', statusCode: 499 }));
   });
 
   it('falls back to JWT auth when no API key is present', async () => {
