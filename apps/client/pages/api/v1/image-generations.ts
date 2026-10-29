@@ -1,4 +1,3 @@
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 /**
  * POST /api/v1/image-generations - queue an image generation; the caller polls the returned quest.
  * Also served at the legacy `/api/ai/generate-image` (pages/api/ai/generate-image.ts re-exports this).
@@ -20,6 +19,7 @@ import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(generateImageContract).post(async (req, res) => {

@@ -1,5 +1,3 @@
-import { CONVERSATIONAL_VOICE_MODEL_ID } from '@bike4mind/common';
-import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 /**
  * POST /api/v1/voice/sessions - provision a real-time ElevenLabs voice call on the default voice
  * agent and reserve its credits up front (reconciled by ./[id]/end.ts). Also served at the legacy
@@ -15,6 +13,7 @@ import {
 } from '@bike4mind/database';
 import {
   ChatModels,
+  CONVERSATIONAL_VOICE_MODEL_ID,
   createVoiceSessionContract,
   insufficientCreditsError,
   type ChatModelName,
@@ -26,6 +25,7 @@ import { sessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import {
   BadGatewayError,
   BadRequestError,

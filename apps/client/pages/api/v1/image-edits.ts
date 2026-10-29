@@ -1,4 +1,3 @@
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 /**
  * POST /api/v1/image-edits - queue an image edit; the caller polls the returned quest.
  * Also served at the legacy `/api/ai/edit-image` (pages/api/ai/edit-image.ts re-exports this).
@@ -15,6 +14,7 @@ import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/
 import { editImageContract } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
+import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = nextRouteForContract(editImageContract).post(async (req, res) => {
