@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import dayjs from 'dayjs';
+import { downloadData } from '@client/app/utils/download';
 
 type CsvRow = Record<string, unknown>;
 
@@ -56,15 +57,7 @@ export const useExportToCSV = () => {
 
     const csvContent = toCsv(transformedData, headers, dateFormat);
 
-    const blob = new Blob([CSV_BOM, csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `${filename}_${dayjs().format('YYYY-MM-DD')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    downloadData(CSV_BOM + csvContent, `${filename}_${dayjs().format('YYYY-MM-DD')}.csv`, 'text/csv;charset=utf-8;');
   }, []);
 
   return exportToCSV;
