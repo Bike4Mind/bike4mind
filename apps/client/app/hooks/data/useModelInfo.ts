@@ -35,10 +35,7 @@ export function useSupersededModels() {
   return useQuery({ ...catalogQuery(isFullyAuthenticated), select: catalog => catalog.supersededModels });
 }
 
-/**
- * Paid-only models the picker shows a free account as locked. Never feed these to a selection, default or
- * fallback path: those read useModelInfo / useAccessibleModels, which cannot contain one.
- */
+/** Paid-only models the picker shows a free account as locked; display only (see ModelInfo.access). */
 export function useLockedModels() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
   return useQuery({ ...catalogQuery(isFullyAuthenticated), select: catalog => catalog.lockedModels });

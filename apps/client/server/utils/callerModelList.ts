@@ -30,10 +30,7 @@ import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
  */
 type CatalogModelList = { models: ModelInfo[]; supersededModels: SupersededModelInfo[] };
 
-/**
- * `lockedModels` are the paid-only models a free account is shown but cannot select: only the SPA picker
- * reads them. Every other consumer (v1, CLI, desktop, agent validation) reads `models`, which never holds one.
- */
+/** `lockedModels`: paid-only models a free account sees but cannot select (see ModelInfo.access). */
 export type CallerModelList = CatalogModelList & { lockedModels: ModelInfo[] };
 
 const PAID_PLAN_LOCK: ModelAccessLock = { locked: true, reason: 'requires_paid_plan' };

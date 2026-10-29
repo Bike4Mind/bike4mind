@@ -3,8 +3,7 @@
  *
  * Unversioned and unpublished; integrators get the public projection at GET /api/v1/models
  * (pages/api/v1/models.ts). Both read getCallerModelList, so they list the same models;
- * v1 additionally drops disabled ones. Only this route serves `lockedModels`, the paid-only
- * models the SPA picker shows a free account as upgradable; clients that ignore it never see them.
+ * v1 additionally drops disabled ones. Only this route serves `lockedModels` (see ModelInfo.access).
  */
 
 import { baseApi } from '@server/middlewares/baseApi';

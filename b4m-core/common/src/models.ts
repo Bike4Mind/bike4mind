@@ -774,7 +774,8 @@ export type ModelInfo = {
   /**
    * Set only on the `lockedModels` entries of GET /api/models: a model this caller can see but not select
    * until they upgrade. Unlike `disabled`, the model works for other accounts. Locked models never appear
-   * in `models`, so nothing that picks from that list can select one.
+   * in `models`, so nothing that picks from that list can select one. Display only: call-time
+   * createModelAdmission (services/llm/modelAdmission.ts) is the gate.
    */
   access?: ModelAccessLock;
   /**
