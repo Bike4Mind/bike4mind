@@ -278,7 +278,10 @@ function ServerRow({
               variant="outlined"
               color="neutral"
               disabled={busy}
-              onClick={() => setEditing(open => !open)}
+              onClick={() => {
+                if (!editing) setDraft(draftFor(server.auth));
+                setEditing(!editing);
+              }}
               data-testid="model-servers-credentials-btn"
             >
               {askCredentials ? 'Enter new credentials' : 'Credentials'}
@@ -374,6 +377,8 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const suggestedName = useRef<string | null>(null);
+  // Bumped whenever the tested address or credential changes, so a probe still running for the old one is ignored.
+  const attempt = useRef(0);
 
   const reset = useCallback(() => {
     setAddress('');
@@ -383,10 +388,12 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     setAcceptOpen(false);
     setError(null);
     suggestedName.current = null;
+    attempt.current += 1;
   }, []);
 
   // The "Save it anyway" answer was about the address and credentials the user tested, not new ones.
   const untest = () => {
+    attempt.current += 1;
     setProbe(null);
     setAcceptOpen(false);
   };
@@ -395,11 +402,17 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     setBusy(true);
     setError(null);
     try {
+      const tested = attempt.current;
       const result = await window.b4m.modelServers.probe({ address, credential: toCredential(credential) });
+      if (tested !== attempt.current) return;
       setProbe(result);
       if (result.kind) setKind(result.kind);
-      if (result.suggestedName && (!name.trim() || name === suggestedName.current)) setName(result.suggestedName);
-      if (result.suggestedName) suggestedName.current = result.suggestedName;
+      const suggested = result.suggestedName;
+      if (suggested) {
+        const previous = suggestedName.current;
+        setName(current => (!current.trim() || current === previous ? suggested : current));
+        suggestedName.current = suggested;
+      }
     } finally {
       setBusy(false);
     }

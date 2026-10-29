@@ -132,6 +132,17 @@ describe('ModelServersSettings add form', () => {
     await click('model-servers-add-test-btn');
     expect(nameInput().value).toBe('my box');
   });
+
+  it('ignores a test result that arrives after the address changed', async () => {
+    let answer: (result: ModelServerProbeResult) => void = () => undefined;
+    const probe = vi.fn(() => new Promise<ModelServerProbeResult>(resolve => (answer = resolve)));
+    await mount([], probe);
+    await type('model-servers-add-address-input', 'https://a.example.test');
+    await click('model-servers-add-test-btn');
+    await type('model-servers-add-address-input', 'https://b.example.test');
+    await act(async () => answer(openServer('https://a.example.test', 'a')));
+    expect(document.querySelector('[data-testid="model-servers-add-name-input"]')).toBeNull();
+  });
 });
 
 describe('ModelServersSettings credentials form', () => {
@@ -167,6 +178,16 @@ describe('ModelServersSettings credentials form', () => {
     expect(saveButton().textContent).toBe('Remove credential');
     await act(async () => saveButton().click());
     expect(update).toHaveBeenCalledWith('aaa111', { credential: { type: 'none' } });
+  });
+
+  it('opens fresh from the saved credential each time', async () => {
+    await mount([server({ auth: { type: 'bearer' } })]);
+    await click('model-servers-credentials-btn');
+    await type('model-servers-edit-token-input', 'tok-abandoned');
+    await click('model-servers-credentials-btn');
+    await click('model-servers-credentials-btn');
+    expect(element<HTMLInputElement>('model-servers-edit-token-input').value).toBe('');
+    expect(saveButton().disabled).toBe(true);
   });
 
   it('offers nothing to save for a server without a credential until one is chosen', async () => {
