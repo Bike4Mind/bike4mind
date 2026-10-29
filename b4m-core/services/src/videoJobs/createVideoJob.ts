@@ -44,10 +44,10 @@ export async function createVideoJob(
     deps
   );
   if (replay) return replay;
-  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
   const caps = getVideoModelCapabilities(request.model);
   const retired = retiredVideoModelMessage(request.model);
   if (retired) return { ok: false, status: 422, code: 'model_unavailable', message: retired };
+  await deps.assertModelAdmission(input.user.id, request.model, input.user.adminRoleWithheld);
   if (!deps.providers.get(caps.provider)) {
     return {
       ok: false,

@@ -153,6 +153,17 @@ describe('createVideoJob', () => {
     expect(repository.jobs.size).toBe(0);
   });
 
+  it('reports a retired model as 422 even when plan admission would refuse', async () => {
+    const { deps } = makeDeps();
+    vi.mocked(deps.assertModelAdmission).mockRejectedValue(new Error('paid plan required'));
+    const result = await createVideoJob(
+      { user, request: { ...validRequest, model: 'veo-3.1-fast-generate-preview' }, source: 'api' },
+      deps
+    );
+    expect(result).toMatchObject({ ok: false, status: 422, code: 'model_unavailable' });
+    expect(deps.assertModelAdmission).not.toHaveBeenCalled();
+  });
+
   it('rejects a model whose provider is not registered', async () => {
     const { deps } = makeDeps({ providers: createVideoProviderRegistry([]) });
     expect(await createVideoJob({ user, request: validRequest, source: 'api' }, deps)).toMatchObject({
