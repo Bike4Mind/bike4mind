@@ -10,7 +10,7 @@ import type {
 import { api } from '@client/app/contexts/ApiContext';
 import { CREDITS_BALANCE_KEY } from './credits';
 
-const ARENA_NEXT_KEY = ['preference-arena', 'next'] as const;
+export const ARENA_NEXT_KEY = ['preference-arena', 'next'] as const;
 const ARENA_ADMIN_KEY = ['admin', 'preference-arena'] as const;
 
 export function useArenaNextPair() {
@@ -22,6 +22,7 @@ export function useArenaNextPair() {
     staleTime: 0,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    retry: 1,
   });
 }
 

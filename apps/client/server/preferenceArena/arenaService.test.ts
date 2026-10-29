@@ -59,7 +59,6 @@ function build(over: { user?: ArenaUser | null; settings?: Partial<PreferenceAre
     goldRecord: vi.fn().mockResolvedValue({ answered: 3, correct: 3 }),
     countCreditedSince: vi.fn().mockResolvedValue(0),
     creditsEarned: vi.fn().mockResolvedValue(0),
-    markOutcome: vi.fn().mockResolvedValue(undefined),
     totals: vi.fn(),
     rejectionCounts: vi.fn(),
     goldRaters: vi.fn(),
@@ -138,6 +137,18 @@ describe('serveNextPair', () => {
     expect(pairs.sampleUnseen.mock.calls.map(call => call[0])).toEqual(['regular', 'gold']);
   });
 
+  it('drops an outstanding pair that was retired and serves a fresh one', async () => {
+    const { service, votes, pairs } = build();
+    votes.findOutstanding.mockResolvedValue(servedRow({ id: 'stale' }));
+    pairs.findById.mockResolvedValue(pair({ active: false }));
+    pairs.sampleUnseen.mockResolvedValue(pair({ id: 'bbbbbbbbbbbbbbbbbbbbbbbb' }));
+    expect(await service.serveNextPair('u1')).toMatchObject({
+      status: 'ready',
+      pair: { pairId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
+    });
+    expect(votes.delete).toHaveBeenCalledWith('stale');
+  });
+
   it('shows the winner of a serve race', async () => {
     const { service, votes } = build();
     votes.serve.mockResolvedValue(null);
@@ -190,7 +201,37 @@ describe('submitVote', () => {
       }),
       creditAdapters
     );
-    expect(votes.markOutcome).toHaveBeenCalledWith('vote1', { credited: true, creditsAwarded: 2 });
+    expect(votes.recordVote).toHaveBeenCalledWith(
+      'u1',
+      'aaaaaaaaaaaaaaaaaaaaaaaa',
+      expect.objectContaining({ credited: true, creditsAwarded: 2 })
+    );
+  });
+
+  it('judges and pays while the row is still served, so a second pair cannot slip past the caps', async () => {
+    const { service, votes, addCredits } = build();
+    await service.submitVote('u1', vote);
+    const flippedAt = votes.recordVote.mock.invocationCallOrder[0];
+    expect(votes.countCreditedSince.mock.invocationCallOrder[0]).toBeLessThan(flippedAt);
+    expect(votes.creditsEarned.mock.invocationCallOrder[0]).toBeLessThan(flippedAt);
+    expect(addCredits.mock.invocationCallOrder[0]).toBeLessThan(flippedAt);
+    expect(votes.countCreditedSince).toHaveBeenCalledWith('u1', new Date('2026-01-01T00:00:00Z'));
+  });
+
+  it('counts this gold answer toward qualification', async () => {
+    const { service, votes, pairs } = build();
+    votes.goldRecord.mockResolvedValue({ answered: 0, correct: 0 });
+    pairs.findById.mockResolvedValue(pair({ goldChoice: 'a' }));
+    expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
+  });
+
+  it('refuses and releases a retired pair without paying', async () => {
+    const { service, votes, pairs, addCredits } = build();
+    pairs.findById.mockResolvedValue(pair({ active: false }));
+    await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(NotFoundError);
+    expect(votes.delete).toHaveBeenCalledWith('vote1');
+    expect(addCredits).not.toHaveBeenCalled();
+    expect(votes.recordVote).not.toHaveBeenCalled();
   });
 
   it('does not credit a missed gold question and records the reason', async () => {
@@ -201,9 +242,8 @@ describe('submitVote', () => {
     expect(votes.recordVote).toHaveBeenCalledWith(
       'u1',
       expect.any(String),
-      expect.objectContaining({ goldCorrect: false })
+      expect.objectContaining({ goldCorrect: false, credited: false, rejectReason: 'gold_missed' })
     );
-    expect(votes.markOutcome).toHaveBeenCalledWith('vote1', { credited: false, rejectReason: 'gold_missed' });
   });
 
   it('is idempotent for a pair that was already voted', async () => {
@@ -214,14 +254,18 @@ describe('submitVote', () => {
     expect(addCredits).not.toHaveBeenCalled();
   });
 
-  it('returns the settled award when a concurrent vote won the race', async () => {
+  it('returns the settled award when a concurrent submit of the same vote won the race', async () => {
     const { service, votes, addCredits } = build();
     votes.recordVote.mockResolvedValue(null);
     votes.findForPair
       .mockResolvedValueOnce(servedRow())
       .mockResolvedValueOnce(servedRow({ status: 'voted', creditsAwarded: 2 }));
     expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 2 });
-    expect(addCredits).not.toHaveBeenCalled();
+    // The losing grant reuses the winner's transaction id, which the ledger turns into a no-op.
+    expect(addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ transactionId: 'arena-vote:vote1' }),
+      expect.anything()
+    );
   });
 
   it('swallows a grant failure, logs it and awards nothing', async () => {
@@ -229,6 +273,36 @@ describe('submitVote', () => {
     addCredits.mockRejectedValue(new Error('db down'));
     expect(await service.submitVote('u1', vote)).toEqual({ creditsAwarded: 0 });
     expect(logger.error).toHaveBeenCalled();
-    expect(votes.markOutcome).not.toHaveBeenCalled();
+    expect(votes.recordVote).toHaveBeenCalledWith(
+      'u1',
+      expect.any(String),
+      expect.objectContaining({ credited: false, rejectReason: 'grant_failed' })
+    );
+  });
+});
+
+describe('getArenaStats', () => {
+  it('builds win rates only from raters the vote judge would also qualify', async () => {
+    const { service, votes, pairs } = build({ settings: { minGoldVotes: 2, minGoldAccuracyPercent: 75 } });
+    pairs.countsForStats.mockResolvedValue({ total: 1, gold: 0, active: 1 });
+    votes.totals.mockResolvedValue({ votes: 3, credited: 1, creditsAwarded: 2 });
+    votes.rejectionCounts.mockResolvedValue({});
+    votes.distinctRaterCount.mockResolvedValue(3);
+    votes.goldRaters.mockResolvedValue([
+      { userId: 'good', answered: 4, correct: 4 },
+      { userId: 'bad', answered: 4, correct: 1 },
+      { userId: 'new', answered: 1, correct: 1 },
+    ]);
+    votes.votesByRaters.mockResolvedValue([{ userId: 'good', pairId: 'aaaaaaaaaaaaaaaaaaaaaaaa', choice: 'b' }]);
+    pairs.findByIds.mockResolvedValue([pair()]);
+
+    const stats = await service.getArenaStats();
+
+    expect(stats.raters).toEqual({ total: 3, qualified: 1, flagged: 1 });
+    expect(votes.votesByRaters).toHaveBeenCalledWith(['good']);
+    expect(stats.winRates).toEqual([
+      { taskType: 'code', modelId: 'model-2', wins: 1, losses: 0, ties: 0 },
+      { taskType: 'code', modelId: 'model-1', wins: 0, losses: 1, ties: 0 },
+    ]);
   });
 });

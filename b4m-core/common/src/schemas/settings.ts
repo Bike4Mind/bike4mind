@@ -27,6 +27,7 @@ import {
 } from '../constants/forcedRetrieval';
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
+import { ARENA_QUALITY_DEFAULTS } from '../preferenceArena';
 import {
   AI_EDIT_VERSION_RETENTION_DEFAULT,
   AI_EDIT_VERSION_RETENTION_MAX,
@@ -4285,16 +4286,17 @@ export const settingsMap = {
   preferenceArenaMinResponseMs: makeNumberSetting({
     key: 'preferenceArenaMinResponseMs',
     name: 'Preference Arena: Minimum Response Time (ms)',
-    defaultValue: 0,
+    defaultValue: ARENA_QUALITY_DEFAULTS.minResponseMs,
     int: true,
     min: 0,
-    description: 'Votes cast faster than this are recorded but earn nothing. 0 disables the check.',
+    description:
+      'Votes cast faster than this (ms, measured on the server) are recorded but earn nothing. 0 keeps rewards off.',
     category: 'Users',
   }),
   preferenceArenaGoldRatePercent: makeNumberSetting({
     key: 'preferenceArenaGoldRatePercent',
     name: 'Preference Arena: Gold Question Rate (%)',
-    defaultValue: 0,
+    defaultValue: ARENA_QUALITY_DEFAULTS.goldRatePercent,
     int: true,
     min: 0,
     max: 100,
@@ -4304,7 +4306,7 @@ export const settingsMap = {
   preferenceArenaMinGoldVotes: makeNumberSetting({
     key: 'preferenceArenaMinGoldVotes',
     name: 'Preference Arena: Minimum Gold Answers',
-    defaultValue: 0,
+    defaultValue: ARENA_QUALITY_DEFAULTS.minGoldVotes,
     int: true,
     min: 0,
     description: 'Gold questions a rater must answer before any vote can earn. 0 earns nothing.',
@@ -4313,11 +4315,12 @@ export const settingsMap = {
   preferenceArenaMinGoldAccuracyPercent: makeNumberSetting({
     key: 'preferenceArenaMinGoldAccuracyPercent',
     name: 'Preference Arena: Minimum Gold Accuracy (%)',
-    defaultValue: 0,
+    defaultValue: ARENA_QUALITY_DEFAULTS.minGoldAccuracyPercent,
     int: true,
     min: 0,
     max: 100,
-    description: 'Raters whose gold accuracy falls below this stop earning. Their votes are still recorded.',
+    description:
+      'Raters whose gold accuracy falls below this stop earning. Their votes are still recorded. 0 keeps rewards off.',
     category: 'Users',
   }),
   freeTierDailySpendCapCredits: makeNumberSetting({

@@ -15,6 +15,11 @@ const VOTE_BUTTONS: ReadonlyArray<{ choice: ArenaChoice; label: string }> = [
   { choice: 'b', label: 'B is better' },
 ];
 
+function formatVoteToast(creditsAwarded: number): string {
+  if (creditsAwarded <= 0) return 'Thanks for your feedback';
+  return creditsAwarded === 1 ? '+1 credit' : `+${creditsAwarded} credits`;
+}
+
 function AnswerCard({ label, text, testId }: { label: string; text: string; testId: string }) {
   return (
     <Sheet
@@ -80,21 +85,27 @@ function Notice({ title, children, testId }: { title: string; children?: ReactNo
 
 export default function ArenaPage() {
   useDocumentTitle('Rate answers');
-  const { data, isPending, isError, error, refetch } = useArenaNextPair();
+  const { data, isPending, isError, error, isFetching, refetch } = useArenaNextPair();
   const vote = useArenaVote();
   const { openView: openBillingView } = useBillingView();
-  // The billing modal that hosts the verification flow only mounts when credits are enforced.
-  const canOpenVerification = !!useGetSettingsValue('enforceCredits');
+  // The billing modal that hosts the verification flow only mounts when credits are enforced, and
+  // its unlock card renders nothing unless the no-card unlock is on.
+  const enforceCredits = !!useGetSettingsValue('enforceCredits');
+  const noCardUnlockEnabled = !!useGetSettingsValue('noCardUnlockEnabled');
+  const canOpenVerification = enforceCredits && noCardUnlockEnabled;
 
   const submitVote = (pairId: string, choice: ArenaChoice) =>
     vote.mutate(
       { pairId, choice },
       {
         onSuccess: result => {
-          toast.success(result.creditsAwarded > 0 ? `+${result.creditsAwarded} credits` : 'Thanks for your feedback');
+          toast.success(formatVoteToast(result.creditsAwarded));
           void refetch();
         },
-        onError: voteError => toast.error(getErrorMessage(voteError)),
+        onError: voteError => {
+          toast.error(getErrorMessage(voteError));
+          void refetch();
+        },
       }
     );
 
@@ -122,7 +133,7 @@ export default function ArenaPage() {
       return (
         <PairView
           pair={data.pair}
-          submitting={vote.isPending}
+          submitting={vote.isPending || isFetching}
           onVote={choice => submitVote(data.pair.pairId, choice)}
         />
       );

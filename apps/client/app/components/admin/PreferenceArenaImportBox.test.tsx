@@ -35,7 +35,9 @@ const validPair = {
 };
 
 describe('PreferenceArenaImportBox', () => {
-  beforeEach(() => state.mutate.mockReset());
+  beforeEach(() => {
+    state.mutate.mockReset();
+  });
 
   it('rejects invalid JSON without posting', () => {
     renderBox();
@@ -49,6 +51,12 @@ describe('PreferenceArenaImportBox', () => {
     submit(JSON.stringify([{ ...validPair, source: 'scraped' }]));
     expect(screen.getByTestId('arena-import-errors')).toHaveTextContent('source');
     expect(state.mutate).not.toHaveBeenCalled();
+  });
+
+  it('accepts an object wrapping the pairs array', () => {
+    renderBox();
+    submit(JSON.stringify({ pairs: [validPair] }));
+    expect(state.mutate).toHaveBeenCalledWith([validPair], expect.any(Object));
   });
 
   it('posts the validated pairs', () => {

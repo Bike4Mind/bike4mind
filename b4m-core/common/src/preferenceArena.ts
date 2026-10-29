@@ -24,7 +24,15 @@ export const ARENA_VERIFIED_UNLOCK_REASONS: readonly SignupGrantUnlockReason[] =
 export type ArenaIneligibleReason = 'disabled' | 'unverified' | 'blocked';
 
 export type ArenaRejectReason =
-  'rewards_off' | 'too_fast' | 'gold_missed' | 'unqualified' | 'low_gold_accuracy' | 'daily_cap' | 'lifetime_cap';
+  | 'rewards_off'
+  | 'too_fast'
+  | 'gold_missed'
+  | 'unqualified'
+  | 'low_gold_accuracy'
+  | 'daily_cap'
+  | 'lifetime_cap'
+  /** The vote earned but the credit write threw; kept countable so it can be reconciled. */
+  | 'grant_failed';
 
 export const PREFERENCE_ARENA_REWARD_REASON = 'preference_arena_vote';
 
@@ -46,6 +54,22 @@ export interface PreferenceArenaSettings {
   minGoldAccuracyPercent: number;
 }
 
+/**
+ * Defaults for the quality gates, applied when an admin has never set them. The admin settings
+ * schema reads these too, so the value an admin sees is the value the judge uses. Money settings
+ * (credits per vote, caps) have no default here: unset means rewards off.
+ */
+export const ARENA_QUALITY_DEFAULTS = {
+  minResponseMs: 4000,
+  goldRatePercent: 20,
+  minGoldVotes: 3,
+  minGoldAccuracyPercent: 80,
+} as const;
+
+function isUnset(raw: unknown): boolean {
+  return raw === undefined || raw === null || (typeof raw === 'string' && raw.trim() === '');
+}
+
 function parseNonNegativeInt(raw: unknown): number {
   const n = typeof raw === 'string' ? (raw.trim() === '' ? NaN : Number(raw)) : raw;
   return typeof n === 'number' && Number.isSafeInteger(n) && n > 0 ? n : 0;
@@ -59,17 +83,25 @@ function parseFlag(raw: unknown): boolean {
   return raw === true || (typeof raw === 'string' && raw.trim().toLowerCase() === 'true');
 }
 
-/** Unset or malformed values resolve to disabled/0; a 0 cap earns nothing rather than everything. */
+/** Unset quality gates take ARENA_QUALITY_DEFAULTS; malformed values resolve to 0, which keeps rewards off. */
 export function resolvePreferenceArenaSettings(adminSettings: Record<string, unknown>): PreferenceArenaSettings {
   return {
     enabled: parseFlag(adminSettings.preferenceArenaEnabled),
     creditsPerVote: parseNonNegativeInt(adminSettings.preferenceArenaCreditsPerVote),
     dailyVoteCap: parseNonNegativeInt(adminSettings.preferenceArenaDailyVoteCap),
     lifetimeCreditCap: parseNonNegativeInt(adminSettings.preferenceArenaLifetimeCreditCap),
-    minResponseMs: parseNonNegativeInt(adminSettings.preferenceArenaMinResponseMs),
-    goldRatePercent: parsePercent(adminSettings.preferenceArenaGoldRatePercent),
-    minGoldVotes: parseNonNegativeInt(adminSettings.preferenceArenaMinGoldVotes),
-    minGoldAccuracyPercent: parsePercent(adminSettings.preferenceArenaMinGoldAccuracyPercent),
+    minResponseMs: isUnset(adminSettings.preferenceArenaMinResponseMs)
+      ? ARENA_QUALITY_DEFAULTS.minResponseMs
+      : parseNonNegativeInt(adminSettings.preferenceArenaMinResponseMs),
+    goldRatePercent: isUnset(adminSettings.preferenceArenaGoldRatePercent)
+      ? ARENA_QUALITY_DEFAULTS.goldRatePercent
+      : parsePercent(adminSettings.preferenceArenaGoldRatePercent),
+    minGoldVotes: isUnset(adminSettings.preferenceArenaMinGoldVotes)
+      ? ARENA_QUALITY_DEFAULTS.minGoldVotes
+      : parseNonNegativeInt(adminSettings.preferenceArenaMinGoldVotes),
+    minGoldAccuracyPercent: isUnset(adminSettings.preferenceArenaMinGoldAccuracyPercent)
+      ? ARENA_QUALITY_DEFAULTS.minGoldAccuracyPercent
+      : parsePercent(adminSettings.preferenceArenaMinGoldAccuracyPercent),
   };
 }
 
@@ -102,17 +134,43 @@ export interface ArenaVoteContext {
 
 export type ArenaVoteJudgement = { accepted: true; credits: number } | { accepted: false; reason: ArenaRejectReason };
 
+/**
+ * Every quality gate must be set before any vote earns: a 0 response floor or accuracy bar would
+ * otherwise wave bots through, so an unset gate keeps rewards off instead of opening them.
+ */
+export function arenaRewardsConfigured(settings: PreferenceArenaSettings): boolean {
+  return (
+    settings.creditsPerVote > 0 &&
+    settings.dailyVoteCap > 0 &&
+    settings.lifetimeCreditCap > 0 &&
+    settings.minResponseMs > 0 &&
+    settings.minGoldVotes > 0 &&
+    settings.minGoldAccuracyPercent > 0
+  );
+}
+
+export interface ArenaGoldRecord {
+  answered: number;
+  correct: number;
+}
+
+export type ArenaRaterStanding = 'unqualified' | 'qualified' | 'flagged';
+
+/** The one definition of a rater's standing, shared by the vote judge and the routing stats. */
+export function arenaRaterStanding(gold: ArenaGoldRecord, settings: PreferenceArenaSettings): ArenaRaterStanding {
+  if (settings.minGoldVotes <= 0 || gold.answered < settings.minGoldVotes) return 'unqualified';
+  return (gold.correct / gold.answered) * 100 >= settings.minGoldAccuracyPercent ? 'qualified' : 'flagged';
+}
+
 /** Pure: decides whether a recorded vote earns. The vote is kept for routing data either way. */
 export function judgeArenaVote(context: ArenaVoteContext): ArenaVoteJudgement {
   const { settings } = context;
-  if (settings.creditsPerVote <= 0) return { accepted: false, reason: 'rewards_off' };
+  if (!arenaRewardsConfigured(settings)) return { accepted: false, reason: 'rewards_off' };
   if (context.responseMs < settings.minResponseMs) return { accepted: false, reason: 'too_fast' };
   if (context.goldCorrect === false) return { accepted: false, reason: 'gold_missed' };
-  if (settings.minGoldVotes <= 0 || context.goldAnswered < settings.minGoldVotes) {
-    return { accepted: false, reason: 'unqualified' };
-  }
-  const accuracyPercent = (context.goldCorrectTotal / context.goldAnswered) * 100;
-  if (accuracyPercent < settings.minGoldAccuracyPercent) return { accepted: false, reason: 'low_gold_accuracy' };
+  const standing = arenaRaterStanding({ answered: context.goldAnswered, correct: context.goldCorrectTotal }, settings);
+  if (standing === 'unqualified') return { accepted: false, reason: 'unqualified' };
+  if (standing === 'flagged') return { accepted: false, reason: 'low_gold_accuracy' };
   if (context.creditedVotesToday >= settings.dailyVoteCap) return { accepted: false, reason: 'daily_cap' };
   const credits = Math.min(settings.creditsPerVote, settings.lifetimeCreditCap - context.creditsEarnedLifetime);
   if (credits <= 0) return { accepted: false, reason: 'lifetime_cap' };

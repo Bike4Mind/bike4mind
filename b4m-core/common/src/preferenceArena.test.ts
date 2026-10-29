@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  ARENA_QUALITY_DEFAULTS,
+  arenaRaterStanding,
   isArenaVerifiedUser,
   judgeArenaVote,
   resolvePreferenceArenaSettings,
@@ -30,17 +32,23 @@ const context = (over: Partial<ArenaVoteContext> = {}): ArenaVoteContext => ({
 });
 
 describe('resolvePreferenceArenaSettings', () => {
-  it('resolves an empty map to disabled and zeroed', () => {
+  it('resolves an empty map to disabled, unpaid, and default quality gates', () => {
     expect(resolvePreferenceArenaSettings({})).toEqual({
       enabled: false,
       creditsPerVote: 0,
       dailyVoteCap: 0,
       lifetimeCreditCap: 0,
-      minResponseMs: 0,
-      goldRatePercent: 0,
-      minGoldVotes: 0,
-      minGoldAccuracyPercent: 0,
+      ...ARENA_QUALITY_DEFAULTS,
     });
+  });
+
+  it('keeps an explicit 0 quality gate rather than falling back to the default', () => {
+    const resolved = resolvePreferenceArenaSettings({
+      preferenceArenaMinResponseMs: '0',
+      preferenceArenaMinGoldVotes: '',
+    });
+    expect(resolved.minResponseMs).toBe(0);
+    expect(resolved.minGoldVotes).toBe(ARENA_QUALITY_DEFAULTS.minGoldVotes);
   });
 
   it('parses stored string values', () => {
@@ -113,10 +121,15 @@ describe('judgeArenaVote', () => {
       accepted: false,
       reason: 'unqualified',
     });
-    expect(judgeArenaVote(context({ settings: { ...settings, minGoldVotes: 0 } }))).toEqual({
-      accepted: false,
-      reason: 'unqualified',
-    });
+  });
+
+  it('keeps rewards off while any quality gate is 0, instead of waving every vote through', () => {
+    for (const gate of ['minResponseMs', 'minGoldVotes', 'minGoldAccuracyPercent', 'dailyVoteCap'] as const) {
+      expect(judgeArenaVote(context({ settings: { ...settings, [gate]: 0 } }))).toEqual({
+        accepted: false,
+        reason: 'rewards_off',
+      });
+    }
   });
 
   it('rejects low gold accuracy', () => {
@@ -139,5 +152,21 @@ describe('judgeArenaVote', () => {
       accepted: false,
       reason: 'lifetime_cap',
     });
+  });
+});
+
+describe('arenaRaterStanding', () => {
+  it('needs enough gold answers, then splits on accuracy', () => {
+    expect(arenaRaterStanding({ answered: 2, correct: 2 }, { ...settings, minGoldVotes: 3 })).toBe('unqualified');
+    expect(
+      arenaRaterStanding({ answered: 4, correct: 3 }, { ...settings, minGoldVotes: 3, minGoldAccuracyPercent: 75 })
+    ).toBe('qualified');
+    expect(
+      arenaRaterStanding({ answered: 4, correct: 2 }, { ...settings, minGoldVotes: 3, minGoldAccuracyPercent: 75 })
+    ).toBe('flagged');
+  });
+
+  it('treats nobody as qualified when no gold bar is set', () => {
+    expect(arenaRaterStanding({ answered: 5, correct: 5 }, { ...settings, minGoldVotes: 0 })).toBe('unqualified');
   });
 });

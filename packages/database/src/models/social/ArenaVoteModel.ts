@@ -1,6 +1,6 @@
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
-import type { ArenaChoice, ArenaRejectReason, IMongoDocument } from '@bike4mind/common';
+import type { ArenaChoice, ArenaGoldRecord, ArenaRejectReason, IMongoDocument } from '@bike4mind/common';
 
 export type ArenaVoteStatus = 'served' | 'voted';
 
@@ -52,11 +52,6 @@ export interface IArenaVoteModel extends Model<IArenaVoteDocument> {}
 export const ArenaVote: IArenaVoteModel =
   mongoose.models.ArenaVote ?? model<IArenaVoteDocument>('ArenaVote', ArenaVoteSchema);
 
-export interface ArenaGoldRecord {
-  answered: number;
-  correct: number;
-}
-
 export interface ArenaRaterSummary extends ArenaGoldRecord {
   userId: string;
 }
@@ -67,12 +62,12 @@ export interface ArenaVoteTotals {
   creditsAwarded: number;
 }
 
-export interface ArenaVoteOutcome {
+export type ArenaVoteOutcome = {
   choice: ArenaChoice;
   votedAt: Date;
   responseMs: number;
   goldCorrect: boolean | null;
-}
+} & ({ credited: true; creditsAwarded: number } | { credited: false; rejectReason: ArenaRejectReason });
 
 export interface ArenaRatedVote {
   userId: string;
@@ -122,7 +117,11 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
     }
   }
 
-  /** Atomically flips the outstanding row to voted; null when this pair is not outstanding for the user. */
+  /**
+   * Atomically flips the outstanding row to voted with its judged outcome; null when this pair is
+   * not outstanding for the user. Judging must happen before this call: the row stays 'served',
+   * holding the one-outstanding lock, until the outcome is final.
+   */
   async recordVote(userId: string, pairId: string, outcome: ArenaVoteOutcome): Promise<IArenaVoteDocument | null> {
     const updated = await this.model.findOneAndUpdate(
       { userId, pairId, status: 'served' },
@@ -146,34 +145,16 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
     return { answered: row?.answered ?? 0, correct: row?.correct ?? 0 };
   }
 
-  countCreditedSince(userId: string, since: Date, excludeVoteId: string): Promise<number> {
-    return this.model.countDocuments({
-      userId,
-      credited: true,
-      votedAt: { $gte: since },
-      _id: { $ne: excludeVoteId },
-    });
+  countCreditedSince(userId: string, since: Date): Promise<number> {
+    return this.model.countDocuments({ userId, credited: true, votedAt: { $gte: since } });
   }
 
-  async creditsEarned(userId: string, excludeVoteId: string): Promise<number> {
+  async creditsEarned(userId: string): Promise<number> {
     const [row] = await this.model.aggregate<{ total: number }>([
-      {
-        $match: {
-          userId,
-          credited: true,
-          _id: { $ne: new mongoose.Types.ObjectId(excludeVoteId) },
-        },
-      },
+      { $match: { userId, credited: true } },
       { $group: { _id: null, total: { $sum: '$creditsAwarded' } } },
     ]);
     return row?.total ?? 0;
-  }
-
-  async markOutcome(
-    voteId: string,
-    outcome: { credited: true; creditsAwarded: number } | { credited: false; rejectReason: ArenaRejectReason }
-  ): Promise<void> {
-    await this.model.updateOne({ _id: voteId }, { $set: outcome });
   }
 
   async totals(): Promise<ArenaVoteTotals> {
@@ -219,10 +200,13 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
     return raters.length;
   }
 
-  /** Voted, non-gold votes from the given raters, for the win-rate rollup. */
+  /** Voted, non-gold votes from the given raters, for the win-rate rollup. Too-fast clicks are not judgment. */
   async votesByRaters(userIds: string[]): Promise<ArenaRatedVote[]> {
     const rows = await this.model
-      .find({ userId: { $in: userIds }, status: 'voted', isGold: false }, { userId: 1, pairId: 1, choice: 1 })
+      .find(
+        { userId: { $in: userIds }, status: 'voted', isGold: false, rejectReason: { $ne: 'too_fast' } },
+        { userId: 1, pairId: 1, choice: 1 }
+      )
       .lean<{ userId: string; pairId: string; choice: ArenaChoice }[]>();
     return rows.map(({ userId, pairId, choice }) => ({ userId, pairId, choice }));
   }

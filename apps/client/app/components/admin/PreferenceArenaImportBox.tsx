@@ -10,6 +10,10 @@ const MAX_SHOWN_ERRORS = 10;
 
 type ParseResult = { ok: true; pairs: ArenaPairImport[] } | { ok: false; errors: string[] };
 
+function isPairsEnvelope(value: unknown): value is { pairs: unknown[] } {
+  return typeof value === 'object' && value !== null && 'pairs' in value && Array.isArray(value.pairs);
+}
+
 export function parseArenaPairImport(raw: string): ParseResult {
   let json: unknown;
   try {
@@ -17,7 +21,8 @@ export function parseArenaPairImport(raw: string): ParseResult {
   } catch (error) {
     return { ok: false, errors: [`Invalid JSON: ${error instanceof Error ? error.message : 'could not parse'}`] };
   }
-  const parsed = arenaPairImportRequestSchema.safeParse({ pairs: json });
+  const candidate = isPairsEnvelope(json) ? json.pairs : json;
+  const parsed = arenaPairImportRequestSchema.safeParse({ pairs: candidate });
   if (parsed.success) return { ok: true, pairs: parsed.data.pairs };
   return {
     ok: false,

@@ -1,4 +1,5 @@
 import {
+  arenaRaterStanding,
   arenaVoteTransactionId,
   CreditHolderType,
   ForbiddenError,
@@ -13,6 +14,7 @@ import {
   type ArenaNextResponse,
   type ArenaPairImport,
   type ArenaPairView,
+  type ArenaRejectReason,
   type ArenaStats,
   type ArenaVoteRequest,
   type ArenaVoteResponse,
@@ -42,7 +44,6 @@ export type ArenaServiceDeps = {
     | 'goldRecord'
     | 'countCreditedSince'
     | 'creditsEarned'
-    | 'markOutcome'
     | 'totals'
     | 'rejectionCounts'
     | 'goldRaters'
@@ -119,8 +120,8 @@ export function createArenaService(deps: ArenaServiceDeps) {
     const outstanding = await votes.findOutstanding(userId);
     if (!outstanding) return null;
     const pair = await pairs.findById(outstanding.pairId);
-    if (pair) return { status: 'ready', pair: toView(pair, outstanding.swapped) };
-    // The pair was deleted out from under a served row; drop it so the user is not stuck.
+    if (pair?.active) return { status: 'ready', pair: toView(pair, outstanding.swapped) };
+    // The pair was retired under a served row; drop it so the user is not stuck on it.
     await votes.delete(outstanding.id);
     return null;
   }
@@ -178,44 +179,48 @@ export function createArenaService(deps: ArenaServiceDeps) {
     if (row.status === 'voted') return { creditsAwarded: row.creditsAwarded };
 
     const pair = await pairs.findById(pairId);
-    if (!pair) throw new NotFoundError('Pair not found');
-
-    const votedAt = now();
-    const choice = row.swapped ? opposite(request.choice) : request.choice;
-    const goldCorrect = pair.goldChoice ? choice === pair.goldChoice : null;
-    const recorded = await votes.recordVote(userId, pairId, {
-      choice,
-      votedAt,
-      responseMs: Math.max(0, votedAt.getTime() - row.servedAt.getTime()),
-      goldCorrect,
-    });
-    if (!recorded) {
-      const settled = await votes.findForPair(userId, pairId);
-      return { creditsAwarded: settled?.creditsAwarded ?? 0 };
+    if (!pair?.active) {
+      await votes.delete(row.id);
+      throw new NotFoundError('Pair is no longer available');
     }
 
-    const [gold, creditedVotesToday, creditsEarnedLifetime] = await Promise.all([
+    const votedAt = now();
+    const responseMs = Math.max(0, votedAt.getTime() - row.servedAt.getTime());
+    const choice = row.swapped ? opposite(request.choice) : request.choice;
+    const goldCorrect = pair.goldChoice ? choice === pair.goldChoice : null;
+
+    // The row stays 'served' until recordVote, so no second pair can be served and voted while
+    // this one is judged and paid: the cap counts below cannot go stale.
+    const [priorGold, creditedVotesToday, creditsEarnedLifetime] = await Promise.all([
       votes.goldRecord(userId),
-      votes.countCreditedSince(userId, startOfUtcDay(votedAt), recorded.id),
-      votes.creditsEarned(userId, recorded.id),
+      votes.countCreditedSince(userId, startOfUtcDay(votedAt)),
+      votes.creditsEarned(userId),
     ]);
     const judgement = judgeArenaVote({
       settings,
-      responseMs: recorded.responseMs ?? 0,
+      responseMs,
       goldCorrect,
-      goldAnswered: gold.answered,
-      goldCorrectTotal: gold.correct,
+      goldAnswered: priorGold.answered + (goldCorrect === null ? 0 : 1),
+      goldCorrectTotal: priorGold.correct + (goldCorrect ? 1 : 0),
       creditedVotesToday,
       creditsEarnedLifetime,
     });
 
+    let outcome: { credited: true; creditsAwarded: number } | { credited: false; rejectReason: ArenaRejectReason };
     if (!judgement.accepted) {
-      await votes.markOutcome(recorded.id, { credited: false, rejectReason: judgement.reason });
-      return { creditsAwarded: 0 };
+      outcome = { credited: false, rejectReason: judgement.reason };
+    } else if (await grantCredits(userId, row.id, pairId, judgement.credits)) {
+      outcome = { credited: true, creditsAwarded: judgement.credits };
+    } else {
+      outcome = { credited: false, rejectReason: 'grant_failed' };
     }
-    if (!(await grantCredits(userId, recorded.id, pairId, judgement.credits))) return { creditsAwarded: 0 };
-    await votes.markOutcome(recorded.id, { credited: true, creditsAwarded: judgement.credits });
-    return { creditsAwarded: judgement.credits };
+
+    const recorded = await votes.recordVote(userId, pairId, { choice, votedAt, responseMs, goldCorrect, ...outcome });
+    if (recorded) return { creditsAwarded: recorded.creditsAwarded };
+    // A concurrent submit of this vote settled it first. Both grants share the vote's transaction id,
+    // so the ledger paid once.
+    const settled = await votes.findForPair(userId, pairId);
+    return { creditsAwarded: settled?.creditsAwarded ?? 0 };
   }
 
   async function importPairs(adminUserId: string, imports: ArenaPairImport[]): Promise<number> {
@@ -272,7 +277,9 @@ export function createArenaService(deps: ArenaServiceDeps) {
       winner.wins += 1;
       loser.losses += 1;
     }
-    return [...tallies.values()].sort((x, y) => x.taskType.localeCompare(y.taskType) || y.wins - x.wins);
+    return [...tallies.values()].sort(
+      (x, y) => x.taskType.localeCompare(y.taskType) || y.wins - x.wins || x.modelId.localeCompare(y.modelId)
+    );
   }
 
   async function getArenaStats(): Promise<ArenaStats> {
@@ -284,14 +291,13 @@ export function createArenaService(deps: ArenaServiceDeps) {
       votes.distinctRaterCount(),
       votes.goldRaters(),
     ]);
-    const enoughGold = goldRaters.filter(rater => rater.answered > 0 && rater.answered >= settings.minGoldVotes);
-    const accurate = (rater: { answered: number; correct: number }) =>
-      (rater.correct / rater.answered) * 100 >= settings.minGoldAccuracyPercent;
-    const qualified = enoughGold.filter(accurate);
+    const standings = goldRaters.map(rater => ({ rater, standing: arenaRaterStanding(rater, settings) }));
+    const qualified = standings.filter(entry => entry.standing === 'qualified').map(entry => entry.rater);
+    const flagged = standings.filter(entry => entry.standing === 'flagged').length;
     return {
       pairs: pairCounts,
       votes: { total: totals.votes, credited: totals.credited, creditsAwarded: totals.creditsAwarded },
-      raters: { total: raterTotal, qualified: qualified.length, flagged: enoughGold.length - qualified.length },
+      raters: { total: raterTotal, qualified: qualified.length, flagged },
       rejections,
       winRates: await computeWinRates(qualified.map(rater => rater.userId)),
     };
