@@ -138,12 +138,17 @@ const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request bef
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
 /**
  * Keepalive pings stretch the idle limit up to this multiple of it, measured from the last real
- * event, so a generation hung behind a live, still-pinging connection is still cut off.
+ * event, so a generation hung behind a live, still-pinging connection is still cut off. This is
+ * the whole ceiling before the first event and the floor once events flow, where the ceiling
+ * follows max_tokens at KEEPALIVE_MIN_TOKENS_PER_SECOND up to MAX_KEEPALIVE_CEILING_MS.
  */
 const KEEPALIVE_SILENCE_CEILING_FACTOR = 2;
 // Once events flow, the ceiling follows max_tokens at this floor rate: thinking is billed but can
 // stream only pings for minutes, so a fixed multiple of the idle limit kills live generations.
 const KEEPALIVE_MIN_TOKENS_PER_SECOND = 50;
+// Bounds the max_tokens stretch so a hung generation still reaches the fallback: a 128K request
+// would otherwise hold the user for over 40 minutes, and a 15-minute Lambda caller would die first.
+const MAX_KEEPALIVE_CEILING_MS = 15 * 60 * 1000;
 
 /**
  * Largest max_tokens the SDK will accept without streaming. It derives a projected
@@ -1692,7 +1697,10 @@ export class AnthropicBackend implements ICompletionBackend {
               const firstEventCeilingMs = INITIAL_TIMEOUT_MS * KEEPALIVE_SILENCE_CEILING_FACTOR;
               const generationCeilingMs = Math.max(
                 idleTimeoutMs * KEEPALIVE_SILENCE_CEILING_FACTOR,
-                Math.ceil(apiParams.max_tokens / KEEPALIVE_MIN_TOKENS_PER_SECOND) * 1000
+                Math.min(
+                  MAX_KEEPALIVE_CEILING_MS,
+                  Math.ceil(apiParams.max_tokens / KEEPALIVE_MIN_TOKENS_PER_SECOND) * 1000
+                )
               );
 
               let idleTimer: ReturnType<typeof setTimeout> | undefined;

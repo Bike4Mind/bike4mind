@@ -298,6 +298,27 @@ describe('AnthropicBackend - keepalive pings and the idle timer', () => {
     expect(turn.outcome.error?.message).toContain('connection stayed alive');
   });
 
+  it('clamps the max_tokens ceiling at 15 minutes so a hung generation still reaches the fallback', async () => {
+    const turn = rawSseTurn(ChatModels.CLAUDE_4_5_OPUS, { maxTokens: 64_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    turn.push(
+      sse('message_start', { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 0 } } })
+    );
+
+    // 870s of pings: 64000 tokens at 50/s would allow 1280s, the clamp allows 900s.
+    for (let i = 0; i < 29; i++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      turn.push(PING);
+    }
+    expect(turn.isAborted()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    await turn.turn;
+
+    expect(turn.isAborted()).toBe(true);
+    expect(turn.outcome.error).toMatchObject({ kind: 'stream_idle', timeoutMs: 900_000, keepalive: true });
+  });
+
   it('keeps twice the first-event limit for pings before any event, whatever max_tokens', async () => {
     const turn = rawSseTurn(ChatModels.CLAUDE_4_5_SONNET, { maxTokens: 16_000 });
     await vi.advanceTimersByTimeAsync(0);

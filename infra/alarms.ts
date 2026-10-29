@@ -315,7 +315,7 @@ if (isMonitoredStage) {
   new aws.cloudwatch.MetricAlarm('streamIdleTimeouts', {
     name: `${$app.name}-${$app.stage}-stream-idle-timeouts`,
     alarmDescription:
-      'LLM streams are being cut by our own idle watchdog while the model is still generating. Each one is billed by the provider and retried. See the ChatCompletion logs for "Stream idle timeout".',
+      'LLM streams are being cut by our own idle watchdog. Each cut attempt is billed by the provider and then retried or sent to a fallback model. See the ChatCompletion logs for "Stream idle timeout"; keepalive: true means the model was still generating.',
     comparisonOperator: 'GreaterThanOrEqualToThreshold',
     evaluationPeriods: 1,
     metricName: 'StreamIdleTimeoutTriggered',
