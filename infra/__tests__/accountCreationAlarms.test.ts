@@ -6,6 +6,8 @@ import {
   accountCreationAlarmThreshold,
   emailRateQueries,
   emailRateThreshold,
+  NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR_DEFAULT,
+  SIGNUP_ALARM_PER_HOUR_DEFAULT,
 } from '../accountCreationAlarmConfig';
 
 const alarmSource = readFileSync(new URL('../accountCreationAlarms.ts', import.meta.url), 'utf8');
@@ -30,14 +32,18 @@ function resourceConfiguration(name: string): Record<string, string> {
 }
 
 describe('account creation alarms', () => {
-  it.each([undefined, '', ' '])('is opt-in for %s', value => {
-    expect(accountCreationAlarmThreshold(value, 'TEST')).toBeUndefined();
+  it.each([undefined, '', ' '])('falls back to the default for blank values (%s)', value => {
+    expect(accountCreationAlarmThreshold(value, 'TEST', 8)).toBe(8);
+  });
+  it('defaults to 8 signups and 5 early API keys per hour', () => {
+    expect(SIGNUP_ALARM_PER_HOUR_DEFAULT).toBe(8);
+    expect(NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR_DEFAULT).toBe(5);
   });
   it.each(['0', '-1', 'NaN', 'Infinity', '1.5', '9007199254740992'])('rejects invalid settings %s', value => {
-    expect(() => accountCreationAlarmThreshold(value, 'TEST')).toThrow('TEST');
+    expect(() => accountCreationAlarmThreshold(value, 'TEST', 8)).toThrow('TEST');
   });
   it('uses hourly Maximum so duplicate census deliveries do not inflate a count', () => {
-    expect(accountCreationAlarmThreshold(' 7 ', 'TEST')).toBe(7);
+    expect(accountCreationAlarmThreshold(' 7 ', 'TEST', 8)).toBe(7);
     expect(accountCreationAlarmArgs('SuccessfulSignups', 7)).toEqual({
       metricName: 'SuccessfulSignups',
       threshold: 7,

@@ -63,6 +63,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('ENABLE_MONITORING', undefined);
   vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', undefined);
+  vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', undefined);
   vi.stubGlobal('aws', {
     cloudwatch: {
       LogMetricFilter: resources.filter,
@@ -181,10 +182,37 @@ describe('LLM spend alarms', () => {
     });
   });
 
-  it('reads the configured ceiling', async () => {
-    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', '60');
+  it('alarms on hourly spend by accounts under 7 days old', async () => {
     await load();
-    for (const [, args] of resources.alarm.mock.calls) expect(args.threshold).toBe(60);
+    expect(resources.alarm).toHaveBeenCalledWith('youngAccountSpendRate', {
+      name: 'test-app-production-young-account-spend-rate',
+      alarmDescription:
+        'Estimated LLM spend per hour by accounts under 7 days old at or above the configured USD ceiling',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsdYoungAccounts',
+      namespace: 'test-app/production/LLMSpend',
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 2,
+      treatMissingData: 'notBreaching',
+      alarmActions: ['alarm-topic', 'email-topic'],
+      okActions: ['alarm-topic', 'email-topic'],
+      tags: { Application: 'LLMSpend', Severity: 'High' },
+    });
+  });
+
+  it('reads the configured ceilings', async () => {
+    vi.stubEnv('LLM_SPEND_ALARM_USD_PER_5MIN', '60');
+    vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '9');
+    await load();
+    for (const [name, args] of resources.alarm.mock.calls)
+      expect(args.threshold).toBe(name === 'youngAccountSpendRate' ? 9 : 60);
+  });
+
+  it('rejects a malformed young-account ceiling', async () => {
+    vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR', '0');
+    await expect(load()).rejects.toThrow(/YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR/);
   });
 
   it.each(['0', '2.5', 'abc'])('rejects a malformed ceiling %s', async raw => {
@@ -247,7 +275,7 @@ describe('LLM spend dashboard', () => {
 describe('LLM spend stage gating', () => {
   it.each(['dev', 'production'])('creates resources on %s', async stage => {
     await load(stage);
-    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length);
+    expect(resources.alarm).toHaveBeenCalledTimes(PROVIDERS.length + 1);
     expect(resources.dashboard).toHaveBeenCalledTimes(1);
   });
   it('creates nothing on an unmonitored stage', async () => {
@@ -264,6 +292,7 @@ describe('LLM spend stage gating', () => {
   it('declares the env var in the deploy contract and exports the module', () => {
     const contract = JSON.parse(readFileSync(new URL('../deploy-contract.json', import.meta.url), 'utf8'));
     expect(contract.deployEnv).toContain('LLM_SPEND_ALARM_USD_PER_5MIN');
+    expect(contract.deployEnv).toContain('YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR');
     expect(readFileSync(new URL('../index.ts', import.meta.url), 'utf8')).toContain("export * from './llmSpend';");
   });
 });

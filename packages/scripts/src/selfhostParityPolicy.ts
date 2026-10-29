@@ -47,13 +47,13 @@ const wired = (
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   hostedOnly(
     'eventRule:infra/accountCreationAlarms.ts:AccountCreationMetricsSchedule',
-    '43add6f506047225259825c608612686bf15e0f97d11432a5607e4ea06e35e04',
-    'Opt-in hosted CloudWatch account census; no local notification destination is configured.',
+    '9ecd499546afefc96b5204f91ccaa0292f7eaf73bce58d0bf91a30adda3497e7',
+    'Hosted CloudWatch account census on monitored stages; no local notification destination is configured.',
     ['cloudwatch:PutMetricData', 'cloudwatch:namespace', 'import:@aws-sdk/client-cloudwatch']
   ),
   broker(
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
-    'c51286a11ea2ee3a29b05d4d3586737a2e39f3cc0f0268e083f506f614a5fc32'
+    'aa48c95e91e528e37c56987140eb2432dc050caa462b4c8f28e9043bf22d4a77'
   ),
   broker(
     'queue:infra/businessMetricAlerts.ts:businessMetricAlertsDLQ',
@@ -898,7 +898,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:youngAccountSpendAlert',
-    'cf9c4f3143a0f002186d47a5dbe4e5e91cfdebcd9f8df6c5bf65707ca48a8a1a',
+    '0f351e3081a732ae7ebcb35c048e4d5a5031666986942fbba872f472c6fa7ad2',
     'Hosted production abuse alert to Slack; not applicable to a portable deployment.'
   ),
   hostedOnly(

@@ -4,6 +4,8 @@ import {
   accountCreationAlarmThreshold,
   emailRateQueries,
   emailRateThreshold,
+  NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR_DEFAULT,
+  SIGNUP_ALARM_PER_HOUR_DEFAULT,
 } from './accountCreationAlarmConfig';
 import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { dlqAlarmTopic } from './dlqAlarms';
@@ -12,19 +14,21 @@ import { lambdaVpc } from './vpc';
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
 
 const signals = [
-  { metric: 'SuccessfulSignups', env: 'SIGNUP_ALARM_PER_HOUR', raw: process.env.SIGNUP_ALARM_PER_HOUR },
+  {
+    metric: 'SuccessfulSignups',
+    env: 'SIGNUP_ALARM_PER_HOUR',
+    raw: process.env.SIGNUP_ALARM_PER_HOUR,
+    fallback: SIGNUP_ALARM_PER_HOUR_DEFAULT,
+  },
   {
     metric: 'NewAccountApiKeys',
     env: 'NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR',
     raw: process.env.NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR,
+    fallback: NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR_DEFAULT,
   },
-].map(signal => ({ ...signal, threshold: accountCreationAlarmThreshold(signal.raw, signal.env) }));
+].map(signal => ({ ...signal, threshold: accountCreationAlarmThreshold(signal.raw, signal.env, signal.fallback) }));
 
-if (
-  runsScheduledJobs &&
-  isMonitoredStage($app.stage, ['dev', 'production'], process.env.ENABLE_MONITORING) &&
-  signals.some(signal => signal.threshold !== undefined)
-) {
+if (runsScheduledJobs && isMonitoredStage($app.stage, ['dev', 'production'], process.env.ENABLE_MONITORING)) {
   if (!dlqAlarmTopic) throw new Error('account creation alarms require dlqAlarmTopic');
   const namespace = `${$app.name}/${$app.stage}/AccountCreation`;
   const failures = new aws.sqs.Queue('AccountCreationMetricsDlq', { messageRetentionSeconds: 14 * 24 * 3600 });
@@ -78,7 +82,6 @@ if (
     retryPolicy: { maximumEventAgeInSeconds: 3600, maximumRetryAttempts: 2 },
   });
   for (const signal of signals) {
-    if (signal.threshold === undefined) continue;
     new aws.cloudwatch.MetricAlarm(`AccountCreation${signal.metric}`, {
       ...accountCreationAlarmArgs(signal.metric, signal.threshold),
       name: `${$app.name}-${$app.stage}-${signal.metric}`,
