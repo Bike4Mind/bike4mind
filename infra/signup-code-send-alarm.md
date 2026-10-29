@@ -60,8 +60,9 @@ must share the alarm's region, so this alarm routes to the us-east-1 WAF topics:
 
 Hourly, production only. Uses the scheduled event time as the end of a fixed
 `[end - 1 hour, end)` window, so delayed delivery and retries query the same spend.
-The SST cron input carries no timestamp, so the handler falls back to the current
-hour boundary when the event has no `time`; an invalid `time` still fails the run.
+The target clears SST's default literal input so EventBridge passes the original
+scheduled event, including `time`. Missing or invalid timestamps fail the run
+instead of silently shifting the window on a retry.
 Sums AI credit spend by accounts created in the 7 days before that end time and posts to the LiveOps Slack webhook when the total
 exceeds `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS` or the number of distinct spending
 accounts exceeds `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`. The message lists the top

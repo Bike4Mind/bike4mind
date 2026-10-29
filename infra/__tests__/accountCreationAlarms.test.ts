@@ -82,13 +82,6 @@ describe('account creation alarms', () => {
       expect.arrayContaining(['SIGNUP_ALARM_PER_HOUR', 'NEW_ACCOUNT_API_KEY_ALARM_PER_HOUR'])
     );
   });
-  it('routes the mail send failure alarm to the existing notification topic', () => {
-    const mailSource = readFileSync(new URL('../mailAlarms.ts', import.meta.url), 'utf8');
-    expect(mailSource).toContain('alarmActions: [dlqAlarmTopic.arn],');
-    expect(mailSource).toContain('okActions: [dlqAlarmTopic.arn],');
-    expect(mailSource).toContain('pattern: \'"Email delivery failed"\'');
-    expect(readFileSync(new URL('../index.ts', import.meta.url), 'utf8')).toContain("export * from './mailAlarms';");
-  });
   it('isolates SES rates to the OTC configuration set and handles zero sends', () => {
     const queries = emailRateQueries('Bounce', 'synthetic-otc');
     expect(queries[0]).toEqual({

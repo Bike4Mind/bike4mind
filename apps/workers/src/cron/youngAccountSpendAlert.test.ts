@@ -116,11 +116,12 @@ describe('young-account spend handler', () => {
   });
 
   it('keeps the scheduled window on delayed delivery and retry', async () => {
-    mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    mocks.post.mockRejectedValueOnce(new Error('webhook unavailable'));
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-10-26T11:05:00Z'));
-      await handler(event);
+      await expect(handler(event)).rejects.toThrow('webhook unavailable');
       vi.setSystemTime(new Date('2026-10-26T12:15:00Z'));
       await handler(event);
       expect(mocks.findYoungAccountSpend.mock.calls[0]).toEqual(mocks.findYoungAccountSpend.mock.calls[1]);
@@ -139,21 +140,13 @@ describe('young-account spend handler', () => {
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
-  it('queries the previous wall-clock hour when the SST cron event carries no time', async () => {
-    mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date('2026-10-26T11:05:00Z'));
-      expect(await handler({})).toMatchObject({ status: 'ok' });
-      expect(mocks.findYoungAccountSpend).toHaveBeenCalledWith(
-        new Date('2026-10-26T10:00:00Z'),
-        new Date('2026-10-26T11:00:00Z'),
-        10
-      );
-    } finally {
-      vi.useRealTimers();
+  it.each([{}, null, undefined, { time: null }, { time: '' }])(
+    'rejects an event without a valid scheduled timestamp: %j',
+    async invalidEvent => {
+      await expect(handler(invalidEvent)).rejects.toThrow();
+      expect(mocks.connect).not.toHaveBeenCalled();
     }
-  });
+  );
 
   it('posts to Slack when a ceiling is exceeded', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
