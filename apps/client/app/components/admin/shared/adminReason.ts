@@ -27,6 +27,7 @@ export const ADMIN_REASON_PRESETS = {
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
+  waitlistInvite: ['Approved from the waitlist queue', 'Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
