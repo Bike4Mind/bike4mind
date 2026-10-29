@@ -2,12 +2,18 @@
 // createDatabase: runs when a new stack is created; seeds and migrates up.
 
 import { MigrationManager } from '@bike4mind/scripts';
-import { connectDB, getDB } from '@bike4mind/database';
+import { AnalyticsDaily, AnalyticsUserDay, connectDB, getDB } from '@bike4mind/database';
 import { ensureAtlasVectorSearchIndexes } from '@bike4mind/fab-pipeline';
 import { Context } from 'aws-lambda';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
+
+// Rollup collections are written by upsert only, so their unique indexes must exist before the first write.
+export const ensureAnalyticsIndexes = async () => {
+  await AnalyticsUserDay.createIndexes();
+  await AnalyticsDaily.createIndexes();
+};
 
 export const createDatabase = async (_event: unknown, context: Context) => {
   const logger = new Logger().withMetadata(contextToLogs(context));
@@ -17,6 +23,7 @@ export const createDatabase = async (_event: unknown, context: Context) => {
   await manager.seed();
   await manager.up(null);
   await ensureAtlasVectorSearchIndexes(getDB().connection, logger);
+  await ensureAnalyticsIndexes();
 };
 
 // updateDatabase: runs when an existing stack is updated; migrates the schema.
@@ -26,6 +33,7 @@ export const updateDatabase = async (_event: unknown, context: Context) => {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE));
   await new MigrationManager(logger).up(null);
   await ensureAtlasVectorSearchIndexes(getDB().connection, logger);
+  await ensureAnalyticsIndexes();
 };
 
 // deleteDatabase: runs when an existing stack is deleted; drops all collections and the database.
