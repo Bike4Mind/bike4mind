@@ -11,6 +11,18 @@ import {
   resolveSignupGrantSettings,
 } from './signupGrant';
 
+const VALID_POLICY = {
+  enabled: true,
+  version: 'v1',
+  rules: [
+    { signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 2, missing: 'score', missingWeight: 0 },
+    { signal: 'ipSignups', comparison: 'gte', threshold: 3, weight: 2, missing: 'score', missingWeight: 0 },
+  ],
+  reducedAt: 3,
+  reviewAt: 6,
+  reducedFraction: 0.5,
+};
+
 const settings = (values: Record<string, unknown>) =>
   ({
     findBySettingName: async (name: string) => (name in values ? { settingValue: values[name] } : null),
@@ -51,7 +63,7 @@ describe('signup grant configuration', () => {
 
 describe('signup grant protections', () => {
   const allOn = {
-    signupGrantRiskPolicy: { enabled: true },
+    signupGrantRiskPolicy: VALID_POLICY,
     maxSignupsPerIpPerDay: 5,
     maxSignupsPerAsnPerHour: '20',
     signupBurstAutoHold: 'true',
@@ -75,13 +87,23 @@ describe('signup grant protections', () => {
   });
 
   it('reads the policy stored as a JSON string, as the seed migration writes it', () => {
-    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: '{"enabled":true}' })).toEqual([]);
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: JSON.stringify(VALID_POLICY) })).toEqual([]);
     expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: '{"enabled":false}' })).toEqual([
       'signupGrantRiskPolicy',
     ]);
     expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: 'not json' })).toEqual([
       'signupGrantRiskPolicy',
     ]);
+  });
+
+  it('does not treat a bare or incomplete enabled policy as protection, since the runtime ignores it', () => {
+    const unset = ['signupGrantRiskPolicy'];
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: { enabled: true } })).toEqual(unset);
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: '{"enabled":true}' })).toEqual(unset);
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: { ...VALID_POLICY, rules: [] } })).toEqual(unset);
+    expect(
+      findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: { ...VALID_POLICY, reviewAt: 1, reducedAt: 3 } })
+    ).toEqual(unset);
   });
 
   it('does not treat a non-boolean enabled value as protection', () => {
@@ -152,7 +174,7 @@ describe('signup grant protections', () => {
 
 describe('signupGrantWriteGap', () => {
   const allOn = {
-    signupGrantRiskPolicy: { enabled: true },
+    signupGrantRiskPolicy: VALID_POLICY,
     maxSignupsPerIpPerDay: 5,
     maxSignupsPerAsnPerHour: 20,
     signupBurstAutoHold: true,
