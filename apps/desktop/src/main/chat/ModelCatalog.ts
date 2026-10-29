@@ -1,5 +1,5 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { VideoModel } from '@bike4mind/common';
+import { supportsOneHourPromptCache, type VideoModel } from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
 import { parseVideoModels } from './media/videoModels';
 import { supportsReasoningEffort } from './reasoningEffort';
@@ -279,6 +279,10 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       // Decided here rather than read off the wire: the catalog does not report it, and the
       // renderer has to disable the effort picker on a model that would ignore the field.
       supportsReasoningEffort: supportsReasoningEffort(model.id as string),
+      ...(typeof model.backend === 'string' &&
+      supportsOneHourPromptCache({ id: model.id as string, backend: model.backend })
+        ? { supportsOneHourCache: true }
+        : {}),
       supportsTools: true,
       ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
       ...pricingOf(model.pricing),

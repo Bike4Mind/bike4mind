@@ -8,7 +8,8 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
-import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
+import type { ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import { isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
@@ -31,6 +32,8 @@ import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
+import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
+import { CacheExpiryNote } from './CacheExpiryNote';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
 import { SESSION_PANEL_ID, SessionPanel } from './SessionPanel';
 import { panelFitsBesideThread, useElementWidth, useSessionPanelPrefs } from './sessionPanelState';
@@ -342,6 +345,10 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = catalog.models.find(model => model.id === conversation.session?.model);
+  const sessionCacheTtl = conversation.session?.promptCacheTtl ?? DEFAULT_PROMPT_CACHE_TTL;
+  // Main sends the hour only to a model that takes it; see ChatService cacheTtlField.
+  const cacheTtlFor = (model: ChatModelOption | undefined): PromptCacheTtl =>
+    model?.supportsOneHourCache ? sessionCacheTtl : DEFAULT_PROMPT_CACHE_TTL;
   const modelsInUse = useMemo<ModelsInUse>(() => {
     const localName = (id: string | undefined) =>
       catalog.models.find(model => model.id === id && isLocalBackend(model))?.name ?? null;
@@ -1070,6 +1077,15 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             />
           )}
 
+          <CacheExpiryNote
+            stamp={latestReply(conversation.messages)?.promptCache}
+            model={modelOption}
+            contextTokens={composerUsage.contextTokens ?? 0}
+            ttl={cacheTtlFor(modelOption)}
+            turnOpen={turnOpen}
+            sx={contentColumnSx}
+          />
+
           <Composer
             sessionId={activeId}
             disabled={!activeId || creatingCode}
@@ -1120,7 +1136,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   noLocal={noLocal}
                   local={localMode}
                   onOpenModels={() => setScreen('models')}
-                  switchCredits={model => modelSwitchCredits(model, composerUsage.contextTokens ?? 0)}
+                  switchCredits={model =>
+                    modelSwitchCredits(model, composerUsage.contextTokens ?? 0, cacheTtlFor(model))
+                  }
                 />
                 <ReasoningEffortPicker
                   models={catalog.models}
@@ -1128,6 +1146,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   effort={conversation.session?.reasoningEffort ?? 'default'}
                   disabled={!activeId}
                   onSelect={effort => void conversation.setReasoningEffort(effort)}
+                />
+                <PromptCacheTtlPicker
+                  model={modelOption}
+                  ttl={sessionCacheTtl}
+                  contextTokens={composerUsage.contextTokens ?? 0}
+                  disabled={!activeId}
+                  onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
                 />
               </Stack>
             }

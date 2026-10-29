@@ -9,7 +9,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
-import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
+import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ChatImportOrigin } from './claudeImport';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
@@ -665,6 +665,8 @@ export interface ChatMessage {
   rounds?: ChatReplyRound[];
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  /** When the reply's last request refreshed the server's prompt cache, and for how long; see ChatPromptCacheStamp. */
+  promptCache?: ChatPromptCacheStamp;
   /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
    * verbatim into the next request, because dropping them breaks thinking-plus-tools turns.
@@ -918,6 +920,8 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
+  /** Whether the server will cache this model's prompt for an hour on request (supportsOneHourPromptCache). */
+  supportsOneHourCache?: boolean;
   /**
    * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
    * so the effort picker becomes that switch, stored as `default` (on) and
@@ -1132,6 +1136,12 @@ interface ChatSessionMeta {
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
+   * How long the server's prompt cache for this conversation lives between requests. Absent on
+   * conversations from before the choice existed, which run at '5m'. Sent only to a model that
+   * takes the 1-hour TTL; see `ChatModelOption.supportsOneHourCache`.
+   */
+  promptCacheTtl?: PromptCacheTtl;
+  /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a
    * broken one, and the only thing it cannot do is run a turn.
@@ -1277,6 +1287,7 @@ export type ChatStreamEvent =
       rounds?: ChatReplyRound[];
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
+      promptCache?: ChatPromptCacheStamp;
     }
   | { type: 'error'; sessionId: string; messageId: string; message: string; stopReason?: string }
   | {
@@ -1723,6 +1734,18 @@ export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self
  * `toolCalls` - and a round naming one that is no longer there draws prose with no row instead
  * of the same row twice.
  */
+/**
+ * The server-side prompt cache a reply left behind. `cachedAt` is the last request's first
+ * token (or its end when nothing streamed), which is after the cache was written, so an
+ * expiry read off it is late by at most the prompt's processing time, never early.
+ */
+export interface ChatPromptCacheStamp {
+  cachedAt: number;
+  ttl: PromptCacheTtl;
+  /** The cache is per model, so a conversation switched since holds none on its new one. */
+  model: string;
+}
+
 export interface ChatRoundTiming {
   startedAt: number;
   /** The first streamed delta of any kind; absent when the stream produced nothing. */

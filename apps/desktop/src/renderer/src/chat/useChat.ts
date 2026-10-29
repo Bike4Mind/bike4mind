@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
   BranchElsewhere,
   ChatApprovalAnswer,
@@ -447,6 +448,8 @@ export interface ConversationController {
   setModel: (model: string) => Promise<void>;
   /** How hard that model should think. Sent only on a model that accepts an effort. */
   setReasoningEffort: (effort: ReasoningEffortSetting) => Promise<void>;
+  /** How long the server keeps this conversation's prompt cache. Sent only on a model that takes the hour. */
+  setPromptCacheTtl: (ttl: PromptCacheTtl) => Promise<void>;
   /**
    * Set how much this conversation may do without asking. Driven by the composer pill, from a
    * click, and from nothing else: this is the only path to the mode in the renderer.
@@ -1102,6 +1105,17 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
+  const setPromptCacheTtl = useCallback(
+    async (ttl: PromptCacheTtl) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.setSessionPromptCacheTtl(sessionId, ttl);
+      if (!updated) return;
+      setSession(current => (current ? { ...current, promptCacheTtl: updated.promptCacheTtl } : current));
+      onSummaryChanged(updated);
+    },
+    [sessionId, onSummaryChanged]
+  );
+
   const setApprovalMode = useCallback(
     async (mode: ChatApprovalMode) => {
       if (!sessionId) return;
@@ -1274,6 +1288,7 @@ export function useConversation(
     setModel,
     settleLocalModel,
     setReasoningEffort,
+    setPromptCacheTtl,
     setApprovalMode,
     project,
     respondToApproval,

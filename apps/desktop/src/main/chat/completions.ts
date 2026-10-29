@@ -2,7 +2,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
-import { isToolChangeMessage, type ReasoningEffort } from '@bike4mind/common';
+import { isToolChangeMessage, type PromptCacheTtl, type ReasoningEffort } from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -103,6 +103,8 @@ export interface CompletionRequest {
   thinking?: boolean;
   /** Lowers or raises how long a reasoning model thinks before its first token. Absent sends nothing. */
   reasoningEffort?: ReasoningEffort;
+  /** Prompt-cache lifetime the server's breakpoints take. Absent sends nothing, which is '5m'. */
+  cacheTtl?: PromptCacheTtl;
   /**
    * Which conversation this request belongs to, for the developer log only. NOT sent on the
    * wire - the body below is built field by field - and absent for the requests that are not a
@@ -145,6 +147,7 @@ export async function streamCompletion(
           tools: request.tools ?? [],
           ...(request.thinking ? { thinking: { enabled: true } } : {}),
           ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+          ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },
       },
       { responseType: 'stream', signal }
