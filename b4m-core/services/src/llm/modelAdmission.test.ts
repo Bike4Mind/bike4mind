@@ -267,15 +267,13 @@ describe('loadFreeTierAllowedModels', () => {
     await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toBeUndefined();
   });
 
-  it('returns the allowlist plus the Default API Model while the gate is on', async () => {
+  it('returns only the allowlist while the gate is on, never the Default API Model', async () => {
     getSettingsMap.mockResolvedValueOnce({
       freeTierModelGateEnabled: 'true',
       freeTierAllowedModels: JSON.stringify(['cheap']),
-      DefaultAPIModel: ChatModels.CLAUDE_5_SONNET,
+      DefaultAPIModel: ChatModels.CLAUDE_5_5_OPUS,
     });
-    await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toEqual(
-      new Set(['cheap', ChatModels.CLAUDE_5_SONNET])
-    );
+    await expect(loadFreeTierAllowedModels(adminSettings)).resolves.toEqual(new Set(['cheap']));
   });
 
   it('propagates a settings read failure instead of opening the gate', async () => {

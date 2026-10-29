@@ -57,6 +57,10 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   resolveDefaultChatModel: async () => ({ model: 'default-model' }),
   isChatModelUsable: () => true,
 }));
+// Passthrough: the free-tier default fallback has its own tests (server/utils/callerModelList.test.ts).
+vi.mock('@server/utils/callerModelList', () => ({
+  resolveCallerDefaultModel: async (model: string) => model,
+}));
 
 const { default: startHandler } = await import('@pages/api/v1/agent-executions/index');
 const { default: getHandler } = await import('@pages/api/v1/agent-executions/[id]/index');

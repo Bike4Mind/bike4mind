@@ -139,6 +139,10 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
   isChatModelUsable: (...a: unknown[]) => mockIsChatModelUsable(...a),
 }));
+// Passthrough: the free-tier default fallback has its own tests (server/utils/callerModelList.test.ts).
+vi.mock('@server/utils/callerModelList', () => ({
+  resolveCallerDefaultModel: async (model: string) => model,
+}));
 
 // Only the data dependencies of the real apiKeyAuth middleware and the chat
 // invoke are controlled; header parsing, scope check, and error->status mapping

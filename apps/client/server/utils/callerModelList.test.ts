@@ -41,7 +41,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 
 import { Logger } from '@bike4mind/observability';
-import { getCallerModelList } from './callerModelList';
+import { getCallerModelList, resolveCallerDefaultModel } from './callerModelList';
 
 const textModel = (id: string, overrides: Partial<ModelInfo> = {}): ModelInfo =>
   ({
@@ -161,5 +161,64 @@ describe('getCallerModelList free-tier gate', () => {
     expect(await listedIds()).toEqual(ungated);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('allowlist read failed'), expect.anything());
     warn.mockRestore();
+  });
+});
+
+describe('resolveCallerDefaultModel', () => {
+  const premium = textModel('premium');
+  const cheap = textModel('cheap');
+  const cheaper = textModel('cheaper');
+  const resolveDefault = (user: IUserDocument = makeUser()) =>
+    resolveCallerDefaultModel('premium', user, { log: vi.fn() });
+
+  beforeEach(() => {
+    mocks.getAvailableModels.mockResolvedValue([premium, cheap, cheaper]);
+    // 'missing' is allowlisted but not listed for this caller, so it is skipped.
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['missing', 'cheaper', 'cheap']));
+  });
+
+  it('starts a free user on the first listed allowlisted model, in admin order', async () => {
+    expect(await resolveDefault()).toBe('cheaper');
+  });
+
+  it('skips a disabled allowlisted model', async () => {
+    mocks.getAvailableModels.mockResolvedValue([premium, cheap, textModel('cheaper', { disabled: true })]);
+
+    expect(await resolveDefault()).toBe('cheap');
+  });
+
+  it('keeps the default when it is allowlisted', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(new Set(['cheap', 'premium']));
+
+    expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('keeps the default for a user holding plan:paid', async () => {
+    mocks.getUserEntitlements.mockResolvedValue(['base', 'plan:paid']);
+
+    expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('keeps the default for an admin without reading the allowlist', async () => {
+    expect(await resolveDefault(makeUser({ isAdmin: true }))).toBe('premium');
+    expect(mocks.loadFreeTierAllowedModels).not.toHaveBeenCalled();
+  });
+
+  it('keeps the default when the gate is off', async () => {
+    mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
+
+    expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('keeps the default when no allowlisted model is listed, so admission refuses it', async () => {
+    mocks.getAvailableModels.mockResolvedValue([premium]);
+
+    expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('propagates an allowlist read failure instead of opening the gate', async () => {
+    mocks.loadFreeTierAllowedModels.mockRejectedValue(new Error('settings db down'));
+
+    await expect(resolveDefault()).rejects.toThrow('settings db down');
   });
 });

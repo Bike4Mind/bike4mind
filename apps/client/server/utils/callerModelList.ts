@@ -97,6 +97,28 @@ async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument 
   return { models, supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)) };
 }
 
+/**
+ * The model for a request that names none, given the admin default. A free account whose default is paid-only
+ * starts on the first allowlisted text model (admin order) it can list, so an expensive DefaultAPIModel never
+ * opens the free-tier gate. With no such model listed the default is returned and admission refuses it with the
+ * upgrade prompt. Fails closed: an allowlist read failure propagates, as it does at call time.
+ */
+export async function resolveCallerDefaultModel(
+  defaultModel: string,
+  user: IUserDocument,
+  logger: { log: (message: string) => void }
+): Promise<string> {
+  if (isFreeTierExempt(user)) return defaultModel;
+  const allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
+  if (!allowedModels || allowedModels.has(defaultModel)) return defaultModel;
+  if (await holdsPaidPlan(user)) return defaultModel;
+  const { models } = await getCachedCallerModelList(user.id, logger);
+  const listedTextModels = new Set<string>(
+    models.filter(model => model.type === 'text' && !model.disabled).map(m => m.id)
+  );
+  return [...allowedModels].find(id => listedTextModels.has(id)) ?? defaultModel;
+}
+
 export async function getCallerModelList(
   user: IUserDocument | null,
   logger: { log: (message: string) => void }

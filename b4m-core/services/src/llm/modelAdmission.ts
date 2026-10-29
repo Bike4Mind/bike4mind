@@ -53,22 +53,20 @@ export async function loadModelConfigurations(
 }
 
 /**
- * The text models a free account may call, or undefined when the free-tier gate is off. The Default API
- * Model is always included so a free account is never left with no model to chat on. A read failure
- * propagates: this gate fails closed.
+ * The text models a free account may call, in admin order, or undefined when the free-tier gate is off.
+ * The Default API Model is deliberately NOT added: an expensive default would open the gate. A free
+ * account that sends no model is started on an allowlisted one instead (resolveCallerDefaultModel in
+ * apps/client/server/utils/callerModelList.ts). A read failure propagates: this gate fails closed.
  */
 export async function loadFreeTierAllowedModels(
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>
 ): Promise<ReadonlySet<string> | undefined> {
   const settings = await getSettingsMap(
     { adminSettings },
-    { names: ['freeTierModelGateEnabled', 'freeTierAllowedModels', 'DefaultAPIModel'] }
+    { names: ['freeTierModelGateEnabled', 'freeTierAllowedModels'] }
   );
   if (getSettingsValue('freeTierModelGateEnabled', settings) !== true) return undefined;
-  const allowed = new Set(getSettingsValue('freeTierAllowedModels', settings) ?? []);
-  const defaultModel = getSettingsValue('DefaultAPIModel', settings);
-  if (defaultModel) allowed.add(defaultModel);
-  return allowed;
+  return new Set(getSettingsValue('freeTierAllowedModels', settings) ?? []);
 }
 
 /** Whether an admission error is the free-tier refusal, as opposed to any other reason a model is refused. */

@@ -24,6 +24,10 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   isChatModelUsable: vi.fn(),
   resolveDefaultChatModel: vi.fn(),
 }));
+// Passthrough: the free-tier default fallback has its own tests (server/utils/callerModelList.test.ts).
+vi.mock('@server/utils/callerModelList', () => ({
+  resolveCallerDefaultModel: async (model: string) => model,
+}));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@server/utils/startAgentExecution', () => ({
