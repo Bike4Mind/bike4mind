@@ -76,6 +76,15 @@ vi.mock('@server/projects/projectScopes', async importOriginal => {
   };
 });
 
+const refCleanup = vi.hoisted(() => ({
+  targets: vi.fn().mockResolvedValue([{ userId: 'planned', fileIds: ['f1'] }]),
+  cleanUp: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@server/sharing/revokedFileReferences', () => ({
+  projectRevokeCleanupTargets: (...a: unknown[]) => refCleanup.targets(...a),
+  cleanUpRevokedFileReferences: (...a: unknown[]) => refCleanup.cleanUp(...a),
+}));
+
 import '@pages/api/projects/[id]/index';
 import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
@@ -84,7 +93,7 @@ import { assertProjectsReadScope, assertProjectsWriteScope } from '@server/proje
 
 function request(method: 'GET' | 'DELETE', query: Record<string, unknown>) {
   const { req, res } = createMocks({ method, query });
-  Object.assign(req, { user: { id: 'u1' }, ability: {} });
+  Object.assign(req, { user: { id: 'u1' }, ability: {}, logger: { warn: vi.fn() } });
   return { req, res };
 }
 
@@ -141,6 +150,14 @@ describe('GET and DELETE /api/projects/[id] scope asserts', () => {
     const { req, res } = request('DELETE', { id: 'p1' });
     await mockRefs.deleteHandler!(req, res);
     expect(assertProjectsWriteScope).toHaveBeenCalledWith(req);
+  });
+  it("DELETE plans every participant's reference cleanup before the delete and runs it after", async () => {
+    const { req, res } = request('DELETE', { id: 'p1' });
+    await mockRefs.deleteHandler!(req, res);
+    expect(refCleanup.targets).toHaveBeenCalledWith('p1', undefined, expect.anything());
+    expect(refCleanup.cleanUp).toHaveBeenCalledWith([{ userId: 'planned', fileIds: ['f1'] }], expect.anything());
+    expect(refCleanup.targets.mock.invocationCallOrder[0]).toBeLessThan(mockDeleteProject.mock.invocationCallOrder[0]);
+    expect(mockDeleteProject.mock.invocationCallOrder[0]).toBeLessThan(refCleanup.cleanUp.mock.invocationCallOrder[0]);
   });
 });
 

@@ -344,7 +344,7 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(true);
     expect(info.supportsVision).toBe(true);
     expect(info.supportsTools).toBe(true);
-    // The window is what we will actually allocate (see effectiveContextWindow), not the
+    // The window is what we will actually allocate (see ollamaNumCtx), not the
     // 262144 the model reports, so callers size history to what fits. Output is half of
     // that, which is what leaves room for the prompt.
     expect(info.contextWindow).toBe(32768);

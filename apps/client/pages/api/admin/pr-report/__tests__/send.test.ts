@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@client/server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
+    chain.use = () => chain;
     chain.post = (handler: unknown) => handler;
     return chain;
   },

@@ -95,15 +95,16 @@ jobs:
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
           # Preview stacks live in a SEPARATE AWS account the dev role can't `sst shell`
-          # into, so inject E2E_CLEANUP_SECRET (the only SST value the suite needs) directly
-          # from this repo secret. It must match the preview-tier value the deployer seeds
-          # onto preview stages.
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET_PREVIEW }}
+          # into, so derive E2E_CLEANUP_SECRET (the only SST value the suite needs) per stage
+          # from this seed secret. It must match what the deployer sets on each preview stage.
+          E2E_PREVIEW_SEED: ${{ secrets.E2E_CLEANUP_SECRET_PREVIEW }}
+          STAGE: ${{ steps.config.outputs.stage }}
           AI_LATENCY_RUN: 'false'
           PW_WORKERS: '1'
           CI: 'true'
         run: |
           set -o pipefail
+          . .github/scripts/derive-preview-e2e-secret.sh "$STAGE"
           # An unset secret means the suite cannot start at all. Report that as a labeled
           # skip rather than `exit 1`: a red job here is indistinguishable from a real test
           # failure, so the PR comment below would tell a reviewer e2e broke when nothing
@@ -122,7 +123,12 @@ jobs:
         env:
           E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
           E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
-        run: python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
+          STAGE: ${{ steps.config.outputs.stage }}
+        # A preview run sent its derived value, not the staging secret, so scrub that one.
+        run: |
+          case "$STAGE" in pr[0-9]*) . .github/scripts/derive-preview-e2e-secret.sh "$STAGE" ;; esac
+          python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
 
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were

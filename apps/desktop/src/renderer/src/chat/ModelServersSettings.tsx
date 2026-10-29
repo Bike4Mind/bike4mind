@@ -294,8 +294,11 @@ function ServerRow({
           </Stack>
         )}
         {!server.local && server.access === 'manage' && (
-          <Typography level="body-xs" textColor="text.tertiary">
-            This setting is on this device only. Pulling and removing models on this server is not available yet.
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-access-note">
+            This setting is on this device only.{' '}
+            {server.kind === 'ollama'
+              ? 'Download and remove models on this server from the Models screen.'
+              : 'Downloading and removing models works only on Ollama servers.'}
           </Typography>
         )}
         {error && (

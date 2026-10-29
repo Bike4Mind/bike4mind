@@ -3,15 +3,11 @@ import { render } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IFabFileDocument, IUserDocument } from '@bike4mind/common';
-import { useUser } from '@client/app/contexts/UserContext';
 
-const mockCreateFabFile = vi.fn();
-const mockSetPendingMessageFiles = vi.fn();
+const { mockUploadComposerFile } = vi.hoisted(() => ({ mockUploadComposerFile: vi.fn() }));
 
-// Capture the `server.process` FilePond would drive, so the test can invoke the real
-// upload pipeline without a DOM file input.
-let capturedProcess: ((...a: unknown[]) => void) | null = null;
+// Capture the `server.process` FilePond would drive, so the test can run it without a DOM file input.
+let capturedProcess: ((...a: unknown[]) => { abort: () => void }) | null = null;
 
 vi.mock('react-filepond', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stub stands in for the FilePond component
@@ -21,305 +17,87 @@ vi.mock('react-filepond', () => ({
   },
 }));
 
-vi.mock('@client/app/utils/filesAPICalls', () => ({
-  createFabFileOnServerWithUpload: (...a: unknown[]) => mockCreateFabFile(...a),
-  deleteFileUtility: vi.fn(),
-}));
-
-const mockConsumeBuffered = vi.fn().mockReturnValue(undefined);
-vi.mock('@client/app/hooks/useSessionLayout', () => ({
-  setPendingMessageFiles: (u: unknown) => mockSetPendingMessageFiles(u),
-  consumeBufferedModerationStatus: (...a: unknown[]) => mockConsumeBuffered(...a),
-  patchPendingMessageFileModerationStatus: (files: unknown) => files,
-}));
-
-vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ getQueryData: () => undefined, invalidateQueries: vi.fn() }),
-}));
-
-const { toastMock } = vi.hoisted(() => ({
-  toastMock: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
-}));
-vi.mock('sonner', () => ({ toast: toastMock }));
+vi.mock('@client/app/utils/filesAPICalls', () => ({ deleteFileUtility: vi.fn() }));
+vi.mock('./uploadComposerFile', () => ({ uploadComposerFile: mockUploadComposerFile }));
+vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({}) }));
 
 import { SessionFilePond } from './SessionFilePond';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const Wrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
-);
 
-const SID = 'session-1';
+type FilePondItem = { file: File };
 
-/** Runs the captured upload pipeline for one file and resolves when it settles. */
-async function upload(
-  attachScopeMode: 'auto' | 'notebook' | 'message',
-  file: File,
-  addToNotebookContext: ReturnType<typeof vi.fn>
-) {
+/** Runs the captured FilePond `process` for one file and resolves when its upload settled. */
+async function processFile(file: File, otherItems: FilePondItem[] = []) {
+  const setFiles = vi.fn();
+  const load = vi.fn();
+  const error = vi.fn();
   render(
-    <Wrapper>
+    <CssVarsProvider theme={appTheme}>
       <SessionFilePond
         pond={{ current: null }}
         files={[]}
-        setFiles={vi.fn()}
-        maxFileSizeForFilePond="10MB"
-        attachScopeMode={attachScopeMode}
-        currentSessionId={SID}
-        addToNotebookContext={addToNotebookContext}
-      />
-    </Wrapper>
-  );
-  capturedProcess!('content', file, {}, vi.fn(), vi.fn(), vi.fn(), vi.fn());
-  // Let the arrayBuffer + upload promise chain settle.
-  await new Promise(r => setTimeout(r, 0));
-  await new Promise(r => setTimeout(r, 0));
-}
-
-/** Same pipeline as `upload`, but returns the `error` callback FilePond would receive, so a
- * storage-refusal test can assert what the caller sees alongside the toast. */
-async function uploadCapturingError(file: File) {
-  const errorFn = vi.fn();
-  render(
-    <Wrapper>
-      <SessionFilePond
-        pond={{ current: null }}
-        files={[]}
-        setFiles={vi.fn()}
+        setFiles={setFiles}
         maxFileSizeForFilePond="10MB"
         attachScopeMode="auto"
-        currentSessionId={SID}
-        addToNotebookContext={vi.fn().mockResolvedValue(undefined)}
+        currentSessionId="session-1"
+        addToNotebookContext={vi.fn()}
       />
-    </Wrapper>
+    </CssVarsProvider>
   );
-  capturedProcess!('content', file, {}, vi.fn(), errorFn, vi.fn(), vi.fn());
+  const handle = capturedProcess!('content', file, {}, load, error, vi.fn(), vi.fn());
   await new Promise(r => setTimeout(r, 0));
-  await new Promise(r => setTimeout(r, 0));
-  return errorFn;
+  // What the pond would keep after every setFiles updater ran.
+  const remaining = () =>
+    setFiles.mock.calls.reduce<FilePondItem[]>(
+      (items, [updater]) => (updater as (p: FilePondItem[]) => FilePondItem[])(items),
+      [{ file }, ...otherItems]
+    );
+  return { handle, load, error, setFiles, remaining };
 }
 
-const makeFile = (name: string, type: string) => {
-  const f = new File(['x'], name, { type });
-  // jsdom's File lacks arrayBuffer in some versions; the pipeline awaits it first.
-  if (!f.arrayBuffer) Object.defineProperty(f, 'arrayBuffer', { value: async () => new ArrayBuffer(1) });
-  return f;
-};
+const pdf = () => new File(['x'], 'roster.pdf', { type: 'application/pdf' });
 
-describe('SessionFilePond attachment scope', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockConsumeBuffered.mockReturnValue(undefined);
-    capturedProcess = null;
-  });
-
-  it('promotes a document to notebook context on the default path', async () => {
-    // THE regression test for #959: an ordinary document upload, no toggles touched,
-    // must reach session.knowledgeIds. If the default ever reverts to per-message,
-    // this fails and the reported bug is back.
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'roster.pdf', mimeType: 'application/pdf' });
-
-    await upload('auto', makeFile('roster.pdf', 'application/pdf'), add);
-
-    expect(add).toHaveBeenCalledOnce();
-    expect(add.mock.calls[0][0]).toBe(SID);
-    expect(add.mock.calls[0][1]).toMatchObject({ id: 'f1' });
-  });
-
-  it('passes propagateToProjects false, so an automatic promotion stays out of projects', async () => {
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'roster.pdf', mimeType: 'application/pdf' });
-
-    await upload('auto', makeFile('roster.pdf', 'application/pdf'), add);
-
-    expect(add.mock.calls[0][2]).toEqual({ propagateToProjects: false });
-  });
-
-  it('does NOT promote an image on the default path', async () => {
-    // An image is re-encoded into every turn it is attached to, so persisting one by
-    // default is an unbounded token cost the user never asked for.
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
-
-    await upload('auto', makeFile('shot.png', 'image/png'), add);
-
-    expect(add).not.toHaveBeenCalled();
-  });
-
-  it('does NOT promote an opted-in image at upload time; that waits for the moderation scan', async () => {
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
-
-    await upload('notebook', makeFile('shot.png', 'image/png'), add);
-
-    expect(add).not.toHaveBeenCalled();
-  });
-
-  it('promotes an opted-in image whose clean scan arrived before the id swap', async () => {
-    // The WS promotion path matches on the real FabFile id. When the scan beats the
-    // temp-id swap the event is buffered instead, so that lookup finds nothing and the
-    // image would never be promoted. Consuming the buffer here is the last chance.
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
-    mockConsumeBuffered.mockReturnValue({ moderationStatus: 'clean', fileUrl: 'https://cdn.example/shot.png' });
-
-    await upload('notebook', makeFile('shot.png', 'image/png'), add);
-
-    expect(add).toHaveBeenCalledOnce();
-    // The upload response still says 'pending'; the hook's scan guard needs the buffered verdict.
-    expect(add.mock.calls[0][1]).toMatchObject({
-      id: 'img1',
-      moderationStatus: 'clean',
-      fileUrl: 'https://cdn.example/shot.png',
-    });
-  });
-
-  it('does NOT promote when the buffered scan says blocked', async () => {
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
-    mockConsumeBuffered.mockReturnValue({ moderationStatus: 'blocked' });
-
-    await upload('notebook', makeFile('shot.png', 'image/png'), add);
-
-    expect(add).not.toHaveBeenCalled();
-  });
-
-  it('honours an explicit per-message override for a document', async () => {
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'roster.pdf', mimeType: 'application/pdf' });
-
-    await upload('message', makeFile('roster.pdf', 'application/pdf'), add);
-
-    expect(add).not.toHaveBeenCalled();
-  });
-
-  it('records the resolved scope on the pending item so later steps do not re-derive it', async () => {
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'roster.pdf', mimeType: 'application/pdf' });
-
-    await upload('auto', makeFile('roster.pdf', 'application/pdf'), add);
-
-    const firstUpdater = mockSetPendingMessageFiles.mock.calls[0][0] as (p: unknown[]) => unknown[];
-    // uploadSessionId is frozen alongside scope so the deferred image promotion cannot
-    // file the file under whichever notebook the user switched to meanwhile.
-    expect(firstUpdater([])[0]).toMatchObject({ scope: 'notebook', status: 'uploading', uploadSessionId: SID });
-  });
-
-  it('keeps the frozen scope across the temp-id to real-file swap', async () => {
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'roster.pdf', mimeType: 'application/pdf' });
-
-    await upload('auto', makeFile('roster.pdf', 'application/pdf'), add);
-
-    const swapUpdater = mockSetPendingMessageFiles.mock.calls.at(-1)![0] as (
-      p: Array<Record<string, unknown>>
-    ) => Array<Record<string, unknown>>;
-    const before = [
-      {
-        fabFile: { id: expect.anything() } as unknown as IFabFileDocument,
-        uploadProgress: 0,
-        status: 'uploading',
-        scope: 'notebook',
-      },
-    ];
-    // The swap matches on the temp id, which the test cannot know; assert instead that
-    // a passthrough item is returned untouched and still carries its scope.
-    expect(swapUpdater(before as never)[0]).toMatchObject({ scope: 'notebook' });
-  });
-});
-
-describe('SessionFilePond storage limit', () => {
-  const refreshUser = vi.fn(() => Promise.resolve());
-  // 1 MB limit, stored in MB like the real user document.
-  const setUsage = (currentStorageSize: number) =>
-    useUser.setState({ currentUser: { currentStorageSize, storageLimit: 1 } as IUserDocument, refreshUser });
-
+describe('SessionFilePond', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capturedProcess = null;
-    refreshUser.mockClear().mockImplementation(() => Promise.resolve());
   });
 
-  afterEach(() => {
-    useUser.setState({ currentUser: null });
+  it('hands FilePond the server id once the upload resolves', async () => {
+    mockUploadComposerFile.mockResolvedValue({ id: 'f1' });
+
+    const { load, error } = await processFile(pdf());
+
+    expect(load).toHaveBeenCalledWith('f1');
+    expect(error).not.toHaveBeenCalled();
   });
 
-  it('refuses over the limit before any server call, and reports it both ways', async () => {
-    setUsage(1_000_000);
-    const errorFn = await uploadCapturingError(makeFile('notes.txt', 'text/plain'));
+  it('marks the hidden FilePond item failed when the upload fails', async () => {
+    mockUploadComposerFile.mockRejectedValue(new Error('boom'));
 
-    expect(mockCreateFabFile).not.toHaveBeenCalled();
-    expect(refreshUser).toHaveBeenCalled();
-    expect(toastMock.error).toHaveBeenCalledWith(expect.stringMatching(/Free up at least/), expect.anything());
-    expect(errorFn).toHaveBeenCalledWith(expect.stringMatching(/Free up at least/));
+    const { error } = await processFile(pdf());
+
+    expect(error).toHaveBeenCalledWith('Failed to upload file');
   });
 
-  it('warns near the limit but still uploads', async () => {
-    setUsage(950_000);
-    mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'notes.txt', mimeType: 'text/plain' });
+  it('drops its item without an error when the upload was cancelled from the tile', async () => {
+    mockUploadComposerFile.mockRejectedValue(new DOMException('Upload cancelled', 'AbortError'));
+    const other = { file: new File(['y'], 'other.pdf') };
 
-    await uploadCapturingError(makeFile('notes.txt', 'text/plain'));
+    const { error, remaining } = await processFile(pdf(), [other]);
 
-    expect(toastMock.warning).toHaveBeenCalledWith(
-      expect.stringMatching(/close to your storage limit/),
-      expect.anything()
-    );
-    expect(mockCreateFabFile).toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(remaining()).toEqual([other]);
   });
 
-  it("shows the server's used, limit and requested numbers when the client check passed", async () => {
-    setUsage(0);
-    mockCreateFabFile.mockRejectedValue({
-      isAxiosError: true,
-      message: 'Request failed with status code 400',
-      response: {
-        status: 400,
-        data: {
-          error: 'File size exceeds storage limit',
-          errorCode: 'storage_limit_exceeded',
-          used_bytes: 800_000,
-          limit_bytes: 1_000_000,
-          requested_bytes: 300_000,
-          owner: 'user',
-        },
-      },
-    });
+  it('aborts the upload through FilePond', async () => {
+    mockUploadComposerFile.mockReturnValue(new Promise(() => {}));
 
-    const errorFn = await uploadCapturingError(makeFile('notes.txt', 'text/plain'));
+    const { handle } = await processFile(pdf());
+    const signal = (mockUploadComposerFile.mock.calls[0]![2] as { signal: AbortSignal }).signal;
+    handle.abort();
 
-    expect(toastMock.error).toHaveBeenCalledWith(
-      expect.stringMatching(/800 kB of 1 MB.*Free up at least 100 kB/),
-      expect.anything()
-    );
-    expect(errorFn).toHaveBeenCalledWith(expect.stringMatching(/Free up at least 100 kB/));
-  });
-
-  it('surfaces a legacy server refusal with no code verbatim when the client check passed', async () => {
-    setUsage(0);
-    mockCreateFabFile.mockRejectedValue({
-      isAxiosError: true,
-      message: 'Request failed with status code 400',
-      response: { status: 400, data: { error: 'File size exceeds storage limit' } },
-    });
-
-    const errorFn = await uploadCapturingError(makeFile('notes.txt', 'text/plain'));
-
-    expect(toastMock.error).toHaveBeenCalledWith('File size exceeds storage limit', expect.anything());
-    expect(errorFn).toHaveBeenCalledWith('File size exceeds storage limit');
-  });
-
-  it('does not judge an oversized image against the flat resize cap alone', async () => {
-    // Matches the review's exact repro: limit 4 MB, used 1 MB, a 4,000,000-byte JPEG - the
-    // flat cap estimate (3 MB) would exceed, but the true post-resize size (as low as 85% of
-    // that cap) fits, so this must not be blocked client-side.
-    useUser.setState({ currentUser: { currentStorageSize: 1_000_000, storageLimit: 4 } as IUserDocument, refreshUser });
-    mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.jpg', mimeType: 'image/jpeg' });
-    const big = makeFile('shot.jpg', 'image/jpeg');
-    Object.defineProperty(big, 'size', { value: 4_000_000 });
-
-    await uploadCapturingError(big);
-
-    expect(mockCreateFabFile).toHaveBeenCalled();
+    expect(signal.aborted).toBe(true);
   });
 });

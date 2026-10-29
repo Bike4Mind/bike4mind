@@ -1,5 +1,9 @@
 /** The Models screen's IPC types and the pure rules main and the renderer share. */
 
+import { LOCAL_SERVER_ID, type ModelServerManagement } from './modelServers';
+
+export type { ModelServerManagement };
+
 export const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
 export const HUGGING_FACE_TOKENS_URL = 'https://huggingface.co/settings/tokens';
 export const HUGGING_FACE_SSH_KEYS_URL = 'https://huggingface.co/settings/keys';
@@ -20,6 +24,9 @@ export type ModelHubErrorKind =
   // A curated build's weights, layers or licenses no longer match what was reviewed.
   | 'upstream-changed'
   | 'interrupted'
+  | 'connection-lost'
+  | 'not-allowed'
+  | 'credentials'
   | 'cancelled'
   | 'invalid'
   | 'failed';
@@ -36,6 +43,10 @@ export interface ModelRuntimeStatus {
   version: string | null;
   url: string;
   error: string | null;
+  /** `local` for this computer, otherwise a saved model server's id (see @shared/modelServers). */
+  serverId: string;
+  serverName: string;
+  management: ModelServerManagement;
 }
 
 export interface LocalModelCapabilities {
@@ -250,14 +261,19 @@ export interface ModelPullRequest {
   sizeBytes: number;
   acceptLicense: boolean;
   confirmAccess: boolean;
+  /** The server to pull to; omitted means this computer. */
+  serverId?: string;
   /** Set from Curated: main then also refuses unless the source still serves the reviewed layers. */
   curated?: { entryId: string; buildId: string };
 }
 
-export type ModelPullPhase = 'verifying' | 'downloading' | 'finishing' | 'failed';
+/** `paused`: the connection to a model server dropped mid-download; resuming continues from its partial file. */
+export type ModelPullPhase = 'verifying' | 'downloading' | 'finishing' | 'paused' | 'failed';
 
 export interface ModelPull {
   key: string;
+  serverId: string;
+  serverName: string;
   repo: string;
   buildId: string;
   /** The build's `HubBuildView.label`; null until main has read the build. */
@@ -278,8 +294,9 @@ export type ModelRemoveResult = { ok: true } | { ok: false; error: ModelHubError
 export type CuratedCheckResult = { ok: true } | { ok: false; error: ModelHubError };
 
 /** Hugging Face repo ids are case-insensitive, so a curated row and a pull of the live repo share one key. */
-export function pullKey(repo: string, buildId: string): string {
-  return `${repo.toLowerCase()}#${buildId}`;
+export function pullKey(repo: string, buildId: string, serverId: string = LOCAL_SERVER_ID): string {
+  const id = `${repo.toLowerCase()}#${buildId}`;
+  return serverId === LOCAL_SERVER_ID ? id : `${serverId}/${id}`;
 }
 
 const PERMISSIVE_LICENSES = new Set([
