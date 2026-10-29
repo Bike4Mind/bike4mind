@@ -5,6 +5,8 @@ import BaseRepository from '@bike4mind/db-core';
 /**
  * `phoneHash` is an unsalted SHA-256 of the canonical E.164 number: it keeps the number out of plain
  * view, but the number space is small enough to enumerate, so treat the hash as personal data.
+ * Claims are kept after account deletion on purpose (as `GithubUnlockClaim` is): dropping one would let
+ * the number unlock again on a new account.
  */
 export interface IPhoneUnlockClaimDocument extends IMongoDocument {
   phoneHash: string;
