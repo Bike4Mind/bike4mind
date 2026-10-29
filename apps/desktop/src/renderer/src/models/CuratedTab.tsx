@@ -136,6 +136,8 @@ interface RowError {
   repo: string | null;
   /** Set when the download finished but Ollama could not describe it, so the check can run again. */
   recheck?: boolean;
+  /** A recheck's IPC failure expires when its authoritative pull is dismissed or removed. */
+  pullKey?: string;
 }
 
 /** The Download flow shared by the picks and the full list: check with main, confirm, then pull. */
@@ -191,11 +193,18 @@ function useCuratedPull(onRecheck: () => void) {
   const checkAgain = async (where: string, entry: CuratedEntryView, build: CuratedBuildView) => {
     setChecking(where);
     try {
-      const result = await window.b4m.models.checkCurated(entry.id, build.id);
-      if (result.ok) setError(current => (current?.where === where ? null : current));
-      else showError(where, result.error, build, true);
+      await window.b4m.models.checkCurated(entry.id, build.id);
+      // Main updates the failed pull on either outcome. Keeping a second copy here would restore
+      // its warning after Dismiss, including when the check finishes after it was dismissed.
+      setError(current => (current?.where === where ? null : current));
     } catch {
-      setError({ where, text: CHECK_FAILED, repo: null, recheck: true });
+      setError({
+        where,
+        text: CHECK_FAILED,
+        repo: null,
+        recheck: true,
+        pullKey: pullKey(build.repo, build.pullBuildId),
+      });
     } finally {
       setChecking(null);
     }
@@ -236,7 +245,8 @@ function CuratedBuild({
         repo: failure.kind === 'upstream-changed' && build.ollamaRef.startsWith('hf.co/') ? build.repo : null,
         recheck: pull?.ref !== null && failure.kind === 'unverified',
       }
-    : flow.error?.where === where
+    : flow.error?.where === where &&
+        (!flow.error.pullKey || (pull?.key === flow.error.pullKey && pull.phase === 'failed'))
       ? flow.error
       : null;
   const confirming = flow.confirming?.where === where ? flow.confirming : null;

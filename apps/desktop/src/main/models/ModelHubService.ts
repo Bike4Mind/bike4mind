@@ -187,6 +187,7 @@ export function installedReviewed(inspection: ModelInspection, reviewed: HubBuil
   const pins = pinsOf(reviewed);
   const contents = inspection.contents;
   if (!pins || !contents || contents.modelBlob !== modelDigest(reviewed)) return false;
+  if (contents.adapterBlobs?.length) return false;
   const matchesBlob = (actual: (string | null)[] | undefined, expected: string | null) =>
     expected ? actual?.length === 1 && actual[0] === expected : (actual?.length ?? 0) === 0;
   if (!matchesBlob(contents.projectorBlobs, pins.projector) || !matchesBlob(contents.draftBlobs, pins.draft))

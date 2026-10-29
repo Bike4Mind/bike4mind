@@ -48,7 +48,7 @@ describe.sequential(`bundled curated builds (${mode})`, () => {
       expect(health.ok, health.error ?? 'Ollama is unavailable').toBe(true);
       expect(ollamaBlocked(build, health.version), `${id}: unsupported Ollama version`).toBeNull();
       console.info(`${id}: Ollama ${health.version}; declared minimum ${build.runtimeMin?.ollama}; ref ${ref}`);
-      if (mode === 'pull') await runtime.pull(ref);
+      if (mode === 'pull') await runtime.pull(ref, source.kind === 'library' ? { runner: 'llamacpp' } : {});
       const inspection = await runtime.inspect(ref, { tags: false, timeoutMs: 30_000 });
       expect(installedReviewed(inspection, build), `${id}: /api/show differs from reviewed contents`).toBe(true);
     });

@@ -236,6 +236,7 @@ describe('OllamaRuntime.inspect', () => {
       modelBlob: blob,
       projectorBlobs: [projector],
       draftBlobs: [],
+      adapterBlobs: [],
     });
 
     await server.close();
@@ -247,6 +248,7 @@ describe('OllamaRuntime.inspect', () => {
       modelBlob: null,
       projectorBlobs: [],
       draftBlobs: [],
+      adapterBlobs: [],
     });
   });
 
@@ -267,21 +269,23 @@ describe('OllamaRuntime.inspect', () => {
     expect((await runtimeFor(server).inspect(fixtureTags.gemma4.name)).contents?.modelBlob).toBeNull();
   });
 
-  it('reads draft and projector blobs only from the generated header, retaining malformed paths', async () => {
+  it('reads draft, projector and adapter blobs only from the generated header, retaining malformed paths', async () => {
     const model = 'a'.repeat(64);
     const draft = 'b'.repeat(64);
     const projector = 'c'.repeat(64);
     const show = {
       ...gemma4Show,
       modelfile:
-        `FROM sha256-${model}\nDRAFT /models/sha256-${draft}\nFROM C:\\models\\sha256-${projector}\n` +
-        `FROM unreadable\nTEMPLATE """\nFROM sha256-${draft}\nDRAFT sha256-${model}\n"""\n`,
+        `FROM sha256-${model}\nADAPTER /models/sha256-${model}\nADAPTER unreadable\n` +
+        `DRAFT /models/sha256-${draft}\nFROM C:\\models\\sha256-${projector}\n` +
+        `FROM unreadable\nTEMPLATE """\nFROM sha256-${draft}\nDRAFT sha256-${model}\nADAPTER sha256-${draft}\n"""\n`,
     };
     server = await startFakeServer({ 'POST /api/show': json(show) });
     expect((await runtimeFor(server).inspect(fixtureTags.gemma4.name, { tags: false })).contents).toMatchObject({
       modelBlob: model,
       projectorBlobs: [projector, null],
       draftBlobs: [draft],
+      adapterBlobs: [model, null],
     });
   });
 
