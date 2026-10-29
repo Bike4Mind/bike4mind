@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Checkbox, Sheet, Typography } from '@mui/joy';
-import { ActionDialog, ADMIN_REASON_PRESETS, useUndoToast } from '../../../shared';
+import { ActionDialog, ADMIN_REASON_PRESETS, undoAdminReason, useUndoToast } from '../../../shared';
 import { formatCredits } from './creditAdjustment';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
 import { BALANCE_REFRESH_FAILED, useRefreshedUser } from './useRefreshedUser';
@@ -22,14 +22,19 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
 
   const handleConfirm = async (reason: string) => {
     const removed = zeroCredits && balance > 0 ? balance : 0;
-    await update({ isBanned: true, ...(removed > 0 && { currentCredits: 0, creditReason: reason }) });
+    await update({
+      isBanned: true,
+      statusChangeReason: reason,
+      ...(removed > 0 && { currentCredits: 0, creditReason: reason }),
+    });
     onClose();
     showUndo({
       message: removed > 0 ? `Account suspended, credits set to 0` : 'Account suspended',
       onUndo: () =>
         update({
           isBanned: false,
-          ...(removed > 0 && { creditDelta: removed, creditReason: `Undo: ${reason}`.slice(0, 500) }),
+          statusChangeReason: undoAdminReason(reason),
+          ...(removed > 0 && { creditDelta: removed, creditReason: undoAdminReason(reason) }),
         }),
       onViewAudit: onAudit,
     });
@@ -42,7 +47,6 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
       title={`Suspend ${name}?`}
       description="They are signed out everywhere and cannot sign in until reinstated. Their data is kept."
       reasonPresets={ADMIN_REASON_PRESETS.suspension}
-      reasonAudited={zeroCredits && balance > 0}
       confirmLabel="Suspend account"
       tone="danger"
       // Suspending alone needs no balance; only the wipe and its refund do.
@@ -69,5 +73,34 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
         </Sheet>
       )}
     </ActionDialog>
+  );
+};
+
+/** The reverse of SuspendDialog. Credits a suspension wiped stay wiped; adjust them separately. */
+export const ReinstateDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
+  const update = useAdminUserUpdate(user.id);
+  const showUndo = useUndoToast();
+
+  const handleConfirm = async (reason: string) => {
+    await update({ isBanned: false, statusChangeReason: reason });
+    onClose();
+    showUndo({
+      message: 'Account reinstated',
+      onUndo: () => update({ isBanned: true, statusChangeReason: undoAdminReason(reason) }),
+      onViewAudit: onAudit,
+    });
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title={`Reinstate ${displayName(user)}?`}
+      description="They can sign in again right away."
+      reasonPresets={ADMIN_REASON_PRESETS.reinstatement}
+      confirmLabel="Reinstate account"
+      onConfirm={handleConfirm}
+      data-testid="reinstate-dialog"
+    />
   );
 };

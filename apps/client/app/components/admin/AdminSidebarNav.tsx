@@ -340,7 +340,8 @@ export const SidebarNav = ({
     return (
       <Box
         component="span"
-        aria-label={`${waitingSubscribersCount} waiting`}
+        aria-label={`${waitingSubscribersCount} waiting for an invite`}
+        title={`${waitingSubscribersCount} waiting for an invite`}
         sx={{
           minWidth: 20,
           height: 20,

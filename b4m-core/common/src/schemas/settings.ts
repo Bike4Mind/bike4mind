@@ -3253,7 +3253,7 @@ export const settingsMap = {
     // defaults to paid-only so the gate is live without an admin write.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? 'all' : 'paid',
     description:
-      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
+      'Who may use personal API keys and CLI/desktop cloud access. "all": anyone. "paid": active paid subscribers (including standalone plans and org seats), users who have bought credits, or org-billed keys whose org has a paid plan. Admins, developer-tagged users and admin-provisioned keys are exempt. "disabled": only those exemptions pass. Covers key minting, rotation, use and CLI/desktop device login, refresh and use. Also applies to federated AI-token exchanges (subscription_required on refusal). Changes apply within 30 seconds. Defaults to "paid" on hosted and "all" on self-host.',
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
@@ -3865,7 +3865,7 @@ export const settingsMap = {
     // Self-host has no billing stack, so every account would read as free; the gate is hosted-only by default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description:
-      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) to the free-tier model allowlist across all modalities, on web chat, media generation, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
+      'Restricts accounts without an active paid plan (Basic or Pro, org seats included) or a past credit purchase to the free-tier model allowlist across all modalities, on web chat, media generation, CLI, API keys, agents and fallbacks. Admins and developer-tagged users are exempt. Off lets every account call every model it can otherwise access. Changes reach running servers within about 5 minutes (settings cache).',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 1,
@@ -3884,7 +3884,7 @@ export const settingsMap = {
       ChatModels.GEMINI_2_5_FLASH_LITE,
     ],
     description:
-      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line. Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. The Default API Model is always allowed so a free account can still chat. A model missing here, including a newly added one, is paid-only.',
+      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line. Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. A model missing here, including a newly added one and the Default API Model, is paid-only. A free account that calls the chat or agent-execution API without a model starts on the first text model listed here that it can use.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 2,

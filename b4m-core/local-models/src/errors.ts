@@ -48,6 +48,18 @@ export class RuntimeProtocolError extends LocalRuntimeError {
   }
 }
 
+/** A pull whose stream stayed open but sent nothing for `idleTimeoutMs`, as when the network drops quietly. */
+export class PullIdleTimeoutError extends LocalRuntimeError {
+  constructor(
+    runtimeId: string,
+    readonly ref: string,
+    readonly idleTimeoutMs: number
+  ) {
+    super(`${runtimeId} sent nothing for ${idleTimeoutMs}ms while pulling ${ref}`, runtimeId);
+    this.name = 'PullIdleTimeoutError';
+  }
+}
+
 export type GgufFormatErrorReason = 'truncated' | 'unsupported' | 'invalid' | 'limit';
 
 /** A GGUF header that is truncated, malformed, in an unsupported version or byte order, or past a read limit. */

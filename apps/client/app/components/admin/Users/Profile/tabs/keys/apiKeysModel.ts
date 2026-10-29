@@ -1,5 +1,12 @@
-import { ApiKeyStatus, type AdminApiKeyAccess, type AdminApiKeyRequestCounts } from '@bike4mind/common';
+import {
+  ApiKeyStatus,
+  type AdminApiKeyAccess,
+  type AdminApiKeyRequestCounts,
+  type ApiKeyRateLimitUsage,
+  type IUserApiKeyDocument,
+} from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import { formatRateLimitReset } from '@client/app/utils/formatRateLimitReset';
 
 export const KEY_STATUS: Readonly<Record<ApiKeyStatus, { label: string; tone: AdminStatusTone }>> = {
   [ApiKeyStatus.ACTIVE]: { label: 'Active', tone: 'good' },
@@ -7,6 +14,24 @@ export const KEY_STATUS: Readonly<Record<ApiKeyStatus, { label: string; tone: Ad
   [ApiKeyStatus.EXPIRED]: { label: 'Expired', tone: 'neutral' },
   [ApiKeyStatus.RATE_LIMITED]: { label: 'Rate limited', tone: 'warn' },
 };
+
+export function describeLiveLimit(key: IUserApiKeyDocument, usage?: ApiKeyRateLimitUsage): string | null {
+  if (key.status !== ApiKeyStatus.ACTIVE || !usage) return null;
+  const limits = [
+    { label: 'Per-minute', count: usage.minute, limit: key.rateLimit.requestsPerMinute, resetAt: usage.minuteResetAt },
+    { label: 'Per-day', count: usage.day, limit: key.rateLimit.requestsPerDay, resetAt: usage.dayResetAt },
+  ];
+  const exhausted = limits.filter(
+    ({ count, limit, resetAt }) => count >= limit && (resetAt === undefined || resetAt * 1000 > Date.now())
+  );
+  if (exhausted.length === 0) return null;
+  return exhausted
+    .map(({ label, count, limit, resetAt }) => {
+      const reset = formatRateLimitReset(resetAt);
+      return `${label} limit reached (${count}/${limit}); ${reset ? `resets in ${reset}` : 'reset time unavailable'}.`;
+    })
+    .join(' ');
+}
 
 // Immediate revoke and its Undo carry fixed reasons: the action model takes no reason for a
 // reversible write, but the server audits every key write with one.
@@ -45,11 +70,17 @@ export function describeKeyAccess(access: AdminApiKeyAccess): { tone: AdminStatu
         label: 'Allowed',
         text: 'This user has an active paid subscription, so their personal API keys work.',
       };
+    case 'credit_purchase':
+      return {
+        tone: 'good',
+        label: 'Allowed',
+        text: 'This user has bought credits, so their personal API keys work without a subscription.',
+      };
     case 'no_paid_subscription':
       return {
         tone: 'warn',
         label: 'Blocked',
-        text: `API keys need an active paid subscription and this user has none, so their personal keys are refused. ${ADMIN_KEYS_STILL_WORK}`,
+        text: `API keys need an active paid subscription or a credit purchase and this user has neither, so their personal keys are refused. ${ADMIN_KEYS_STILL_WORK}`,
       };
     case 'disabled':
       return {

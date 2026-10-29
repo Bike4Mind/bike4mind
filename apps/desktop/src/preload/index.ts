@@ -64,15 +64,15 @@ const api: DesktopApi = {
     },
   },
   models: {
-    getStatus: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus),
-    listInstalled: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled),
+    getStatus: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetStatus, serverId),
+    listInstalled: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListInstalled, serverId),
     search: (request: HubSearchRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsSearch, request),
     getDetail: (repo: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsGetDetail, repo),
-    listCurated: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListCurated),
-    getCuratedPull: (entryId: string, buildId: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.modelsGetCuratedPull, entryId, buildId),
-    checkCurated: (entryId: string, buildId: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCurated, entryId, buildId),
+    listCurated: (serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsListCurated, serverId),
+    getCuratedPull: (entryId: string, buildId: string, serverId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsGetCuratedPull, entryId, buildId, serverId),
+    checkCurated: (entryId: string, buildId: string, serverId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCurated, entryId, buildId, serverId),
     checkCuratedList: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCheckCuratedList),
     getCuratedSettings: () => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSettings),
     setCuratedEnabled: (enabled: boolean) => ipcRenderer.invoke(IPC_CHANNELS.modelsCuratedSetEnabled, enabled),
@@ -84,8 +84,9 @@ const api: DesktopApi = {
     listPulls: () => ipcRenderer.invoke(IPC_CHANNELS.modelsListPulls),
     pull: (request: ModelPullRequest) => ipcRenderer.invoke(IPC_CHANNELS.modelsPull, request),
     cancelPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsCancelPull, key),
+    resumePull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsResumePull, key),
     dismissPull: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsDismissPull, key),
-    remove: (name: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name),
+    remove: (name: string, serverId?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsRemove, name, serverId),
     getHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsGetHfAccess),
     setHfToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.modelsSaveHfAccess, token),
     clearHfToken: () => ipcRenderer.invoke(IPC_CHANNELS.modelsClearHfAccess),
@@ -100,7 +101,7 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsPullsChanged, handler);
     },
     onInstalledChanged: listener => {
-      const handler = () => listener();
+      const handler = (_event: unknown, serverId: string) => listener(serverId);
       ipcRenderer.on(IPC_CHANNELS.modelsInstalledChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.modelsInstalledChanged, handler);
     },

@@ -232,6 +232,8 @@ import EnsureSignupFingerprintWindowIndex from './20260921235939_ensure-signup-f
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureUserSignupMetaCapturedAtIndex from './20260921235973_ensure-user-signupmeta-capturedat-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureUserRiskScoreReviewIndex from './20260921235956_ensure-user-riskscore-review-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillAdminAuditLog from './20260921235941_backfill-admin-audit-log';
@@ -253,6 +255,7 @@ import EnsureUserAdminListIndexes from './20260921236000_ensure-user-admin-list-
 import EnsureAdminSavedViewIndexes from './20260921236100_ensure-admin-saved-view-indexes';
 import EnsureSubscriptionAdminListIndexes from './20260921236200_ensure-subscription-admin-list-indexes';
 import EnsureSubscriptionMirrorIndexes from './20260921236300_ensure-subscription-mirror-indexes';
+import EnsureSignupTraceIndexes from './20260921236400_ensure-signup-trace-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -431,6 +434,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureAuthEventIndexes,
   EnsureSignupFingerprintWindowIndex,
   EnsureUserSignupMetaCapturedAtIndex,
+  EnsureUserRiskScoreReviewIndex,
   BackfillStorageLimitOverrides,
   SeedStagedSignupSettings,
   EnsureQuestSignupActivityIndex,
@@ -441,6 +445,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureAdminSavedViewIndexes,
   EnsureSubscriptionAdminListIndexes,
   EnsureSubscriptionMirrorIndexes,
+  EnsureSignupTraceIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];
