@@ -56,6 +56,9 @@ export const composeAdminReason = ({ preset, note }: AdminReasonDraft): string =
   return trimmedNote ? `${preset}${PRESET_SEPARATOR}${trimmedNote}` : preset;
 };
 
+/** The reason an undo carries: the original one, marked, and still within the shared maximum. */
+export const undoAdminReason = (reason: string): string => `Undo: ${reason}`.slice(0, ADMIN_ACTION_REASON_MAX_LENGTH);
+
 export const isAdminReasonComplete = (draft: AdminReasonDraft): boolean =>
   isValidAdminActionReason(composeAdminReason(draft));
 
