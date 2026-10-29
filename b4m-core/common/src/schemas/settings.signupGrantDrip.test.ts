@@ -3,6 +3,14 @@ import { selfUserResponseSchema } from './user';
 import { API_SERVICE_GROUPS, SettingKeySchema, settingsMap } from './settings';
 
 describe('signup activity drip settings', () => {
+  it('registers an admin-only preview test switch that defaults off', () => {
+    const setting = settingsMap.signupGrantActivityPreviewTestMode;
+    expect(setting.schema.parse(undefined)).toBe(false);
+    expect(setting.schema.parse('true')).toBe(true);
+    expect('userReadable' in setting && setting.userReadable).toBeFalsy();
+    expect(SettingKeySchema.parse(setting.key)).toBe(setting.key);
+    expect(API_SERVICE_GROUPS.CREDITS.settings).toContainEqual(expect.objectContaining({ key: setting.key }));
+  });
   it('defaults the daily rate off and the cap to 9000, in the credits group', () => {
     const daily = settingsMap.signupGrantActivityDailyCredits;
     const max = settingsMap.signupGrantActivityMaxCredits;
@@ -38,6 +46,8 @@ describe('signup grant drip state on the self user schema', () => {
     const result = parse({ ...base, unlockedBy: 'activity_drip', dripCredits: 1000, lastDripDay: '2026-10-29' });
     expect(result.success).toBe(true);
     expect(parse({ ...base, unlockedBy: 'subscription' }).success).toBe(true);
+    expect(parse({ ...base, lastDripPeriod: 'preview:5:1234' }).success).toBe(true);
+    expect(parse({ ...base, lastDripPeriod: 'invalid' }).success).toBe(false);
   });
 
   it('treats absent drip fields as a legacy grant and rejects malformed ones', () => {

@@ -1048,8 +1048,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           unlockedOrgId: { type: String },
           dripCredits: { type: Number, min: 0 },
           lastDripDay: { type: String },
+          lastDripPeriod: { type: String },
           activity: {
-            type: new Schema({ day: String, ms: Number, lastAt: Date }, { _id: false }),
+            type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
             default: undefined,
           },
         },

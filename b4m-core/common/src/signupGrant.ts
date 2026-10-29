@@ -37,8 +37,18 @@ export interface SignupGrant {
   dripCredits?: number;
   /** UTC day (YYYY-MM-DD) of the latest drip payout. */
   lastDripDay?: string;
+  /** Preview testing window of the latest payout; UTC budget accounting still uses lastDripDay. */
+  lastDripPeriod?: string;
   /** Active-session time accrued on one UTC day, advanced by the server from heartbeat pings. */
-  activity?: { day: string; ms: number; lastAt: Date };
+  activity?: { day: string; ms: number; lastAt: Date; period?: string };
+}
+
+export function hasPaidSignupDrip(
+  grant: Pick<SignupGrant, 'lastDripDay' | 'lastDripPeriod'>,
+  day: string,
+  period?: string
+): boolean {
+  return period ? grant.lastDripPeriod === period : grant.lastDripDay === day;
 }
 
 const DEFAULT_SIGNUP_ACTIVE_SECONDS = 60;

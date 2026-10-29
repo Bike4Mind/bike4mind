@@ -144,12 +144,25 @@ describe('useSignupGrantHeartbeat', () => {
       'the grant is unlocked',
       () => (h.grant = { stage: 'unlocked', signupCredits: 1, unlockCredits: 1, creditsReleased: 2 }),
     ],
-    ['today is already paid', () => (h.grant = { ...h.grant, lastDripDay: new Date().toISOString().slice(0, 10) })],
   ])('does not ping when %s', async (_label, arrange) => {
     arrange();
     renderHook(() => useSignupGrantHeartbeat());
     touch();
     await advance(HEARTBEAT_INTERVAL_MS * 2);
     expect(h.post).not.toHaveBeenCalled();
+  });
+
+  it('asks the server for the next window even when this calendar day already paid', async () => {
+    h.grant = { ...h.grant, lastDripDay: new Date().toISOString().slice(0, 10) };
+    h.post.mockResolvedValueOnce(response({ paidToday: true, nextEligibleAt: Date.now() + 300_000 }));
+    renderHook(() => useSignupGrantHeartbeat());
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(1);
+    await advance(HEARTBEAT_INTERVAL_MS * 3);
+    expect(h.post).toHaveBeenCalledTimes(1);
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(2);
   });
 });

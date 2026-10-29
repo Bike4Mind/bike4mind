@@ -37,7 +37,7 @@ describe('activity signup drip evaluation', () => {
     h.findById.mockResolvedValue(grantedUser());
     h.drip.mockResolvedValue({ creditsGranted: 1000, currentCredits: 1 });
     await unlockSignupGrantFromActivity('user-1', NOW);
-    expect(h.drip).toHaveBeenCalledWith('user-1', '2030-03-01', expect.anything());
+    expect(h.drip).toHaveBeenCalledWith('user-1', '2030-03-01', expect.anything(), undefined);
     expect(h.drip.mock.calls[0][2].db.signupProtection).toBe(h.protection);
   });
 

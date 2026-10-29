@@ -18,6 +18,7 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { recordHeartbeat } from './recordActiveSession';
 import { unlockSignupGrantFromActivity } from './activityUnlock';
+import * as dripPeriods from './signupDripPeriod';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -69,7 +70,7 @@ beforeEach(async () => {
     signupGrantActivityMaxCredits: '9000',
   });
   vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
-    async name => ({ settingValue: config[name] }) as never
+    async name => (config[name] === undefined ? null : { settingValue: config[name] }) as never
   );
   await User.collection.deleteMany({});
   await CreditTransaction.collection.deleteMany({});
@@ -101,6 +102,91 @@ async function pingEvery60s(userId: string, from: number, to: number) {
 }
 
 describe('active session heartbeat', () => {
+  function enablePreviewTestMode(stage = 'pr6157') {
+    config.signupGrantActivityPreviewTestMode = 'true';
+    config.signupGrantActivityMinActiveSeconds = '60';
+    const resolvePeriod = dripPeriods.resolveSignupDripPeriod;
+    vi.spyOn(dripPeriods, 'resolveSignupDripPeriod').mockImplementation(now => resolvePeriod(now, stage));
+  }
+
+  it('pays once per preview window, resets active time, and stops at the unlock pool', async () => {
+    enablePreviewTestMode();
+    const user = await createSignupStageUser();
+    for (let window = 0; window < 10; window++) {
+      const start = window * 300;
+      expect(await ping(user.id, start)).toMatchObject({ creditsGranted: 0, activeSeconds: 0 });
+      const crossing = await ping(user.id, start + 60);
+      expect(crossing.creditsGranted).toBe(window < 9 ? 1000 : 0);
+      if (window < 8) expect(crossing.nextEligibleAt).toBe(at(start + 300).getTime());
+      expect((await ping(user.id, start + 120)).creditsGranted).toBe(0);
+    }
+    expect(await creditsOf(user.id)).toBe(10000);
+    const rows = await dripRows(user.id);
+    expect(rows).toHaveLength(9);
+    expect(new Set(rows.map(row => row.transactionId)).size).toBe(9);
+    expect(rows.every(row => row.transactionId?.includes(':2030-03-01:preview:5:'))).toBe(true);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      dripCredits: 9000,
+      lastDripDay: '2030-03-01',
+    });
+  });
+
+  it('deduplicates concurrent crossing pings within a preview window', async () => {
+    enablePreviewTestMode();
+    const user = await createSignupStageUser();
+    await ping(user.id, 0);
+    const results = await Promise.all(Array.from({ length: 6 }, () => ping(user.id, 60)));
+    expect(results.reduce((sum, result) => sum + result.creditsGranted, 0)).toBe(1000);
+    expect(await creditsOf(user.id)).toBe(2000);
+    expect(await dripRows(user.id)).toHaveLength(1);
+  });
+
+  it('keeps preview windows inside the real UTC budget and retries withheld payouts', async () => {
+    enablePreviewTestMode();
+    const user = await createSignupStageUser();
+    config.signupGrantDailyBudget = '1500';
+    expect((await pingEvery60s(user.id, 0, 60)).creditsGranted).toBe(1000);
+    expect(await pingEvery60s(user.id, 300, 360)).toMatchObject({ creditsGranted: 0, withheld: true });
+    const budgets = await SignupGrantBudgetDayModel.find().lean();
+    expect(budgets.map(row => [row._id, row.spent])).toEqual([['2030-03-01', 1000]]);
+    config.signupGrantDailyBudget = '5000';
+    expect((await ping(user.id, 420)).creditsGranted).toBe(1000);
+    expect((await SignupGrantBudgetDayModel.findById('2030-03-01'))?.spent).toBe(2000);
+  });
+
+  it('requires activity in the new window on the eligibility fallback too', async () => {
+    enablePreviewTestMode();
+    const user = await createSignupStageUser();
+    await pingEvery60s(user.id, 0, 60);
+    expect((await unlockSignupGrantFromActivity(user.id, at(300))).creditsGranted).toBe(0);
+    await ping(user.id, 300);
+    expect((await unlockSignupGrantFromActivity(user.id, at(360))).creditsGranted).toBe(0);
+    expect((await ping(user.id, 360)).creditsGranted).toBe(1000);
+    expect((await unlockSignupGrantFromActivity(user.id, at(420))).creditsGranted).toBe(0);
+  });
+
+  it('returns to UTC days when the preview switch is turned off', async () => {
+    enablePreviewTestMode();
+    const user = await createSignupStageUser();
+    await pingEvery60s(user.id, 0, 60);
+    config.signupGrantActivityPreviewTestMode = 'false';
+    expect((await pingEvery60s(user.id, 300, 360)).creditsGranted).toBe(0);
+    expect(await ping(user.id, 86400)).toMatchObject({ activeSeconds: 0, creditsGranted: 0 });
+    expect((await ping(user.id, 86460)).creditsGranted).toBe(1000);
+    const rows = await dripRows(user.id);
+    expect(rows.map(row => row.transactionId)).toContain(`unlock-grant:activity:${user.id}:2030-03-02`);
+  });
+
+  it('keeps production daily even when the test switch is on', async () => {
+    enablePreviewTestMode('production');
+    const user = await createSignupStageUser();
+    await pingEvery60s(user.id, 0, 60);
+    expect((await pingEvery60s(user.id, 300, 360)).creditsGranted).toBe(0);
+    expect(await dripRows(user.id)).toHaveLength(1);
+    expect((await User.findById(user.id))?.signupGrant?.lastDripPeriod).toBeUndefined();
+  });
+
   it('pays on the second 60s ping at the default 60 second minimum', async () => {
     delete config.signupGrantActivityMinActiveSeconds;
     const user = await createSignupStageUser();

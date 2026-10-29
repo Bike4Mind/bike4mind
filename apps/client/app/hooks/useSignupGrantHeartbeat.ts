@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { signupGrantRemaining } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -17,6 +17,7 @@ interface HeartbeatResponse {
   creditsGranted: number;
   paidToday: boolean;
   withheld: boolean;
+  nextEligibleAt?: number;
 }
 
 /** Another tab pinged recently, so this one idles; the server throttle remains the real guard. */
@@ -39,10 +40,6 @@ export function useSignupGrantHeartbeat() {
   const enabledSetting = useGetSettingsValue('signupGrantActivityEnabled');
   const dailyCredits = Number(useGetSettingsValue('signupGrantActivityDailyCredits')) || 0;
   const grant = currentUser?.signupGrant;
-  const grantRef = useRef(grant);
-  useEffect(() => {
-    grantRef.current = grant;
-  }, [grant]);
   const eligible =
     (enabledSetting === true || enabledSetting === 'true') &&
     dailyCredits > 0 &&
@@ -54,7 +51,7 @@ export function useSignupGrantHeartbeat() {
     if (!eligible || !userId) return;
     const tabId = Math.random().toString(36).slice(2);
     let lastInputAt = 0;
-    let paidDay = '';
+    let paidUntil = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
     const onInput = () => {
@@ -66,8 +63,7 @@ export function useSignupGrantHeartbeat() {
       if (!stopped) timer = setTimeout(tick, delay);
     };
     const tick = async () => {
-      const day = new Date().toISOString().slice(0, 10);
-      if (paidDay === day || grantRef.current?.lastDripDay === day) {
+      if (Date.now() < paidUntil) {
         schedule(HEARTBEAT_INTERVAL_MS);
         return;
       }
@@ -82,7 +78,12 @@ export function useSignupGrantHeartbeat() {
           queryClient.invalidateQueries({ queryKey: ['identify'] });
         }
         if (res.data.paidToday) {
-          paidDay = day;
+          const nextUtcDay = new Date().setUTCHours(24, 0, 0, 0);
+          const nextEligibleAt = res.data.nextEligibleAt;
+          paidUntil =
+            typeof nextEligibleAt === 'number' && Number.isFinite(nextEligibleAt) && nextEligibleAt > Date.now()
+              ? nextEligibleAt
+              : nextUtcDay;
           schedule(HEARTBEAT_INTERVAL_MS);
           return;
         }

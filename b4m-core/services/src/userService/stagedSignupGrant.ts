@@ -1,5 +1,6 @@
 import {
   CreditHolderType,
+  hasPaidSignupDrip,
   PENDING_FREE_CREDITS_TAG,
   settingsMap,
   type IUserDocument,
@@ -26,7 +27,7 @@ export type SignupGrantValidator = (
 ) => Promise<boolean | { cumulativeCredits: number } | { unlockedOrgId: string }>;
 
 /** One UTC day's activity drip: a fixed daily amount, bounded by the account-wide drip cap. */
-type DripEvidence = { drip: { day: string; dailyCredits: number; maxCredits: number } };
+type DripEvidence = { drip: { day: string; dailyCredits: number; maxCredits: number; period?: string } };
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
@@ -126,9 +127,9 @@ async function releaseStage(
           throw new Error('Invalid signup assessment entitlement');
       } else {
         if (typeof evidence === 'object' && 'drip' in evidence) {
-          const { day, dailyCredits, maxCredits } = evidence.drip;
+          const { day, dailyCredits, maxCredits, period } = evidence.drip;
           const dripped = grant.dripCredits ?? 0;
-          if (grant.lastDripDay === day || !Number.isSafeInteger(dripped) || dripped < 0) return noGrant();
+          if (hasPaidSignupDrip(grant, day, period) || !Number.isSafeInteger(dripped) || dripped < 0) return noGrant();
           dripAmount = Math.max(
             0,
             Math.min(dailyCredits, maxCredits - dripped, grant.unlockCredits - dripped, maximum - grant.creditsReleased)
@@ -143,10 +144,11 @@ async function releaseStage(
       const amount = Math.max(0, target - grant.creditsReleased);
       if (expected !== 'pending_email' && amount === 0) return noGrant();
       // The target is account-wide, not reason-wide: competing validators cannot stack grants.
-      // A drip is keyed by UTC day instead, so each day pays at most once whatever else was released.
+      // A drip is keyed by earning window, so each window pays once whatever else was released.
       const dripDay = typeof evidence === 'object' && 'drip' in evidence ? evidence.drip.day : undefined;
+      const dripPeriod = typeof evidence === 'object' && 'drip' in evidence ? evidence.drip.period : undefined;
       const transactionId = dripDay
-        ? `unlock-grant:activity:${userId}:${dripDay}`
+        ? `unlock-grant:activity:${userId}:${dripDay}${dripPeriod ? `:${dripPeriod}` : ''}`
         : expected === 'pending_email'
           ? `verify-grant:${userId}`
           : grant.creditsReleased === (assessment?.credits ?? grant.signupCredits)
@@ -216,6 +218,7 @@ async function releaseStage(
           nextCondition: unlocked ? null : 'verification',
           ...(reason ? { unlockedBy: reason } : {}),
           ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
+          ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
           ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
             ? { unlockedOrgId: evidence.unlockedOrgId }
             : {}),
@@ -319,20 +322,22 @@ export async function resolveDripLimits(adminSettings: GrantAdapters['db']['admi
 }
 
 /**
- * Pays one UTC day's activity drip. The caller has already established that `day` qualifies; this owns
+ * Pays a UTC day's activity drip, or a trusted preview period within it. The caller establishes eligibility; this owns
  * the rate, the cap, the once-per-day ledger id and the daily budget draw. Signup tranches still held
  * for the budget are paid first, so a drip is skipped (withheld) while a live one from `day` exists.
  */
 export async function dripSignupGrant(
   userId: string,
   day: string,
-  adapters: GrantAdapters
+  adapters: GrantAdapters,
+  period?: string
 ): Promise<GrantFreeCreditsResult> {
+  if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
   const { dailyCredits, maxCredits } = await resolveDripLimits(adapters.db.adminSettings);
   if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
-  if (!user?.signupGrant || user.signupGrant.lastDripDay === day) return noGrant();
+  if (!user?.signupGrant || hasPaidSignupDrip(user.signupGrant, day, period)) return noGrant();
   // Existence only, and bounded: holders that are blocked, AI-revoked or held before `day` are ignored
   // so one abandoned hold cannot stall every drip. Older holds are retried by the held-release job.
   const heldTranche = await adapters.db.users.findOne({
@@ -350,7 +355,7 @@ export async function dripSignupGrant(
     userId,
     'signup',
     'activity_drip',
-    async current => (current.emailVerified ? { drip: { day, dailyCredits, maxCredits } } : false),
+    async current => (current.emailVerified ? { drip: { day, dailyCredits, maxCredits, period } } : false),
     adapters
   );
 }
