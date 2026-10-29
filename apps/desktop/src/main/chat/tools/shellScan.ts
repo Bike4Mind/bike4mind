@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, parse, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import {
   PACKAGE_VALUE_OPTIONS,
@@ -122,14 +122,22 @@ const namesSecret = (path: string): boolean => path.split('/').some(part => SECR
  * unasked, both as written and with every symlink followed, so `~/.nvm/link -> ~/.ssh` still asks.
  */
 export async function isToolchainPath(path: string, cwd: string): Promise<boolean> {
-  if (namesSecret(resolve(cwd, path))) return false;
+  // Only the part below a toolchain root is checked: the root is trusted, and folders above it
+  // (the home folder, a checkout path) may legitimately be named like a secret.
+  const below = (candidate: string, roots: string[]): string => {
+    const rest = roots
+      .filter(root => candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep))
+      .map(root => candidate.slice(root.length));
+    return rest.length ? rest.reduce((a, b) => (a.length >= b.length ? a : b)) : candidate;
+  };
+  if (namesSecret(below(resolve(cwd, path), toolchainLocations()))) return false;
   try {
     // Each root is resolved the way the path is: a root that does not exist under a linked
     // parent (macOS `/etc` -> `/private/etc`) must still match the path's physical form.
     const roots = await Promise.all(
       toolchainLocations().map(root => resolveWithinRootsPhysically(root, [parse(root).root], root))
     );
-    return !namesSecret(await resolveWithinRootsPhysically(path, roots, cwd));
+    return !namesSecret(below(await resolveWithinRootsPhysically(path, roots, cwd), roots));
   } catch {
     return false;
   }

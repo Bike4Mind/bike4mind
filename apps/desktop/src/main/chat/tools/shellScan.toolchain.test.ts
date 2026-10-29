@@ -41,3 +41,32 @@ describe('toolchain probes when the home folder is reached through a link', () =
     expect(await directories('cat ~/.nvm/link/id_rsa')).not.toEqual([]);
   });
 });
+
+describe('toolchain probes when a folder above the home folder is named like a secret', () => {
+  let base: string;
+
+  beforeEach(async () => {
+    base = await realpath(await mkdtemp(join(process.cwd(), '.b4m-token-')));
+    await mkdir(join(base, 'home', 'proj'), { recursive: true });
+    home = join(base, 'home');
+  });
+
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  const directories = async (command: string) => {
+    const root = join(home, 'proj');
+    return (await scanShell(command, root, [root]))?.directories;
+  };
+
+  it('still treats a toolchain folder as a toolchain folder', async () => {
+    expect(await directories('ls ~/.nvm/versions')).toEqual([]);
+  });
+
+  it('still asks about a secret-named file inside the toolchain folder', async () => {
+    await mkdir(join(home, '.nvm', 'versions'), { recursive: true });
+    await writeFile(join(home, '.nvm', 'versions', 'token.json'), '{}');
+    expect(await directories('cat ~/.nvm/versions/token.json')).not.toEqual([]);
+  });
+});
