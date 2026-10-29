@@ -113,7 +113,7 @@ Money
 
 ### 3.3 Definitions every section shares
 
-- **Counted user**: a `users` row with `isSystem != true`, `isSynthetic != true`, `isAdmin != true`, not deleted, and not on the staff email domains. Suspended users are counted in history (they were active then) but excluded from "Top users". A footer note on the page says this once.
+- **Counted user**: any user that is not `isSystem`, `isSynthetic` or `isAdmin` and not on the staff email domains. A `userId` with no `users` row (deleted, or not an ObjectId) still counts, so DAU equals a direct distinct count over `usageevents`. Suspended users are counted in history (they were active then) but excluded from "Top users". A footer note on the page says this once.
 - **Active user (day D)**: a counted user with at least one `usageevents` row (any feature, `status: 'ok'`) on UTC day D. Why `UsageEvent`: it is written for every billable AI call on every surface (web, CLI, desktop, API, agent), it is indexed on `createdAt`, and it has no TTL. CounterLog is a product-event stream with free-form `userId` and is used only for feature adoption. `lastActiveAt` is socket-driven and misses API users, so it is not used.
 - **DAU / WAU / MAU (day D)**: distinct active users on D / in the 7 UTC days ending D / in the 28 UTC days ending D. 28 rather than 30 so MAU windows hold the same weekdays.
 - **Stickiness**: average DAU over the range / MAU at the range end, as a percent.
@@ -250,7 +250,7 @@ Cohort: counted users who signed up in the range (legit only unless toggled), an
 Live aggregation over `usageevents` for 12 months and cohort retention does not fit a 60 s request. The page reads precomputed rollups; only "today" is live.
 
 **`analytics_user_days`** (new collection): one row per counted user per active UTC day.
-- Fields: `day` (`YYYY-MM-DD`), `userId`, `ownerType`, `orgId?`, `requests`, `creditsCharged`, `features` (string array), `sources` (string array), `signupDay`, `suspected` (boolean, frozen at write).
+- Fields: `day` (`YYYY-MM-DD`), `userId`, `ownerType`, `orgId?`, `requests`, `creditsCharged`, `features` (string array), `sources` (string array), `signupDay`, `suspected` (boolean; the signup verdict for the user, set when the user first appears and refreshed with the signup cohort for the trailing 14 days).
 - Indexes, declared together at the bottom of the schema: unique `{ day: 1, userId: 1 }`; `{ userId: 1, day: 1 }` (retention); `{ signupDay: 1, day: 1 }` (cohorts).
 - DAU = count of rows for `day`; WAU/MAU = distinct `userId` over 7/28 days of rows (one `$group` over at most 28 x DAU rows).
 
