@@ -41,7 +41,7 @@ function pendingEmailMatch(pendingEmail: string) {
   };
 }
 
-export const InviteRecipientSchema = new Schema<IInviteDocument['recipients']>({
+export const InviteRecipientSchema: Schema<IInviteDocument['recipients']> = new Schema<IInviteDocument['recipients']>({
   pending: {
     type: [String],
     required: false,
@@ -56,7 +56,7 @@ export const InviteRecipientSchema = new Schema<IInviteDocument['recipients']>({
   },
 });
 
-export const InviteSchema = new Schema<IInviteDocument>(
+export const InviteSchema: Schema<IInviteDocument> = new Schema<IInviteDocument>(
   {
     type: {
       type: String,

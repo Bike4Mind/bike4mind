@@ -23,7 +23,7 @@ export class FavoriteRepository extends BaseRepository<IFavorite> implements IFa
   }
 }
 
-export const FavoriteSchema = new Schema<IFavorite>(
+export const FavoriteSchema: Schema<IFavorite> = new Schema<IFavorite>(
   {
     userId: { type: String, required: true },
     documentId: { type: String, required: true },

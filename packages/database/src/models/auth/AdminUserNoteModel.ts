@@ -56,10 +56,10 @@ revisionSchema.pre('save', function () {
   if (!this.isNew) immutable();
 });
 
-export const AdminUserNoteModel =
+export const AdminUserNoteModel: mongoose.Model<AdminUserNoteRecord> =
   (mongoose.models.AdminUserNote as mongoose.Model<AdminUserNoteRecord> | undefined) ??
   mongoose.model<AdminUserNoteRecord>('AdminUserNote', noteSchema);
-export const AdminUserNoteRevisionModel =
+export const AdminUserNoteRevisionModel: mongoose.Model<RevisionRecord> =
   (mongoose.models.AdminUserNoteRevision as mongoose.Model<RevisionRecord> | undefined) ??
   mongoose.model<RevisionRecord>('AdminUserNoteRevision', revisionSchema);
 

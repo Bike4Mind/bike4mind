@@ -2,7 +2,7 @@ import mongoose, { Model, Schema, model } from 'mongoose';
 import { IPromptDocument, IPromptRepository } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
-export const PromptSchema = new Schema<IPromptDocument>(
+export const PromptSchema: Schema<IPromptDocument> = new Schema<IPromptDocument>(
   {
     type: { type: String, required: true },
     name: { type: String, required: true, unique: true },

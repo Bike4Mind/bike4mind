@@ -65,7 +65,7 @@ const ReleaseNoteSchema = new Schema(
 // index, which the 20260921235998 migration drops.
 ReleaseNoteSchema.index({ status: 1, publishAt: -1, _id: -1 }, { name: 'status_publishAt_id' });
 
-export const ReleaseNote =
+export const ReleaseNote: Model<IReleaseNoteDocument> =
   (mongoose.models.ReleaseNote as mongoose.Model<IReleaseNoteDocument>) ||
   model<IReleaseNoteDocument>('ReleaseNote', ReleaseNoteSchema);
 

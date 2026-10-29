@@ -26,10 +26,10 @@ const reviewSchema = new Schema<SignupDomainReview & { reviewedBy?: string; revi
 });
 reviewSchema.index({ triggeredAt: -1 });
 
-export const SignupObservationModel =
+export const SignupObservationModel: mongoose.Model<SignupObservation> =
   (mongoose.models.SignupObservation as mongoose.Model<SignupObservation>) ??
   mongoose.model('SignupObservation', observationSchema);
-export const SignupDomainReviewModel =
+export const SignupDomainReviewModel: mongoose.Model<SignupDomainReview> =
   (mongoose.models.SignupDomainReview as mongoose.Model<SignupDomainReview>) ??
   mongoose.model('SignupDomainReview', reviewSchema);
 

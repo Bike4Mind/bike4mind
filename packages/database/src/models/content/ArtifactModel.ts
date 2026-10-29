@@ -260,7 +260,7 @@ ArtifactSchema.methods.restore = function () {
   return this.save();
 };
 
-export const Artifact =
+export const Artifact: Model<IArtifactDocument> =
   (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||
   model<IArtifactDocument>('Artifact', ArtifactSchema);
 

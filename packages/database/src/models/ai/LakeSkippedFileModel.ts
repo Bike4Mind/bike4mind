@@ -39,7 +39,7 @@ const LakeSkippedFileSchema = new mongoose.Schema(
 LakeSkippedFileSchema.index({ dataLakeId: 1, sourceKind: 1, sourceId: 1 }, { unique: true });
 LakeSkippedFileSchema.index({ dataLakeId: 1, firstSeenAt: -1 });
 
-export const LakeSkippedFileModel =
+export const LakeSkippedFileModel: mongoose.Model<ILakeSkippedFileDocument> =
   (mongoose.models['LakeSkippedFile'] as unknown as mongoose.Model<ILakeSkippedFileDocument>) ||
   mongoose.model<ILakeSkippedFileDocument>('LakeSkippedFile', LakeSkippedFileSchema);
 

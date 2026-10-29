@@ -382,7 +382,7 @@ export function liveShareTokens(artifact: ShareTokenBearing): PublishedArtifactS
   return (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt);
 }
 
-export const PublishedArtifact =
+export const PublishedArtifact: Model<IPublishedArtifactDocument> =
   (mongoose.models.PublishedArtifact as mongoose.Model<IPublishedArtifactDocument>) ||
   model<IPublishedArtifactDocument>('PublishedArtifact', PublishedArtifactSchema);
 

@@ -19,7 +19,7 @@ CreditGrantIdentityClaimSchema.index({ identityDigest: 1 }, { unique: true });
 CreditGrantIdentityClaimSchema.index({ ownerId: 1 }, { unique: true });
 CreditGrantIdentityClaimSchema.index({ transactionId: 1 }, { unique: true });
 
-export const CreditGrantIdentityClaim =
+export const CreditGrantIdentityClaim: mongoose.Model<ICreditGrantIdentityClaim> =
   (mongoose.models.CreditGrantIdentityClaim as mongoose.Model<ICreditGrantIdentityClaim> | undefined) ??
   model<ICreditGrantIdentityClaim>('CreditGrantIdentityClaim', CreditGrantIdentityClaimSchema);
 

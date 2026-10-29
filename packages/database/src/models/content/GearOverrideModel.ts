@@ -49,7 +49,7 @@ const GearOverrideSchema = new Schema(
 
 GearOverrideSchema.index({ key: 1 }, { unique: true });
 
-export const GearOverride =
+export const GearOverride: Model<IGearOverrideDocument> =
   (mongoose.models.GearOverride as mongoose.Model<IGearOverrideDocument>) ||
   model<IGearOverrideDocument>('GearOverride', GearOverrideSchema);
 

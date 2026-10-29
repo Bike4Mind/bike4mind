@@ -137,151 +137,152 @@ export interface IRepoHistoricalInsightsDocument extends IMongoDocument {
 export interface IRepoHistoricalInsightsModel extends Model<IRepoHistoricalInsightsDocument> {}
 
 // Schema definition
-export const RepoHistoricalInsightsSchema = new Schema<IRepoHistoricalInsightsDocument>(
-  {
-    repoFullName: { type: String, required: true, unique: true },
-    source: { type: String, enum: ['github', 'jira'], default: 'github' },
+export const RepoHistoricalInsightsSchema: Schema<IRepoHistoricalInsightsDocument> =
+  new Schema<IRepoHistoricalInsightsDocument>(
+    {
+      repoFullName: { type: String, required: true, unique: true },
+      source: { type: String, enum: ['github', 'jira'], default: 'github' },
 
-    status: {
-      type: String,
-      enum: ['pending', 'analyzing', 'complete', 'failed'],
-      default: 'pending',
-    },
-    analysisJobId: { type: String },
-    analysisStartedAt: { type: Date },
-    analysisCompletedAt: { type: Date },
-    lastAnalyzedCommit: { type: String },
-    errorMessage: { type: String },
-
-    stats: {
-      totalClosedIssues: { type: Number, default: 0 },
-      totalMergedPRs: { type: Number, default: 0 },
-      medianDurationHours: { type: Number, default: 0 },
-      meanDurationHours: { type: Number, default: 0 },
-      convergenceRate: { type: Number, default: 0 },
-      byType: {
-        bug: {
-          medianHours: { type: Number },
-          p75Hours: { type: Number },
-          p90Hours: { type: Number },
-          count: { type: Number },
-          confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
-        },
-        feature: {
-          medianHours: { type: Number },
-          p75Hours: { type: Number },
-          p90Hours: { type: Number },
-          count: { type: Number },
-          confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
-        },
-        task: {
-          medianHours: { type: Number },
-          p75Hours: { type: Number },
-          p90Hours: { type: Number },
-          count: { type: Number },
-          confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
-        },
-        chore: {
-          medianHours: { type: Number },
-          p75Hours: { type: Number },
-          p90Hours: { type: Number },
-          count: { type: Number },
-          confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
-        },
-        refactor: {
-          medianHours: { type: Number },
-          p75Hours: { type: Number },
-          p90Hours: { type: Number },
-          count: { type: Number },
-          confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
-        },
+      status: {
+        type: String,
+        enum: ['pending', 'analyzing', 'complete', 'failed'],
+        default: 'pending',
       },
-      byMonth: [
+      analysisJobId: { type: String },
+      analysisStartedAt: { type: Date },
+      analysisCompletedAt: { type: Date },
+      lastAnalyzedCommit: { type: String },
+      errorMessage: { type: String },
+
+      stats: {
+        totalClosedIssues: { type: Number, default: 0 },
+        totalMergedPRs: { type: Number, default: 0 },
+        medianDurationHours: { type: Number, default: 0 },
+        meanDurationHours: { type: Number, default: 0 },
+        convergenceRate: { type: Number, default: 0 },
+        byType: {
+          bug: {
+            medianHours: { type: Number },
+            p75Hours: { type: Number },
+            p90Hours: { type: Number },
+            count: { type: Number },
+            confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+          },
+          feature: {
+            medianHours: { type: Number },
+            p75Hours: { type: Number },
+            p90Hours: { type: Number },
+            count: { type: Number },
+            confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+          },
+          task: {
+            medianHours: { type: Number },
+            p75Hours: { type: Number },
+            p90Hours: { type: Number },
+            count: { type: Number },
+            confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+          },
+          chore: {
+            medianHours: { type: Number },
+            p75Hours: { type: Number },
+            p90Hours: { type: Number },
+            count: { type: Number },
+            confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+          },
+          refactor: {
+            medianHours: { type: Number },
+            p75Hours: { type: Number },
+            p90Hours: { type: Number },
+            count: { type: Number },
+            confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+          },
+        },
+        byMonth: [
+          {
+            month: { type: String },
+            closedIssues: { type: Number },
+            mergedPRs: { type: Number },
+            avgDurationHours: { type: Number },
+          },
+        ],
+      },
+
+      contributors: [
         {
-          month: { type: String },
-          closedIssues: { type: Number },
-          mergedPRs: { type: Number },
+          githubLogin: { type: String },
+          jiraDisplayName: { type: String },
+          jiraAccountId: { type: String },
+          name: { type: String },
+          avatarUrl: { type: String },
+          velocityTier: { type: String, enum: ['LIGHTNING', 'FORGE', 'STRATEGIC'] },
+          velocityMultiplier: { type: Number },
           avgDurationHours: { type: Number },
+          totalPRs: { type: Number },
+          totalIssuesResolved: { type: Number },
+          avgPRSize: {
+            additions: { type: Number },
+            deletions: { type: Number },
+          },
+          avgTimeSpentHours: { type: Number },
+          avgOriginalEstimateHours: { type: Number },
+          strengths: [{ type: String }],
+          bestTaskTypes: [{ type: String }],
+          recentActivity: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+          trend: { type: String, enum: ['improving', 'stable', 'declining'] },
         },
       ],
-    },
 
-    contributors: [
-      {
-        githubLogin: { type: String },
-        jiraDisplayName: { type: String },
-        jiraAccountId: { type: String },
-        name: { type: String },
-        avatarUrl: { type: String },
-        velocityTier: { type: String, enum: ['LIGHTNING', 'FORGE', 'STRATEGIC'] },
-        velocityMultiplier: { type: Number },
-        avgDurationHours: { type: Number },
-        totalPRs: { type: Number },
-        totalIssuesResolved: { type: Number },
-        avgPRSize: {
-          additions: { type: Number },
-          deletions: { type: Number },
+      keywordRisks: [
+        {
+          keyword: { type: String },
+          tier: { type: String, enum: ['EXTREME', 'HIGH', 'MEDIUM', 'LOW'] },
+          multiplier: { type: Number },
+          occurrences: { type: Number },
+          avgDurationHours: { type: Number },
+          exampleIssues: [{ type: String }],
         },
-        avgTimeSpentHours: { type: Number },
-        avgOriginalEstimateHours: { type: Number },
-        strengths: [{ type: String }],
-        bestTaskTypes: [{ type: String }],
-        recentActivity: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] },
-        trend: { type: String, enum: ['improving', 'stable', 'declining'] },
+      ],
+
+      durationDistributions: {
+        bug: [
+          {
+            label: { type: String },
+            minHours: { type: Number },
+            maxHours: { type: Number },
+            count: { type: Number },
+            percentage: { type: Number },
+          },
+        ],
+        feature: [
+          {
+            label: { type: String },
+            minHours: { type: Number },
+            maxHours: { type: Number },
+            count: { type: Number },
+            percentage: { type: Number },
+          },
+        ],
+        task: [
+          {
+            label: { type: String },
+            minHours: { type: Number },
+            maxHours: { type: Number },
+            count: { type: Number },
+            percentage: { type: Number },
+          },
+        ],
       },
-    ],
 
-    keywordRisks: [
-      {
-        keyword: { type: String },
-        tier: { type: String, enum: ['EXTREME', 'HIGH', 'MEDIUM', 'LOW'] },
-        multiplier: { type: Number },
-        occurrences: { type: Number },
-        avgDurationHours: { type: Number },
-        exampleIssues: [{ type: String }],
+      velocityImprovement: {
+        byYear: { type: Map, of: Number },
+        overallImprovement: { type: String },
       },
-    ],
-
-    durationDistributions: {
-      bug: [
-        {
-          label: { type: String },
-          minHours: { type: Number },
-          maxHours: { type: Number },
-          count: { type: Number },
-          percentage: { type: Number },
-        },
-      ],
-      feature: [
-        {
-          label: { type: String },
-          minHours: { type: Number },
-          maxHours: { type: Number },
-          count: { type: Number },
-          percentage: { type: Number },
-        },
-      ],
-      task: [
-        {
-          label: { type: String },
-          minHours: { type: Number },
-          maxHours: { type: Number },
-          count: { type: Number },
-          percentage: { type: Number },
-        },
-      ],
     },
-
-    velocityImprovement: {
-      byYear: { type: Map, of: Number },
-      overallImprovement: { type: String },
-    },
-  },
-  {
-    timestamps: true,
-    toJSON: { virtuals: true },
-  }
-);
+    {
+      timestamps: true,
+      toJSON: { virtuals: true },
+    }
+  );
 
 export class RepoHistoricalInsightsRepository extends BaseRepository<IRepoHistoricalInsightsDocument> {
   private repoModel: IRepoHistoricalInsightsModel;

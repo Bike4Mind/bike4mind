@@ -130,7 +130,7 @@ LakeMembershipDecisionSchema.pre(
   }
 );
 
-export const LakeMembershipDecisionModel =
+export const LakeMembershipDecisionModel: mongoose.Model<ILakeMembershipDecisionDocument> =
   (mongoose.models['LakeMembershipDecision'] as unknown as mongoose.Model<ILakeMembershipDecisionDocument>) ||
   mongoose.model<ILakeMembershipDecisionDocument>('LakeMembershipDecision', LakeMembershipDecisionSchema);
 

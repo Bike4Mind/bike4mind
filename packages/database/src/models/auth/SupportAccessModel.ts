@@ -26,6 +26,6 @@ const schema = new Schema<SupportAccessRecord>({
 schema.index({ userId: 1, startedAt: -1 });
 schema.index({ endedAt: 1, expiresAt: 1 });
 
-export const SupportAccess =
+export const SupportAccess: Model<SupportAccessRecord> =
   (mongoose.models.SupportAccess as Model<SupportAccessRecord> | undefined) ??
   model<SupportAccessRecord>('SupportAccess', schema);
