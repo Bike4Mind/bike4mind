@@ -54,6 +54,10 @@ const LOCAL_TIMEOUT_MS = 1_500;
 /** Background recheck while the app runs. */
 export const HEALTH_INTERVAL_MS = 60_000;
 const RECHECK_AFTER_MS = 10_000;
+/** `dns.lookup` has no timeout of its own and can hang on a slow resolver. */
+const RESOLVE_TIMEOUT_MS = 5_000;
+/** How long a picker load waits on a down server's check before listing its last models. */
+export const PICKER_CHECK_WAIT_MS = 2_000;
 
 interface ServerClient extends LocalChat {
   listModels(): Promise<ChatModelOption[]>;
@@ -291,12 +295,13 @@ export class ModelServerRegistry {
     const lists = await Promise.all(
       [...this.entries.values()].map(async entry => {
         const server = { id: entry.record.id, name: entry.record.name };
-        // A check already running (say, after a pull) decides whether a server shown as down is back.
-        if (entry.health.state !== 'online') await this.checking.get(entry)?.catch(() => undefined);
-        // A picker refresh retries a server that was down, without hammering one that keeps failing.
-        if (entry.health.state !== 'online' && entry.health.state !== 'unknown' && this.stale(entry)) {
-          await this.checkEntry(entry);
-          this.emit();
+        // A server shown as down may be back: a check already running (say, after a pull) decides, or a
+        // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
+        const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
+        const running = this.checking.get(entry);
+        if (down && (running || this.stale(entry))) {
+          const check = (running ?? this.checkEntry(entry).then(() => this.emit())).catch(() => undefined);
+          await within(check, PICKER_CHECK_WAIT_MS, undefined);
         }
         if (entry.health.state === 'online' || entry.health.state === 'unknown') {
           try {
@@ -618,8 +623,8 @@ export class ModelServerRegistry {
     const literal = scopeOfIp(host);
     if (literal) return literal;
     try {
-      const addresses = await (this.deps.resolve ?? resolveAll)(host);
-      if (addresses.length === 0) return null;
+      const addresses = await within((this.deps.resolve ?? resolveAll)(host), RESOLVE_TIMEOUT_MS, null);
+      if (!addresses || addresses.length === 0) return null;
       return leastTrusted(addresses.map(address => scopeOfIp(address) ?? 'public'));
     } catch {
       return null;
@@ -630,6 +635,13 @@ export class ModelServerRegistry {
 async function resolveAll(host: string): Promise<string[]> {
   const addresses = await dns.promises.lookup(host, { all: true });
   return addresses.map(entry => entry.address);
+}
+
+/** `work`'s result, or `late` once `ms` pass without one. */
+function within<T, L>(work: Promise<T>, ms: number, late: L): Promise<T | L> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<L>(resolve => (timer = setTimeout(() => resolve(late), ms)));
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }
 
 function unavailableReason(entry: Entry): string {
