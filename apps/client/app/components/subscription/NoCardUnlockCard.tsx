@@ -2,9 +2,10 @@ import { Alert, Box, Button, Link, Typography } from '@mui/joy';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link as RouterLink } from '@tanstack/react-router';
-import type { NoCardUnlockReason, NoCardUnlockRefusal } from '@bike4mind/common';
+import type { NoCardUnlockRefusal } from '@bike4mind/common';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
-import { useNoCardUnlock } from '@client/app/hooks/data/noCardUnlock';
+import { useNoCardUnlock, type OneClickUnlockReason } from '@client/app/hooks/data/noCardUnlock';
+import { PhoneUnlockForm } from './PhoneUnlockForm';
 
 const REFUSAL_TEXT: Record<NoCardUnlockRefusal, string> = {
   disabled: 'This unlock is not available for your account right now.',
@@ -21,6 +22,13 @@ const REFUSAL_TEXT: Record<NoCardUnlockRefusal, string> = {
   work_email_catch_all: 'This email domain could not be verified as a work address.',
   work_email_probe_inconclusive: 'We could not verify this email domain right now.',
   domain_cap_reached: 'Too many unlocks have been claimed for this domain today. Try again tomorrow.',
+  phone_invalid: 'Enter a valid mobile number in international format, starting with + and the country code.',
+  phone_line_type: 'Only mobile numbers qualify. VoIP, landline and virtual numbers are not accepted.',
+  phone_blocked: 'This phone number cannot be used for an unlock.',
+  phone_already_claimed: 'This phone number has already been used for an unlock.',
+  phone_rate_limited: 'Too many verification attempts. Try again later.',
+  phone_not_started: 'Your code expired. Send a new code and try again.',
+  phone_code_invalid: 'That code is not valid. Check the SMS and try again, or send a new code.',
   signup_held: 'Unlocks for your email domain are on hold while we review recent signups.',
   signup_grant_pending: 'Your signup credits are still being prepared. Unlocks open once they arrive.',
   daily_budget_reached: 'Free credit unlocks are paused for today. Try again tomorrow.',
@@ -32,15 +40,16 @@ export function NoCardUnlockCard() {
   const { t } = useTranslation();
   const { getSettingBoolean } = useAdminSettingsCache();
   const unlock = useNoCardUnlock();
-  const [pending, setPending] = useState<NoCardUnlockReason | null>(null);
+  const [pending, setPending] = useState<OneClickUnlockReason | 'phone' | null>(null);
   const [outcome, setOutcome] = useState<{ granted: number; refusal?: NoCardUnlockRefusal } | null>(null);
   const [failed, setFailed] = useState(false);
 
   if (!getSettingBoolean('noCardUnlockEnabled', false)) return null;
   // No catch-all probe runs in this deployment, so work-email unlocks are only offered when inconclusive results are allowed.
   const workEmailOffered = getSettingBoolean('noCardUnlockProbeInconclusiveAllows', false);
+  const phoneOffered = getSettingBoolean('noCardUnlockPhoneEnabled', false);
 
-  const run = (reason: NoCardUnlockReason) => {
+  const run = (reason: OneClickUnlockReason) => {
     setPending(reason);
     setOutcome(null);
     setFailed(false);
@@ -58,6 +67,7 @@ export function NoCardUnlockCard() {
         {workEmailOffered
           ? t('billing.no_card_unlock_sub', 'Verify a GitHub account or a work email to add starter credits.')
           : t('billing.no_card_unlock_sub_github', 'Verify a GitHub account to add starter credits.')}
+        {phoneOffered && ` ${t('billing.no_card_unlock_sub_phone', 'You can also verify a mobile number.')}`}
       </Typography>
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
         <Button
@@ -79,6 +89,17 @@ export function NoCardUnlockCard() {
           >
             {t('billing.no_card_unlock_work_email', 'Verify work email')}
           </Button>
+        )}
+        {phoneOffered && (
+          <PhoneUnlockForm
+            disabled={pending !== null && pending !== 'phone'}
+            onBusyChange={busy => {
+              setPending(busy ? 'phone' : null);
+              if (busy) setFailed(false);
+            }}
+            onOutcome={setOutcome}
+            onError={() => setFailed(true)}
+          />
         )}
       </Box>
       {failed && (

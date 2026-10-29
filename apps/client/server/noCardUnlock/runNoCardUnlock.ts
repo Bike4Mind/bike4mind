@@ -12,6 +12,7 @@ import {
 import { decryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
+import { allowPhoneVerifyAttempt, clearPendingPhone, phoneUnlockValidator } from './phoneUnlock';
 
 const { GithubApiError, githubValidator, grantNoCardUnlock, loadNoCardUnlockSettings, workEmailValidator } =
   userService;
@@ -72,7 +73,20 @@ export interface NoCardUnlockResponse {
   refusal?: string;
 }
 
-export async function runNoCardUnlock(reason: NoCardUnlockReason, userId: string): Promise<NoCardUnlockResponse> {
+async function refusalResponse(userId: string, refusal: string): Promise<NoCardUnlockResponse> {
+  const user = await userRepository.findById(userId);
+  return { creditsGranted: 0, currentCredits: user?.currentCredits ?? 0, refusal };
+}
+
+/** `phoneCode` is the SMS code for `phone_verified`; the other reasons ignore it. */
+export async function runNoCardUnlock(
+  reason: NoCardUnlockReason,
+  userId: string,
+  { phoneCode = '' }: { phoneCode?: string } = {}
+): Promise<NoCardUnlockResponse> {
+  if (reason === 'phone_verified' && !(await allowPhoneVerifyAttempt(userId))) {
+    return refusalResponse(userId, 'phone_rate_limited');
+  }
   const settings = await loadNoCardUnlockSettings(adminSettingsRepository);
 
   const validators: Record<NoCardUnlockReason, NoCardUnlockValidator> = {
@@ -89,6 +103,7 @@ export async function runNoCardUnlock(reason: NoCardUnlockReason, userId: string
       // Port 25 is blocked from the serverless runtime, so the probe is always inconclusive.
       catchAllProbe: async () => null,
     }),
+    phone_verified: phoneUnlockValidator(settings, phoneCode),
   };
 
   const result = await grantNoCardUnlock(userId, reason, {
@@ -105,8 +120,8 @@ export async function runNoCardUnlock(reason: NoCardUnlockReason, userId: string
   });
 
   if (result.granted) {
+    if (reason === 'phone_verified') await clearPendingPhone(userId);
     return { creditsGranted: result.credits, currentCredits: result.currentCredits };
   }
-  const user = await userRepository.findById(userId);
-  return { creditsGranted: 0, currentCredits: user?.currentCredits ?? 0, refusal: result.refusal };
+  return refusalResponse(userId, result.refusal);
 }

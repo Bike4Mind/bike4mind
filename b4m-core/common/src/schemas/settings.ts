@@ -499,6 +499,9 @@ export const SettingKeySchema = z.enum([
   'noCardUnlockGithubMinRepos',
   'noCardUnlockWorkEmailDomainDailyCap',
   'noCardUnlockProbeInconclusiveAllows',
+  'noCardUnlockPhoneEnabled',
+  'noCardUnlockPhoneCredits',
+  'noCardUnlockPhoneBlockedPrefixes',
   'signupAnomaly',
 
   // WEATHER SERVICE SETTINGS
@@ -4447,6 +4450,36 @@ export const settingsMap = {
       'Grant the work-email unlock when the catch-all mail-domain check cannot reach a verdict. This deployment cannot run that check, so ON grants work-email unlocks after only the MX and disposable-domain checks. OFF (default) refuses them.',
     category: 'Users',
     userReadable: true,
+  }),
+  noCardUnlockPhoneEnabled: makeBooleanSetting({
+    key: 'noCardUnlockPhoneEnabled',
+    // Read by the billing UI to decide whether to offer the phone unlock.
+    userReadable: true,
+    name: 'No-Card Unlock: Phone Verification',
+    defaultValue: false,
+    description:
+      'Offers the phone unlock: the user receives an SMS code and must be on a mobile line (VoIP, landline and other line types are refused). Each phone number can unlock once across all users. Needs the TWILIO_* secrets; without them every attempt is refused. OFF (default) hides it.',
+    category: 'Users',
+  }),
+  noCardUnlockPhoneCredits: makeNumberSetting({
+    key: 'noCardUnlockPhoneCredits',
+    name: 'No-Card Unlock: Phone Credits',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits granted when a user verifies a qualifying mobile number. SMS numbers are cheap to buy, so this can be set below the GitHub amount. 0 grants nothing.',
+    category: 'Users',
+  }),
+  noCardUnlockPhoneBlockedPrefixes: makeObjectSetting<string[]>({
+    key: 'noCardUnlockPhoneBlockedPrefixes',
+    name: 'No-Card Unlock: Blocked Phone Prefixes',
+    defaultValue: [],
+    description:
+      'Phone number ranges refused for the phone unlock, as E.164 prefixes (for example +4479112). A prefix blocks every number that starts with it. Entries that are not a + followed by digits are ignored.',
+    category: 'Users',
+    // Private: the ranges are abuse intelligence, so the key carries no userReadable or publicSafe tag.
+    schema: z.array(z.string()),
   }),
   freeTierDailySpendCapCredits: makeNumberSetting({
     key: 'freeTierDailySpendCapCredits',

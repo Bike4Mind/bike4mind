@@ -75,6 +75,9 @@ export const DEFAULT_MANIFEST = {
   STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   SUPPORT_EMAIL: { kind: 'secret', optional: true },
   TURNSTILE_SECRET_KEY: { kind: 'secret', optional: true },
+  TWILIO_ACCOUNT_SID: { kind: 'secret', optional: true },
+  TWILIO_AUTH_TOKEN: { kind: 'secret', optional: true },
+  TWILIO_VERIFY_SERVICE_SID: { kind: 'secret', optional: true },
   XAI_API_KEY: { kind: 'secret', optional: true },
   // --- bucket ---
   appFilesBucket: { kind: 'bucket' },

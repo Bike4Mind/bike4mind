@@ -4,7 +4,14 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { NoCardUnlockCard } from './NoCardUnlockCard';
 
-const state = vi.hoisted(() => ({ enabled: true, probeAllows: true, mutate: vi.fn() }));
+const state = vi.hoisted(() => ({
+  enabled: true,
+  probeAllows: true,
+  phoneEnabled: false,
+  mutate: vi.fn(),
+  startPhone: vi.fn(),
+  verifyPhone: vi.fn(),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -20,11 +27,18 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({
-    getSettingBoolean: (key: string) => (key === 'noCardUnlockEnabled' ? state.enabled : state.probeAllows),
+    getSettingBoolean: (key: string) =>
+      ({
+        noCardUnlockEnabled: state.enabled,
+        noCardUnlockProbeInconclusiveAllows: state.probeAllows,
+        noCardUnlockPhoneEnabled: state.phoneEnabled,
+      })[key] ?? false,
   }),
 }));
 vi.mock('@client/app/hooks/data/noCardUnlock', () => ({
   useNoCardUnlock: () => ({ mutate: state.mutate }),
+  usePhoneUnlockStart: () => ({ mutate: state.startPhone, isPending: false }),
+  usePhoneUnlockVerify: () => ({ mutate: state.verifyPhone, isPending: false }),
 }));
 
 const theme = extendTheme({ ...getThemeConfig() });
@@ -45,7 +59,10 @@ describe('NoCardUnlockCard', () => {
   beforeEach(() => {
     state.enabled = true;
     state.probeAllows = true;
+    state.phoneEnabled = false;
     state.mutate.mockReset();
+    state.startPhone.mockReset();
+    state.verifyPhone.mockReset();
   });
 
   it('renders nothing when the unlock is disabled', () => {
@@ -100,5 +117,50 @@ describe('NoCardUnlockCard', () => {
     renderCard();
     fireEvent.click(screen.getByTestId('no-card-unlock-github-btn'));
     await waitFor(() => expect(screen.getByTestId('no-card-unlock-error')).toBeTruthy());
+  });
+
+  describe('phone unlock', () => {
+    const settleWith = (mock: ReturnType<typeof vi.fn>, result: unknown) =>
+      mock.mockImplementation((_arg, opts) => {
+        opts.onSuccess(result);
+        opts.onSettled();
+      });
+
+    it('is hidden until its own toggle is on', () => {
+      renderCard();
+      expect(screen.queryByTestId('no-card-unlock-phone-btn')).toBeNull();
+    });
+
+    it('sends a code, then verifies it and shows success', async () => {
+      state.phoneEnabled = true;
+      settleWith(state.startPhone, { sent: true });
+      settleWith(state.verifyPhone, { creditsGranted: 3, currentCredits: 3 });
+      renderCard();
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-btn'));
+      fireEvent.change(screen.getByTestId('no-card-unlock-phone-input'), { target: { value: ' +14155552671 ' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-send-btn'));
+      expect(state.startPhone.mock.calls[0][0]).toBe('+14155552671');
+
+      const codeInput = await screen.findByTestId('no-card-unlock-phone-code-input');
+      const verifyBtn = screen.getByTestId('no-card-unlock-phone-verify-btn');
+      expect((verifyBtn as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.change(codeInput, { target: { value: '123456' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-verify-btn'));
+      expect(state.verifyPhone.mock.calls[0][0]).toBe('123456');
+      await waitFor(() => expect(screen.getByTestId('no-card-unlock-success')).toBeTruthy());
+    });
+
+    it('shows the line-type refusal and stays on the number step', async () => {
+      state.phoneEnabled = true;
+      settleWith(state.startPhone, { sent: false, refusal: 'phone_line_type' });
+      renderCard();
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-btn'));
+      fireEvent.change(screen.getByTestId('no-card-unlock-phone-input'), { target: { value: '+14155552671' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-send-btn'));
+      const refusal = await screen.findByTestId('no-card-unlock-refusal');
+      expect(refusal.textContent).toContain('Only mobile numbers qualify');
+      expect(screen.getByTestId('no-card-unlock-phone-input')).toBeTruthy();
+      expect(state.verifyPhone).not.toHaveBeenCalled();
+    });
   });
 });

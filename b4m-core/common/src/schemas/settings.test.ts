@@ -234,6 +234,13 @@ describe('public settings projection (M2.5 security boundary)', () => {
       const keys = new Set(userReadableSettingKeys());
       expect(keys.has('noCardUnlockEnabled')).toBe(true);
       expect(keys.has('noCardUnlockProbeInconclusiveAllows')).toBe(true);
+      expect(keys.has('noCardUnlockPhoneEnabled')).toBe(true);
+    });
+
+    it('keeps the phone blocklist and phone credits admin-only', () => {
+      const keys = new Set(userReadableSettingKeys());
+      expect(keys.has('noCardUnlockPhoneBlockedPrefixes')).toBe(false);
+      expect(keys.has('noCardUnlockPhoneCredits')).toBe(false);
     });
 
     it('excludes admin-only operational config a non-admin has no claim to', () => {

@@ -13,12 +13,14 @@ import {
   CreditLot,
   CreditTransaction,
   GithubUnlockClaim,
+  PhoneUnlockClaim,
   User,
   adminSettingsRepository,
   cacheRepository,
   creditLotRepository,
   creditTransactionRepository,
   githubUnlockClaimRepository,
+  phoneUnlockClaimRepository,
   signupGrantBudgetRepository,
   userRepository,
   withTransaction,
@@ -27,7 +29,7 @@ import { userService } from '@bike4mind/services';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-const { grantNoCardUnlock, githubValidator, workEmailValidator } = userService;
+const { grantNoCardUnlock, githubValidator, phoneValidator, workEmailValidator } = userService;
 
 let replSet: MongoMemoryReplSet;
 
@@ -45,12 +47,15 @@ afterAll(async () => {
 beforeEach(async () => {
   await mongoose.connection.dropDatabase();
   await Promise.all(
-    [User, CreditTransaction, CreditLot, AdminSettings, Cache, GithubUnlockClaim].map(model => model.createIndexes())
+    [User, CreditTransaction, CreditLot, AdminSettings, Cache, GithubUnlockClaim, PhoneUnlockClaim].map(model =>
+      model.createIndexes()
+    )
   );
 });
 
 const GITHUB = 11;
 const WORK = 7;
+const PHONE = 3;
 const MAX = 15;
 
 const seedSettings = async (over: Record<string, unknown> = {}) => {
@@ -62,6 +67,8 @@ const seedSettings = async (over: Record<string, unknown> = {}) => {
     noCardUnlockGithubMinAgeDays: 30,
     noCardUnlockGithubMinRepos: 1,
     noCardUnlockWorkEmailDomainDailyCap: 2,
+    noCardUnlockPhoneEnabled: true,
+    noCardUnlockPhoneCredits: PHONE,
     ...over,
   };
   for (const [settingName, settingValue] of Object.entries(values)) {
@@ -94,7 +101,7 @@ const ghProfile = (githubId: number, ageDays: number) => ({
   getEmails: async () => [{ email: 'a@b.test', verified: true, primary: true }],
 });
 
-const build = async (githubId = 1, ageDays = 400) => {
+const build = async (githubId = 1, ageDays = 400, phone = '+14155550100') => {
   const settings = await userService.loadNoCardUnlockSettings(adminSettingsRepository);
   return {
     db: {
@@ -119,6 +126,14 @@ const build = async (githubId = 1, ageDays = 400) => {
         catchAllProbe: async () => false,
         isDisposable: () => false,
       }),
+      phone_verified: phoneValidator({
+        settings,
+        code: '123456',
+        getPendingPhone: async () => phone,
+        checkCode: async () => true,
+        claimPhone: (number, userId) => phoneUnlockClaimRepository.claim(number, userId),
+        releasePhone: (number, userId) => phoneUnlockClaimRepository.release(number, userId),
+      }),
     },
   };
 };
@@ -127,6 +142,45 @@ const balance = async (id: string) => (await User.findById(id).lean())?.currentC
 const rows = (id: string) => CreditTransaction.countDocuments({ ownerId: id, transactionId: /^unlock-grant:/ });
 
 describe('grantNoCardUnlock on a real replica set', () => {
+  it('unlocks one phone number for one account, under the per-reason ledger id', async () => {
+    await seedSettings();
+    const [a, b] = [await seedUser(), await seedUser()];
+    expect(await grantNoCardUnlock(a, 'phone_verified', await build(1, 400, '+447700900123'))).toMatchObject({
+      granted: true,
+      credits: PHONE,
+    });
+    expect(
+      await CreditTransaction.countDocuments({ transactionId: noCardUnlockTransactionId('phone_verified', a) })
+    ).toBe(1);
+    expect(await grantNoCardUnlock(b, 'phone_verified', await build(2, 400, '+447700900123'))).toEqual({
+      granted: false,
+      refusal: 'phone_already_claimed',
+    });
+    expect(await balance(b)).toBe(0);
+  });
+
+  it('refuses the phone unlock while its own toggle is off, even with credits set', async () => {
+    await seedSettings({ noCardUnlockPhoneEnabled: false });
+    const id = await seedUser();
+    expect(await grantNoCardUnlock(id, 'phone_verified', await build())).toEqual({
+      granted: false,
+      refusal: 'disabled',
+    });
+    expect(await PhoneUnlockClaim.countDocuments({})).toBe(0);
+  });
+
+  it('counts the phone grant toward the combined maximum', async () => {
+    await seedSettings({ noCardUnlockMaxCredits: GITHUB + 1 });
+    const id = await seedUser();
+    const adapters = await build(5, 400, '+447700900124');
+    await grantNoCardUnlock(id, 'github_verified', adapters);
+    expect(await grantNoCardUnlock(id, 'phone_verified', adapters)).toMatchObject({ granted: true, credits: 1 });
+    expect(await userService.noCardUnlockEligibility(id, 'work_email_verified', adapters)).toEqual({
+      eligible: false,
+      refusal: 'cap_reached',
+    });
+  });
+
   it('credits once with the per-reason ledger id and treats a replay as already granted', async () => {
     await seedSettings();
     const id = await seedUser();

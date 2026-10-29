@@ -74,6 +74,12 @@ const Config = {
   ANTHROPIC_API_KEY: Resource.ANTHROPIC_API_KEY.value,
   ANTHROPIC_ADMIN_API_KEY: readOptionalSecret('ANTHROPIC_ADMIN_API_KEY', () => Resource.ANTHROPIC_ADMIN_API_KEY.value),
   TURNSTILE_SECRET_KEY: readOptionalSecret('TURNSTILE_SECRET_KEY', () => Resource.TURNSTILE_SECRET_KEY.value),
+  TWILIO_ACCOUNT_SID: readOptionalSecret('TWILIO_ACCOUNT_SID', () => Resource.TWILIO_ACCOUNT_SID.value),
+  TWILIO_AUTH_TOKEN: readOptionalSecret('TWILIO_AUTH_TOKEN', () => Resource.TWILIO_AUTH_TOKEN.value),
+  TWILIO_VERIFY_SERVICE_SID: readOptionalSecret(
+    'TWILIO_VERIFY_SERVICE_SID',
+    () => Resource.TWILIO_VERIFY_SERVICE_SID.value
+  ),
   OPENAI_ADMIN_API_KEY: readOptionalSecret('OPENAI_ADMIN_API_KEY', () => Resource.OPENAI_ADMIN_API_KEY.value),
   GEMINI_API_KEY: Resource.GEMINI_API_KEY.value,
   OKTA_AUDIENCE: Resource.OKTA_AUDIENCE.value,

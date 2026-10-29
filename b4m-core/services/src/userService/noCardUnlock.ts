@@ -5,7 +5,9 @@ import {
   ICacheRepository,
   ICreditLotRepository,
   ICreditTransactionRepository,
+  IUserDocument,
   IUserRepository,
+  isBlockedPhone,
   NO_CARD_UNLOCK_REASONS,
   noCardUnlockTransactionId,
   personalEmailProviders,
@@ -185,6 +187,40 @@ export function workEmailValidator(deps: WorkEmailValidatorDeps): NoCardUnlockVa
   };
 }
 
+export interface PhoneValidatorDeps {
+  settings: NoCardUnlockSettings;
+  code: string;
+  /** The E.164 number the start step sent a code to for this user, or null when none is pending. */
+  getPendingPhone: (userId: string) => Promise<string | null>;
+  checkCode: (phone: string, code: string) => Promise<boolean>;
+  claimPhone: (phone: string, userId: string) => Promise<{ claimed: boolean }>;
+  releasePhone: (phone: string, userId: string) => Promise<void>;
+}
+
+export function phoneValidator(deps: PhoneValidatorDeps): NoCardUnlockValidator {
+  return async user => {
+    const phone = await deps.getPendingPhone(user.id);
+    if (!phone) return deny('phone_not_started');
+    // Re-checked here because a range can be blocked between sending the code and entering it.
+    if (isBlockedPhone(phone, deps.settings.phoneBlockedPrefixes)) return deny('phone_blocked');
+    if (!(await deps.checkCode(phone, deps.code))) return deny('phone_code_invalid');
+
+    return {
+      ok: true,
+      commit: async () => {
+        const claim = await deps.claimPhone(phone, user.id);
+        if (!claim.claimed) return { ok: false, refusal: 'phone_already_claimed' };
+        return {
+          ok: true,
+          release: async ({ reasonGranted }) => {
+            if (!reasonGranted) await deps.releasePhone(phone, user.id);
+          },
+        };
+      },
+    };
+  };
+}
+
 const SETTING_NAMES = [
   'noCardUnlockEnabled',
   'noCardUnlockGithubCredits',
@@ -194,6 +230,9 @@ const SETTING_NAMES = [
   'noCardUnlockGithubMinRepos',
   'noCardUnlockWorkEmailDomainDailyCap',
   'noCardUnlockProbeInconclusiveAllows',
+  'noCardUnlockPhoneEnabled',
+  'noCardUnlockPhoneCredits',
+  'noCardUnlockPhoneBlockedPrefixes',
 ] as const;
 
 export async function loadNoCardUnlockSettings(
@@ -225,26 +264,73 @@ export interface GrantNoCardUnlockAdapters {
 
 const refused = (refusal: NoCardUnlockRefusal): GrantNoCardUnlockResult => ({ granted: false, refusal });
 
+function reasonCreditsOf(reason: NoCardUnlockReason, settings: NoCardUnlockSettings): number {
+  const credits: Record<NoCardUnlockReason, number> = {
+    github_verified: settings.githubCredits,
+    work_email_verified: settings.workEmailCredits,
+    phone_verified: settings.phoneEnabled ? settings.phoneCredits : 0,
+  };
+  return credits[reason];
+}
+
+type EligibilityAdapters = Pick<GrantNoCardUnlockAdapters, 'db' | 'settings' | 'signupProtection'>;
+
+type Preflight =
+  | { ok: true; user: IUserDocument; settings: NoCardUnlockSettings; reasonCredits: number; transactionId: string }
+  | { ok: false; refusal: NoCardUnlockRefusal };
+
+/** The account-level checks every reason shares, run before any validator so a refusal costs nothing external. */
+async function preflight(
+  userId: string,
+  reason: NoCardUnlockReason,
+  { db, settings: preloaded, signupProtection }: EligibilityAdapters
+): Promise<Preflight> {
+  const settings = preloaded ?? (await loadNoCardUnlockSettings(db.adminSettings));
+  if (!settings.enabled) return { ok: false, refusal: 'disabled' };
+
+  const reasonCredits = reasonCreditsOf(reason, settings);
+  if (reasonCredits <= 0) return { ok: false, refusal: 'disabled' };
+
+  const user = await db.users.findById(userId);
+  if (!user || !user.emailVerified || accountBlockReasons(user).length > 0) return { ok: false, refusal: 'disabled' };
+
+  const transactionId = noCardUnlockTransactionId(reason, userId);
+  if (await db.creditTransactions.findOne({ transactionId })) return { ok: false, refusal: 'already_granted' };
+
+  if (await protectSignupCredits(userId, { users: db.users, adminSettings: db.adminSettings, signupProtection })) {
+    return { ok: false, refusal: 'signup_held' };
+  }
+  return { ok: true, user, settings, reasonCredits, transactionId };
+}
+
+export type NoCardUnlockEligibility = { eligible: true } | { eligible: false; refusal: NoCardUnlockRefusal };
+
+/**
+ * Whether a grant for `reason` could succeed if its validator passed. For a reason whose validator
+ * costs money (the phone unlock sends an SMS), call this first so an ineligible user spends nothing.
+ */
+export async function noCardUnlockEligibility(
+  userId: string,
+  reason: NoCardUnlockReason,
+  adapters: EligibilityAdapters
+): Promise<NoCardUnlockEligibility> {
+  const pre = await preflight(userId, reason, adapters);
+  if (!pre.ok) return { eligible: false, refusal: pre.refusal };
+  const granted = await sumGranted(adapters.db, userId);
+  if (Math.min(pre.reasonCredits, pre.settings.maxCredits - granted) <= 0) {
+    return { eligible: false, refusal: 'cap_reached' };
+  }
+  return { eligible: true };
+}
+
 export async function grantNoCardUnlock(
   userId: string,
   reason: NoCardUnlockReason,
   { db, validators, withTransaction, settings: preloaded, signupProtection }: GrantNoCardUnlockAdapters
 ): Promise<GrantNoCardUnlockResult> {
-  const settings = preloaded ?? (await loadNoCardUnlockSettings(db.adminSettings));
-  if (!settings.enabled) return refused('disabled');
-
-  const reasonCredits = reason === 'github_verified' ? settings.githubCredits : settings.workEmailCredits;
-  if (reasonCredits <= 0) return refused('disabled');
-
-  const user = await db.users.findById(userId);
-  if (!user || !user.emailVerified || accountBlockReasons(user).length > 0) return refused('disabled');
-
-  const transactionId = noCardUnlockTransactionId(reason, userId);
-  if (await db.creditTransactions.findOne({ transactionId })) return refused('already_granted');
-
-  if (await protectSignupCredits(userId, { users: db.users, adminSettings: db.adminSettings, signupProtection })) {
-    return refused('signup_held');
-  }
+  const pre = await preflight(userId, reason, { db, settings: preloaded, signupProtection });
+  if (!pre.ok) return refused(pre.refusal);
+  const { user, settings, reasonCredits, transactionId } = pre;
 
   // A budget-held signup tranche is paid before any unlock, so no account holds the remainder without it.
   if (user.signupGrantHeldReason === 'budget_exhausted') return refused('signup_grant_pending');
