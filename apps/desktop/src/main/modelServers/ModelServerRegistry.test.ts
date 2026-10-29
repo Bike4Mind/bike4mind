@@ -170,6 +170,7 @@ describe('ModelServerRegistry', () => {
       'http://127.0.0.1:11434',
       '127.0.0.1:11434',
       'localhost:11434',
+      'http://localhost.:11434',
       'http://[::1]:11434/',
       '0.0.0.0:11434',
       'http://[::ffff:127.0.0.1]:11434',
@@ -227,6 +228,14 @@ describe('ModelServerRegistry', () => {
       expect(probe).toMatchObject({ ok: false, needsCredentials: false });
       expect(probe.error).toMatch(/127\.0\.0\.2 answered 403 Forbidden/);
       expect(probe.error).not.toMatch(notCredentials);
+      expect(probe.error).toMatch(/If this server needs an API key, enter it and test again/);
+
+      const withKey = await servers.probe({
+        address: 'http://127.0.0.2:11434',
+        credential: { type: 'bearer', token: TOKEN },
+      });
+      expect(withKey).toMatchObject({ ok: false, needsCredentials: false });
+      expect(withKey.error).not.toMatch(/needs an API key/);
     });
 
     it('marks a saved server with a credential refused on a check and a picker refresh', async () => {

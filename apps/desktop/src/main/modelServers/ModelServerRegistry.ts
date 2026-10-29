@@ -91,6 +91,8 @@ interface ProbeOutcome {
   latencyMs: number | null;
   models: number | null;
   auth: boolean;
+  /** A 403 with no 401: the request was refused, not asked for credentials. */
+  forbidden: boolean;
   error: string | null;
   refused: boolean;
 }
@@ -189,8 +191,14 @@ export class ModelServerRegistry {
         kind: outcome.kind,
       });
     }
-    if (!outcome.kind)
-      return failed(outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`, base);
+    if (!outcome.kind) {
+      // Some servers answer 403, not 401, when the token is missing.
+      const hint = outcome.forbidden && !headers ? ' If this server needs an API key, enter it and test again.' : '';
+      return failed(
+        `${outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`}${hint}`,
+        base
+      );
+    }
     let openToAnyone = false;
     if (scope === 'public') {
       openToAnyone = headers
@@ -280,7 +288,7 @@ export class ModelServerRegistry {
         const server = { id: entry.record.id, name: entry.record.name };
         // Asking without the credential would get a 401 that replaces this message with a vaguer one.
         const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
-        if (missing && entry.health.error !== missing.error) {
+        if (missing && (entry.health.state !== missing.state || entry.health.error !== missing.error)) {
           this.setHealth(entry, missing);
           this.emit();
         }
@@ -578,7 +586,10 @@ const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0', '::'
 
 /** The port "This computer" already uses: saving it again would list the same Ollama twice. */
 function isLocalOllama(parsed: ParsedAddress): boolean {
-  return LOOPBACK_NAMES.has(parsed.host.toLowerCase()) && new URL(parsed.origin).port === LOCAL_OLLAMA_PORT;
+  return (
+    LOOPBACK_NAMES.has(parsed.host.toLowerCase().replace(/\.$/, '')) &&
+    new URL(parsed.origin).port === LOCAL_OLLAMA_PORT
+  );
 }
 
 async function resolveAll(host: string): Promise<string[]> {
@@ -688,6 +699,7 @@ async function detect(
       latencyMs: version.latencyMs,
       models: Array.isArray(listed) ? listed.length : null,
       auth: false,
+      forbidden: false,
       error: null,
       refused: false,
     };
@@ -705,6 +717,7 @@ async function detect(
       latencyMs: models.latencyMs,
       models: data.length,
       auth: false,
+      forbidden: false,
       error: null,
       refused: false,
     };
@@ -720,6 +733,7 @@ async function detect(
     latencyMs: null,
     models: null,
     auth,
+    forbidden,
     refused,
     error: forbidden
       ? new ServerForbiddenError(label).message
