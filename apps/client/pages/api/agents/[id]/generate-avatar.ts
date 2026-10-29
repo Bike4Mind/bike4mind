@@ -1,3 +1,4 @@
+import { HTTPError } from '@bike4mind/common';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
@@ -50,13 +51,12 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     await checkStorageLimit(req.user!, 0);
 
     try {
-      res.json(await generateAgentAvatar(agent, req.user!, userImageModel, req.logger));
+      res.json(await generateAgentAvatar(agent, req.user!, userImageModel, req.logger, req));
     } catch (error) {
       logImageGenerationFailure(imageLogger, 'Error generating agent avatar:', error, { agentId: agent.id, userId });
 
-      // Let the shared error handler render this with its real status and message
-      // (400 with a storage `code` and byte counts), same as every other upload door.
-      if (error instanceof BadRequestError) {
+      // Keep admission, balance and storage refusals classified for the shared error handler.
+      if (error instanceof HTTPError) {
         throw error;
       }
 

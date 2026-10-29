@@ -57,6 +57,8 @@ export interface ToolBuilderDeps {
   db: ToolContext['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /** The turn's active organization, forwarded to the tool context (see ToolContext.organizationId). */
   organizationId?: ToolContext['organizationId'];
   /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
@@ -391,6 +393,7 @@ export function buildSharedTools(
     model,
     imageProcessorLambdaName,
     entitlementKeys,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -416,6 +419,7 @@ export function buildSharedTools(
     logger,
     {
       db,
+      getEntitlements,
       retrievalFilter,
       kbScope,
       inlinedAttachmentIds,
