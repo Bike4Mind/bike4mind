@@ -64,6 +64,7 @@ const CopyButton = ({ text }: { text: string }) => {
   return (
     <Tooltip title={copied ? 'Copied!' : 'Copy code'} variant="solid" size="sm">
       <IconButton
+        data-testid="markdown-code-copy-btn"
         size="sm"
         variant="plain"
         color="neutral"
@@ -295,6 +296,7 @@ const MarkdownViewer: React.FC<Props> = ({
             return !inline && match ? (
               <Box
                 className="markdown-viewer-code-block"
+                data-testid="markdown-code-block"
                 sx={{ maxWidth: '100%', overflowX: 'auto', position: 'relative' }}
                 {...citedBlockProps(node, citedRange)}
               >
