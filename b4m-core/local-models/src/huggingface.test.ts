@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import { inspect } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   HubAccessError,
   HubRateLimitError,
@@ -10,7 +10,15 @@ import {
   RuntimeHttpError,
   RuntimeProtocolError,
 } from './errors';
-import { HuggingFaceHub, MAX_VERIFY_TAGS, ggufQuantLabel, hubResolveUrl, type HubModelDetail } from './huggingface';
+import {
+  HUB_CACHE_TTL_MS,
+  HuggingFaceHub,
+  MAX_VERIFY_TAGS,
+  clearHubCache,
+  ggufQuantLabel,
+  hubResolveUrl,
+  type HubModelDetail,
+} from './huggingface';
 import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
 import {
   gatedInfo,
@@ -31,7 +39,10 @@ const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
 
 const servers: FakeServer[] = [];
 
+beforeEach(clearHubCache);
+
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(servers.splice(0).map(server => server.close()));
 });
 
@@ -186,6 +197,245 @@ describe('HuggingFaceHub.search', () => {
       'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
       'bartowski/Qwen2.5-0.5B-Instruct-GGUF',
     ]);
+  });
+});
+
+describe('HuggingFaceHub cache', () => {
+  const repo = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
+
+  it('serves a repeated search and model read from cache for 10 minutes, then asks again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const first = await hub.search({ query: 'qwen' });
+    expect(await hub.search({ query: 'qwen' })).toEqual(first);
+    await hub.getModel(repo);
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(3);
+
+    vi.advanceTimersByTime(HUB_CACHE_TTL_MS - 1);
+    await hub.search({ query: 'qwen' });
+    expect(server.requests).toHaveLength(3);
+    vi.advanceTimersByTime(1);
+    await hub.search({ query: 'qwen' });
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(6);
+  });
+
+  it('keys on the query, cursor and revision, and refresh bypasses the cache', async () => {
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await hub.search({ query: 'a' });
+    await hub.search({ query: 'b' });
+    await hub.search({ query: 'a', cursor: 'next' });
+    expect(server.requests).toHaveLength(3);
+    await hub.search({ query: 'a', refresh: true });
+    await hub.search({ query: 'a' });
+    expect(server.requests).toHaveLength(4);
+    await hub.getModel(repo, { refresh: true });
+    const before = server.requests.length;
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(before);
+  });
+
+  it('never reuses an anonymous result for a token, or one token for another', async () => {
+    const server = await serve({ 'GET /api/models': json(searchPage) });
+    const anonymous = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const one = new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN });
+    const two = new HuggingFaceHub({ endpoint: server.baseUrl, token: `${TOKEN}2` });
+    await anonymous.search();
+    await one.search();
+    await two.search();
+    expect(server.requests).toHaveLength(3);
+    expect(server.requests.map(request => request.headers.authorization)).toEqual([
+      undefined,
+      `Bearer ${TOKEN}`,
+      `Bearer ${TOKEN}2`,
+    ]);
+    await new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).search();
+    await anonymous.search();
+    expect(server.requests).toHaveLength(3);
+  });
+
+  it('does not cache errors', async () => {
+    let calls = 0;
+    const server = await serve({
+      'GET /api/models': (_request, response) => {
+        calls++;
+        if (calls === 1) return reply(response, 500, {}, 'boom');
+        return json(searchPage)(_request, response);
+      },
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await expect(hub.search()).rejects.toBeInstanceOf(RuntimeHttpError);
+    expect((await hub.search()).models.length).toBeGreaterThan(0);
+    expect(calls).toBe(2);
+  });
+
+  it('honors cancellation even when search and model answers are cached', async () => {
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await hub.search();
+    await hub.getModel(repo);
+    const signal = AbortSignal.abort();
+
+    await expect(hub.search({ signal })).rejects.toBe(signal.reason);
+    await expect(hub.getModel(repo, { signal })).rejects.toBe(signal.reason);
+    expect(server.requests).toHaveLength(3);
+  });
+
+  it('hands out copies, so a caller that edits a result does not change the next one', async () => {
+    const server = await serve({ 'GET /api/models': json(searchPage) });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const first = await hub.search();
+    const id = first.models[0]?.id;
+    first.models.length = 0;
+    expect((await hub.search()).models[0]?.id).toBe(id);
+  });
+});
+
+describe('HuggingFaceHub rate limit backoff', () => {
+  const limited = (retryAfter: string) => () =>
+    new Response('{"error":"Too many requests"}', { status: 429, headers: { 'retry-after': retryAfter } });
+  const ok = () => new Response(JSON.stringify(searchPage), { headers: { 'content-type': 'application/json' } });
+  const hubWith = (responses: (() => Response)[], options: { maxRateLimitWaitMs?: number } = {}) => {
+    const fetch = vi.fn(async () => (responses.shift() ?? ok)());
+    return { fetch, hub: new HuggingFaceHub({ fetch, ...options }) };
+  };
+
+  it.each([
+    ['seconds', () => '2'],
+    ['an HTTP date', () => new Date(Date.now() + 2000).toUTCString()],
+  ])('retries a 429 after Retry-After given as %s, then succeeds', async (_name, header) => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00.000Z') });
+    const { fetch, hub } = hubWith([limited(header())]);
+    const pending = hub.search();
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await pending).models.length).toBeGreaterThan(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('backs off exponentially when the 429 names no wait', async () => {
+    vi.useFakeTimers();
+    const none = () => new Response('', { status: 429 });
+    const { fetch, hub } = hubWith([none, none]);
+    const pending = hub.search();
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('surfaces HubRateLimitError once the total wait would pass the cap', async () => {
+    vi.useFakeTimers();
+    const { fetch, hub } = hubWith([limited('1'), limited('1'), limited('1')], { maxRateLimitWaitMs: 2500 });
+    const error = caught(hub.search());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await error).toBeInstanceOf(HubRateLimitError);
+    expect(await error).toMatchObject({ status: 429, retryAfterMs: 1000 });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not wait at all when Retry-After is longer than the cap', async () => {
+    const { fetch, hub } = hubWith([limited('30')]);
+    expect(await caught(hub.search())).toMatchObject({ name: 'HubRateLimitError', retryAfterMs: 30_000 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['0', 'Thu, 01 Jan 1970 00:00:00 GMT'])(
+    'does not retry with retries disabled even for Retry-After %s',
+    async header => {
+      const { fetch, hub } = hubWith([limited(header)], { maxRateLimitWaitMs: 0 });
+      await expect(hub.search()).rejects.toBeInstanceOf(HubRateLimitError);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('honors the request deadline during backoff without sending another request', async () => {
+    const fetch = vi.fn(async (_input: string, options?: RequestInit) => {
+      options?.signal?.throwIfAborted();
+      return limited('3')();
+    });
+    const hub = new HuggingFaceHub({ fetch, requestTimeoutMs: 30 });
+    const started = performance.now();
+
+    await expect(hub.search()).rejects.toBeInstanceOf(RuntimeConnectionError);
+
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops waiting when the caller aborts, without another request', async () => {
+    vi.useFakeTimers();
+    const { fetch, hub } = hubWith([limited('3')]);
+    const controller = new AbortController();
+    const error = caught(hub.search({ signal: controller.signal }));
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+    expect(await error).toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('HuggingFaceHub install guard', () => {
+  const file = (path: string, url?: string) => ({
+    path,
+    sizeBytes: 1,
+    sha256: null,
+    url: url ?? hubResolveUrl('a/b', 'main', path),
+  });
+
+  it.each(['pytorch_model.bin', 'model.pt', 'model.pth', 'model.ckpt', 'model.safetensors', 'sub/model.gguf.bin', 'x'])(
+    'refuses to download %s before any request',
+    async path => {
+      const server = await serve({});
+      const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+      const error = await caught(
+        hub.download(file(path, `${server.baseUrl}/a/b/resolve/main/${path}`), '/nonexistent/x')
+      );
+      expect(error).toBeInstanceOf(LocalRuntimeError);
+      expect(error.message).toContain('Only .gguf files can be installed');
+      expect(server.requests).toEqual([]);
+    }
+  );
+
+  it('refuses a .gguf name whose resolve URL points at another kind of file', async () => {
+    const hub = new HuggingFaceHub();
+    const error = await caught(
+      hub.download(file('model.gguf', hubResolveUrl('a/b', 'main', 'model.bin')), '/nonexistent/x')
+    );
+    expect(error.message).toContain('Only .gguf files can be installed');
+  });
+
+  it('refuses to verify an Ollama ref for a build that holds a non-GGUF file', async () => {
+    const hub = new HuggingFaceHub();
+    const build = {
+      id: 'model',
+      quant: 'Q4_K_M',
+      files: [{ ...file('model.bin'), sha256: 'a'.repeat(64) }],
+      sizeBytes: 1,
+      split: false,
+      complete: true,
+      ollamaRef: null,
+      ollamaRefIssue: null,
+    };
+    const error = await caught(hub.verifyOllamaRef({ id: 'a/b', builds: [build] }, build));
+    expect(error).toBeInstanceOf(LocalRuntimeError);
   });
 });
 
@@ -769,7 +1019,7 @@ describe('HuggingFaceHub errors', () => {
       [infoPath]: withHeaders({ error: 'slow down' }, { ratelimit: '"api";r=0;t=53' }, 429),
       'GET /api/models/a/c/revision/main': json({ error: 'slow down' }, 429),
     });
-    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, maxRateLimitWaitMs: 0 });
     const search = await caught(hub.search());
     expect(search).toBeInstanceOf(HubRateLimitError);
     expect(search).toBeInstanceOf(RuntimeHttpError);
