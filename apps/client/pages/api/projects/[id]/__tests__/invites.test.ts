@@ -118,7 +118,7 @@ describe('POST /api/projects/:id/invites', () => {
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many email invitations/);
     expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(2);
     expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
-      'rate-limit:u1:project-invite-typed-address',
+      'rate-limit:u1:invite-typed-address',
       20,
       60 * 60 * 1000
     );

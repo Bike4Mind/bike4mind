@@ -13,6 +13,8 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
   deleteHandler: null as null | ((req: any, res: any) => unknown),
+  postMiddleware: [] as unknown[],
+  accounts: [] as Array<{ email: string }>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -22,8 +24,9 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    post: (fn: any) => {
-      mockRefs.postHandler = fn;
+    post: (...fns: any[]) => {
+      mockRefs.postMiddleware = fns.slice(0, -1);
+      mockRefs.postHandler = fns[fns.length - 1];
       return chain;
     },
     delete: (fn: any) => {
@@ -42,8 +45,20 @@ vi.mock('@bike4mind/services', () => ({
   sharingService: { listInvitesForDocument, createInvite, cancelInvite },
 }));
 
+const tryIncrementWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
+const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
+
+const sendInviteNotificationEmails = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
+  getInviteTypeName: () => 'file',
+  sendInviteNotificationEmails,
+}));
+
 vi.mock('@bike4mind/database', () => ({
-  FabFile: {},
+  cacheRepository: { tryIncrementWithinLimitFixedWindow },
+  User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
+  FabFile: { findById: () => Promise.resolve({ fileName: 'report.pdf' }) },
   Group: { findById: groupFindById },
   Session: {},
   Project: {},
@@ -139,6 +154,112 @@ describe('POST /api/[type]/[id]/invites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
+    mockRefs.accounts = [];
+    tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
+  });
+
+  it('rate limits invite creation per user with one bucket for every type', () => {
+    expect(mockRefs.postMiddleware).toEqual([
+      { rateLimitOptions: expect.objectContaining({ limit: 100, bucket: 'POST /api/[type]/[id]/invites' }) },
+    ]);
+  });
+
+  // The project route enforces API-key scopes this route does not; only the raw value can reach
+  // here, since the static projects route shadows the alias.
+  it.each(['Project', 'projects'])('refuses to create a project invite via the %s segment', async pathType => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: pathType, id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/project invites/);
+    expect(createInvite).not.toHaveBeenCalled();
+    expect(tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+  });
+
+  it('refuses more recipients than one request may name', async () => {
+    const recipients = Array.from({ length: 26 }, (_, i) => `507f1f77bcf86cd7994390${String(i).padStart(2, '0')}`);
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('refuses an over-long message, which would be mailed to every recipient', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'], description: 'x'.repeat(1001) },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('charges typed addresses against the budget the project route shares and stops once it is spent', async () => {
+    tryIncrementWithinLimitFixedWindow
+      .mockResolvedValueOnce({ success: true, expiresAt: new Date() })
+      .mockResolvedValueOnce({ success: false, expiresAt: new Date() });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'sessions', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com', '507f1f77bcf86cd799439034', 'b@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many email invitations/);
+    expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(2);
+    expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:invite-typed-address',
+      20,
+      60 * 60 * 1000
+    );
+    expect(createInvite).not.toHaveBeenCalled();
+    expect(sendInviteNotificationEmails).not.toHaveBeenCalled();
+  });
+
+  it('emails an address with no account the fixed template only, and an account holder the message', async () => {
+    createInvite.mockResolvedValue({
+      id: 'i1',
+      token: TOKEN,
+      recipients: { pending: ['member@example.com', 'stranger@example.com'] },
+    });
+    mockRefs.accounts = [{ email: 'Member@example.com' }];
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['member@example.com', 'stranger@example.com'], description: 'hi' },
+    });
+    (req as any).user = { id: 'u1', name: 'Ann', email: 'ann@example.com' };
+
+    await mockRefs.postHandler!(req, res);
+    await vi.waitFor(() => expect(sendInviteNotificationEmails).toHaveBeenCalledTimes(2));
+
+    expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
+      ['member@example.com'],
+      'Ann',
+      'ann@example.com',
+      'report.pdf',
+      'file',
+      expect.stringContaining(TOKEN),
+      'hi'
+    );
+    expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
+      ['stranger@example.com'],
+      'Ann',
+      'ann@example.com',
+      'report.pdf',
+      'file',
+      expect.stringContaining(TOKEN)
+    );
   });
 
   // The `link` is the one place the token belongs, and it is what the client reads. Echoing the bare
