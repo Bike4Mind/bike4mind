@@ -4300,7 +4300,8 @@ export const settingsMap = {
     int: true,
     min: 0,
     max: 100,
-    description: 'Percent of served pairs drawn from the gold-question set used to check rater quality.',
+    description:
+      'Percent of served pairs drawn from the gold-question set used to check rater quality. Gold pairs must have a clear winner; a Tie on a gold pair counts as a miss.',
     category: 'Users',
   }),
   preferenceArenaMinGoldVotes: makeNumberSetting({

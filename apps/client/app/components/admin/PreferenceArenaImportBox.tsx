@@ -79,7 +79,8 @@ export default function PreferenceArenaImportBox() {
             sx={{ fontFamily: 'monospace', fontSize: 13 }}
           />
           <FormHelperText>
-            A JSON array of up to 500 pairs. Add goldChoice (a or b) only to gold questions.
+            A JSON array of up to 500 pairs. Add goldChoice (a or b) only to gold questions; gold pairs must have a
+            clear winner, since a Tie on a gold pair counts as a miss.
           </FormHelperText>
         </FormControl>
         {errors.length > 0 && (
