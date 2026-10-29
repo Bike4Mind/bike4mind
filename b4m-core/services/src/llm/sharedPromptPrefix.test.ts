@@ -12,6 +12,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ChatModels, getViewSummaryForLLM, type ICacheStrategy, type IMessage } from '@bike4mind/common';
 import { AnthropicBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { getConversationContextSystemMessage } from '../conversationContextService';
+import { createHash } from 'node:crypto';
+import { insertToolChangeMessage, planDeferredTools, selectDeferrableToolNames } from './deferredToolLoading';
 import { ToolBuilder, type ToolBuilderConfig } from './tools/ToolBuilder';
 import { buildViewRegistryAdminMessages } from './viewRegistryPrompt';
 import { buildTaggedContextMessages, markShareablePrefixBoundary } from './systemPromptSources';
@@ -30,7 +32,7 @@ const tool = (name: string): ICompletionOptionTools => ({
 });
 
 type Block = Record<string, unknown>;
-type Request = { tools?: Block[]; system?: Block[] };
+type Request = { tools?: Block[]; system?: Block[]; messages?: Block[]; betaHeader?: string };
 
 type Caller = {
   timezone: string;
@@ -63,8 +65,13 @@ const DENVER_MEMBER: Caller = {
   memento: 'User is a cyclist.',
 };
 
-async function sendFirstTurn(caller: Caller): Promise<Request> {
+/** Whether deferred tool loading is on for the turn, as ChatCompletionProcess decides it. */
+type SendOptions = { deferTools?: boolean };
+
+async function sendFirstTurn(caller: Caller, { deferTools = false }: SendOptions = {}): Promise<Request> {
   vi.mocked(getConversationContextSystemMessage).mockResolvedValue(sys(caller.conversationEntities) as never);
+  const offered = caller.toolOrder;
+  const deferred = new Set(deferTools ? selectDeferrableToolNames(offered) : []);
   const toolPrompt = await new ToolBuilder({
     user: { id: caller.timezone },
     db: { sessions: {} },
@@ -72,10 +79,12 @@ async function sendFirstTurn(caller: Caller): Promise<Request> {
   } as unknown as ToolBuilderConfig).buildToolPrompt({
     hasContentTransform: false,
     hasChessEngine: false,
-    hasCurrentDateTime: true,
-    hasWebSearch: true,
+    hasCurrentDateTime: offered.includes('current_datetime'),
+    hasWebSearch: offered.includes('web_search'),
     webSearchGuidance: 'web search guidance',
-    hasKnowledgeBase: false,
+    hasKnowledgeBase: offered.includes('search_knowledge_base'),
+    knowledgeBaseGuidance: 'knowledge base guidance',
+    deferGuidanceFor: deferred,
     userTimezone: caller.timezone,
     mcpTools: [],
     sessionId: `session-${caller.timezone}`,
@@ -86,15 +95,18 @@ async function sendFirstTurn(caller: Caller): Promise<Request> {
   });
   const extraContext = [sys(`[Current View Context]\nPath: ${caller.currentPath}`)];
 
-  // Shaped like ChatCompletionProcess.process() on a default first turn with navigate_view offered.
+  // Shaped like ChatCompletionProcess.process() on a default first turn.
+  const navigateView = offered.includes('navigate_view');
   const tagged = buildTaggedContextMessages({
     dateContext: [sys(caller.date)],
     extraContext,
     artifactEmission: [sys('artifact guidance')],
     helpCenter: [sys('help center guidance')],
     abstention: [sys('abstention guidance')],
-    viewRegistry: [sys(getViewSummaryForLLM({ isAdmin: false }))],
-    viewRegistryAdmin: buildViewRegistryAdminMessages({ isAdmin: caller.isAdmin, extraContextMessages: extraContext }),
+    viewRegistry: navigateView && !deferred.has('navigate_view') ? [sys(getViewSummaryForLLM({ isAdmin: false }))] : [],
+    viewRegistryAdmin: navigateView
+      ? buildViewRegistryAdminMessages({ isAdmin: caller.isAdmin, extraContextMessages: extraContext })
+      : [],
     replyChoices: [sys('reply choices guidance')],
     toolPrompt: toolPrompt.guidance ? [toolPrompt.guidance] : [],
     toolContext: toolPrompt.context ? [toolPrompt.context] : [],
@@ -109,20 +121,31 @@ async function sendFirstTurn(caller: Caller): Promise<Request> {
     cacheConversationHistory: true,
     cacheTTL: '5m',
   };
+  const plan = planDeferredTools(offered.map(tool), deferred, [
+    ...toolPrompt.deferredGuidance,
+    ...(deferred.has('navigate_view')
+      ? [{ tool: 'navigate_view', text: getViewSummaryForLLM({ isAdmin: false }) }]
+      : []),
+  ]);
+  const messages = insertToolChangeMessage(
+    [...tagged.map(t => t.message), { role: 'user', content: 'hello' }],
+    plan.changeMessage
+  );
+
   const backend = new AnthropicBackend('test-key');
   let request: Request | undefined;
   (backend as unknown as { _api: unknown })._api = {
     messages: {
-      create: async (params: Request) => {
-        request = params;
+      create: async (params: Request, requestOptions?: { headers?: Record<string, string> }) => {
+        request = { ...params, betaHeader: requestOptions?.headers?.['anthropic-beta'] };
         return { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } };
       },
     },
   };
   await backend.complete(
     ChatModels.CLAUDE_4_8_OPUS,
-    [...tagged.map(t => t.message), { role: 'user', content: 'hello' }],
-    { stream: false, tools: caller.toolOrder.map(tool), cacheStrategy },
+    messages,
+    { stream: false, tools: plan.tools, cacheStrategy },
     async () => {}
   );
   return request!;
@@ -157,5 +180,67 @@ describe('shareable prompt prefix across callers', () => {
       expect(sharedHead(tokyo)).not.toContain(perCaller);
     }
     expect(tail(denver)).toContain(DENVER_MEMBER.timezone);
+  });
+});
+
+// The part of the request the API renders ahead of the shareable breakpoint: deferred definitions
+// are left out of the rendered prefix (tool search docs), so they are dropped from the hash too.
+const renderedHeadHash = (request: Request) =>
+  createHash('sha256')
+    .update(
+      JSON.stringify({
+        tools: request.tools?.filter(block => block.defer_loading !== true),
+        system: request.system?.slice(0, shareableBreakpoint(request) + 1),
+      })
+    )
+    .digest('hex');
+
+describe('shareable prompt prefix with deferred tool loading', () => {
+  const WEB_USER: Caller = {
+    ...TOKYO_ADMIN,
+    toolOrder: ['current_model_details', 'web_search', 'current_datetime', 'navigate_view'],
+  };
+  const KNOWLEDGE_USER: Caller = {
+    ...DENVER_MEMBER,
+    toolOrder: ['search_knowledge_base', 'current_model_details', 'retrieve_knowledge_content'],
+  };
+
+  it('hashes the rendered head the same for users with different optional tools', async () => {
+    const web = await sendFirstTurn(WEB_USER, { deferTools: true });
+    const knowledge = await sendFirstTurn(KNOWLEDGE_USER, { deferTools: true });
+
+    expect(renderedHeadHash(web)).toBe(renderedHeadHash(knowledge));
+    expect(web.tools?.filter(block => block.defer_loading !== true).map(block => block.name)).toEqual([
+      'current_model_details',
+    ]);
+  });
+
+  it('declares only the caller own tools and adds them, with their guidance, in the messages', async () => {
+    const web = await sendFirstTurn(WEB_USER, { deferTools: true });
+
+    expect(web.tools?.filter(block => block.defer_loading === true).map(block => block.name)).toEqual([
+      'current_datetime',
+      'navigate_view',
+      'web_search',
+    ]);
+    expect(JSON.stringify(web.tools)).not.toContain('search_knowledge_base');
+    const change = web.messages?.find(message => message.role === 'system');
+    expect(change?.content).toEqual(
+      expect.arrayContaining([
+        { type: 'tool_addition', tool: { type: 'tool_reference', name: 'web_search' } },
+        expect.objectContaining({ type: 'text', text: expect.stringContaining('web search guidance') }),
+      ])
+    );
+    expect(JSON.stringify(change)).toContain('CURRENT TIME');
+    expect(JSON.stringify(web.system)).not.toContain('web search guidance');
+    expect(web.betaHeader).toContain('mid-conversation-tool-changes-2026-07-01');
+  });
+
+  it('control: with deferral off the same two users get different heads', async () => {
+    const web = await sendFirstTurn(WEB_USER);
+    const knowledge = await sendFirstTurn(KNOWLEDGE_USER);
+
+    expect(renderedHeadHash(web)).not.toBe(renderedHeadHash(knowledge));
+    expect(web.messages?.some(message => message.role === 'system')).toBe(false);
   });
 });

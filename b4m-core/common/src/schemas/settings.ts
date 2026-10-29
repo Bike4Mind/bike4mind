@@ -300,6 +300,7 @@ export const SettingKeySchema = z.enum([
   'WebSearchFreshnessPrompt',
   'KnowledgeBaseRetrievalPrompt',
   'UseFormatPrompt',
+  'EnableDeferredToolLoading',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
   'EnableHearth',
@@ -3160,6 +3161,15 @@ export const settingsMap = {
       'System prompt telling the model when to reach for search_knowledge_base rather than answer from training data, and when NOT to. Injected only when the search_knowledge_base tool is offered for the request - a model instructed to search a corpus it has no tool for tends to claim it searched. Clearing this field turns the section OFF rather than restoring the built-in default, and it is the only off switch this section has; to get the stock wording back, paste it in. A change is not instantaneous: the settings cache is per-instance, so it applies immediately on the instance that served the change and within ~5 min (one cache TTL) everywhere else. After an upgrade, diff a saved copy against the built-in default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 13,
+  }),
+  EnableDeferredToolLoading: makeBooleanSetting({
+    key: 'EnableDeferredToolLoading',
+    name: 'Deferred Tool Loading (Claude)',
+    defaultValue: false,
+    description:
+      'On supported Claude models, send the optional chat tools a turn offers with defer_loading and add them, with their guidance, through a mid-conversation tool_addition message, so the cached tools-and-system head is the same for every user whatever tools they have on. Unsupported models and fallback hops keep the current request shape. Off by default until the live cache check passes.',
+    category: 'AI',
+    order: 14,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',

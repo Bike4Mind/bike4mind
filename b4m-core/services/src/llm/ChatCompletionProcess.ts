@@ -306,9 +306,16 @@ import {
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   DATA_LAKE_TOOL_NAMES,
   libraryFlagForScope,
+  chatSupportsDeferredToolAddition,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
+import {
+  insertToolChangeMessage,
+  planDeferredTools,
+  selectDeferrableToolNames,
+  undoDeferredTools,
+} from './deferredToolLoading';
 
 const THROTTLE_INTERVAL = 100;
 const DISABLE_SERVER_THROTTLING = process.env.DISABLE_SERVER_THROTTLING === 'true';
@@ -3798,6 +3805,17 @@ export class ChatCompletionProcess {
       // The built list drops video_generation without a usable config (buildSharedTools), so this is the real offer.
       const videoGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'video_generation') ?? false;
 
+      // Optional tools go out deferred and are added by a history message, so the cached tools+system
+      // head is the same whichever of them this caller has. See deferredToolLoading.ts.
+      const deferredToolNames = new Set(
+        getSettingsValue('EnableDeferredToolLoading', defaultAdminSettings) === true &&
+          !isResearchMode &&
+          chatSupportsDeferredToolAddition(modelInfo)
+          ? selectDeferrableToolNames(offeredToolNames)
+          : []
+      );
+      const viewRegistryDeferred = navigateViewAvailable && deferredToolNames.has('navigate_view');
+
       const toolPromptMessages = await toolBuilder.buildToolPrompt({
         toolPromptId,
         hasContentTransform: hasContentTransform && blogDraftAvailable,
@@ -3824,6 +3842,7 @@ export class ChatCompletionProcess {
         processStartTime,
         agentStore,
         extraContextMessages,
+        deferGuidanceFor: deferredToolNames,
       });
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === TOOLS SETUP ===`);
@@ -3927,16 +3946,17 @@ export class ChatCompletionProcess {
         // Inject view registry summary when the navigate_view tool reached the model. The base list
         // is the same for every user (shareable prefix); the admin views and the current-page
         // emphasis vary per caller and ride behind it as viewRegistryAdmin.
-        viewRegistry: navigateViewAvailable
-          ? [
-              {
-                role: 'system' as const,
-                // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
-                requiresTool: 'navigate_view',
-                content: getViewSummaryForLLM({ isAdmin: false }),
-              },
-            ]
-          : [],
+        viewRegistry:
+          navigateViewAvailable && !viewRegistryDeferred
+            ? [
+                {
+                  role: 'system' as const,
+                  // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+                  requiresTool: 'navigate_view',
+                  content: getViewSummaryForLLM({ isAdmin: false }),
+                },
+              ]
+            : [],
         viewRegistryAdmin: navigateViewAvailable
           ? buildViewRegistryAdminMessages({ isAdmin: this.user?.isAdmin === true, extraContextMessages })
           : [],
@@ -4912,6 +4932,14 @@ export class ChatCompletionProcess {
         currentUserPromptMessages[0]
       );
       let outboundMessages = turnContext.messages;
+      if (deferredToolNames.size > 0 && options.tools) {
+        const plan = planDeferredTools(options.tools, deferredToolNames, [
+          ...toolPromptMessages.deferredGuidance,
+          ...(viewRegistryDeferred ? [{ tool: 'navigate_view', text: getViewSummaryForLLM({ isAdmin: false }) }] : []),
+        ]);
+        options.tools = plan.tools;
+        outboundMessages = insertToolChangeMessage(outboundMessages, plan.changeMessage);
+      }
       // The adapter's own end-of-array anchor would only add a breakpoint on the volatile current turn.
       const historyAnchorMarked = anchoredMessages !== messages;
 
@@ -5235,22 +5263,29 @@ export class ChatCompletionProcess {
             this.withheldReasoningChars = 0;
             let lastStreamIndex = 0;
 
+            // A fallback hop gets its identity line back wherever the primary turn would have.
+            const hopWithholdsIdentity =
+              !!options.identityViaTool &&
+              withholdIdentityTool(
+                currentModel,
+                (options.tools ?? []).map(t => t.toolSchema.name)
+              );
+            const hopTools = hopWithholdsIdentity
+              ? options.tools?.filter(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME)
+              : options.tools;
+            // A hop that cannot take deferred tools, or would be left with none loaded, gets today's shape.
+            const hopRequest =
+              chatSupportsDeferredToolAddition(currentModel) && hopTools?.some(t => !t.toolSchema.defer_loading)
+                ? { messages: outboundMessages, tools: hopTools }
+                : undoDeferredTools(outboundMessages, hopTools);
+
             await currentLlm.complete(
               currentModel.id,
-              outboundMessages,
+              hopRequest.messages,
               {
                 ...options,
-                // A fallback hop gets its identity line back wherever the primary turn would have.
-                ...(options.identityViaTool &&
-                withholdIdentityTool(
-                  currentModel,
-                  (options.tools ?? []).map(t => t.toolSchema.name)
-                )
-                  ? {
-                      tools: options.tools?.filter(t => t.toolSchema.name !== CURRENT_MODEL_DETAILS_TOOL_NAME),
-                      identityViaTool: false,
-                    }
-                  : {}),
+                tools: hopRequest.tools,
+                ...(hopWithholdsIdentity ? { identityViaTool: false } : {}),
                 // Per attempt: a fallback hop must name the model that actually serves it.
                 modelDisplayName: currentModel.name,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
