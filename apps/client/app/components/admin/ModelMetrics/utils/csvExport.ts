@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { CSV_BOM, toCsv } from '@client/app/hooks/useExportToCSV';
+import { CSV_BOM, toCsvFromRecords } from '@client/app/utils/csv';
 import { downloadData } from '@client/app/utils/download';
 import { ModelMetric } from '../types';
 
@@ -38,7 +38,7 @@ export const exportToCSV = (data: ModelMetric[], filename: string) => {
     Status: metric.status,
   }));
 
-  const csvContent = toCsv(rows, headers, 'YYYY-MM-DD HH:mm:ss');
+  const csvContent = toCsvFromRecords(rows, headers, 'YYYY-MM-DD HH:mm:ss');
 
   downloadData(CSV_BOM + csvContent, filename, 'text/csv;charset=utf-8;');
 };

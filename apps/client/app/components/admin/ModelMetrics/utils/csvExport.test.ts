@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CSV_BOM } from '@client/app/hooks/useExportToCSV';
+import { CSV_BOM } from '@client/app/utils/csv';
 import type { ModelMetric } from '../types';
 
 const downloadData = vi.hoisted(() => vi.fn());
