@@ -2,6 +2,7 @@ import { User, UserApiKey } from '@bike4mind/database';
 import {
   emptySignalCounts,
   isSuspectedSignup,
+  type SignupVerdicts,
   type SignupTimeseries,
   type SignupTimeseriesBucket,
   type SignupTimeseriesRange,
@@ -118,23 +119,94 @@ export async function loadCandidates(since: Date, until: Date, deadlineMs = QUER
   };
 }
 
+/** Start of the chart's first bucket for `range`, in the viewer's offset. */
+function rangeSince(range: SignupTimeseriesRange, tzOffsetMinutes: number, now: Date): Date {
+  const { unit, buckets } = RANGE_SHAPES[range];
+  const size = unit === 'hour' ? HOUR_MS : DAY_MS;
+  return new Date(truncate(now, unit, tzOffsetMinutes) - (buckets - 1) * size);
+}
+
+async function computeCohort(since: Date, now: Date) {
+  const [hourlyCounts, { candidates, truncated, keysTruncated }] = await Promise.all([
+    // UTC hours, independent of the viewer's offset, so the spike signal is the same for every viewer.
+    countByBucket(new Date(since.getTime() - SPIKE_BASELINE_HOURS * HOUR_MS), now, 'hour', 0),
+    loadCandidates(since, now),
+  ]);
+  return { candidates, signalsById: classifySignups(candidates, now, hourlyCounts), truncated, keysTruncated };
+}
+
+// ms. Verdict requests pass the chart's own `until`, so on a warm instance one classification serves the
+// chart and every page of the list classified against it.
+const COHORT_CACHE_TTL_MS = 60_000;
+const COHORT_CACHE_MAX_ENTRIES = 4;
+const cohortCache = new Map<string, { cachedAt: number; result: ReturnType<typeof computeCohort> }>();
+
+/** Tests reuse one fixed `now` across different data, so they clear the cache between cases. */
+export const clearCohortCache = () => cohortCache.clear();
+
+/**
+ * Every signup in [since, now) classified as one cohort. The chart and the Users table's Verdict column
+ * both go through here, so an account gets the same verdict in both for the same range and instant.
+ */
+function classifyCohort(since: Date, now: Date) {
+  const key = `${since.getTime()}:${now.getTime()}`;
+  const cached = cohortCache.get(key);
+  if (cached && Date.now() - cached.cachedAt < COHORT_CACHE_TTL_MS) return cached.result;
+  // Each chart load has its own `now`, so an unread key would otherwise hold its cohort until eviction.
+  for (const [staleKey, entry] of cohortCache) {
+    if (Date.now() - entry.cachedAt >= COHORT_CACHE_TTL_MS) cohortCache.delete(staleKey);
+  }
+  const result = computeCohort(since, now);
+  result.catch(() => cohortCache.delete(key));
+  cohortCache.set(key, { cachedAt: Date.now(), result });
+  for (const oldest of cohortCache.keys()) {
+    if (cohortCache.size <= COHORT_CACHE_MAX_ENTRIES) break;
+    cohortCache.delete(oldest);
+  }
+  return result;
+}
+
+/**
+ * The chart's verdict for each of `userIds` under `range`; null for an account outside the range, past
+ * the classification scan cap, or not found. Pass the chart's `until` as `now` so both classify the same
+ * cohort at the same instant; dormancy and the range start both move with `now`.
+ */
+export async function getSignupVerdicts(
+  {
+    range,
+    tzOffsetMinutes = 0,
+    userIds,
+  }: { range: SignupTimeseriesRange; tzOffsetMinutes?: number; userIds: string[] },
+  now = new Date()
+): Promise<SignupVerdicts> {
+  const verdicts: SignupVerdicts['verdicts'] = Object.fromEntries(userIds.map(id => [id, null]));
+  const since = rangeSince(range, tzOffsetMinutes, now);
+  // A page of old accounts must not pay for classifying the whole range.
+  const inRange = await User.exists({ _id: { $in: userIds }, createdAt: { $gte: since, $lt: now } }).maxTimeMS(
+    QUERY_DEADLINE_MS
+  );
+  if (!inRange) return { verdicts };
+  const { signalsById } = await classifyCohort(since, now);
+  for (const id of userIds) {
+    const signals = signalsById.get(id);
+    if (signals) verdicts[id] = { suspected: isSuspectedSignup(signals), signals };
+  }
+  return { verdicts };
+}
+
 export async function getSignupTimeseries(
   { range, tzOffsetMinutes = 0 }: { range: SignupTimeseriesRange; tzOffsetMinutes?: number },
   now = new Date()
 ): Promise<SignupTimeseries> {
   const { unit, buckets: bucketCount, baselineBuckets } = RANGE_SHAPES[range];
   const size = unit === 'hour' ? HOUR_MS : DAY_MS;
-  const lastStart = truncate(now, unit, tzOffsetMinutes);
-  const since = new Date(lastStart - (bucketCount - 1) * size);
+  const since = rangeSince(range, tzOffsetMinutes, now);
   const historySince = new Date(since.getTime() - baselineBuckets * size);
 
-  const [counts, hourlyCounts, { candidates, truncated, keysTruncated }] = await Promise.all([
+  const [counts, { candidates, signalsById, truncated, keysTruncated }] = await Promise.all([
     countByBucket(historySince, now, unit, tzOffsetMinutes),
-    // UTC hours, independent of the viewer's offset, so the spike signal is the same for every viewer.
-    countByBucket(new Date(since.getTime() - SPIKE_BASELINE_HOURS * HOUR_MS), now, 'hour', 0),
-    loadCandidates(since, now),
+    classifyCohort(since, now),
   ]);
-  const signalsById = classifySignups(candidates, now, hourlyCounts);
 
   const buckets: SignupTimeseriesBucket[] = Array.from({ length: bucketCount }, (_, i) => {
     const start = since.getTime() + i * size;

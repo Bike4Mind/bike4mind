@@ -210,7 +210,7 @@ DataLakeSchema.index({ status: 1, lastHealthCheckedAt: 1, _id: 1 });
 // that sort.
 DataLakeSchema.index({ status: 1, lastInconsistencyScanAt: 1, _id: 1 });
 
-export const DataLakeModel =
+export const DataLakeModel: mongoose.Model<IDataLakeDocument> =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
   mongoose.model<IDataLakeDocument>('DataLake', DataLakeSchema);
 
@@ -1632,7 +1632,7 @@ DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
 // Exported like its sibling `DataLakeModel` above: app code goes through
 // `dataLakeBatchRepository`, but the operator scripts under packages/scripts/migrate read models
 // directly (see check-datalake-prefix-whitespace.ts, which reads stored taxonomy suffixes).
-export const DataLakeBatchModel =
+export const DataLakeBatchModel: mongoose.Model<IDataLakeBatchDocument> =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
   mongoose.model<IDataLakeBatchDocument>('DataLakeBatch', DataLakeBatchSchema);
 

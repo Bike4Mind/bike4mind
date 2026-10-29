@@ -156,3 +156,8 @@ export function serverStorageLimitMessage(error: unknown): string | undefined {
   const message = typeof data?.error === 'string' ? data.error : data?.message;
   return typeof message === 'string' && message.includes(LEGACY_SERVER_STORAGE_LIMIT_MESSAGE) ? message : undefined;
 }
+
+/** The text for either storage refusal (pre-flight or server), or undefined when `error` is anything else. */
+export function storageLimitMessage(error: unknown): string | undefined {
+  return error instanceof StorageLimitExceededError ? error.message : serverStorageLimitMessage(error);
+}

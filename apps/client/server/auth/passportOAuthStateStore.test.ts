@@ -21,6 +21,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 import { PassportOAuthStateStore, OAUTH_NONCE_HASH_REQ_KEY } from './passportOAuthStateStore';
+import { recordTurnstileVerification, wasTurnstileVerified } from './signupChallenge';
 import { STATE_NONCE_COOKIE_NAME } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import type OAuth2Strategy from 'passport-oauth2';
 import { createHash } from 'crypto';
@@ -66,6 +67,21 @@ describe('PassportOAuthStateStore', () => {
     vi.clearAllMocks();
     mockJwtSecret = 'test-jwt-secret-for-state-store';
     store = new PassportOAuthStateStore('github-oauth-state');
+  });
+
+  it('carries challenge proof only through valid browser-bound state', async () => {
+    const start = nonceStoreReq();
+    recordTurnstileVerification(start, true);
+    const { token } = await callStore(store, start);
+    expect(token).toBeDefined();
+    const callback = { ...nonceVerifyReq };
+    expect((await callVerify(store, callback, token!)).ok).toBe(true);
+    expect(wasTurnstileVerified(callback)).toBe(true);
+    expect((await callVerify(store, mockReq, token!)).ok).toBe(false);
+    expect(wasTurnstileVerified(mockReq)).toBeNull();
+    const { token: skipped } = await callStore(store, nonceStoreReq());
+    expect((await callVerify(store, callback, skipped!)).ok).toBe(true);
+    expect(wasTurnstileVerified(callback)).toBeNull();
   });
 
   describe('store()', () => {

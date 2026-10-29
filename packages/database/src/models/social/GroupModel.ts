@@ -3,7 +3,7 @@ import { IGroupDocument, IGroupRepository } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 
-export const GroupSchema = new mongoose.Schema<IGroupDocument>(
+export const GroupSchema: mongoose.Schema<IGroupDocument> = new mongoose.Schema<IGroupDocument>(
   {
     name: { type: String, required: true },
     // Optional metadata. NOT required: Mongoose treats '' as missing, so a required

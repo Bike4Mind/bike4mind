@@ -96,9 +96,13 @@ vi.mock('@server/auth/signupNetworkLimits', () => ({
   isSignupNetworkOverLimit: (...args: unknown[]) => mockIsSignupNetworkOverLimit(...args),
   createSignupRiskCollector: (...args: unknown[]) => mockCreateSignupRiskCollector(...args),
 }));
+vi.mock('@bike4mind/server-utils/auth/signupGrantRisk', () => ({
+  createSignupGrantRiskCollector: (...args: unknown[]) => mockCreateSignupRiskCollector(...args),
+}));
 
 import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { selfServeVerifyCallback, verifyCallback } from './verifyCallback';
+import { recordTurnstileVerification } from '@server/auth/signupChallenge';
 
 const runStandard = (
   strategy: AuthStrategy,
@@ -1492,10 +1496,12 @@ describe('selfServeVerifyCallback - signup network limits', () => {
   const req = { headers: { 'cloudfront-viewer-address': '203.0.113.9:4444', 'cloudfront-viewer-asn': '64500' } };
   const runSelfServe = (
     strategy: AuthStrategy,
-    profile: Record<string, unknown> = freshProfile
+    profile: Record<string, unknown> = freshProfile,
+    verified = false
   ): Promise<{ err: unknown; user: unknown; info: unknown }> =>
     new Promise(resolve => {
       const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
+      recordTurnstileVerification(req, verified);
       void selfServeVerifyCallback(strategy)(req, 'access-tok', 'refresh-tok', profile, done);
     });
 
@@ -1555,13 +1561,22 @@ describe('selfServeVerifyCallback - signup network limits', () => {
     expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
   });
 
-  it("assesses the new account's staged grant against the request network", async () => {
+  it.each([true, false])('assesses a new account with the request network and challenge proof (%s)', async verified => {
     mockFindOne.mockResolvedValue(null);
     mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ ...doc, _id: 'new-id', id: 'new-id' }));
 
-    const { user } = await runSelfServe(AuthStrategy.Google);
+    const { user } = await runSelfServe(AuthStrategy.Google, freshProfile, verified);
 
     expect(user).toBeTruthy();
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signupMeta: expect.objectContaining({
+          ip: '203.0.113.9',
+          capturedAt: expect.any(Date),
+          challengeVerified: verified ? true : null,
+        }),
+      })
+    );
     expect(mockCreateSignupRiskCollector).toHaveBeenCalledWith(expect.objectContaining({ ip: '203.0.113.9' }));
     expect(mockReleasePending).toHaveBeenCalledWith(
       expect.anything(),

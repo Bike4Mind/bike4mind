@@ -1127,6 +1127,9 @@ importers:
       express:
         specifier: ^4.19.2
         version: 4.22.0
+      isolated-vm:
+        specifier: ^7.0.1
+        version: 7.0.1
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
