@@ -1500,6 +1500,30 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('markFailed - failureReason', () => {
+    it('writes failureReason at the top level, not into the error subdoc', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+
+      await agentExecutionRepository.markFailed(execution.id, {
+        message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
+      });
+
+      const updated = await agentExecutionRepository.findById(execution.id);
+      expect(updated?.failureReason).toBe('insufficient_credits');
+      expect(updated?.error).not.toHaveProperty('failureReason');
+    });
+
+    it('leaves failureReason unset when the caller omits it', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution());
+
+      await agentExecutionRepository.markFailed(execution.id, { message: 'LLM API returned 500' });
+
+      const updated = await agentExecutionRepository.findById(execution.id);
+      expect(updated?.failureReason).toBeUndefined();
+    });
+  });
+
   describe('findBillingBySessionId', () => {
     it('returns every execution for the session when no org is given (admin view)', async () => {
       const sessionId = new mongoose.Types.ObjectId().toString();

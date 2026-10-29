@@ -1192,6 +1192,7 @@ async function processExecution(
       logger.warn('[Credits] Insufficient credits to start execution', { availableCredits, requiredCredits });
       await agentExecutionRepository.markFailed(executionId, {
         message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
@@ -1220,6 +1221,7 @@ async function processExecution(
       });
       await agentExecutionRepository.markFailed(executionId, {
         message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
+        failureReason: 'insufficient_credits',
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;

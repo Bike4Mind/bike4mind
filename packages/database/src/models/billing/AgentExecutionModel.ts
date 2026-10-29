@@ -418,10 +418,12 @@ export interface IAgentExecution {
    * Coarse classifier for failures that operators / dashboards filter on.
    * `'abandoned'` is set by the scheduled / admin-triggered sweep on stale
    * executions so they can be distinguished from real executor errors.
+   * `'insufficient_credits'` is set when the executor refuses to start a run for
+   * credits (balance or org member cap); the loop scheduler pauses on it.
    * Schema is untyped at the Mongoose level so future variants can be added
    * without a migration; the TS union is the source of truth.
    */
-  failureReason?: 'abandoned';
+  failureReason?: 'abandoned' | 'insufficient_credits';
 
   /**
    * Set when the abandoned-sweep's post-abandonment quest settlement fails for
@@ -1783,7 +1785,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async markFailed(
     id: string,
-    error: { message: string; stack?: string; timedOut?: boolean; callerSafe?: boolean }
+    {
+      failureReason,
+      ...error
+    }: {
+      message: string;
+      stack?: string;
+      timedOut?: boolean;
+      callerSafe?: boolean;
+      failureReason?: IAgentExecution['failureReason'];
+    }
   ): Promise<void> {
     await this.model.updateOne(
       { _id: id },
@@ -1792,6 +1803,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           status: 'failed',
           error,
           completedAt: new Date(),
+          ...(failureReason && { failureReason }),
         },
       }
     );

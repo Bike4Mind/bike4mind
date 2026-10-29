@@ -425,7 +425,10 @@ describe('processExecution tool deps', () => {
     it('refuses a run whose balance cannot cover one iteration, before any tool or model work', async () => {
       const { markFailed } = await admitWith({ credits: 1 });
 
-      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
+      });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
 
@@ -435,6 +438,7 @@ describe('processExecution tool deps', () => {
       // The harness stops the run at tool building, which markFailed reports on its own terms.
       expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
         message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
       });
       expect(buildSharedToolsMock).toHaveBeenCalledTimes(1);
     });
@@ -448,7 +452,10 @@ describe('processExecution tool deps', () => {
       };
       const { markFailed } = await admitWith({ credits: 1_000, doc: resumed });
 
-      expect(markFailed).toHaveBeenCalledWith('exec-1', { message: 'Insufficient credits to run agent execution' });
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
+      });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
 
@@ -464,6 +471,7 @@ describe('processExecution tool deps', () => {
 
       expect(markFailed).not.toHaveBeenCalledWith('exec-1', {
         message: 'Insufficient credits to run agent execution',
+        failureReason: 'insufficient_credits',
       });
     });
   });
