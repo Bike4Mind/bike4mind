@@ -253,6 +253,144 @@ describe('signup grant daily budget', () => {
     expect((await User.findById(second.id))?.signupGrantHeldReason).toBeNull();
   });
 
+  const createInbox = async (email: string, enrolled: boolean) =>
+    User.create({
+      username: email.replace(/\W/g, '-'),
+      name: 'Synthetic User',
+      email,
+      emailVerified: true,
+      ...(enrolled ? { signupGrant: await newSignupGrant(adminSettings) } : {}),
+    });
+  const logger = { error: vi.fn() };
+  const tagsOf = async (id: string) => (await User.findById(id))?.tags ?? [];
+  const githubUnlock = (id: string) =>
+    userService.grantNoCardUnlock(id, 'github_verified', {
+      db: { users: userRepository, creditTransactions: creditTransactionRepository, creditLots: {}, adminSettings },
+      validators: {
+        github_verified: async () => ({ ok: false, refusal: 'github_not_linked' }),
+        work_email: async () => ({ ok: false, refusal: 'disabled' }),
+      },
+      withTransaction: fn => fn(),
+      settings: {
+        enabled: true,
+        githubCredits: 10,
+        workEmailCredits: 10,
+        maxCredits: 20,
+        githubMinAgeDays: 0,
+        githubMinRepos: 0,
+        workEmailDomainDailyCap: 1,
+        probeInconclusiveAllows: false,
+      },
+    } as unknown as Parameters<typeof userService.grantNoCardUnlock>[2]);
+
+  it('clears the hold on an alias tranche the inbox claim refuses once the next day opens', async () => {
+    config.signupGrantDailyBudget = '12';
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-04-01T10:00:00Z');
+    const paid = await createInbox('x.y@gmail.com', true);
+    const alias = await createInbox('xy+1@gmail.com', true);
+    expect(await userService.releaseSignupTranche(paid.id, adapters)).toMatchObject({ creditsGranted: 12 });
+    expect(await userService.grantFreeCredits(alias, adapters)).toMatchObject({ withheld: true });
+    expect((await User.findById(alias.id))?.signupGrantHeldReason).toBe('budget_exhausted');
+    expect(await githubUnlock(alias.id)).toEqual({ granted: false, refusal: 'signup_grant_pending' });
+
+    clock = new Date('2030-04-02T00:00:01Z');
+    const released = await userService.releasePendingFreeCredits(
+      { id: alias.id, tags: await tagsOf(alias.id) },
+      { ...adapters, logger }
+    );
+    expect(released).toMatchObject({ released: true, creditsGranted: 0, patch: { tags: [] } });
+    expect((await User.findById(alias.id))?.signupGrantHeldReason).toBeNull();
+    expect(await creditsOf(alias.id)).toBe(0);
+    expect(await spentToday()).toBe(0);
+    expect(await githubUnlock(alias.id)).not.toMatchObject({ refusal: 'signup_grant_pending' });
+  });
+
+  it('clears the hold when a held tranche is refused by the inbox claim on release', async () => {
+    config.signupGrantDailyBudget = '12';
+    clock = new Date('2030-04-05T10:00:00Z');
+    const paid = await createInbox('a.b@gmail.com', true);
+    const alias = await createInbox('ab+2@gmail.com', true);
+    await userService.releaseSignupTranche(paid.id, adapters);
+    expect(await userService.releaseSignupTranche(alias.id, adapters)).toMatchObject({ withheld: true });
+
+    clock = new Date('2030-04-06T00:00:01Z');
+    expect(await userService.releaseSignupTranche(alias.id, adapters)).toEqual({
+      creditsGranted: 0,
+      currentCredits: null,
+    });
+    expect((await User.findById(alias.id))?.signupGrantHeldReason).toBeNull();
+    expect(await spentToday()).toBe(0);
+  });
+
+  it('clears a stale hold on an unstaged alias the inbox claim refuses', async () => {
+    config.signupGrantDailyBudget = '12';
+    config.defaultFreeCredits = '12';
+    const paid = await createInbox('c.d@gmail.com', false);
+    const alias = await createInbox('cd+3@gmail.com', false);
+    expect(await userService.grantFreeCredits(paid, adapters)).toMatchObject({ creditsGranted: 12 });
+    await User.updateOne(
+      { _id: alias.id },
+      { $set: { signupGrantHeldReason: 'budget_exhausted', tags: [PENDING_FREE_CREDITS_TAG] } }
+    );
+
+    clock = new Date(clock.getTime() + 24 * 60 * 60 * 1000);
+    const released = await userService.releasePendingFreeCredits(
+      { id: alias.id, tags: [PENDING_FREE_CREDITS_TAG] },
+      { ...adapters, logger }
+    );
+    expect(released).toMatchObject({ released: true, creditsGranted: 0 });
+    expect((await User.findById(alias.id))?.signupGrantHeldReason).toBeNull();
+    expect(await githubUnlock(alias.id)).not.toMatchObject({ refusal: 'signup_grant_pending' });
+  });
+
+  it('leaves an already-paid account with a stale pending tag untouched on an exhausted day', async () => {
+    config.signupGrantDailyBudget = '12';
+    config.defaultFreeCredits = '12';
+    const [paid, staleHold, other] = await Promise.all([0, 1, 2].map(n => createUser(false, n)));
+    for (const user of [paid, staleHold]) {
+      await CreditTransaction.create({
+        ownerId: user.id,
+        ownerType: 'User',
+        credits: 12,
+        type: 'generic_add',
+        transactionId: `verify-grant:${user.id}`,
+      });
+      await User.updateOne({ _id: user.id }, { $set: { tags: [PENDING_FREE_CREDITS_TAG] } });
+    }
+    await User.updateOne({ _id: staleHold.id }, { $set: { signupGrantHeldReason: 'budget_exhausted' } });
+    expect(await userService.grantFreeCredits(other, adapters)).toMatchObject({ creditsGranted: 12 });
+    expect(await spentToday()).toBe(12);
+
+    for (const user of [paid, staleHold]) {
+      const released = await userService.releasePendingFreeCredits(
+        { id: user.id, tags: [PENDING_FREE_CREDITS_TAG] },
+        { ...adapters, logger }
+      );
+      expect(released).toMatchObject({ released: true, creditsGranted: 0, patch: { tags: [] } });
+      const persisted = await User.findById(user.id);
+      expect(persisted?.signupGrantHeldReason).toBeNull();
+    }
+    expect(await spentToday()).toBe(12);
+    expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${paid.id}` })).toBe(1);
+  });
+
+  it('keeps the hold on an account the budget still cannot pay', async () => {
+    config.signupGrantDailyBudget = '12';
+    config.defaultFreeCredits = '12';
+    const [first, second] = await Promise.all([createUser(false, 0), createUser(false, 1)]);
+    await userService.grantFreeCredits(first, adapters);
+    await userService.grantFreeCredits(second, adapters);
+    const released = await userService.releasePendingFreeCredits(
+      { id: second.id, tags: await tagsOf(second.id) },
+      { ...adapters, logger }
+    );
+    expect(released).toMatchObject({ released: false, creditsGranted: 0 });
+    expect((await User.findById(second.id))?.signupGrantHeldReason).toBe('budget_exhausted');
+    expect(await tagsOf(second.id)).toContain(PENDING_FREE_CREDITS_TAG);
+    expect(await githubUnlock(second.id)).toEqual({ granted: false, refusal: 'signup_grant_pending' });
+  });
+
   it('counts a reservation once per transaction id and refunds it once', async () => {
     const repo = signupGrantBudgetRepository;
     expect(await repo.reserve('2030-02-01', 'tx-1', 10, 25)).toEqual({ spent: 10, fresh: true });

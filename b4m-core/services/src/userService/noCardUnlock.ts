@@ -239,15 +239,15 @@ export async function grantNoCardUnlock(
   const user = await db.users.findById(userId);
   if (!user || !user.emailVerified || accountBlockReasons(user).length > 0) return refused('disabled');
 
-  // An unlock waits until the signup tranche has been paid, so no account holds the remainder without it.
-  if (user.signupGrant?.stage === 'pending_email' || user.signupGrantHeldReason) return refused('signup_grant_pending');
-
   const transactionId = noCardUnlockTransactionId(reason, userId);
   if (await db.creditTransactions.findOne({ transactionId })) return refused('already_granted');
 
   if (await protectSignupCredits(userId, { users: db.users, adminSettings: db.adminSettings, signupProtection })) {
     return refused('signup_held');
   }
+
+  // A budget-held signup tranche is paid before any unlock, so no account holds the remainder without it.
+  if (user.signupGrantHeldReason === 'budget_exhausted') return refused('signup_grant_pending');
 
   const check = await validators[reason]({ id: user.id, email: user.email ?? '' });
   if (!check.ok) return refused(check.refusal);

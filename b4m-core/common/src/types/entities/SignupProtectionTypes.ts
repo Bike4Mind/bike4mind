@@ -64,6 +64,8 @@ export type SignupGrantBudgetRepository = {
   refund: (day: string, transactionId: string, amount: number) => Promise<void>;
   /** True only for the call that first sets the day's alert flag. */
   markAlerted: (day: string, threshold: 50 | 100) => Promise<boolean>;
+  /** The day's spend; 0 when no row exists. */
+  getSpent: (day: string) => Promise<number>;
 };
 
 export type SignupGrantBudgetAlert = { day: string; threshold: 50 | 100; spent: number; budget: number };

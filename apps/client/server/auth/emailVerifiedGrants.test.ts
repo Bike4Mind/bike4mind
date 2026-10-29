@@ -96,6 +96,17 @@ describe('emailVerifiedGrants', () => {
       expect(result).toEqual({ creditsGranted: 100, currentCredits: 100, tags: ['Customer'] });
     });
 
+    it('forwards bypassBudget to the release adapters', async () => {
+      mockReleasePending.mockResolvedValue(releasedResult);
+
+      await releaseVerifiedPendingFreeCredits(taggedUser, 'test reason', logger, undefined, { bypassBudget: true });
+
+      expect(mockReleasePending).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ bypassBudget: true })
+      );
+    });
+
     it('reports current persisted tags instead of the stale grant snapshot', async () => {
       mockReleasePending.mockResolvedValue(releasedResult);
       mockClearPending.mockResolvedValue({ tags: ['new-entitlement'] });

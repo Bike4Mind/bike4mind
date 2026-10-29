@@ -93,15 +93,37 @@ export const grantFreeCredits = async (
     if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
+  const result = await grantFlatFreeCredits(user, { db, reason, bypassBudget });
+  // Every outcome but a hold is final, so a held reason left from an earlier attempt must not outlive it.
+  if (!result.withheld && persisted?.signupGrantHeldReason)
+    await db.users.update({ id: user.id, signupGrantHeldReason: null });
+  return result;
+};
+
+async function grantFlatFreeCredits(
+  user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
+  { db, reason, bypassBudget }: Pick<FreeCreditAdapters, 'db' | 'reason' | 'bypassBudget'>
+): Promise<GrantFreeCreditsResult> {
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
 
-  const legacyGrant = await db.creditTransactions.findOne({
-    transactionId: legacyOtcRegisterTransactionId(user.id),
-  });
-  if (legacyGrant) return { creditsGranted: 0, currentCredits: null };
-
   const transactionId = `verify-grant:${user.id}`;
+  // Checked before the budget so a paid account never draws, or is tagged and held, on an exhausted day.
+  const alreadyGranted = await db.creditTransactions.findOne({
+    transactionId: { $in: [transactionId, legacyOtcRegisterTransactionId(user.id)] },
+  });
+  if (alreadyGranted) return { creditsGranted: 0, currentCredits: null };
+
+  // The transactionId dedupes per account; the claim dedupes the open-registration default per
+  // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
+  // none. An invite-resolved amount is an explicit grant to that account and is not claimed.
+  // Claimed before the draw so an alias that earns nothing is never held; the claim is idempotent
+  // per account, so a held grant re-claims when released.
+  const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
+  if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
+    return { creditsGranted: 0, currentCredits: null };
+  }
+
   const budget = bypassBudget
     ? { outcome: 'unmetered' as const, release: async () => {} }
     : await reserveSignupGrantBudget(db, transactionId, amount);
@@ -113,21 +135,13 @@ export const grantFreeCredits = async (
 
   let credited = false;
   try {
-    // addCredits treats a repeated transactionId as success, which would leave a reservation spent and
-    // let an admin release report credits an earlier payout already made.
+    // A concurrent grant can land after the check above; addCredits treats a repeated transactionId as
+    // success, which would leave a reservation spent and let an admin release report credits an
+    // earlier payout already made.
     if ((budget.outcome === 'reserved' || bypassBudget) && (await db.creditTransactions.findOne({ transactionId }))) {
       await budget.release();
       return { creditsGranted: 0, currentCredits: null };
     }
-    // The transactionId dedupes per account; the claim dedupes the open-registration default per
-    // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
-    // none. An invite-resolved amount is an explicit grant to that account and is not claimed.
-    const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
-    if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
-      await budget.release();
-      return { creditsGranted: 0, currentCredits: null };
-    }
-
     const holder = await addCredits(
       {
         ownerId: user.id,
@@ -144,7 +158,6 @@ export const grantFreeCredits = async (
       }
     );
     credited = true;
-    if (persisted?.signupGrantHeldReason) await db.users.update({ id: user.id, signupGrantHeldReason: null });
     return { creditsGranted: amount, currentCredits: holder.currentCredits };
   } catch (error) {
     // A peer already wrote this ledger row, so the draw it made is the one that counts.
@@ -153,7 +166,7 @@ export const grantFreeCredits = async (
     if (!credited) await budget.release();
     throw error;
   }
-};
+}
 
 /**
  * Grants the deferred free credits for a user tagged PENDING_FREE_CREDITS_TAG and returns the

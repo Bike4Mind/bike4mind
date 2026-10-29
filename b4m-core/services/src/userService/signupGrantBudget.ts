@@ -36,12 +36,16 @@ async function alertCrossing(
   budgetConfig: NonNullable<SignupProtection['grantBudget']>,
   day: string,
   threshold: 50 | 100,
-  spent: number,
+  readSpent: () => Promise<number>,
   budget: number
 ) {
   try {
     if (await budgetConfig.repository.markAlerted(day, threshold)) {
-      await budgetConfig.notify?.({ day, threshold, spent, budget });
+      const spent = await readSpent();
+      // Reservations run inside callers' payout transactions and Slack can take seconds.
+      budgetConfig.notify?.({ day, threshold, spent, budget })?.catch(error => {
+        console.warn('[signup-grant-budget] Budget alert failed', error);
+      });
     }
   } catch (error) {
     console.warn('[signup-grant-budget] Budget alert failed', error);
@@ -67,11 +71,11 @@ export async function reserveSignupGrantBudget(
   const day = signupGrantBudgetDay(budgetConfig.now?.());
   const reservation = await budgetConfig.repository.reserve(day, transactionId, amount, budget);
   if (!reservation) {
-    await alertCrossing(budgetConfig, day, 100, budget, budget);
+    await alertCrossing(budgetConfig, day, 100, () => budgetConfig.repository.getSpent(day), budget);
     return { outcome: 'exhausted', release: noop };
   }
-  if (reservation.spent * 2 >= budget) await alertCrossing(budgetConfig, day, 50, reservation.spent, budget);
-  if (reservation.spent >= budget) await alertCrossing(budgetConfig, day, 100, reservation.spent, budget);
+  if (reservation.spent * 2 >= budget) await alertCrossing(budgetConfig, day, 50, async () => reservation.spent, budget);
+  if (reservation.spent >= budget) await alertCrossing(budgetConfig, day, 100, async () => reservation.spent, budget);
   const release = !reservation.fresh
     ? noop
     : () =>
