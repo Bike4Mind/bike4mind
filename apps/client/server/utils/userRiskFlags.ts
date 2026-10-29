@@ -21,9 +21,13 @@ export const RISK_RULE_CONFIG = {
 export type RiskRuleConfig = typeof RISK_RULE_CONFIG;
 
 export type RiskSignIn = Pick<UserSignIn, 'result' | 'event'> &
-  Partial<Pick<UserSignIn, 'ip' | 'browser' | 'operatingSystem' | 'deviceType'>> & { at: Date | string };
+  Partial<Pick<UserSignIn, 'ip' | 'browser' | 'operatingSystem'>> & { at: Date | string };
 export type RiskDailyCredits = { day: string; credits: number };
-export type RiskModerationIncident = { createdAt: Date | string; labels?: Array<{ name: string }> };
+export type RiskModerationIncident = {
+  createdAt: Date | string;
+  labels?: Array<{ name: string }>;
+  reviewStatus?: string;
+};
 
 export type UserRiskInputs = {
   signIns: readonly RiskSignIn[];
@@ -64,8 +68,9 @@ export const evaluateFailedSignIns = (
   };
 };
 
-const deviceKey = (e: RiskSignIn) =>
-  e.browser && e.operatingSystem ? [e.browser, e.operatingSystem, e.deviceType ?? ''].join('|') : undefined;
+// deviceType is left out: it only exists on sign-ins matched to a login record, so older priors would
+// never match a recent one and read as a new device.
+const deviceKey = (e: RiskSignIn) => (e.browser && e.operatingSystem ? `${e.browser}|${e.operatingSystem}` : undefined);
 const knownIp = (e: RiskSignIn) => (e.ip && e.ip.toLowerCase() !== 'unknown' ? e.ip : undefined);
 
 export const evaluateNewSignIn = (
@@ -142,7 +147,7 @@ export const evaluateCreditSpike = (
       { label: 'Baseline active days', value: String(activeDays) },
     ],
     window: { from, to },
-    timeline: { types: ['credit'], from, to },
+    timeline: { types: ['usage'], from, to },
   };
 };
 
@@ -153,7 +158,9 @@ export const evaluateModeration = (
 ): AdminUserRiskFlag | null => {
   const to = now.getTime();
   const from = to - cfg.windowDays * DAY_MS;
-  const hits = incidents.filter(i => ms(i.createdAt) >= from && ms(i.createdAt) <= to);
+  const hits = incidents.filter(
+    i => i.reviewStatus !== 'false_positive' && ms(i.createdAt) >= from && ms(i.createdAt) <= to
+  );
   if (hits.length < cfg.threshold) return null;
   const labels = [...new Set(hits.flatMap(i => (i.labels ?? []).map(l => l.name)))];
   return {

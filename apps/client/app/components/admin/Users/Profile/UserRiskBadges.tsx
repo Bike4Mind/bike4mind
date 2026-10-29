@@ -25,7 +25,14 @@ export const UserRiskBadges: React.FC<UserRiskBadgesProps> = ({ userId, onOpenCo
   const navigate = useNavigate({ from: '/admin/users/$userId' });
   const [openId, setOpenId] = useState<AdminUserRiskFlagId | null>(null);
 
-  if (risk.isLoading || risk.isError || !risk.data) return null;
+  if (risk.isLoading) return null;
+  if (risk.isError || !risk.data) {
+    return (
+      <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="user-risk-badges-error">
+        Risk flags could not be loaded
+      </Typography>
+    );
+  }
   const flags = risk.data.flags;
   const open = flags.find(flag => flag.id === openId);
 

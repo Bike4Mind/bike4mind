@@ -78,6 +78,7 @@ export const SIGN_IN_EVENT_RESULTS: Readonly<Partial<Record<UserAuthAuditEvent, 
 };
 
 const SIGN_IN_EVENTS = Object.keys(SIGN_IN_EVENT_RESULTS) as UserAuthAuditEvent[];
+const SUCCESS_SIGN_IN_EVENTS = SIGN_IN_EVENTS.filter(event => SIGN_IN_EVENT_RESULTS[event] === 'success');
 
 const BROWSERS: ReadonlyArray<[RegExp, string]> = [
   [/Edg\//, 'Edge'],
@@ -151,10 +152,13 @@ export const authRowToSignIn = (row: UserAuthAuditRow, loginRecords: readonly IL
 export const listUserSignIns = async (
   userId: string,
   loginRecords: readonly ILoginRecord[],
-  page: { limit: number; cursor?: AuditLogCursor }
+  page: { limit: number; cursor?: AuditLogCursor; successOnly?: boolean }
 ): Promise<{ entries: UserSignIn[]; nextCursor: AuditLogCursor | null }> => {
   const rows = await UserAuthAuditLogModel.find({
-    $and: [{ userId, event: { $in: SIGN_IN_EVENTS } }, ...createdAtCursorClauses(page.cursor)],
+    $and: [
+      { userId, event: { $in: page.successOnly ? SUCCESS_SIGN_IN_EVENTS : SIGN_IN_EVENTS } },
+      ...createdAtCursorClauses(page.cursor),
+    ],
   })
     .sort({ createdAt: -1, _id: -1 })
     .limit(page.limit + 1)

@@ -71,6 +71,37 @@ describe('GET /api/admin/users/[userId]/risk-flags', () => {
     ]);
   });
 
+  it('is JWT-only so an API key can never read the IP evidence', () => {
+    expect((handler as unknown as { _config?: { auth?: string } })._config?.auth).toBe('jwtOnly');
+  });
+
+  it('reads successful sign-ins separately and excludes false-positive moderation incidents', async () => {
+    await call().promise;
+    expect(mocks.listUserSignIns).toHaveBeenCalledWith(USER_ID, [], expect.objectContaining({ successOnly: true }));
+    expect(mocks.findIncidents).toHaveBeenCalledWith(
+      { userId: USER_ID, reviewStatus: { $ne: 'false_positive' } },
+      expect.anything()
+    );
+  });
+
+  it('still fires new IP when failed rows crowd the combined page but the success read has the priors', async () => {
+    const success = (id: string, at: Date, ip: string) => ({ id, at, result: 'success', event: 'login_success', ip });
+    mocks.listUserSignIns.mockImplementation(async (_u: unknown, _l: unknown, page: { successOnly?: boolean }) =>
+      page.successOnly
+        ? {
+            entries: [
+              success('n', ago(HOUR), '198.51.100.7'),
+              ...['a', 'b', 'c'].map((id, i) => success(id, ago((30 + i) * 24 * HOUR), '203.0.113.1')),
+            ],
+            nextCursor: null,
+          }
+        : { entries: [failedSignIn(0)], nextCursor: null }
+    );
+    const { res, promise } = call();
+    await promise;
+    expect(flagIds(res)).toEqual(['new_ip_or_device']);
+  });
+
   it('rejects a non-admin with 403 before reading anything', async () => {
     await expect(call({}, { id: 'u2', isAdmin: false }).promise).rejects.toMatchObject({ statusCode: 403 });
     expect(mocks.findById).not.toHaveBeenCalled();

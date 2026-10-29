@@ -90,9 +90,17 @@ describe('UserRiskBadges', () => {
     expect(screen.getByTestId('user-risk-badges-empty')).toHaveTextContent('No risk flags');
   });
 
-  it.each([{ isLoading: true }, { isError: true }])('renders nothing while %o', state => {
-    Object.assign(mocks, state, { data: undefined });
+  it('renders nothing while loading', () => {
+    Object.assign(mocks, { isLoading: true, data: undefined });
     renderBadges();
     expect(screen.queryByTestId('user-risk-badges')).toBeNull();
+    expect(screen.queryByTestId('user-risk-badges-error')).toBeNull();
+  });
+
+  it('says so when the flags fail to load instead of showing nothing', () => {
+    Object.assign(mocks, { isError: true, data: undefined });
+    renderBadges();
+    expect(screen.getByTestId('user-risk-badges-error')).toHaveTextContent('could not be loaded');
+    expect(screen.queryByTestId('user-risk-badges-empty')).toBeNull();
   });
 });

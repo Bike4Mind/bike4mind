@@ -76,6 +76,12 @@ describe('evaluateNewSignIn', () => {
     const flag = evaluateNewSignIn([success(HOUR, '10.0.0.1', device), ...earlier], NOW);
     expect(flag?.evidence).toContainEqual({ label: 'New device', value: 'Firefox, Linux' });
   });
+  it('does not flag a new device when only deviceType differs between prior and recent sign-ins', () => {
+    const base = { browser: 'Chrome', operatingSystem: 'macOS' };
+    const earlier = prior(3).map(e => ({ ...e, ...base }));
+    const recent = success(HOUR, '10.0.0.1', { ...base, deviceType: 'Desktop' } as Partial<RiskSignIn>);
+    expect(evaluateNewSignIn([recent, ...earlier], NOW)).toBeNull();
+  });
   it('ignores missing and Unknown IPs', () => {
     expect(evaluateNewSignIn([success(HOUR, undefined), success(2 * HOUR, 'Unknown'), ...prior(3)], NOW)).toBeNull();
   });
@@ -104,6 +110,9 @@ describe('evaluateCreditSpike', () => {
     expect(flag).toMatchObject({ id: 'credit_spike', severity: 'warn' });
     expect(flag?.evidence[0]).toEqual({ label: 'Credits spent, last 7 days', value: '210' });
   });
+  it('links to the usage timeline, which is what the spike measures', () => {
+    expect(evaluateCreditSpike(series(10, 30, 30), NOW)?.timeline?.types).toEqual(['usage']);
+  });
   it('does not fire just below the multiplier', () => {
     expect(evaluateCreditSpike(series(10, 30, 29), NOW)).toBeNull();
   });
@@ -129,6 +138,11 @@ describe('evaluateModeration', () => {
     const flag = evaluateModeration([{ createdAt: ago(DAY), labels: [{ name: 'Explicit Nudity' }] }], NOW);
     expect(flag?.id).toBe('prior_moderation');
     expect(flag?.evidence).toContainEqual({ label: 'Labels', value: 'Explicit Nudity' });
+  });
+  it('ignores incidents reviewed as false positives', () => {
+    const incident = { createdAt: ago(DAY), reviewStatus: 'false_positive' };
+    expect(evaluateModeration([incident], NOW)).toBeNull();
+    expect(evaluateModeration([incident, { createdAt: ago(DAY), reviewStatus: 'confirmed_csam' }], NOW)).not.toBeNull();
   });
   it('ignores incidents outside the window', () => {
     const age = RISK_RULE_CONFIG.moderation.windowDays * DAY + 1;
