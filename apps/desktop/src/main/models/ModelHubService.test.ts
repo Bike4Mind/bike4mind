@@ -487,8 +487,13 @@ describe('ModelHubService pulls', () => {
     const service = new ModelHubService({
       runtime,
       hub: new HuggingFaceHub({ endpoint: 'https://license-refresh.test', fetch }),
+      libraryLayers: async () => null,
+      hardware: async () => CPU_16,
+      localContext: async () => AUTO_LOCAL_CONTEXT,
+      curated: CURATED,
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
+      warn: () => {},
     });
     const shown = await service.detail(REPO);
     if (!shown.ok) throw new Error(shown.error.message);
