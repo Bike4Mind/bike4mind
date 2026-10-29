@@ -263,6 +263,8 @@ export interface ToolContext {
    * absent means tag-only matching (the neutral default). See getDynamicDataLakeAccess.
    */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /**
    * The turn's active organization, already authorization-validated upstream on the web and
    * public API paths (resolveActiveOrg) but NOT on every host (Slack), so a tool that scopes a

@@ -4,7 +4,15 @@ import { TooManyRequestsError } from '@bike4mind/common';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
-const { captured, mockAdmitRequestCompletion, mockStartAgentExecution } = vi.hoisted(() => ({
+const {
+  captured,
+  mockAdmitRequestCompletion,
+  mockStartAgentExecution,
+  mockResolveDefaultChatModel,
+  mockResolveCallerDefaultModel,
+} = vi.hoisted(() => ({
+  mockResolveDefaultChatModel: vi.fn(),
+  mockResolveCallerDefaultModel: vi.fn(async (model: string) => model),
   captured: {} as { handler?: Handler },
   mockAdmitRequestCompletion: vi.fn(),
   mockStartAgentExecution: vi.fn(),
@@ -22,8 +30,13 @@ vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => 'limiter' }))
 vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: vi.fn() }));
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   isChatModelUsable: vi.fn(),
-  resolveDefaultChatModel: vi.fn(),
+  resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
 }));
+// Passthrough: the free-tier default fallback has its own tests (server/utils/callerModelList.test.ts).
+vi.mock('@server/utils/callerModelList', () => ({
+  resolveCallerDefaultModel: (...a: unknown[]) => mockResolveCallerDefaultModel(...a),
+}));
+vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettingsValue: () => 'claude-opus-5' }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@server/auth/assertAiAccessAllowed', () => ({ assertAiAccessAllowed: vi.fn() }));
 vi.mock('@server/utils/startAgentExecution', () => ({
@@ -64,6 +77,19 @@ describe('POST /api/v1/agent-executions - untrusted owner quotas', () => {
     );
     expect(mockAdmitRequestCompletion).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(202);
+  });
+
+  it('starts a model-less run on the caller-specific default model', async () => {
+    mockResolveDefaultChatModel.mockResolvedValueOnce({ model: 'admin-default' });
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('allowlisted-model');
+    const req = request();
+    req.validated = { session_id: 's1', message: 'hi' } as typeof req.validated;
+    await captured.handler!(req, response());
+    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('admin-default', req.user, req.logger);
+    expect(mockStartAgentExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'allowlisted-model' }),
+      req.logger
+    );
   });
 
   it('propagates shared quota refusal without accepting the run', async () => {
