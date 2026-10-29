@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { IMessage } from '@bike4mind/common';
 import { stripToolDependentMessages, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { DEFERRED_ANCHOR_TOOL_NAME } from '@bike4mind/common';
 import type { HistoryToolTurn } from '@bike4mind/utils';
 import {
   applyToolTimeline,
   declareDeferredTools,
-  DEFERRED_ANCHOR_TOOL_NAME,
   DEFERRED_TOOLS_MARKER,
   hasCoreTool,
+  lookbackAnchor,
   planToolTimeline,
   undoDeferredTools,
 } from './deferredToolLoading';
@@ -174,6 +175,22 @@ describe('applyToolTimeline', () => {
     const inserted = applyToolTimeline([user('u1')], [{ after: null, added: ['web_search'], removed: [] }]);
     expect(inserted).toHaveLength(2);
     expect(stripToolDependentMessages(inserted)).toEqual([user('u1')]);
+  });
+});
+
+describe('lookbackAnchor', () => {
+  const a0 = assistant('a0');
+  const u1 = user('u1');
+  const history = [user('u0'), a0, u1, assistant('a1')];
+
+  it('is the message before the last replayed prompt when a change follows that prompt', () => {
+    expect(lookbackAnchor(history, u1, [{ after: u1, added: ['web_search'], removed: [] }])).toBe(a0);
+  });
+
+  it('is undefined when the last turn changed nothing, or there is no earlier message', () => {
+    expect(lookbackAnchor(history, u1, [{ after: null, added: ['web_search'], removed: [] }])).toBeUndefined();
+    expect(lookbackAnchor([u1], u1, [{ after: u1, added: ['web_search'], removed: [] }])).toBeUndefined();
+    expect(lookbackAnchor(history, undefined, [])).toBeUndefined();
   });
 });
 

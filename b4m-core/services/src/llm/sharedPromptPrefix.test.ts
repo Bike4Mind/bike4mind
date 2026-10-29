@@ -18,12 +18,13 @@ import {
   applyToolTimeline,
   declareDeferredTools,
   hasCoreTool,
+  lookbackAnchor,
   planToolTimeline,
   type ToolTimeline,
 } from './deferredToolLoading';
 import { ToolBuilder, type ToolBuilderConfig } from './tools/ToolBuilder';
 import { buildViewRegistryAdminMessages } from './viewRegistryPrompt';
-import { buildTaggedContextMessages, markShareablePrefixBoundary } from './systemPromptSources';
+import { buildTaggedContextMessages, markHistoryCacheAnchor, markShareablePrefixBoundary } from './systemPromptSources';
 
 vi.mock('../conversationContextService', () => ({
   extractAndSaveEntitiesFromUserMessage: vi.fn(),
@@ -136,22 +137,24 @@ async function sendTurn(
   });
   markShareablePrefixBoundary(tagged);
 
-  const cacheStrategy: ICacheStrategy = {
-    enableCaching: true,
-    cacheSystemPrompt: true,
-    cacheTools: true,
-    cacheConversationHistory: true,
-    cacheTTL: '5m',
-  };
   const baseMessages: IMessage[] = [
     ...tagged.map(t => t.message),
     ...historyMessages,
     { role: 'user', content: prompt },
   ];
+  const lookback = timeline ? lookbackAnchor(historyMessages, toolTurns.at(-1)?.prompt, timeline.changes) : undefined;
+  const anchored = markHistoryCacheAnchor(markHistoryCacheAnchor(baseMessages, historyMessages.at(-1)), lookback);
+  const cacheStrategy: ICacheStrategy = {
+    enableCaching: true,
+    cacheSystemPrompt: true,
+    cacheTools: true,
+    cacheConversationHistory: anchored === baseMessages,
+    cacheTTL: '5m',
+  };
   const guidance = new Map(toolPrompt.deferredGuidance.map(entry => [entry.tool, entry.text]));
   if (guided.has('navigate_view')) guidance.set('navigate_view', getViewSummaryForLLM({ isAdmin: false }));
   const tools = timeline ? declareDeferredTools(offered.map(tool), timeline.notOffered.map(tool)) : offered.map(tool);
-  const messages = timeline ? applyToolTimeline(baseMessages, timeline.changes, guidance) : baseMessages;
+  const messages = timeline ? applyToolTimeline(anchored, timeline.changes, guidance) : anchored;
 
   const backend = new AnthropicBackend('test-key');
   let request: Request | undefined;
@@ -307,6 +310,58 @@ describe('shareable prompt prefix with deferred tool loading', () => {
       { type: 'tool_removal', tool: { type: 'tool_reference', name: 'web_search' } },
     ]);
     expect(second.tools?.find(block => block.name === 'web_search')?.defer_loading).toBe(true);
+  });
+
+  describe('history breakpoints around a large addition', () => {
+    const core = ['current_model_details', 'web_search'];
+    const big = Array.from({ length: 24 }, (_, i) => `big_tool_${String(i).padStart(2, '0')}`);
+    const markedTexts = (request: Request) =>
+      (request.messages ?? []).flatMap(message =>
+        Array.isArray(message.content)
+          ? (message.content as Block[]).filter(block => block.cache_control).map(block => block.text)
+          : []
+      );
+    const markerCount = (request: Request) =>
+      [...(request.tools ?? []), ...(request.system ?? [])].filter(block => block.cache_control).length +
+      markedTexts(request).length;
+
+    it('also marks the previous turn breakpoint, which a 24-block addition would put past the 20-block lookback', async () => {
+      const third = await sendTurn(
+        { ...WEB_USER, toolOrder: [...core, ...big] },
+        {
+          deferTools: true,
+          history: [
+            { prompt: 'u1', reply: 'a1', offered: core },
+            { prompt: 'u2', reply: 'a2', offered: [...core, ...big] },
+          ],
+          prompt: 'u3',
+        }
+      );
+
+      const additions = (third.messages ?? [])
+        .filter(message => message.role === 'system')
+        .flatMap(message => (message.content as Block[]).filter(block => block.type === 'tool_addition'));
+      expect(additions.length).toBeGreaterThan(20);
+      expect(markedTexts(third)).toEqual(['a1', 'a2']);
+      expect(markerCount(third)).toBeLessThanOrEqual(4);
+      expect(shareableBreakpoint(third)).toBeGreaterThan(0);
+    });
+
+    it('keeps the single history breakpoint when the last turn changed no tools', async () => {
+      const third = await sendTurn(
+        { ...WEB_USER, toolOrder: [...core, ...big] },
+        {
+          deferTools: true,
+          history: [
+            { prompt: 'u1', reply: 'a1', offered: [...core, ...big] },
+            { prompt: 'u2', reply: 'a2', offered: [...core, ...big] },
+          ],
+          prompt: 'u3',
+        }
+      );
+
+      expect(markedTexts(third)).toEqual(['a2']);
+    });
   });
 
   it('control: with deferral off the same two users get different heads', async () => {

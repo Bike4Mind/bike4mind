@@ -1,17 +1,22 @@
 import type { IMessage } from '@bike4mind/common';
-import { isToolChangeMessage } from '@bike4mind/common';
+import {
+  canFollowWithToolChange,
+  DEFERRED_ANCHOR_TOOL_NAME,
+  DEFERRED_ANCHOR_TOOL_SCHEMA,
+  diffToolNames,
+  isToolChangeMessage,
+  toolChangeContent,
+} from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { HistoryToolTurn } from '@bike4mind/utils';
 import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 /**
- * Deferred tool loading for in-app chat. Anthropic renders `tools` ahead of `system`, so every
- * distinct optional tool set is its own cached head. A tool sent with `defer_loading: true` is left
- * out of that rendered prefix; a `tool_addition` system message in the history surfaces it (and its
- * guidance) at that position instead. Changes are append-only: each tool is added after the turn
- * that first offered it and removed after the turn that stopped offering it, so a tool-set change
- * re-writes only from that turn on. Only tools the turn offers are callable; anything else in
- * `tools` is a deferred declaration that earlier references need, and refuses if called.
+ * Deferred tool loading for in-app chat, on the shared helpers in @bike4mind/common deferredTools.ts
+ * (also used by Desktop). Each tool is added after the turn that first offered it and removed after
+ * the turn that stopped offering it, with its guidance as a text block in the same message. Only
+ * tools the turn offers are callable; anything else in `tools` is a deferred declaration that
+ * earlier references need, and refuses if called.
  */
 
 /** Offered to every in-app turn, so they stay loaded: the head is shared only if this set is too. */
@@ -20,27 +25,12 @@ export const CORE_TOOL_NAMES: ReadonlySet<string> = new Set([CURRENT_MODEL_DETAI
 /** `requiresTool` marker on change messages, so a turn that continues without tools drops them. */
 export const DEFERRED_TOOLS_MARKER = 'deferred_tools';
 
-/**
- * Never added, so never callable. Any deferred tool changes the rendered head (measured live), so it
- * is always declared: a turn with no optional tools then shares the head of turns that have some.
- */
-export const DEFERRED_ANCHOR_TOOL_NAME = 'deferred_tools_anchor';
-
 const notAvailable = (name: string) => `The ${name} tool is not available in this conversation.`;
 
 export const deferredAnchorTool = (): ICompletionOptionTools => ({
-  toolSchema: {
-    name: DEFERRED_ANCHOR_TOOL_NAME,
-    description: 'Not available.',
-    parameters: { type: 'object', properties: {} },
-    defer_loading: true,
-  },
+  toolSchema: { ...DEFERRED_ANCHOR_TOOL_SCHEMA },
   toolFn: async () => notAvailable(DEFERRED_ANCHOR_TOOL_NAME),
 });
-
-type ToolChangeBlock =
-  | { type: 'tool_addition' | 'tool_removal'; tool: { type: 'tool_reference'; name: string } }
-  | { type: 'text'; text: string };
 
 /** One change, placed after `after` (a history prompt) or, when null, after the current user message. */
 export type ToolChange = { after: IMessage | null; added: string[]; removed: string[] };
@@ -79,8 +69,7 @@ export function planToolTimeline(
   const everAdded = new Set<string>();
   let active = new Set<string>();
   const step = (after: IMessage | null, offered: Set<string>) => {
-    const added = sorted([...offered].filter(name => !active.has(name)));
-    const removed = sorted([...active].filter(name => !offered.has(name)));
+    const { added, removed } = diffToolNames(active, offered);
     if (added.length > 0 || removed.length > 0) changes.push({ after, added, removed });
     added.forEach(name => everAdded.add(name));
     active = offered;
@@ -100,28 +89,36 @@ export function planToolTimeline(
 
 const isTurn = (message: IMessage) => message.role === 'user' || message.role === 'assistant';
 
-/** A change may follow a user message only when the next turn is the assistant's, or nothing. */
+/** Plain system messages are hoisted out by the adapter, so placement is judged on the turns alone. */
 function placeableAfter(messages: readonly IMessage[], index: number): boolean {
-  if (index < 0 || messages[index].role !== 'user') return false;
-  const next = messages.slice(index + 1).find(isTurn);
-  return next === undefined || next.role === 'assistant';
+  if (index < 0) return false;
+  const turns = messages.filter(isTurn);
+  return canFollowWithToolChange(turns, turns.indexOf(messages[index]));
 }
 
 function changeMessage(added: string[], removed: string[], guidance: ReadonlyMap<string, string>): IMessage {
-  const reference = (type: 'tool_addition' | 'tool_removal') => (name: string) => ({
-    type,
-    tool: { type: 'tool_reference' as const, name },
-  });
   const text = added
     .map(name => guidance.get(name)?.trim())
     .filter((entry): entry is string => Boolean(entry))
     .join('\n\n');
-  const content: ToolChangeBlock[] = [
-    ...removed.map(reference('tool_removal')),
-    ...added.map(reference('tool_addition')),
-    ...(text ? [{ type: 'text' as const, text }] : []),
-  ];
+  const content = [...toolChangeContent(added, removed), ...(text ? [{ type: 'text' as const, text }] : [])];
   return { role: 'system', content: content as unknown as IMessage['content'], requiresTool: DEFERRED_TOOLS_MARKER };
+}
+
+/**
+ * The previous request's history breakpoint (the message before the last replayed prompt), when a
+ * change sits after that prompt. The API looks back only 20 blocks from a breakpoint for an earlier
+ * entry, and one tool_addition block per tool can push that entry out of reach (measured live), so
+ * the caller marks this message too and reads it exactly.
+ */
+export function lookbackAnchor(
+  history: readonly IMessage[],
+  lastPrompt: IMessage | undefined,
+  changes: readonly ToolChange[]
+): IMessage | undefined {
+  if (!lastPrompt || !changes.some(change => change.after === lastPrompt)) return undefined;
+  const index = history.indexOf(lastPrompt);
+  return index > 0 ? history[index - 1] : undefined;
 }
 
 /**

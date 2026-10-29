@@ -308,14 +308,15 @@ import {
   DATA_LAKE_TOOL_NAMES,
   libraryFlagForScope,
   chatSupportsDeferredToolAddition,
+  DEFERRED_ANCHOR_TOOL_NAME,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 import {
   applyToolTimeline,
   declareDeferredTools,
-  DEFERRED_ANCHOR_TOOL_NAME,
   hasCoreTool,
+  lookbackAnchor,
   planToolTimeline,
   type ToolTimeline,
   undoDeferredTools,
@@ -4955,7 +4956,10 @@ export class ChatCompletionProcess {
       // on the system-role form, and `messages` stays that form for everything persisted from it.
       // The history breakpoint is flagged on the message itself, before relocation, so both the
       // adapter's same-role merge and the tool rounds below see the same object.
-      const anchoredMessages = markHistoryCacheAnchor(messages, lastHistoryMessage);
+      const lookback = toolTimeline
+        ? lookbackAnchor(previousMessages, cacheInfo.toolTurns?.at(-1)?.prompt, toolTimeline.changes)
+        : undefined;
+      const anchoredMessages = markHistoryCacheAnchor(markHistoryCacheAnchor(messages, lastHistoryMessage), lookback);
       const turnContext = relocatePerTurnContext(
         anchoredMessages,
         perTurnContextMessages,
