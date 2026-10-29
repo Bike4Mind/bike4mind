@@ -1,6 +1,7 @@
 export * from './errors';
 export * from './adminUserNotes';
 export * from './signupGrant';
+export * from './signupRiskPolicy';
 export * from './apiErrorCodes';
 export * from './groupTypes';
 export * from './insufficientCredits';
