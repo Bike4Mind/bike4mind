@@ -62,7 +62,9 @@ export function usePromptCacheComposer({
     if (!hasSession || !supportsOneHourPromptCache(selectedModel)) return null;
     return {
       value: cacheTtl,
-      prices: promptCacheTtlPrices(selectedModel, contextUsage?.actualInputTokens, contextUsage?.inputModelId),
+      prices: contextUsage?.providerInputTokens
+        ? promptCacheTtlPrices(selectedModel, contextUsage.providerInputTokens, contextUsage.answeredModelId)
+        : promptCacheTtlPrices(selectedModel, contextUsage?.actualInputTokens, contextUsage?.inputModelId),
       onChange: setTtl,
       disabled: isPending,
     };
