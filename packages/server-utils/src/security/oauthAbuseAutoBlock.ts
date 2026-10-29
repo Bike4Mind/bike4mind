@@ -51,12 +51,14 @@ export interface OauthAbuseAutoBlockDeps {
     ip: string,
     reason: string,
     options: { durationMs: number; source: 'auto'; escalationLevel: number }
-  ) => Promise<unknown>;
+  ) => Promise<{ created: boolean }>;
 }
 
 export interface OauthAbuseAutoBlockResult {
   evaluatedSince: Date;
+  /** New blocks only; a block() that merely extended an existing row is left out. */
   blocked: Array<{ ip: string; attempts: number; durationMs: number; escalationLevel: number }>;
+  failed: string[];
 }
 
 /** Positive whole minutes from a CSV; blank or any malformed entry falls back to the default schedule. */
@@ -135,7 +137,7 @@ export async function runOauthAbuseAutoBlock(
   const now = options.now ?? new Date();
   const policy = await deps.loadPolicy();
   const evaluatedSince = new Date(now.getTime() - policy.windowMs);
-  const result: OauthAbuseAutoBlockResult = { evaluatedSince, blocked: [] };
+  const result: OauthAbuseAutoBlockResult = { evaluatedSince, blocked: [], failed: [] };
   if (!policy.enabled) return result;
 
   const lookbackStart = new Date(now.getTime() - policy.lookbackMs);
@@ -153,14 +155,19 @@ export async function runOauthAbuseAutoBlock(
 
       const escalationLevel = nextEscalationLevel(latest, lookbackStart, policy.escalationMs.length - 1);
       const durationMs = resolveBlockDurationMs(escalationLevel, policy.escalationMs);
-      await deps.block(ip, `Auto-blocked: ${attempts} failed sign-ins in ${policy.windowMs / MINUTE_MS} minutes`, {
-        durationMs,
-        source: 'auto',
-        escalationLevel,
-      });
-      result.blocked.push({ ip, attempts, durationMs, escalationLevel });
+      const { created } = await deps.block(
+        ip,
+        `Auto-blocked: ${attempts} failed sign-ins in ${policy.windowMs / MINUTE_MS} minutes`,
+        {
+          durationMs,
+          source: 'auto',
+          escalationLevel,
+        }
+      );
+      if (created) result.blocked.push({ ip, attempts, durationMs, escalationLevel });
     } catch (error) {
       console.warn(`Failed to auto-block IP ${ip}`, error);
+      result.failed.push(ip);
     }
   }
   return result;

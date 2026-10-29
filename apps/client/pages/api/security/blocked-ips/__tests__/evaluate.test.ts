@@ -64,13 +64,13 @@ describe('POST /api/security/blocked-ips/evaluate - admin gate', () => {
       for (const { ip, attempts } of candidates.list) {
         const options = { durationMs: 600_000, source: 'auto' as const, escalationLevel: 0 };
         try {
-          await deps.block(ip, `Auto-blocked: ${attempts} failed sign-ins in 10 minutes`, options);
-          blocked.push({ ip, attempts, durationMs: options.durationMs, escalationLevel: 0 });
+          const { created } = await deps.block(ip, `Auto-blocked: ${attempts} failed sign-ins in 10 minutes`, options);
+          if (created) blocked.push({ ip, attempts, durationMs: options.durationMs, escalationLevel: 0 });
         } catch {
           // The real runner logs and moves on.
         }
       }
-      return { evaluatedSince: EVALUATED_SINCE, blocked };
+      return { evaluatedSince: EVALUATED_SINCE, blocked, failed: [] };
     });
     blockedIP.block.mockReset().mockResolvedValue({ doc: {}, created: true });
     audit.record.mockReset().mockImplementation(async () => {

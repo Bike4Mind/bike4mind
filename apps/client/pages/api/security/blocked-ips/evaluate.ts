@@ -10,7 +10,6 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 // Unlike the cron, each new block here is audited inside its own transaction.
 const handler = baseApi().post(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
-  const created = new Set<string>();
   const auditFailed: string[] = [];
   const { blocked, evaluatedSince } = await runOauthAbuseAutoBlock({
     now: new Date(),
@@ -43,11 +42,11 @@ const handler = baseApi().post(async (req, res) => {
           }
           throw error;
         }
-        if (ipBlocked) created.add(ip);
+        return { created: ipBlocked };
       },
     },
   });
-  const blockedIps = blocked.map(b => b.ip).filter(ip => created.has(ip));
+  const blockedIps = blocked.map(b => b.ip);
   if (auditFailed.length > 0) {
     return res.status(500).json({
       error: 'Audit or commit failed; these IPs were not blocked',

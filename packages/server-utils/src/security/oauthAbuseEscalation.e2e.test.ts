@@ -42,7 +42,7 @@ it('keeps a persistent attacker at the last step with the default schedule', asy
         findLatestBlock: i => blockedIPRepository.findLatestBlock(i),
         // Stamps the block at the simulated time; the repository's block() always uses the wall clock.
         block: async (i, reason, o) => {
-          const doc = await BlockedIP.create({
+          await BlockedIP.create({
             ip: i,
             reason,
             active: true,
@@ -51,7 +51,7 @@ it('keeps a persistent attacker at the last step with the default schedule', asy
             source: o.source,
             escalationLevel: o.escalationLevel,
           });
-          return doc;
+          return { created: true };
         },
       },
     });

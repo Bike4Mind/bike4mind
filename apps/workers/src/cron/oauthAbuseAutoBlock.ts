@@ -15,5 +15,6 @@ export const handler = async () => {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
   const result = await runOauthAbuseAutoBlock();
   if (result.blocked.length > 0) console.info('[oauthAbuseAutoBlock] blocked', result.blocked);
+  if (result.failed.length > 0) console.error('[oauthAbuseAutoBlock] failed to block', result.failed);
   return result;
 };

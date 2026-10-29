@@ -56,7 +56,7 @@ const setup = (
   > = {},
   attemptsSince = 0
 ) => {
-  const block = vi.fn().mockResolvedValue({});
+  const block = vi.fn().mockResolvedValue({ created: true });
   const getIPsWithHighAttempts = vi.fn().mockResolvedValue([
     { ip: '1.1.1.1', attempts: 25 },
     { ip: '2.2.2.2', attempts: 20 },
@@ -196,6 +196,15 @@ describe('runOauthAbuseAutoBlock', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
     expect(result.blocked.map(b => b.ip)).toEqual(['2.2.2.2']);
+    expect(result.failed).toEqual(['1.1.1.1']);
+  });
+
+  it('leaves out a block() that only extended an existing row', async () => {
+    const { deps, block } = setup();
+    block.mockResolvedValueOnce({ created: false });
+    const result = await runOauthAbuseAutoBlock({ now: NOW, deps });
+    expect(result.blocked.map(b => b.ip)).toEqual(['2.2.2.2']);
+    expect(result.failed).toEqual([]);
   });
 });
 
@@ -205,7 +214,7 @@ describe('default deps and policy', () => {
     h.getIPs.mockResolvedValue([{ ip: '9.9.9.9', attempts: 7 }]);
     h.countForIP.mockResolvedValue(7);
     h.findLatest.mockResolvedValue({ active: false, expiresAt: ago(MIN), source: 'auto', escalationLevel: 0 });
-    h.block.mockResolvedValue({});
+    h.block.mockResolvedValue({ created: true });
   });
 
   it('maps the admin settings to window, threshold, lookback and block duration', async () => {
