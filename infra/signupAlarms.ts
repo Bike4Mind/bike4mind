@@ -158,7 +158,10 @@ if (isMonitoredStage) {
     alarmDescription:
       'A signup grant release was attempted while a large grant is configured and a signup protection setting is still off',
     comparisonOperator: 'GreaterThanOrEqualToThreshold',
-    evaluationPeriods: 1,
+    // Any occurrence in the last hour holds ALARM, so sparse signups under one standing misconfiguration
+    // do not page an ALARM/OK pair each.
+    evaluationPeriods: 12,
+    datapointsToAlarm: 1,
     metricName: 'SignupGrantProtectionGaps',
     namespace: metricNamespace,
     period: 300,

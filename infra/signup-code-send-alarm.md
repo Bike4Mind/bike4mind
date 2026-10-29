@@ -48,15 +48,26 @@ alarm episode.
 
 ### Large grant with protections off
 
-The Next.js server log group also emits `signup-grant-protections-off` when a pending free-credit
-grant release is attempted (the log is written before the release is withheld, deduplicated or
-paid, so it marks the configuration, not a payout) while the largest configured grant (the flat grant, or the staged signup plus
-unlock total) is above 100 credits and any of these is still at its default: the signup risk policy
-(`enabled`), `maxSignupsPerIpPerDay`, `maxSignupsPerAsnPerHour`, `signupBurstAutoHold`. The log carries
-the largest grant and the protection keys that are off, nothing about the account. The metric is
-`SignupGrantProtectionGaps` in the same `Signup` namespace; the alarm fires on a single occurrence in
-5 minutes and routes to the same two topics. Saving a larger grant in this state is refused at
-`/api/settings/update`, so the alarm covers configurations saved before that check existed.
+The Next.js server log group also emits `signup-grant-protections-off` when a
+pending free-credit grant release is attempted while the largest live grant is
+above 100 credits and any of these is still at its default: the signup risk
+policy (`enabled`), `maxSignupsPerIpPerDay`, `maxSignupsPerAsnPerHour`,
+`signupBurstAutoHold`. The largest live grant is the flat grant, or the staged
+signup plus unlock total while `stagedSignupGrantEnabled` is on. The log is
+written before the release is withheld, deduplicated or paid, so it marks the
+configuration, not a payout. It carries the largest grant and the protection
+keys that are off, nothing about the account.
+
+The metric is `SignupGrantProtectionGaps` in the same `Signup` namespace. The
+alarm fires on a single occurrence and stays in ALARM until an hour passes
+without one, so sparse signups under one standing misconfiguration do not send
+an ALARM/OK pair each. It routes to the same two topics.
+
+`/api/settings/update` refuses the saves that would create this state: raising
+either grant path above 100 credits (a dormant staged total included), enabling
+staging over a staged total above 100, and turning a protection off while a
+grant above 100 is live. The alarm covers configurations saved before that check
+existed and rows changed outside that route.
 
 ## WAF edge alarm (`infra/waf.ts`)
 

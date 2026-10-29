@@ -305,13 +305,14 @@ describe('signup grant protection gap alarm wiring', () => {
     ).toBe(false);
   });
 
-  it('alarms on a single occurrence and routes ALARM and OK to Slack and email', async () => {
+  it('alarms on a single occurrence, holds for an hour, and routes ALARM and OK to Slack and email', async () => {
     await loadAlarms();
     expect(resources.alarm).toHaveBeenCalledWith('signupGrantProtectionGap', {
       name: 'test-app-production-signup-grant-protection-gap',
       alarmDescription: expect.any(String),
       comparisonOperator: 'GreaterThanOrEqualToThreshold',
-      evaluationPeriods: 1,
+      evaluationPeriods: 12,
+      datapointsToAlarm: 1,
       metricName: 'SignupGrantProtectionGaps',
       namespace: 'test-app/production/Signup',
       period: 300,
