@@ -76,6 +76,33 @@ describe('AnthropicBedrockBackend history cache breakpoint', () => {
     expect(sent.some(message => 'cache' in message)).toBe(false);
   });
 
+  it('marks a flagged tool_result that ends history and keeps the current prompt after it', () => {
+    const toolTurn: IMessage[] = [
+      { role: 'system', content: 'Stable head.' },
+      { role: 'user', content: 'What time is it?' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'current_datetime', input: {} }] as IMessage['content'],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'noon' }] as IMessage['content'],
+        cache: true,
+      },
+      { role: 'user', content: 'And tomorrow?' },
+    ];
+    const payload = backend.getPayload(ChatModels.CLAUDE_4_6_SONNET_BEDROCK, backend.formatMessages(toolTurn), {
+      cacheStrategy: { ...cacheStrategy, cacheConversationHistory: false },
+      maxTokens: 1024,
+    });
+    const sent = (JSON.parse(payload.body) as { messages: Array<{ role: string; content: unknown }> }).messages;
+
+    expect(sent.at(-2)?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'toolu_1', content: 'noon', cache_control: { type: 'ephemeral' } },
+    ]);
+    expect(sent.at(-1)).toEqual({ role: 'user', content: 'And tomorrow?' });
+  });
+
   it('strips the flag without a breakpoint for a model that rejects cache_control', () => {
     // Sending cache_control to these returns a deserialization error and the turn never resolves.
     const sent = wireMessages(ChatModels.CLAUDE_3_HAIKU_BEDROCK);

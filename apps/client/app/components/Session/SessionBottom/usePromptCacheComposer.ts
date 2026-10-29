@@ -48,6 +48,7 @@ export function usePromptCacheComposer({
       answeredModelId: contextUsage?.answeredModelId,
       previousInputTokens: contextUsage?.actualInputTokens,
       previousInputModelId: contextUsage?.inputModelId,
+      providerInputTokens: contextUsage?.providerInputTokens,
       cacheTtl,
     };
     return {
@@ -61,7 +62,9 @@ export function usePromptCacheComposer({
     if (!hasSession || !supportsOneHourPromptCache(selectedModel)) return null;
     return {
       value: cacheTtl,
-      prices: promptCacheTtlPrices(selectedModel, contextUsage?.actualInputTokens, contextUsage?.inputModelId),
+      prices: contextUsage?.providerInputTokens
+        ? promptCacheTtlPrices(selectedModel, contextUsage.providerInputTokens, contextUsage.answeredModelId)
+        : promptCacheTtlPrices(selectedModel, contextUsage?.actualInputTokens, contextUsage?.inputModelId),
       onChange: setTtl,
       disabled: isPending,
     };

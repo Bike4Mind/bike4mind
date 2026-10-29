@@ -25,6 +25,12 @@ export interface SessionContextUsage {
   inputModelId?: string;
   /** Model that answered the last turn, so the one holding this conversation's prompt cache. */
   answeredModelId?: string;
+  /**
+   * The last turn's prompt as the answering model's provider counted it (uncached + cache read + cache
+   * write). Absent when settlement fell back to the local estimate, and for a turn that called tools,
+   * whose usage sums every model call.
+   */
+  providerInputTokens?: number;
   /** The model's full context window. */
   contextLimit: number;
   /** Input budget after reserving output + safety buffer (the real ceiling). */
@@ -55,6 +61,13 @@ function bandFor(pct: number, overflow: boolean): ContextUsageBand {
   return 'normal';
 }
 
+function providerPromptTokens(promptMeta: PromptMeta | undefined): number | undefined {
+  const usage = promptMeta?.tokenUsage;
+  if (usage?.settledBasis !== 'provider' || usage.actualInputTokens == null) return undefined;
+  if (promptMeta?.functionCalls?.length) return undefined;
+  return usage.actualInputTokens + (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0);
+}
+
 /** Compact token count for display, e.g. 86000 -> "86K". */
 export function formatTokenCount(tokens: number): string {
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : `${tokens}`;
@@ -83,6 +96,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
     let latestCacheExpiresAt: number | null = null;
     let latestInputModelId: string | undefined;
     let latestAnsweredModelId: string | undefined;
+    let latestProviderInputTokens: number | undefined;
 
     for (const page of data?.pages ?? []) {
       for (const quest of page.data) {
@@ -95,6 +109,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
           latestAnsweredModelId = quest.promptMeta?.model?.name;
           latestCacheReadTokens = quest.promptMeta?.tokenUsage?.cacheReadInputTokens ?? 0;
           latestCacheExpiresAt = promptCacheExpiresAt(quest);
+          latestProviderInputTokens = providerPromptTokens(quest.promptMeta);
         }
       }
     }
@@ -108,6 +123,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
       actualInputTokens: latest.actualInputTokens,
       inputModelId: latestInputModelId,
       answeredModelId: latestAnsweredModelId,
+      providerInputTokens: latestProviderInputTokens,
       contextLimit: latest.contextLimit,
       safeMaxInputTokens: latest.safeMaxInputTokens,
       utilizationPercentage: pct,

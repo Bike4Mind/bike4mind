@@ -74,15 +74,22 @@ const DENVER_MEMBER: Caller = {
   memento: 'User is a cyclist.',
 };
 
-/** A replayed turn: its prompt, reply, and the tools that turn offered. */
-type PastTurn = { prompt: string; reply: string; offered: string[] };
+/** A replayed turn: its prompt, reply, the tools that turn offered, and the tool it called, if any. */
+type PastTurn = { prompt: string; reply: string; offered: string[]; called?: string };
 
 /** Whether deferred tool loading is on for the turn (as ChatCompletionProcess decides it), and the history. */
-type SendOptions = { deferTools?: boolean; loadStartSet?: boolean; history?: PastTurn[]; prompt?: string };
+type SendOptions = {
+  deferTools?: boolean;
+  loadStartSet?: boolean;
+  history?: PastTurn[];
+  prompt?: string;
+  /** Tool rounds the adapter has already run this turn. */
+  toolCallCount?: number;
+};
 
 async function sendTurn(
   caller: Caller,
-  { deferTools = false, loadStartSet = false, history = [], prompt = 'hello' }: SendOptions = {}
+  { deferTools = false, loadStartSet = false, history = [], prompt = 'hello', toolCallCount = 0 }: SendOptions = {}
 ): Promise<Request> {
   vi.mocked(getConversationContextSystemMessage).mockResolvedValue(sys(caller.conversationEntities) as never);
   const offered = caller.toolOrder;
@@ -90,8 +97,28 @@ async function sendTurn(
   const toolTurns: HistoryToolTurn[] = [];
   for (const past of history) {
     const promptMessage: IMessage = { role: 'user', content: past.prompt };
-    historyMessages.push(promptMessage, { role: 'assistant', content: past.reply });
-    toolTurns.push({ prompt: promptMessage, offeredTools: past.offered, calledTools: [] });
+    if (past.called) {
+      // Replayed as fetchAndProcessPreviousMessages rebuilds a tool turn from its function calls.
+      const id = `toolu_${past.called}`;
+      historyMessages.push(
+        promptMessage,
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: past.reply },
+            { type: 'tool_use', id, name: past.called, input: {} },
+          ] as IMessage['content'],
+        },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] as IMessage['content'] }
+      );
+    } else {
+      historyMessages.push(promptMessage, { role: 'assistant', content: past.reply });
+    }
+    toolTurns.push({
+      prompt: promptMessage,
+      offeredTools: past.offered,
+      calledTools: past.called ? [past.called] : [],
+    });
   }
   const start = new Set(loadStartSet ? startToolNames(toolTurns, offered, () => true) : []);
   const timeline: ToolTimeline | null =
@@ -172,7 +199,12 @@ async function sendTurn(
       },
     },
   };
-  await backend.complete(ChatModels.CLAUDE_4_8_OPUS, messages, { stream: false, tools, cacheStrategy }, async () => {});
+  await backend.complete(
+    ChatModels.CLAUDE_4_8_OPUS,
+    messages,
+    { stream: false, tools, cacheStrategy, _internal: { toolCallCount } },
+    async () => {}
+  );
   return request!;
 }
 
@@ -367,6 +399,99 @@ describe('shareable prompt prefix with deferred tool loading', () => {
       );
 
       expect(markedTexts(third)).toEqual(['a2']);
+    });
+  });
+
+  describe('history breakpoint after a tool-calling turn', () => {
+    const offered = ['current_model_details', 'web_search', 'current_datetime'];
+    // History ends in the tool_result, so the next message, the current prompt, is also a user turn.
+    const markedBlocks = (request: Request) =>
+      (request.messages ?? []).flatMap(message =>
+        Array.isArray(message.content)
+          ? (message.content as Block[])
+              .filter(block => block.cache_control)
+              .map(block => (block.type === 'tool_result' ? `tool_result:${block.tool_use_id}` : block.text))
+          : []
+      );
+    const markerCount = (request: Request) =>
+      [...(request.tools ?? []), ...(request.system ?? [])].filter(block => block.cache_control).length +
+      markedBlocks(request).length;
+
+    it('ends the cached history at the tool_result and keeps the lookback breakpoint', async () => {
+      const third = await sendTurn(
+        { ...WEB_USER, toolOrder: offered },
+        {
+          deferTools: true,
+          history: [
+            { prompt: 'u1', reply: 'a1', offered: ['current_model_details', 'web_search'] },
+            { prompt: 'u2', reply: 'a2', offered, called: 'current_datetime' },
+          ],
+          prompt: 'u3',
+        }
+      );
+
+      expect(markedBlocks(third)).toEqual(['a1', 'tool_result:toolu_current_datetime']);
+      expect(markerCount(third)).toBeLessThanOrEqual(4);
+      expect(shareableBreakpoint(third)).toBeGreaterThan(0);
+    });
+
+    it('on a later tool round, trades the spent lookback breakpoint for one at the end of the round', async () => {
+      const round = await sendTurn(
+        { ...WEB_USER, toolOrder: offered },
+        {
+          deferTools: true,
+          history: [
+            { prompt: 'u1', reply: 'a1', offered: ['current_model_details', 'web_search'] },
+            { prompt: 'u2', reply: 'a2', offered, called: 'current_datetime' },
+          ],
+          prompt: 'u3',
+          toolCallCount: 1,
+        }
+      );
+
+      expect(markedBlocks(round)).toEqual(['tool_result:toolu_current_datetime', 'u3']);
+      expect(markerCount(round)).toBeLessThanOrEqual(4);
+      expect(shareableBreakpoint(round)).toBeGreaterThan(0);
+    });
+
+    it('ends the cached history at the tool_result, not on the current turn, when no tools changed', async () => {
+      const third = await sendTurn(
+        { ...WEB_USER, toolOrder: offered },
+        {
+          deferTools: true,
+          history: [
+            { prompt: 'u1', reply: 'a1', offered },
+            { prompt: 'u2', reply: 'a2', offered, called: 'current_datetime' },
+          ],
+          prompt: 'u3',
+        }
+      );
+
+      expect(markedBlocks(third)).toEqual(['tool_result:toolu_current_datetime']);
+      expect(JSON.stringify(third.messages?.at(-1))).toContain('u3');
+    });
+
+    it('keeps the current prompt when a change after it makes the adapter merge it into the tool_result turn', async () => {
+      const third = await sendTurn(
+        { ...WEB_USER, toolOrder: [...offered, 'navigate_view'] },
+        {
+          deferTools: true,
+          history: [
+            { prompt: 'u1', reply: 'a1', offered },
+            { prompt: 'u2', reply: 'a2', offered, called: 'current_datetime' },
+          ],
+          prompt: 'u3',
+        }
+      );
+
+      const merged = third.messages?.at(-2);
+      expect(merged?.role).toBe('user');
+      expect((merged?.content as Block[]).map(block => block.type)).toEqual(['tool_result', 'text']);
+      expect((merged?.content as Block[])[1].text).toBe('u3');
+      expect(markedBlocks(third)).toEqual(['tool_result:toolu_current_datetime']);
+      expect(third.messages?.at(-1)?.content).toEqual(
+        expect.arrayContaining([{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'navigate_view' } }])
+      );
     });
   });
 
