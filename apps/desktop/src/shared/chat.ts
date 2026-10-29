@@ -920,7 +920,7 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
-  /** Whether the server will cache this model's prompt for an hour on request (supportsOneHourPromptCache). */
+  /** A direct-Anthropic model the server will cache for an hour on request (supportsOneHourPromptCache). */
   supportsOneHourCache?: boolean;
   /**
    * A local Ollama model that can think. Its server takes no effort, only thinking on or off,

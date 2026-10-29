@@ -279,7 +279,8 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       // Decided here rather than read off the wire: the catalog does not report it, and the
       // renderer has to disable the effort picker on a model that would ignore the field.
       supportsReasoningEffort: supportsReasoningEffort(model.id as string),
-      ...(typeof model.backend === 'string' &&
+      // Direct Anthropic only: it is the one backend Desktop marks for caching (see supportsPromptCache).
+      ...(model.backend === 'anthropic' &&
       supportsOneHourPromptCache({ id: model.id as string, backend: model.backend })
         ? { supportsOneHourCache: true }
         : {}),
