@@ -55,7 +55,12 @@ export const validateLoopModel = (value: unknown) => validateString('model', val
 export const validateLoopAgentId = (value: unknown) => validateString('agentId', value, ID_MAX);
 export const validateLoopOrganizationId = (value: unknown) => validateString('organizationId', value, ID_MAX);
 export const validateLoopTools = (value: unknown) => validateStringList('tools', value, TOOLS_MAX, TOOL_NAME_MAX);
-export const validateLoopStages = (value: unknown) => validateStringList('stages', value, STAGES_MAX, STAGE_NAME_MAX);
+// Two at least: a ticket's last stage means closed, so it needs one stage to be worked in (see loopTickets.ts).
+export function validateLoopStages(value: unknown): string[] {
+  const stages = validateStringList('stages', value, STAGES_MAX, STAGE_NAME_MAX);
+  if (stages.length < 2) throw new BadRequestError('stages must contain at least 2 distinct entries');
+  return stages;
+}
 
 export function validateLoopInterval(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < INTERVAL_MIN || value > INTERVAL_MAX) {
