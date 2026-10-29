@@ -53,6 +53,7 @@ const setup = (overrides: Partial<VideoJobDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository({ now: () => clock });
   const queue: string[] = [];
   const deps: CreateVideoJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createVideoProviderRegistry([new TestVideoProvider()]),
     getSettings: async () => ({ enforceCredits: true, videoGeneration: undefined }),

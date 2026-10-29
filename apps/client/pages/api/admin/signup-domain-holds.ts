@@ -105,7 +105,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           const result = await releaseVerifiedPendingFreeCredits(
             { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
             'Signup domain hold released by admin',
-            req.logger
+            req.logger,
+            undefined,
+            { bypassBudget: true }
           );
           creditsReleased += result.creditsGranted;
           if (!result.tags) stillPending++;

@@ -1,9 +1,8 @@
 /**
  * POST /api/v1/agents/{id}/generate-avatar - the public twin of POST /api/agents/[id]/generate-avatar.
  *
- * Both run generateAgentAvatar. Unlike the SPA route, a failure keeps its real status: a typed error
- * (unknown image model, storage quota) passes through and a provider failure is a 502 with a safe
- * message, where the SPA route flattens them to a 500 body. A sharee gets the same 404 as a stranger.
+ * Both run generateAgentAvatar and preserve typed admission, credit and storage refusals. A provider
+ * failure is a 502 with a safe message, where the SPA route uses a 500 body. A sharee gets the same 404 as a stranger.
  */
 import { generateAgentAvatarContract } from '@bike4mind/common';
 import { checkStorageLimit, logImageGenerationFailure } from '@bike4mind/utils';
@@ -30,7 +29,8 @@ const handler = nextRouteForContract(generateAgentAvatarContract, {
         agent,
         req.user,
         req.validated.image_model,
-        req.logger
+        req.logger,
+        req
       );
       return res.json({ portrait_url: portraitUrl, generation_prompt: generationPrompt });
     } catch (error) {

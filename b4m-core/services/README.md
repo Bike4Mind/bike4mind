@@ -4,6 +4,31 @@
 
 This directory contains the core business logic services for the B4M application. Each service is organized into its own module and follows specific patterns for consistency and maintainability.
 
+## Media admission adapter migration
+
+`ImageGenerationService`, `ImageEditService`, `CreateVideoJobDeps` and
+`CreateMusicJobDeps` require an `assertModelAdmission` callback. The image services accept
+`(user: string | IUserDocument, modelId, adminRoleWithheld?)`; their workers pass the loaded user.
+Video/music job callbacks accept `(userId: string, modelId, adminRoleWithheld?)`.
+Implement it with the shared `createModelAdmission` rule and the caller's current
+entitlements. Preserve a withheld admin role when the third argument is true; it
+is trusted caller metadata, never a request-body option. Propagate refusals before reserving credits or dispatching provider
+work. Image services check both invocation and queue execution.
+
+The Free-Tier Model Gate now applies to all model IDs, including media. Add approved
+media IDs to `freeTierAllowedModels` in Admin Settings to offer them to free accounts;
+the default list contains text models only. Conversational voice uses the billing
+identifier `elevenlabs`; its text reasoning model must also be allowed. A refusal
+uses `model_requires_subscription`. Check the allowlist and the account's paid-plan
+entitlement when diagnosing an unexpected refusal; plan-read outages return a
+retryable error instead of an upgrade prompt.
+
+Media tool hosts must supply `getEntitlements: () => Promise<string[]>` through
+`ToolBuilderConfig`, `ToolBuilderDeps` or `generateTools`' object argument. Proactive message
+adapters require the same callback. Resolve the executing user's current entitlements and let
+read failures reject; `entitlementKeys` remains a retrieval snapshot, not a model admission
+source. A missing or failed resolver returns a retryable refusal when plan verification is needed.
+
 ## Internal user notes migration
 
 `userService.adminUpdateUser` no longer accepts `userNotes`. Existing inline notes
@@ -66,12 +91,24 @@ different reasons cannot stack grants. Stronger evidence can release the remaini
 delta. Grant stage records money released, not current identity trust or revocation.
 Identity consumers own verification, identity deduplication, and revocation.
 
-Activity checks use persisted successful chat turns stamped at creation by a
-session-authenticated server invocation for an enrolled account. A retry through
-an API key or an internal caller clears that provenance. Imported, legacy, API-key,
-pending, and failed turns do not qualify. Private message/day thresholds are disabled by zero;
-distinct UTC days must also span the corresponding elapsed whole days. The
-first-party eligibility-check endpoint and Billing status provide a retryable path.
+Activity qualifies on server-accrued heartbeat time, not chat turns: the client pings
+`/api/users/active-session` while the app is open and in use, the server accrues the gap
+between pings into `signupGrant.activity` for the current UTC day, and the day's drip pays
+once that reaches `signupGrantActivityMinActiveSeconds`. The drip pays only from the unlock
+pool. The first-party eligibility-check endpoint and Billing status provide a retryable
+path that pays when the accrued time already qualifies.
+For PR preview testing, the admin switch `signupGrantActivityPreviewTestMode` (default off)
+replaces UTC earning days with fixed five-minute windows. Only `pr<number>` stages honor it;
+production, staging and personal stages always use UTC days. Active time starts again in every
+window, and payouts still respect the unlock pool, lifetime cap, shared UTC daily budget and
+held-tranche priority. The heartbeat response tells the browser when the next window opens.
+
+To test, enable the switch in Admin Settings > Credits System > Users, set the active-time
+minimum to 60 seconds, and reload a fresh staged test account's tab. Stay active through
+several windows and verify one payout per window, then stop at the configured lifetime cap.
+Turning the switch off restores daily earning; a day already paid in test mode stays paid.
+A settings change needs a tab reload to discard the browser's previous next-earning time.
+
 Organization invitation unlocks have their own `signupGrantOrgInviteEnabled` rollout
 flag, disabled by default. Each organization can unlock at most its seat count
 over its lifetime; removing a member or deleting a recipient account does not
@@ -91,6 +128,52 @@ a transient infrastructure failure never becomes a permanent assessment.
 Missing required observations instead appear in the decision's `missing` array.
 Telemetry failures warn after commit and do not fail the grant. Diagnostics
 contain no raw policy, network observations, or collector error contents.
+
+The web integration supplies network counts, blocked/disposable domain observations
+(including refreshed lists), and prior canonical-inbox entitlement collisions.
+Collision means another account already claimed that inbox's default grant, not
+merely that an alias account exists. The unique entitlement claim remains the
+concurrency guard. Domain lookup failures keep the assessment pending for retry.
+Only a real, server-verified Turnstile pass is carried through signed OTC tokens
+or browser-bound OAuth state and stored in `signupMeta` before the first grant.
+Skipped checks, public test secrets, fail-open outages and legacy accounts leave
+the challenge observation unknown. OTC proof is single-use (the pending token is
+consumed), but OAuth proof is per-flow: the signed state is not consumed, so a
+callback that replays the same state within its 5-minute TTL is stamped with the
+same pass. Weight OAuth proof accordingly. Account-age, first-key and early-spend signals
+remain in the separate young-account rescorer; future activity cannot be known at
+the initial grant.
+
+Admins can find zero-credit assessments through Users > High risk (the Risk filter),
+then inspect the signup assessment's score, matched signals and missing observations
+on the user profile. The existing signup grant unlock action requires an audit
+reason and admin access. It releases the configured maximum, including
+the verification tranche; it is not an initial-tranche-only override. The separate
+young-account risk review queue does not replace this grant assessment surface.
+
+### Private cohort replay
+
+Run the same pure grant evaluator against privately labeled observations before
+enabling or tuning a production policy:
+
+```bash
+pnpm --filter @bike4mind/scripts exec tsx src/replaySignupRisk.ts /private/path/signup-risk.json
+```
+
+The input has `policy` (an enabled `signupRiskPolicySchema` policy) and a `samples`
+array. Each sample has `cohort` (`suspected` or `legitimate`), `signupCredits` and
+`signals` (the observations understood by `evaluateSignupRisk`). Use observations
+available at grant time, anchor network windows at signup, and leave unavailable
+facts absent or null. Do not substitute zero for missing historical counts or
+infer a challenge pass from a successful signup. Keep labels independent of the
+candidate policy to avoid evaluating it against its own decisions.
+
+The command performs no database writes and prints only aggregate band and
+missing-observation counts for each cohort. Keep input files, actual weights,
+sample identities and calibration results outside this public repository. Compare
+the suspected cohort's reduced/review share and the legitimate cohort's full share
+against privately agreed acceptance targets. Synthetic tests establish behavior,
+not real-world accuracy; a private replay is still required for that claim.
 
 Before enabling staging, retire existing quest subscriptions, restart subscriber
 fanout, and reconnect clients so every live stream uses the new private-field

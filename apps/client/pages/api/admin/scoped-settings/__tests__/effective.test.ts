@@ -23,6 +23,12 @@ vi.mock('@bike4mind/services', () => ({
 // under a `__get` key; the default export IS the chain, which is how a test gets hold of the handler.
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: Record<string, unknown> = {};
+  const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+  chain.__middlewares = middlewares;
+  chain.use = (middleware: (req: unknown, res: unknown, next: () => void) => void) => {
+    middlewares.push(middleware);
+    return chain;
+  };
   chain.get = (routeHandler: unknown) => {
     chain.__get = routeHandler;
     return chain;
@@ -40,7 +46,11 @@ import handler from '../effective';
 
 type RouteHandler = (req: unknown, res: unknown) => Promise<unknown>;
 
-const route = handler as unknown as { __get: RouteHandler; __config?: unknown };
+const route = handler as unknown as {
+  __get: RouteHandler;
+  __config?: unknown;
+  __middlewares: Array<(req: unknown, res: unknown, next: () => void) => void>;
+};
 
 const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -48,7 +58,10 @@ const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const invoke = async (req: { query?: unknown; isAdmin?: boolean } = {}) => {
   const json = vi.fn((x: unknown) => x);
   const { isAdmin = true, ...rest } = req;
-  await route.__get({ user: { isAdmin }, logger, ...rest }, { json });
+  const request = { user: { isAdmin }, logger, method: 'GET', ...rest };
+  const response = { json };
+  for (const middleware of route.__middlewares) middleware(request, response, () => undefined);
+  await route.__get(request, response);
   return json.mock.calls[0]?.[0];
 };
 
@@ -64,7 +77,7 @@ describe('admin/scoped-settings/effective authorization', () => {
   });
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
-    expect(route.__config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
+    expect(route.__config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], allowedMethods: ['GET'] });
   });
 });
 
