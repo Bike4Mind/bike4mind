@@ -28,6 +28,7 @@ import RestrictedPage from './components/common/RestrictedPage';
 import { AdminLayoutRoute } from './components/admin/AdminLayout';
 import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
+import { LoopsGate } from './components/Loops/LoopsGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
 import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
 import { partitionPremiumRoutes } from './premiumRoutePartition';
@@ -57,6 +58,8 @@ const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
 const BillingDeepLinkModals = lazy(() => import('./components/subscription/BillingDeepLinkModals'));
 const AgentsPage = lazy(() => import('./routes/agents'));
+const LoopsPage = lazy(() => import('./routes/loops'));
+const LoopDetailPage = lazy(() => import('./routes/loops/$id'));
 const NewAgentPage = lazy(() => import('./routes/agents/new'));
 const AgentDetailPage = lazy(() => import('./routes/agents/$id'));
 const EditAgentPage = lazy(() => import('./routes/agents/$id/edit'));
@@ -576,6 +579,30 @@ const agentsRoute = createRoute({
         <AgentsPage />
       </Suspense>
     </ExperimentalFeatureGate>
+  ),
+});
+
+const loopsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/loops',
+  component: () => (
+    <LoopsGate loadingFallback={<RouteLoadingFallback />}>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <LoopsPage />
+      </Suspense>
+    </LoopsGate>
+  ),
+});
+
+const loopDetailRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/loops/$id',
+  component: () => (
+    <LoopsGate loadingFallback={<RouteLoadingFallback />}>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <LoopDetailPage />
+      </Suspense>
+    </LoopsGate>
   ),
 });
 
@@ -1292,6 +1319,8 @@ const routeTree = rootRoute.addChildren([
     notebooksIndexRoute,
     subscriptionsIndexRoute,
     agentsRoute,
+    loopsRoute,
+    loopDetailRoute,
     newAgentRoute,
     agentDetailRoute,
     editAgentRoute,

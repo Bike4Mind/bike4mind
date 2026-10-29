@@ -60,6 +60,9 @@ export interface ILoop {
   updatedAt: Date;
 }
 
+/** A loop as the loops API returns it: `creditsUsed` sums its top-level runs still within the execution TTL. */
+export type ILoopWithUsage = ILoop & { creditsUsed: number };
+
 export interface ILoopRepository extends IBaseRepository<ILoop> {
   listForUser(userId: string): Promise<ILoop[]>;
   findByIdAndUserId(id: string, userId: string): Promise<ILoop | null>;
