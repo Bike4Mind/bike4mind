@@ -139,7 +139,7 @@ async function releaseStage(
               await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
               await db.users.update({ id: userId, signupGrantHeldReason: 'budget_exhausted' });
             }
-            return { ...noGrant(), withheld: true };
+            return { ...noGrant(), withheld: true, budgetExhausted: true };
           }
         }
         // Staged and legacy default grants share one canonical-inbox entitlement. Claim on

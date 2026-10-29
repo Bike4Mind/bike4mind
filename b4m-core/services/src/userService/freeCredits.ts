@@ -9,7 +9,7 @@ import {
   settingsMap,
   type SignupProtection,
 } from '@bike4mind/common';
-import { addCredits } from '../creditService';
+import { addCredits, DuplicateCreditTransactionError } from '../creditService';
 import type { SignupRiskSignals } from './signupRisk';
 import { releaseSignupTranche } from './stagedSignupGrant';
 import { protectSignupCredits } from './signupProtection';
@@ -32,7 +32,7 @@ export type FreeCreditAdapters = {
   reason: string;
   /** Network signals for a staged grant's first assessment; without it only signupMeta is read. */
   collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
-  /** Pays without drawing the daily signup grant budget (admin overrides, card unlock of a held tranche). */
+  /** Admin overrides pay a held grant without drawing the daily signup grant budget. */
   bypassBudget?: boolean;
 };
 
@@ -40,12 +40,16 @@ type FreeCreditLogger = { error: (message: string, ...args: unknown[]) => void }
 
 export type GrantFreeCreditsResult = {
   withheld?: boolean;
+  /** Set when the grant stayed held because the daily budget was spent. */
+  budgetExhausted?: boolean;
   creditsGranted: number;
   currentCredits: number | null;
 };
 
 export type ReleasePendingFreeCreditsResult = {
   released: boolean;
+  /** True when the release stopped because the daily signup grant budget was spent. */
+  budgetExhausted?: boolean;
   creditsGranted: number;
   /** Balance after the grant; null when nothing was granted. */
   currentCredits: number | null;
@@ -104,13 +108,14 @@ export const grantFreeCredits = async (
   if (budget.outcome === 'exhausted') {
     await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     await db.users.update({ id: user.id, signupGrantHeldReason: 'budget_exhausted' });
-    return { creditsGranted: 0, currentCredits: null, withheld: true };
+    return { creditsGranted: 0, currentCredits: null, withheld: true, budgetExhausted: true };
   }
 
   let credited = false;
   try {
-    // addCredits treats a repeated transactionId as success, which would leave this reservation spent.
-    if (budget.outcome === 'reserved' && (await db.creditTransactions.findOne({ transactionId }))) {
+    // addCredits treats a repeated transactionId as success, which would leave a reservation spent and
+    // let an admin release report credits an earlier payout already made.
+    if ((budget.outcome === 'reserved' || bypassBudget) && (await db.creditTransactions.findOne({ transactionId }))) {
       await budget.release();
       return { creditsGranted: 0, currentCredits: null };
     }
@@ -132,12 +137,18 @@ export const grantFreeCredits = async (
         transactionId,
         reason,
       },
-      { db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots }, creditHolderMethods: db.users }
+      {
+        db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },
+        creditHolderMethods: db.users,
+        duplicateTransactionId: 'throw',
+      }
     );
     credited = true;
     if (persisted?.signupGrantHeldReason) await db.users.update({ id: user.id, signupGrantHeldReason: null });
     return { creditsGranted: amount, currentCredits: holder.currentCredits };
   } catch (error) {
+    // A peer already wrote this ledger row, so the draw it made is the one that counts.
+    if (error instanceof DuplicateCreditTransactionError) return { creditsGranted: 0, currentCredits: null };
     // Once the ledger row is written the draw is spent; a later throw must not hand it back.
     if (!credited) await budget.release();
     throw error;
@@ -160,8 +171,8 @@ export const releasePendingFreeCredits = async (
       await protectSignupCredits(user.id, adapters.db);
       return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
     }
-    const { creditsGranted, currentCredits, withheld } = await grantFreeCredits(user, adapters);
-    if (withheld) return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
+    const { creditsGranted, currentCredits, withheld, budgetExhausted } = await grantFreeCredits(user, adapters);
+    if (withheld) return { released: false, budgetExhausted, creditsGranted: 0, currentCredits: null, patch: {} };
     return {
       released: true,
       creditsGranted,
