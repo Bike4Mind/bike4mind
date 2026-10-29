@@ -65,6 +65,22 @@ describe('signupTraceRepository', () => {
     ).toEqual({ ipSignups: null, prefixSignups: null, asnSignups: null });
   });
 
+  it('refuses an empty or malformed window', async () => {
+    const bad = [
+      { since: until, until: since },
+      { since: new Date(NaN) },
+      { until: new Date(NaN) },
+      { maxRows: 0 },
+      { maxRows: 10_001 },
+      { maxRows: 1.5 },
+    ];
+    for (const override of bad) {
+      await expect(signupTraceRepository.recentDistinctSignups({ ...input, ...override })).rejects.toThrow(
+        'Invalid signup window'
+      );
+    }
+  });
+
   it('expires traces two days after the signup', async () => {
     const indexes = await SignupTraceModel.collection.indexes();
     expect(indexes.find(index => Object.keys(index.key).join() === 'signedUpAt')).toMatchObject({

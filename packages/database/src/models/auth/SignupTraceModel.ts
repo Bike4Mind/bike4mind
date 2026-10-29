@@ -78,6 +78,16 @@ class SignupTraceRepository {
     maxRows: number;
   }): Promise<SignupTraceCounts> {
     const { since, until, maxRows } = input;
+    if (
+      !Number.isFinite(since.getTime()) ||
+      !Number.isFinite(until.getTime()) ||
+      since >= until ||
+      !Number.isInteger(maxRows) ||
+      maxRows < 1 ||
+      maxRows > 10_000
+    )
+      throw new Error('Invalid signup window');
+
     const count = async (network: Record<string, unknown>): Promise<number | null> => {
       const rows = await SignupTraceModel.find({ ...network, signedUpAt: { $gte: since, $lt: until } })
         .select({ accountHash: 1, _id: 0 })
