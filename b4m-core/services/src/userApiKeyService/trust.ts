@@ -8,17 +8,24 @@ export type ApiKeyTrustSettings = {
   minAccountAgeDays: number;
   maxActiveKeysUntrusted: number;
   untrustedRateLimitPerMinute: number;
+  /** The quotas below are off at 0 or when omitted by an existing caller. */
+  untrustedRequestsPerDay?: number;
+  untrustedTokensPerMinute?: number;
+  untrustedMaxConcurrent?: number;
 };
 
 export const loadApiKeyTrustSettings = async (db: {
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-}): Promise<ApiKeyTrustSettings> => {
+}): Promise<Required<ApiKeyTrustSettings>> => {
   const settings = await getSettingsMap(db, {
     names: [
       'apiKeyTrustGateEnabled',
       'apiKeyMinAccountAgeDays',
       'maxActiveKeysUntrusted',
       'apiKeyUntrustedRateLimitPerMin',
+      'apiKeyUntrustedRequestsPerDay',
+      'apiKeyUntrustedTokensPerMin',
+      'apiKeyUntrustedMaxConcurrent',
     ],
   });
   // Each schema prefaults to its declared default, so parsing undefined yields that default.
@@ -42,6 +49,21 @@ export const loadApiKeyTrustSettings = async (db: {
       'apiKeyUntrustedRateLimitPerMin',
       settings,
       settingsMap.apiKeyUntrustedRateLimitPerMin.schema.parse(undefined)
+    ),
+    untrustedRequestsPerDay: getSettingsValue(
+      'apiKeyUntrustedRequestsPerDay',
+      settings,
+      settingsMap.apiKeyUntrustedRequestsPerDay.schema.parse(undefined)
+    ),
+    untrustedTokensPerMinute: getSettingsValue(
+      'apiKeyUntrustedTokensPerMin',
+      settings,
+      settingsMap.apiKeyUntrustedTokensPerMin.schema.parse(undefined)
+    ),
+    untrustedMaxConcurrent: getSettingsValue(
+      'apiKeyUntrustedMaxConcurrent',
+      settings,
+      settingsMap.apiKeyUntrustedMaxConcurrent.schema.parse(undefined)
     ),
   };
 };

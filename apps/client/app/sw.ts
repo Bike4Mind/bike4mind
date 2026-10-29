@@ -4,7 +4,7 @@
 import { defaultCache } from '@serwist/turbopack/worker';
 import type { PrecacheEntry, SerwistGlobalConfig } from 'serwist';
 import { Serwist, StaleWhileRevalidate, NetworkOnly } from 'serwist';
-import { isApiPath } from './swRoutes';
+import { bypassesServiceWorker, isApiPath } from './swRoutes';
 
 // TypeScript declaration for the precache-manifest injection point
 // (`self.__SW_MANIFEST`), replaced with the actual manifest at build time.
@@ -69,9 +69,11 @@ const serwist = new Serwist({
 // first and calling `stopImmediatePropagation()` keeps Serwist's fetch handler from
 // responding, so the browser performs its native fetch and the worker location keeps its
 // fragment. Registered BEFORE `serwist.addEventListeners()` so it runs first.
+//
+// The Turnstile origin takes the same exit (see bypassesServiceWorker).
 self.addEventListener('fetch', (event: FetchEvent) => {
   const dest = event.request.destination;
-  if (dest === 'worker' || dest === 'sharedworker') {
+  if (dest === 'worker' || dest === 'sharedworker' || bypassesServiceWorker(new URL(event.request.url))) {
     event.stopImmediatePropagation();
   }
 });

@@ -10,6 +10,8 @@ import { insufficientCreditsError } from '@bike4mind/common';
 import { usdToCredits } from '@bike4mind/utils';
 
 const m = vi.hoisted(() => ({
+  quotaAdmission: vi.fn(),
+  quotaRelease: vi.fn(),
   enforce: true,
   hold: vi.fn(),
   release: vi.fn(),
@@ -24,6 +26,8 @@ const m = vi.hoisted(() => ({
   zeroPricedModelIds: [] as string[],
   disabledModelIds: [] as string[],
 }));
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -151,6 +155,8 @@ async function call(user: Record<string, unknown> = { id: 'u1' }) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.quotaAdmission.mockResolvedValue({ release: m.quotaRelease });
+  m.quotaRelease.mockResolvedValue(undefined);
   m.enforce = true;
   m.canThink = false;
   m.fallbackModels = [];
@@ -178,6 +184,24 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/classify-intent metering', () => {
+  it('refuses quota exhaustion before probing the cache or calling a provider', async () => {
+    m.quotaAdmission.mockRejectedValueOnce(Object.assign(new Error('token quota'), { statusCode: 429 }));
+    await expect(call()).rejects.toMatchObject({ statusCode: 429 });
+    expect(m.cached).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+    expect(m.hold).not.toHaveBeenCalled();
+  });
+
+  it('holds a quota slot until the classifier finishes and releases it after a provider failure', async () => {
+    m.complete.mockImplementationOnce(async () => {
+      expect(m.quotaRelease).not.toHaveBeenCalled();
+      throw new Error('provider down');
+    });
+    await call();
+    expect(m.quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 'u1' } }), { holdSlot: true });
+    expect(m.quotaRelease).toHaveBeenCalledOnce();
+  });
+
   it.each(['ops-model', 'fallback-model'])(
     'skips unpriced %s while retaining the priced candidate and its hold',
     async modelId => {

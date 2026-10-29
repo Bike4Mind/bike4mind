@@ -11,6 +11,7 @@ import Typography from '@mui/joy/Typography';
 import { formatBytes, type HubBuildView, type HubModelView } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { AccessSteps } from './AccessSteps';
+import { FitBadge } from './FitBadge';
 
 export interface PullConsent {
   acceptLicense: boolean;
@@ -21,7 +22,10 @@ function joinNames(names: readonly string[]): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : (names[0] ?? '');
 }
 
-/** Size and license before anything downloads; restricted licenses and gated repos need an explicit tick. */
+/**
+ * Size, fit and license before anything downloads; restricted licenses, gated repos and builds too large for
+ * this computer need an explicit tick.
+ */
 export function PullDialog({
   model,
   build,
@@ -35,8 +39,10 @@ export function PullDialog({
 }) {
   const [acceptLicense, setAcceptLicense] = useState(false);
   const [confirmAccess, setConfirmAccess] = useState(false);
+  const [overrideFit, setOverrideFit] = useState(false);
   const restricted = model.licenseKind === 'restricted';
-  const ready = (!restricted || acceptLicense) && (!model.needsAccess || confirmAccess);
+  const tooLarge = build.fit?.level === 'too-large';
+  const ready = (!restricted || acceptLicense) && (!model.needsAccess || confirmAccess) && (!tooLarge || overrideFit);
   const names = model.licenseNames;
   const several = names.length > 1;
   const acceptLabel =
@@ -47,7 +53,7 @@ export function PullDialog({
   return (
     <Modal open onClose={onClose}>
       <ModalDialog size="md" sx={{ maxWidth: 520 }} data-testid="models-pull-dialog">
-        <DialogTitle>Download {build.quant ?? build.id}?</DialogTitle>
+        <DialogTitle>Download {build.label}?</DialogTitle>
         <DialogContent>
           {/* Joy's checkbox hit area sits 1px outside its box, which otherwise scrolls this content both ways. */}
           <Stack spacing={1.25} sx={{ p: '1px' }}>
@@ -59,6 +65,21 @@ export function PullDialog({
               {model.projectorBytes ? `, plus a vision projector of up to ${formatBytes(model.projectorBytes)}` : ''}.
               Ollama stores it with your other local models; you can remove it from Installed at any time.
             </Typography>
+            {build.fit && (
+              <Stack direction="row" spacing={1} alignItems="flex-start" data-testid="models-pull-dialog-fit">
+                <FitBadge fit={build.fit} bare />
+                <Typography level="body-sm">{build.fit.detail}</Typography>
+              </Stack>
+            )}
+            {tooLarge && (
+              <Checkbox
+                size="sm"
+                checked={overrideFit}
+                onChange={event => setOverrideFit(event.target.checked)}
+                label="Download it anyway. It may fail to load or make this computer swap."
+                slotProps={{ input: { 'data-testid': 'models-pull-dialog-fit-checkbox' } }}
+              />
+            )}
             <Typography level="body-sm" data-testid="models-pull-dialog-license">
               {several ? 'Licenses' : 'License'}:{' '}
               <strong>{names.length ? names.join(', ') : 'No license declared'}</strong>{' '}
@@ -83,7 +104,7 @@ export function PullDialog({
                   size="sm"
                   checked={confirmAccess}
                   onChange={event => setConfirmAccess(event.target.checked)}
-                  label="I have access to this repo and added my Ollama key to Hugging Face."
+                  label="I added Ollama's public key to the Hugging Face account that has access."
                   slotProps={{ input: { 'data-testid': 'models-pull-dialog-access-checkbox' } }}
                 />
               </>

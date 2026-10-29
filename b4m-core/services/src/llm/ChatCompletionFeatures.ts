@@ -6,11 +6,13 @@ import {
   ContextTelemetryAlerts,
   IConnection,
   IChatHistoryItemDocument,
+  IFabFileDocument,
   IMessage,
   IOrganizationDocument,
   IProjectDocument,
   ISessionDocument,
   IUserDocument,
+  LLMEventPayload,
   LLMEvents,
   ModelInfo,
   Permission,
@@ -34,7 +36,7 @@ import {
   IUsageEventRepository,
   IMementoRepository,
   IOrganizationRepository,
-  ILatticeModel,
+  SettingValue,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
@@ -93,6 +95,7 @@ import {
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
+import type { ILatticeModelRepository } from '../latticeService/latticeModelService';
 import type { DecideToolFn } from './tools/base/types';
 import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import { resolveScopedSettingEntries, scopeForCaller } from '../settings/resolveScopedSetting';
@@ -266,22 +269,18 @@ interface DatabaseAdapters {
   };
   rapidReply?: {
     results: {
-      createResult: (data: any) => Promise<any>;
-      updateResult: (id: string, data: any) => Promise<any>;
-      updateResultByQuestId: (questId: string, data: any) => Promise<any>;
-      findByQuestId: (questId: string) => Promise<any>;
-      findLatestBlankRapidReplyBySessionId: (sessionId: string) => Promise<any>;
+      createResult: (data: Record<string, unknown>) => Promise<unknown>;
+      updateResult: (id: string, data: Record<string, unknown>) => Promise<unknown>;
+      updateResultByQuestId: (questId: string, data: Record<string, unknown>) => Promise<unknown>;
+      findByQuestId: (questId: string) => Promise<RapidReplyResultRecord | null>;
+      findLatestBlankRapidReplyBySessionId: (sessionId: string) => Promise<RapidReplyResultRecord | null>;
     };
-    mappings: any;
+    mappings: unknown;
     settings: {
-      getSettings: () => Promise<any>;
+      getSettings: () => Promise<SettingValue<'RapidReplySettings'> | undefined>;
     };
   };
-  latticeModels?: {
-    create: (data: any) => Promise<ILatticeModel>;
-    findById: (id: string) => Promise<ILatticeModel | null>;
-    update: (data: any) => Promise<ILatticeModel | null>;
-  };
+  latticeModels?: Pick<ILatticeModelRepository, 'create' | 'findById' | 'update'>;
   // 'find' is forwarded to ToolContext.db.dataLakes -> createFabFile (persistGeneratedFileAsFabFile),
   // for its fallback tagger's prefix-overlap check.
   dataLakes?: Pick<
@@ -386,6 +385,15 @@ const ALL_FEATURE_NAMES_MAP: Record<featureNames, true> = {
 };
 export const ALL_FEATURE_NAMES = Object.keys(ALL_FEATURE_NAMES_MAP) as featureNames[];
 
+/** Fields this service reads from the stored rapid-reply document (packages/database RapidReplyResultModel). */
+export interface RapidReplyResultRecord {
+  id: string;
+  userId: string;
+  status: 'success' | 'failed' | 'timeout' | 'replaced';
+  rapidResponse: { content: string; latency: number; ttfvt?: number };
+  metrics?: Record<string, unknown>;
+}
+
 export interface IChatCompletionServiceOptions {
   db: DatabaseAdapters & GetEffectiveApiKeyAdapters['db'];
   storage: BaseStorage;
@@ -481,9 +489,12 @@ export interface IChatCompletionServiceOptions {
   getMcpClient: (server: IMcpServerDocument) => Promise<{
     serverName: string;
     getTools: () => Promise<MCPClient['tools']>;
-    callTool: (toolName: string, toolArgs: any) => Promise<any>;
+    callTool: (toolName: string, toolArgs: unknown) => Promise<unknown>;
   }>;
-  logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
+  logEvent: (
+    event: LLMEventPayload,
+    options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
+  ) => Promise<void>;
   logger: Logger;
   getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) => Record<string, unknown>;
   /**
@@ -605,7 +616,7 @@ export type ChatCompletionContext = Pick<
     message: string,
     attachedFileTokenBudget: number,
     modelInfo: ModelInfo
-  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: any[]; fileNotices: FabFileNotice[] }>;
+  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: IFabFileDocument[]; fileNotices: FabFileNotice[] }>;
 };
 
 export interface ChatCompletionFeature {

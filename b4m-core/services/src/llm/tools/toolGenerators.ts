@@ -82,10 +82,10 @@ export const generateTools = (
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
-  onStart: (toolName: string, data: any) => Promise<void>,
-  onFinish: (toolName: string, data: any) => Promise<void>,
+  onStart: (toolName: string, data: unknown) => Promise<void>,
+  onFinish: (toolName: string, data: unknown) => Promise<void>,
   llm: ICompletionBackend,
-  config: { [key in LlmTools]?: any },
+  config: { [key in LlmTools]?: unknown },
   model: string | undefined,
   imageProcessorLambdaName: string | undefined,
   // `tools` is required (no default): the previous `= b4mTools` default silently

@@ -1,5 +1,27 @@
 # @bike4mind/infra
 
+## 6.0.0
+
+### Major Changes
+
+- [#5640](https://github.com/Bike4Mind/bike4mind/pull/5640) [`b8146f3`](https://github.com/Bike4Mind/bike4mind/commit/b8146f33b24b69ee9e3762ab454e9a1b65cad880) Thanks [@jjmarfa](https://github.com/jjmarfa)! - remove the legacy What's New generation pipeline
+
+- [#5645](https://github.com/Bike4Mind/bike4mind/pull/5645) [`70d7e0c`](https://github.com/Bike4Mind/bike4mind/commit/70d7e0c127a04a8cdb1cf28338b8970dd94cd5be) Thanks [@jjmarfa](https://github.com/jjmarfa)! - hold DLQ alarm state across SQS metric gaps
+
+### Minor Changes
+
+- [#5673](https://github.com/Bike4Mind/bike4mind/pull/5673) [`906bf96`](https://github.com/Bike4Mind/bike4mind/commit/906bf96005592c4a384f777729dae4737d08db1f) Thanks [@erikbethke](https://github.com/erikbethke)! - render owner-only thumbnails for live artifacts
+
+- [#5974](https://github.com/Bike4Mind/bike4mind/pull/5974) [`79bace3`](https://github.com/Bike4Mind/bike4mind/commit/79bace3daa0069f297a11dbc178c8091bbdb2739) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - publish the agent authoring assistants as v1 contracts
+
+### Patch Changes
+
+- [#5253](https://github.com/Bike4Mind/bike4mind/pull/5253) [`5741560`](https://github.com/Bike4Mind/bike4mind/commit/5741560256580385e2c577ae0df83db47cb538a2) Thanks [@aflordelis](https://github.com/aflordelis)! - move the next shared server layer into the package
+
+- [#5503](https://github.com/Bike4Mind/bike4mind/pull/5503) [`8e73c9e`](https://github.com/Bike4Mind/bike4mind/commit/8e73c9e56f30e0942266ab667b0c3ad1ffb6469f) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - let workspace packages declare SST secrets, rotation entries and queue/DLQ pairs
+
+- [#5955](https://github.com/Bike4Mind/bike4mind/pull/5955) [`a295054`](https://github.com/Bike4Mind/bike4mind/commit/a2950546d13fbf978e70ee33156e6094db9aabcd) Thanks [@ken-b4m](https://github.com/ken-b4m)! - clear open Dependabot alerts with in-major overrides and bumps
+
 ## 5.0.0
 
 ### Major Changes

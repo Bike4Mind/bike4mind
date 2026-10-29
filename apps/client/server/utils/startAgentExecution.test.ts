@@ -18,7 +18,9 @@ const {
   mockFindRememberedApprovals,
   mockUserFindById,
   mockPinFiles,
+  mockAdmitApiKeyCompletion,
 } = vi.hoisted(() => ({
+  mockAdmitApiKeyCompletion: vi.fn(),
   mockUserFindById: vi.fn(),
   mockPinFiles: vi.fn(),
   mockSend: vi.fn(),
@@ -57,6 +59,8 @@ vi.mock('@bike4mind/database', () => ({
   sessionToolApprovalRepository: { findByUserAndSession: mockFindRememberedApprovals },
   userRepository: { findById: mockUserFindById },
 }));
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitApiKeyCompletion: mockAdmitApiKeyCompletion }));
 
 vi.mock('@server/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
 
@@ -116,9 +120,48 @@ beforeEach(() => {
   mockFindRememberedApprovals.mockResolvedValue(null);
   mockUserFindById.mockImplementation(async (id: string) => ({ id }));
   mockPinFiles.mockResolvedValue(undefined);
+  mockAdmitApiKeyCompletion.mockResolvedValue({ release: vi.fn() });
 });
 
 describe('startAgentExecution', () => {
+  it.each([HEADLESS_CONNECTION_ID, 'websocket-connection'])(
+    'refuses an over-quota key on %s before dispatch or persistence',
+    async connectionId => {
+      const error = new Error('Token rate limit exceeded');
+      mockAdmitApiKeyCompletion.mockRejectedValueOnce(error);
+      await expect(
+        startAgentExecution(
+          input({
+            userId: 'quota-' + connectionId,
+            connectionId,
+            apiKeyInfo: {
+              keyId: 'k1',
+              scopes: [ApiKeyScope.AI_CHAT],
+              ownerUntrusted: true,
+              billingOwnerType: CreditHolderType.User,
+            },
+          }),
+          logger
+        )
+      ).rejects.toBe(error);
+      expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
+        owner: 'quota-' + connectionId,
+        ownerUntrusted: true,
+        billingOwnerType: CreditHolderType.User,
+        holdSlot: false,
+      });
+      expect(mockCreateExecution).not.toHaveBeenCalled();
+      expect(mockQuestCreate).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves signed-in starts outside the API-key quota', async () => {
+    await startAgentExecution(input({ userId: 'signed-in-quota' }), logger);
+    expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
+    expect(mockSend).toHaveBeenCalledOnce();
+  });
+
   it('creates the execution, persists the prompt Quest, and dispatches the Lambda', async () => {
     const result = await startAgentExecution(input({ userId: 'happy-path' }), logger);
 

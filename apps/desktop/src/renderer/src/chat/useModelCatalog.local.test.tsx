@@ -169,3 +169,24 @@ describe('useModelCatalog in local mode', () => {
     expect(catalog.models).toEqual([model]);
   });
 });
+
+describe('useModelCatalog when a model finishes installing', () => {
+  it.each([true, false])('rereads the list and shows the new model (local=%s)', async local => {
+    await mount(local);
+    expect(catalog.models).toEqual([]);
+    expect(installedListeners).toHaveLength(1);
+    listModels.mockClear();
+    listModels.mockResolvedValue({ models: [model] });
+    await act(async () => installedListeners.forEach(listener => listener()));
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith(true);
+    expect(catalog.models).toEqual([model]);
+  });
+
+  it('stops listening on unmount', async () => {
+    await mount(false);
+    expect(installedListeners).toHaveLength(1);
+    await act(async () => root.render(null));
+    expect(installedListeners).toHaveLength(0);
+  });
+});

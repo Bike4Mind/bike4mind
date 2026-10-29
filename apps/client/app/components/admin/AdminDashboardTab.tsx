@@ -112,7 +112,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
           Signups
           <AnalyticsTermHelp
             term="Signups"
-            description="New accounts, in your local time. Likely legit excludes accounts the suspected-signup signals flag, such as bursts of accounts on one domain, machine-regular signup cadence, or bot traffic. Suspected accounts are counted separately and can be reviewed on the Users tab."
+            description="New accounts, in your local time. Likely legit excludes accounts the suspected-signup signals flag: one strong signal, such as a burst of accounts on one domain, machine-regular signup cadence or bot traffic, or two weaker ones, such as signing up during a signup spike and never coming back. Suspected accounts are counted separately and can be reviewed on the Users tab."
           />
         </Typography>
         <NewSignupsTile onReview={() => onNavigate(AdminTab.Users)} />
