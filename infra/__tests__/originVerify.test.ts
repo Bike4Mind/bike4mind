@@ -17,7 +17,7 @@ const proxy = read('apps/client/proxy.ts');
 const headerName = (src: string) => src.match(/const ORIGIN_VERIFY_HEADER = '([^']+)'/)?.[1];
 
 describe('origin verification wiring', () => {
-  it.each([
+  it.each<[uri: string, preserve: boolean]>([
     ['', false],
     ['/login', false],
     ['/api/test/create-user', false],
@@ -28,7 +28,7 @@ describe('origin verification wiring', () => {
     ['/api/auth/%2e%2e/test/create-user', false],
     ['/api/auth/..%2ftest/create-user', false],
     ['/api/auth/\\test/create-user', false],
-    ...AUTH_NETWORK_PATHS.map(path => [path.replace('*', 'verify'), true] as const),
+    ...AUTH_NETWORK_PATHS.map((path): [string, boolean] => [path.replace('*', 'verify'), true]),
   ])('preserves only trusted auth-path JA4 before stamping origin verification: %s', (uri, preserve) => {
     const template = router.match(/const originVerifyInjection = \$interpolate`([\s\S]*?)`;/)?.[1];
     expect(template).toBeTruthy();
