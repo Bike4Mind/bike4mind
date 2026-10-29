@@ -930,8 +930,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
         !EXCLUDED_MODEL_IDS.includes(candidate.id) &&
         modelMatchesSearch(candidate, searchLower)
     );
-    return sortModelsForPicker(shown);
-  }, [showsTextModels, lockedModels, debouncedSearchQuery]);
+    // Same dedupe as the main list: drops disabled models (no plan unlocks them) and collapses twins.
+    return sortModelsForPicker(dedupeModelsForPicker(shown, new Set(), model));
+  }, [showsTextModels, lockedModels, debouncedSearchQuery, model]);
 
   const handleModelSelect = useCallback(
     (selectedModel: ModelInfo) => {

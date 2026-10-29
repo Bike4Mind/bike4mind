@@ -900,4 +900,17 @@ describe('ModelSelection locked (paid-only) models', () => {
     expect(screen.getByTestId('locked-model-row-paid-opus')).toBeInTheDocument();
     expect(screen.queryByTestId('model-selection-no-results')).toBeNull();
   });
+
+  it('collapses locked twins and drops disabled locked models', () => {
+    locked.models = [
+      { ...paidModel, id: 'gpt-4.1', name: 'GPT-4.1' },
+      { ...paidModel, id: 'gpt-4.1-2025-04-14', name: 'GPT-4.1' },
+      { ...paidModel, id: 'retired-x', name: 'Retired X', disabled: true },
+    ];
+    renderSelection({});
+
+    const section = screen.getByTestId('locked-models-section');
+    expect(within(section).getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.queryByTestId('locked-model-row-retired-x')).toBeNull();
+  });
 });
