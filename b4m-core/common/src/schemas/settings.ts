@@ -3870,7 +3870,7 @@ export const settingsMap = {
       ChatModels.GEMINI_2_5_FLASH_LITE,
     ],
     description:
-      'Text model IDs free accounts may call while the Free-Tier Model Gate is on, one per line. A model missing here, including a newly added one and the Default API Model, is paid-only. A free account that sends no model starts on the first model listed here that it can use.',
+      'Text model IDs free accounts may call while the Free-Tier Model Gate is on, one per line. A model missing here, including a newly added one and the Default API Model, is paid-only. A free account that calls the chat or agent-execution API without a model starts on the first model listed here that it can use.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 2,

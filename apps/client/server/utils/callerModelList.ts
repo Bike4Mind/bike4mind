@@ -1,10 +1,12 @@
 import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import {
+  createModelAdmission,
   isFreeTierExempt,
   isFreeTierModel,
   isUnpricedTextModel,
   loadFreeTierAllowedModels,
+  loadModelConfigurations,
 } from '@bike4mind/services/llm/modelAdmission';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -98,10 +100,8 @@ async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument 
 }
 
 /**
- * The model for a request that names none, given the admin default. A free account whose default is paid-only
- * starts on the first allowlisted text model (admin order) it can list, so an expensive DefaultAPIModel never
- * opens the free-tier gate. With no such model listed the default is returned and admission refuses it with the
- * upgrade prompt. Fails closed: an allowlist read failure propagates, as it does at call time.
+ * The model for a request that names none: a free account whose default is paid-only starts on the first allowlisted
+ * text model (admin order) that admission accepts. Read failures propagate, as they do at call time.
  */
 export async function resolveCallerDefaultModel(
   defaultModel: string,
@@ -111,12 +111,20 @@ export async function resolveCallerDefaultModel(
   if (isFreeTierExempt(user)) return defaultModel;
   const allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
   if (!allowedModels || allowedModels.has(defaultModel)) return defaultModel;
-  if (await holdsPaidPlan(user)) return defaultModel;
+  const entitlements = await getUserEntitlements(toEntitlementUser(user));
+  if (entitlements.includes(PAID_PLAN_ENTITLEMENT_KEY)) return defaultModel;
   const { models } = await getCachedCallerModelList(user.id, logger);
-  const listedTextModels = new Set<string>(
-    models.filter(model => model.type === 'text' && !model.disabled).map(m => m.id)
-  );
-  return [...allowedModels].find(id => listedTextModels.has(id)) ?? defaultModel;
+  const admission = createModelAdmission({
+    user,
+    configs: await loadModelConfigurations(adminSettingsRepository),
+    getEntitlements: async () => entitlements,
+    models,
+    freeTierAllowedModels: allowedModels,
+  });
+  for (const id of allowedModels) {
+    if (models.some(model => model.id === id && model.type === 'text') && (await admission.admits(id))) return id;
+  }
+  return defaultModel;
 }
 
 export async function getCallerModelList(

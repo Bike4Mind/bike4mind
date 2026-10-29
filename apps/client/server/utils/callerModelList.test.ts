@@ -8,6 +8,7 @@ const { mocks } = vi.hoisted(() => ({
     getSettingsMap: vi.fn(),
     loadFreeTierAllowedModels: vi.fn(),
     getUserEntitlements: vi.fn(),
+    findAdminSetting: vi.fn(),
   },
 }));
 
@@ -31,7 +32,7 @@ vi.mock('@server/entitlements', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
-  adminSettingsRepository: {},
+  adminSettingsRepository: { findOne: (...a: unknown[]) => mocks.findAdminSetting(...a) },
   cacheRepository: { findOne: vi.fn(async () => null), createOrUpdate: vi.fn(async () => undefined) },
 }));
 // The real getSettingsValue, so the setting is parsed exactly as production parses it.
@@ -74,6 +75,7 @@ beforeEach(() => {
   mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
   mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined);
   mocks.getUserEntitlements.mockResolvedValue(['base']);
+  mocks.findAdminSetting.mockResolvedValue(null);
 });
 
 describe('getCallerModelList unpriced text models', () => {
@@ -214,6 +216,20 @@ describe('resolveCallerDefaultModel', () => {
     mocks.getAvailableModels.mockResolvedValue([premium]);
 
     expect(await resolveDefault()).toBe('premium');
+  });
+
+  it('skips an allowlisted model the admin model config restricts to a tag the user lacks', async () => {
+    mocks.findAdminSetting.mockResolvedValue({
+      settingValue: [{ id: 'cheaper', enabled: true, allowedUserTags: ['beta'], allowedEntitlements: [] }],
+    });
+
+    expect(await resolveDefault()).toBe('cheap');
+  });
+
+  it('propagates an entitlement read failure instead of treating a paid user as free', async () => {
+    mocks.getUserEntitlements.mockRejectedValue(new Error('entitlements down'));
+
+    await expect(resolveDefault()).rejects.toThrow('entitlements down');
   });
 
   it('propagates an allowlist read failure instead of opening the gate', async () => {

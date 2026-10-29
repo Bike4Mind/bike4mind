@@ -53,10 +53,8 @@ export async function loadModelConfigurations(
 }
 
 /**
- * The text models a free account may call, in admin order, or undefined when the free-tier gate is off.
- * The Default API Model is deliberately NOT added: an expensive default would open the gate. A free
- * account that sends no model is started on an allowlisted one instead (resolveCallerDefaultModel in
- * apps/client/server/utils/callerModelList.ts). A read failure propagates: this gate fails closed.
+ * Free-tier text models in admin order, or undefined when the gate is off; a read failure propagates. The Default API
+ * Model is not added (see resolveCallerDefaultModel in apps/client/server/utils/callerModelList.ts).
  */
 export async function loadFreeTierAllowedModels(
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>
