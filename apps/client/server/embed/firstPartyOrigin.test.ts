@@ -55,9 +55,14 @@ describe('resolveEmbedOriginDecision', () => {
     expect(resolveEmbedOriginDecision('null', allowed, 'app.example.com')).toBe(false);
   });
 
-  it('keeps allowing an opaque origin when the key lists no origins', () => {
-    expect(resolveEmbedOriginDecision('null', [], 'app.example.com')).toBe(true);
-    expect(resolveEmbedOriginDecision('null', undefined, 'app.example.com')).toBe(true);
+  it('denies an opaque origin when the key lists no origins', () => {
+    expect(resolveEmbedOriginDecision('null', [], 'app.example.com')).toBe(false);
+    expect(resolveEmbedOriginDecision('null', undefined, 'app.example.com')).toBe(false);
+  });
+
+  it('allows a request with no Origin header when the key lists no origins', () => {
+    expect(resolveEmbedOriginDecision(undefined, [], 'app.example.com')).toBe(true);
+    expect(resolveEmbedOriginDecision(undefined, undefined, 'app.example.com')).toBe(true);
   });
 
   it('applies the allow-list and first-party rules to any other origin', () => {
