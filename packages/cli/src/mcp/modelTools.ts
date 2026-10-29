@@ -19,6 +19,7 @@ import {
   CancelledError,
   NO_LICENSE,
   abortable,
+  buildTag,
   clean,
   formatBytes,
   hiddenAbliteratedMessage,
@@ -101,7 +102,7 @@ function pullSummary(plan: PullPlan) {
   return {
     source: 'huggingface' as const,
     model: plan.id,
-    quant: clean(build.quant),
+    label: clean(build.label),
     files: build.files.map(file => ({ path: clean(file.path), sizeBytes: file.sizeBytes })),
     sizeBytes: build.sizeBytes,
     size: formatBytes(build.sizeBytes),
@@ -145,7 +146,7 @@ function licenseSentence(summary: PullSummary): string {
 
 function pullMessage(summary: PullSummary): string {
   return [
-    `Download ${summary.model}${'quant' in summary ? ` ${summary.quant}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
+    `Download ${summary.model}${'label' in summary ? ` ${summary.label}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
     ...('files' in summary ? [`File: ${summary.files.map(file => file.path).join(', ')}`] : []),
     ...(summary.revision ? [`Revision: ${summary.revision}`] : []),
     ...('digest' in summary ? [`Digest: ${summary.digest}`] : []),
@@ -190,9 +191,7 @@ function terminalCommand(target: RuntimeTarget, subcommand: 'pull' | 'rm', subje
 /** The ref `b4m models pull` resolves to the same build. */
 function pullRef(plan: PullPlan): string {
   if (plan.kind === 'ollama') return plan.name;
-  const ref = plan.build.ollamaRef;
-  const tag = ref ? ref.slice(ref.lastIndexOf(':') + 1) : plan.build.quant;
-  return `${plan.detail.id}:${tag}`;
+  return `${plan.detail.id}:${buildTag(plan.build)}`;
 }
 
 function pullProgress(extra: Extra): PullOptions['onProgress'] {

@@ -161,7 +161,7 @@ function licenseUrl(endpoint: string, detail: HubModelDetail): string {
 function toView(endpoint: string, detail: HubModelDetail): HubModelView {
   const builds: HubBuildView[] = detail.builds.map(build => ({
     id: build.id,
-    quant: build.quant,
+    label: build.label,
     sizeBytes: build.sizeBytes,
     ollamaRef: build.ollamaRef,
     blockedReason: blockedReason(detail, build),
@@ -264,7 +264,7 @@ export class ModelHubService {
         key,
         repo: request.repo,
         buildId: request.buildId,
-        quant: null,
+        label: null,
         ref: null,
         phase: 'verifying',
         completedBytes: 0,
@@ -295,7 +295,7 @@ export class ModelHubService {
         return refuse(hubError('license-required', 'Accept the license before downloading.'));
       if (detail.ollamaNeedsSshKey && !request.confirmAccess)
         return refuse(hubError('access-required', 'Confirm the Hugging Face access steps before downloading.'));
-      entry.view = { ...entry.view, quant: build.quant, expectedBytes: build.sizeBytes };
+      entry.view = { ...entry.view, label: build.label, expectedBytes: build.sizeBytes };
 
       const health = await this.#deps.runtime.health();
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));

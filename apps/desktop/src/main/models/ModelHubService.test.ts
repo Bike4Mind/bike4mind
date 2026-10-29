@@ -22,6 +22,7 @@ function build(overrides: Partial<HubGgufBuild> = {}): HubGgufBuild {
   return {
     id: 'qwen2.5-0.5b-instruct-q4_k_m',
     quant: 'Q4_K_M',
+    label: 'Q4_K_M',
     files: [{ path: 'qwen2.5-0.5b-instruct-q4_k_m.gguf', sizeBytes: 491_400_032, sha256: SHA, url: 'https://x' }],
     sizeBytes: 491_400_032,
     split: false,
@@ -123,7 +124,7 @@ describe('ModelHubService pulls', () => {
     expect(hub.verifyOllamaRef).toHaveBeenCalledTimes(1);
     expect(runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
     pulls[0].options?.onProgress?.({ status: 'pulling abc', completedBytes: 100, totalBytes: 491_400_032 });
-    expect(service.pulls()[0]).toMatchObject({ phase: 'downloading', completedBytes: 100, quant: 'Q4_K_M' });
+    expect(service.pulls()[0]).toMatchObject({ phase: 'downloading', completedBytes: 100, label: 'Q4_K_M' });
 
     pulls[0].resolve();
     await expect(result).resolves.toEqual({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
@@ -375,6 +376,16 @@ describe('ModelHubService pulls', () => {
       ok: false,
       error: { kind: 'cannot-pull', message: expect.stringMatching(/Split/) },
     });
+  });
+
+  it('passes each build its own label when two share a quant', async () => {
+    const builds = [
+      build({ id: 'LFM2.5-350M-Q4_0', quant: 'Q4_0', label: 'Q4_0' }),
+      build({ id: 'LFM2.5-350M-QAD-Q4_0', quant: 'Q4_0', label: 'QAD-Q4_0' }),
+    ];
+    const { service } = harness({ detail: detail({ builds }) });
+    const view = await service.detail(REPO);
+    expect(view.ok && view.model.builds.map(entry => entry.label)).toEqual(['Q4_0', 'QAD-Q4_0']);
   });
 
   it('blocks a build with an unsupported quant in the detail and on pull', async () => {

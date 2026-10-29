@@ -81,7 +81,8 @@ export type LicenseKind = 'permissive' | 'restricted';
 
 export interface HubBuildView {
   id: string;
-  quant: string | null;
+  /** Unique within the repo: the quant, plus what sets the file apart when other builds share it (`QAD-Q4_0`). */
+  label: string;
   sizeBytes: number;
   /** The `hf.co/...` name Ollama would list it under, as planned from the file list. */
   ollamaRef: string | null;
@@ -124,7 +125,8 @@ export interface ModelPull {
   key: string;
   repo: string;
   buildId: string;
-  quant: string | null;
+  /** The build's `HubBuildView.label`; null until main has read the build. */
+  label: string | null;
   ref: string | null;
   phase: ModelPullPhase;
   completedBytes: number;

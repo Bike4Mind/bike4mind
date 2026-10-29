@@ -11,6 +11,8 @@ import {
   ModelNotFoundError,
   OllamaRuntime,
   detectRuntimes,
+  findHubBuild,
+  hubBuildTag,
   isAbliteratedModel,
   isHubRepoId,
   type DetectedRuntime,
@@ -269,15 +271,14 @@ export function parsePullTarget(input: string): PullTarget {
   return { kind: 'hub', repo: path, tag };
 }
 
-/** Matches the tag against each build's planned ref, then its quant label; no tag or `latest` means Q4_K_M. */
+/** The build the tag names, as `findHubBuild` resolves it; no tag or `latest` means Q4_K_M. */
 export function pickBuild(builds: HubGgufBuild[], tag: string | null): HubGgufBuild | undefined {
   // Ollama tags an untagged hf.co pull `latest`, so users copy that form back.
-  const wanted = (tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT).toUpperCase();
-  return (
-    builds.find(build => build.ollamaRef?.slice(build.ollamaRef.lastIndexOf(':') + 1).toUpperCase() === wanted) ??
-    builds.find(build => build.quant === wanted)
-  );
+  return findHubBuild(builds, tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT);
 }
+
+/** The tag `pickBuild` resolves back to `build`. */
+export const buildTag = hubBuildTag;
 
 export async function resolveRuntimeTarget(
   hosts: { flag?: string; env?: string; config?: string },
@@ -454,15 +455,15 @@ export async function planPull(
 
   const build = pickBuild(detail.builds, parsed.tag);
   if (!build) {
-    const quants = [...new Set(detail.builds.map(entry => entry.quant).filter(Boolean))].map(clean);
+    const tags = detail.builds.map(entry => clean(buildTag(entry)));
     throw new Error(
-      quants.length === 0
+      tags.length === 0
         ? `${id} has no GGUF builds.`
-        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${quants.join(', ')} (${pullCommand} ${id}:<QUANT>)`
+        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${tags.join(', ')} (${pullCommand} ${id}:<BUILD>)`
     );
   }
   if (build.ollamaRefIssue && UNPULLABLE.has(build.ollamaRefIssue)) {
-    throw new Error(`Ollama cannot pull ${id} ${clean(build.quant)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
+    throw new Error(`Ollama cannot pull ${id} ${clean(build.label)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
   }
 
   const target = await requirePullable(deps);

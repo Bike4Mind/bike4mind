@@ -40,6 +40,7 @@ function build(quant: string, sizeBytes: number, extra: Partial<HubGgufBuild> = 
   return {
     id: path.replace(/\.gguf$/, ''),
     quant,
+    label: quant,
     files: [{ path, sizeBytes, sha256: 'a'.repeat(64), url: `${ENDPOINT}/${REPO}/resolve/main/${path}` }],
     sizeBytes,
     split: false,
@@ -537,6 +538,24 @@ describe('models show', () => {
     expect(text).toMatch(/Q4_K_M\s+491 MB\s+hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
     expect(text).toMatch(/F16\s+1\.2 GB\s+none: split into shards/);
     expect(text).toMatch(/Pull one with: b4m models pull Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
+  });
+
+  it('shows builds that share a quant under their own labels, and pulls each by its label', async () => {
+    const qad = build('Q4_0', 219_312_832, {
+      id: 'LFM2.5-350M-QAD-Q4_0',
+      label: 'QAD-Q4_0',
+      ollamaRef: `hf.co/${REPO}:QAD-Q4_0`,
+    });
+    const builds = [build('Q4_0', 219_309_792), qad, build('Q4_K_M', 229_312_224)];
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(detail({ builds })) }) });
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    const text = h.lines.join('\n');
+    expect(text).toMatch(/\n {2}Q4_0 {6}219 MB\s+hf\.co\/\S+:Q4_0\n/);
+    expect(text).toMatch(/\n {2}BUILD\s+SIZE\s+OLLAMA REF\n/);
+    expect(text).toMatch(/\n {2}QAD-Q4_0 {2}219 MB\s+hf\.co\/\S+:QAD-Q4_0\n/);
+    expect(pickBuild(builds, 'qad-q4_0')).toBe(qad);
+    expect(pickBuild(builds, 'Q4_0')).toBe(builds[0]);
+    expect(pickBuild([{ ...qad, ollamaRef: null, ollamaRefIssue: 'ambiguous' }], 'QAD-Q4_0')?.id).toBe(qad.id);
   });
 
   it('lists a build with an unsupported quant as not pullable with the reason', async () => {
