@@ -6,10 +6,16 @@ import {
   analyticsUserDayRepository,
   UsageEvent,
   User,
+  UserApiKey,
   type IAnalyticsDailySignups,
   type IAnalyticsUserDay,
 } from '@bike4mind/database';
-import { internalStaffEmailRegex, parseInternalStaffDomains, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
+import {
+  INTERNAL_ACCOUNT_FLAGS,
+  internalStaffEmailRegex,
+  parseInternalStaffDomains,
+  UNCLASSIFIED_SOURCE,
+} from '@bike4mind/common';
 import { isSuspectedSignup } from '@client/app/utils/signupSignals';
 import { classifySignups, DORMANCY_MIN_AGE_MS, SPIKE_BASELINE_HOURS } from '../users/signupClassifier';
 import { countByBucket, loadCandidates } from '../users/signupTimeseries';
@@ -38,16 +44,11 @@ const dayBounds = (day: string) => {
 
 const shiftDay = (day: string, days: number) => formatDay(new Date(dayBounds(day).start.getTime() + days * DAY_MS));
 
-// Mongo map keys cannot hold dots or lead with a dollar sign; model ids like "gpt-4.1" do.
-const safeKey = (key: string) => key.replace(/\./g, '_').replace(/^\$/, '_');
-
 const bump = (map: Map<string, number>, key: string, by: number) => map.set(key, (map.get(key) ?? 0) + by);
 
 const toRecord = (map: Map<string, number>, limit?: number): Record<string, number> => {
   const entries = [...map.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const merged = new Map<string, number>();
-  for (const [key, value] of limit ? entries.slice(0, limit) : entries) bump(merged, safeKey(key), value);
-  return Object.fromEntries(merged);
+  return Object.fromEntries(limit ? entries.slice(0, limit) : entries);
 };
 
 type UserFlags = {
@@ -63,7 +64,7 @@ type UserFlags = {
 // orphaned and non-ObjectId ids still count and DAU matches a direct distinct count over usageevents.
 const isCountedUser = (user: UserFlags | undefined, staffRegex: RegExp | null): boolean =>
   !user ||
-  !(user.isAdmin || user.isSystem || user.isSynthetic || (staffRegex && user.email && staffRegex.test(user.email)));
+  !(INTERNAL_ACCOUNT_FLAGS.some(flag => user[flag]) || (staffRegex && user.email && staffRegex.test(user.email)));
 
 const currentStaffRegex = () =>
   internalStaffEmailRegex(parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS));
@@ -83,11 +84,27 @@ async function loadUsers(userIds: string[]): Promise<Map<string, UserFlags>> {
   return users;
 }
 
-type Signal = string;
+type ApiActivity = { firstApiKeyAt: Date; lastApiUseAt: Date | null };
 
-type CohortResult = { signups: IAnalyticsDailySignups; suspectedIds: string[] };
+async function loadApiActivity(userIds: string[]): Promise<Map<string, ApiActivity>> {
+  const activity = new Map<string, ApiActivity>();
+  for (let i = 0; i < userIds.length; i += USER_BATCH) {
+    // A returning API user may have created their active key long after the signup cohort window.
+    const rows = await UserApiKey.aggregate<{ _id: string } & ApiActivity>([
+      { $match: { userId: { $in: userIds.slice(i, i + USER_BATCH) } } },
+      { $group: { _id: '$userId', firstApiKeyAt: { $min: '$createdAt' }, lastApiUseAt: { $max: '$lastUsedAt' } } },
+    ]).option({ maxTimeMS: QUERY_DEADLINE_MS });
+    for (const row of rows) activity.set(row._id, row);
+  }
+  return activity;
+}
 
-async function classifyCohort(day: string, { now = new Date(), logger }: RollupOptions): Promise<CohortResult> {
+type CohortResult = { signups: IAnalyticsDailySignups; classifiedIds: string[]; suspectedIds: string[] };
+
+async function classifyCohort(
+  day: string,
+  { now = new Date(), logger = console }: RollupOptions
+): Promise<CohortResult> {
   const { start, end } = dayBounds(day);
   const staffRegex = currentStaffRegex();
   // A one-day margin each side lets cohort signals (bursts, shared network) see accounts across midnight.
@@ -103,19 +120,42 @@ async function classifyCohort(day: string, { now = new Date(), logger }: RollupO
       QUERY_DEADLINE_MS
     ),
   ]);
-  if (truncated) logger?.warn(`analytics rollup: signup candidate scan truncated for ${day}`);
+  if (truncated) logger.warn(`analytics rollup: signup candidate scan truncated for ${day}`);
 
   const onDay = candidates.filter(c => c.createdAt >= start && c.createdAt < end);
   const users = await loadUsers(onDay.map(c => c.id));
   const counted = onDay.filter(c => isCountedUser(users.get(c.id), staffRegex));
-  const signalsById = classifySignups(candidates, now, hourlyCounts);
+  const apiActivity = await loadApiActivity(counted.map(candidate => candidate.id));
+  const signalsById = classifySignups(
+    candidates.map(candidate => ({
+      ...candidate,
+      ...apiActivity.get(candidate.id),
+    })),
+    now,
+    hourlyCounts
+  );
 
-  const signups: IAnalyticsDailySignups = { legit: 0, suspected: 0, unclassified: 0, bySignal: {} };
+  const total = truncated
+    ? await User.countDocuments({
+        createdAt: { $gte: start, $lt: end },
+        $nor: [
+          ...INTERNAL_ACCOUNT_FLAGS.map(flag => ({ [flag]: true })),
+          ...(staffRegex ? [{ email: staffRegex }] : []),
+        ],
+      }).maxTimeMS(QUERY_DEADLINE_MS)
+    : counted.length;
+
+  const signups: IAnalyticsDailySignups = {
+    legit: 0,
+    suspected: 0,
+    unclassified: Math.max(0, total - counted.length),
+    bySignal: {},
+  };
   const suspectedIds: string[] = [];
   for (const candidate of counted) {
-    const signals: Signal[] = signalsById.get(candidate.id) ?? [];
+    const signals = signalsById.get(candidate.id) ?? [];
     for (const signal of signals) signups.bySignal[signal] = (signups.bySignal[signal] ?? 0) + 1;
-    if (isSuspectedSignup(signals as never)) {
+    if (isSuspectedSignup(signals)) {
       signups.suspected += 1;
       suspectedIds.push(candidate.id);
     } else if (signals.length < 2 && now.getTime() - candidate.createdAt.getTime() < DORMANCY_MIN_AGE_MS) {
@@ -125,20 +165,26 @@ async function classifyCohort(day: string, { now = new Date(), logger }: RollupO
       signups.legit += 1;
     }
   }
-  return { signups, suspectedIds };
+  return { signups, classifiedIds: counted.map(candidate => candidate.id), suspectedIds };
 }
 
 /**
  * Classifies the accounts created on `day` and writes the result back: the `suspected` flag on
  * that cohort's user-day rows and the signup counts on the day's analytics_daily row. Unclassified
- * means too young for the dormancy signal to be evaluable and not yet suspected; it never counts as legit.
+ * covers unscanned accounts and accounts too young for dormancy; it never counts as legit.
  */
 export async function evaluateSignupDay(day: string, options: RollupOptions = {}) {
-  const { signups, suspectedIds } = await classifyCohort(day, options);
-  // Not atomic: readers between the reset and the re-flag can see suspected=false for the cohort.
-  await AnalyticsUserDay.updateMany({ signupDay: day }, { $set: { suspected: false } });
-  if (suspectedIds.length > 0) {
-    await AnalyticsUserDay.updateMany({ signupDay: day, userId: { $in: suspectedIds } }, { $set: { suspected: true } });
+  const { signups, classifiedIds, suspectedIds } = await classifyCohort(day, options);
+  const suspected = new Set(suspectedIds);
+  // Write final verdicts directly; a partial run must not clear suspected users or unscanned accounts.
+  for (const verdict of [false, true]) {
+    const ids = classifiedIds.filter(id => suspected.has(id) === verdict);
+    for (let i = 0; i < ids.length; i += USER_BATCH) {
+      await AnalyticsUserDay.updateMany(
+        { signupDay: day, userId: { $in: ids.slice(i, i + USER_BATCH) } },
+        { $set: { suspected: verdict } }
+      ).maxTimeMS(QUERY_DEADLINE_MS);
+    }
   }
   return signups;
 }
@@ -181,7 +227,7 @@ async function refreshLaterWindows(day: string) {
     .lean();
   for (const { day: laterDay } of later) {
     const [wau, mau] = await windowCounts(laterDay);
-    await AnalyticsDaily.updateOne({ day: laterDay }, { $set: { wau, mau } });
+    await AnalyticsDaily.updateOne({ day: laterDay }, { $set: { wau, mau } }).maxTimeMS(QUERY_DEADLINE_MS);
   }
 }
 
@@ -288,11 +334,12 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
       updateOne: {
         filter: { day, userId },
         update: {
+          ...(!org ? { $unset: { orgId: 1 as const } } : {}),
           $set: {
             day,
             userId,
             ownerType: owners[0].ownerType,
-            orgId: org?.ownerId,
+            ...(org ? { orgId: org.ownerId } : {}),
             requests: acc.requests,
             creditsCharged: acc.credits,
             features: [...acc.features].sort(),
@@ -308,14 +355,18 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
   for (let i = 0; i < ops.length; i += USER_BATCH) {
     await AnalyticsUserDay.bulkWrite(ops.slice(i, i + USER_BATCH), { ordered: false });
   }
-  const existingIds: string[] = await AnalyticsUserDay.distinct('userId', { day });
+  const existingIds: string[] = await AnalyticsUserDay.distinct('userId', { day }).maxTimeMS(QUERY_DEADLINE_MS);
   const staleIds = existingIds.filter(id => !perUser.has(id));
   for (let i = 0; i < staleIds.length; i += USER_BATCH) {
-    await AnalyticsUserDay.deleteMany({ day, userId: { $in: staleIds.slice(i, i + USER_BATCH) } });
+    await AnalyticsUserDay.deleteMany({ day, userId: { $in: staleIds.slice(i, i + USER_BATCH) } }).maxTimeMS(
+      QUERY_DEADLINE_MS
+    );
   }
 
   const signups = await evaluateSignupDay(day, options);
   const [wau, mau] = await windowCounts(day);
+  // The daily row is the backfill completion marker; leave it absent until all dependent windows refresh.
+  await refreshLaterWindows(day);
   await analyticsDailyRepository.upsertDay(day, {
     signups,
     dau: perUser.size,
@@ -327,7 +378,6 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
     creditsConsumed,
     computedAt,
   });
-  await refreshLaterWindows(day);
   return { day, dau: perUser.size, wau, mau };
 }
 
@@ -336,7 +386,7 @@ export async function reevaluateRecentSignups(yesterday: string, options: Rollup
   for (let back = 1; back <= SIGNUP_REEVALUATION_DAYS - 1; back++) {
     const day = shiftDay(yesterday, -back);
     const signups = await evaluateSignupDay(day, options);
-    await AnalyticsDaily.updateOne({ day }, { $set: { signups } });
+    await AnalyticsDaily.updateOne({ day }, { $set: { signups } }).maxTimeMS(QUERY_DEADLINE_MS);
   }
 }
 

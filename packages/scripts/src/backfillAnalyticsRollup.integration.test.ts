@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '@bike4mind/database';
+import {
+  AnalyticsDaily,
+  AnalyticsUserDay,
+  analyticsUserDayRepository,
+  UsageEvent,
+  User,
+  UserApiKey,
+} from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 
 vi.mock('../utils/config', () => ({ Config: {} }));
@@ -51,6 +58,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all([
     UsageEvent.deleteMany({}),
     AnalyticsUserDay.deleteMany({}),
@@ -110,5 +118,49 @@ describe('backfillAnalyticsRollup', () => {
     await expect(
       backfillAnalyticsRollup({ dryRun: true, from: '2026-06-04', to: '2026-06-01', log: silent })
     ).rejects.toThrow('after');
+    await expect(backfillAnalyticsRollup({ dryRun: true, from: '2026-02-30', log: silent })).rejects.toThrow('--from');
+  });
+
+  it.each(['', '2026-2-01', '2026-13-01', '2026-02-29', '2026-02-30', ' 2026-06-01'])(
+    'rejects invalid calendar day %j',
+    async day => {
+      await expect(backfillAnalyticsRollup({ dryRun: true, to: day, log: silent })).rejects.toThrow('--to');
+    }
+  );
+
+  it.each(['2024-02-29', '2026-06-01'])('accepts valid calendar day %s', async day => {
+    expect(await backfillAnalyticsRollup({ dryRun: true, from: day, to: day, log: silent })).toMatchObject({
+      from: day,
+      to: day,
+      processed: 1,
+    });
+  });
+
+  it('retries a day when refreshing a later window failed before completion', async () => {
+    await backfillAnalyticsRollup({ dryRun: false, from: '2026-06-03', to: '2026-06-03', now: NOW, log: silent });
+    const update = vi
+      .spyOn(analyticsUserDayRepository, 'countDistinctUsers')
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(2)
+      .mockRejectedValueOnce(new Error('window refresh failed'));
+    await expect(
+      backfillAnalyticsRollup({
+        dryRun: false,
+        from: '2026-06-01',
+        to: '2026-06-01',
+        now: NOW,
+        log: silent,
+      })
+    ).rejects.toThrow('window refresh failed');
+    update.mockRestore();
+    const result = await backfillAnalyticsRollup({
+      dryRun: false,
+      from: '2026-06-01',
+      to: '2026-06-01',
+      now: NOW,
+      log: silent,
+    });
+    expect(result.processed).toBe(1);
+    expect(await AnalyticsDaily.findOne({ day: '2026-06-03' }).lean()).toMatchObject({ wau: 2, mau: 2 });
   });
 });

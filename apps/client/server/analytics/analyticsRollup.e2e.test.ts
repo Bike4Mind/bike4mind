@@ -5,6 +5,7 @@ import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { rollupDay, runNightlyRollup } from './analyticsRollup';
 import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
+import { TIMESERIES_SCAN_LIMIT } from '../users/signupTimeseries';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -76,6 +77,7 @@ beforeEach(async () => {
     AnalyticsUserDay.deleteMany({}),
     AnalyticsDaily.deleteMany({}),
     User.deleteMany({}),
+    UserApiKey.deleteMany({}),
   ]);
   await seedUser(users.a);
   await seedUser(users.b);
@@ -125,7 +127,7 @@ describe('rollupDay', () => {
     expect(daily?.dau).toBe(direct.length);
     expect(daily?.dau).toBe(5);
     expect(daily?.requestsByFeature).toEqual({ chat: 5, image: 1 });
-    expect(daily?.requestsByModel).toMatchObject({ 'gpt-4_1': 4, 'dall-e': 1 });
+    expect(daily?.requestsByModel).toMatchObject({ 'gpt-4.1': 4, 'dall-e': 1 });
     expect(daily?.requestsBySource).toEqual({ web: 5, [UNCLASSIFIED_SOURCE]: 1 });
     const rows = await AnalyticsUserDay.find({ day: DAY }).lean();
     expect(rows.map(r => r.userId)).toContain(String(users.deleted));
@@ -232,6 +234,81 @@ describe('rollupDay', () => {
 
   it('rejects a malformed day', async () => {
     await expect(rollupDay('2026-02-30')).rejects.toThrow(/Invalid rollup day/);
+  });
+
+  it('keeps distinct model ids intact in the stored breakdown', async () => {
+    await seedEvent(users.a, `${DAY}T10:00:00Z`, { model: 'gpt-4.1' });
+    await seedEvent(users.a, `${DAY}T11:00:00Z`, { model: 'gpt-4_1' });
+    expect(await rollupDay(DAY, { now: NOW })).toMatchObject({ dau: 1 });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.requestsByModel).toEqual({
+      'gpt-4.1': 1,
+      'gpt-4_1': 1,
+    });
+  });
+
+  it('clears stale organization attribution when a day is recomputed with only personal usage', async () => {
+    await seedEvent(users.a, `${DAY}T10:00:00Z`, { ownerType: 'Organization', ownerId: 'organization' });
+    await rollupDay(DAY, { now: NOW });
+    expect(await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean()).toMatchObject({ orgId: 'organization' });
+    await UsageEvent.updateMany({}, { $set: { ownerType: 'User', ownerId: String(users.a) } });
+    await rollupDay(DAY, { now: NOW });
+    const row = await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean();
+    expect(row?.ownerType).toBe('User');
+    expect(row?.orgId).toBeUndefined();
+  });
+
+  it('counts signups outside the scan cap as unclassified and preserves their existing verdict', async () => {
+    await usersCol().updateOne({ _id: users.a }, { $set: { createdAt: new Date(`${DAY}T09:00:00Z`) } });
+    await usersCol().updateMany(
+      { _id: { $in: [users.admin, users.staff, users.system, users.synthetic] } },
+      { $set: { createdAt: new Date(`${DAY}T09:00:00Z`) } }
+    );
+    await AnalyticsUserDay.create({
+      day: '2026-06-02',
+      userId: String(users.a),
+      ownerType: 'User',
+      signupDay: DAY,
+      suspected: true,
+    });
+    await usersCol().insertMany(
+      Array.from({ length: TIMESERIES_SCAN_LIMIT }, () => ({
+        _id: oid(),
+        username: String(oid()),
+        createdAt: new Date('2026-06-02T10:00:00Z'),
+      }))
+    );
+    const warn = vi.fn();
+    await rollupDay(DAY, { now: NOW, logger: { warn } });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.signups).toMatchObject({
+      legit: 0,
+      suspected: 0,
+      unclassified: 1,
+    });
+    expect(warn).toHaveBeenCalled();
+    expect(await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean()).toMatchObject({ suspected: true });
+  });
+
+  it('uses API activity from keys created after the signup scan window', async () => {
+    await usersCol().updateOne(
+      { _id: users.a },
+      {
+        $set: {
+          createdAt: new Date(`${DAY}T09:00:00Z`),
+          signupMeta: { isDatacenter: true },
+        },
+      }
+    );
+    await UserApiKey.collection.insertOne({
+      userId: String(users.a),
+      keyPrefix: String(oid()),
+      createdAt: new Date('2026-06-04T10:00:00Z'),
+      lastUsedAt: new Date('2026-06-04T11:00:00Z'),
+    });
+    await rollupDay(DAY, { now: NOW });
+    expect((await AnalyticsDaily.findOne({ day: DAY }).lean())?.signups).toMatchObject({
+      legit: 1,
+      suspected: 0,
+    });
   });
 });
 

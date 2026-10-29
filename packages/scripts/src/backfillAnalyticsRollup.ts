@@ -27,7 +27,8 @@ export interface BackfillAnalyticsRollupResult {
 }
 
 const assertDay = (value: string, label: string) => {
-  if (!DAY_RE.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00.000Z`))) {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (!DAY_RE.test(value) || Number.isNaN(date.getTime()) || formatDay(date) !== value) {
     throw new Error(`${label} must be a UTC day formatted YYYY-MM-DD, got "${value}"`);
   }
 };
