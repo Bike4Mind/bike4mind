@@ -59,6 +59,9 @@ export default function HeldSignupGrantsTab() {
       return next;
     });
   const paid = release.data?.results.filter(result => result.outcome === 'released') ?? [];
+  const revokeDone =
+    revoke.data?.batchId === release.data?.batchId &&
+    !revoke.data?.results.some(result => result.outcome === 'insufficient_balance' || result.outcome === 'failed');
 
   return (
     <Stack spacing={2} data-testid="held-signup-grants-tab">
@@ -81,7 +84,7 @@ export default function HeldSignupGrantsTab() {
             variant="outlined"
             sx={{ ml: 2 }}
             data-testid="held-signup-grants-revoke-btn"
-            disabled={busy || !paid.length || revoke.data?.batchId === release.data.batchId}
+            disabled={busy || !paid.length || revokeDone}
             onClick={() => setConfirmRevoke(true)}
           >
             Revoke
