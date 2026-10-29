@@ -66,6 +66,7 @@ const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false })
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
+const PreferenceArenaTab = dynamic(() => import('./PreferenceArenaTab'), { ssr: false });
 const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
@@ -149,6 +150,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
             {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.PreferenceArena} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.PreferenceArena && <PreferenceArenaTab />}
           </TabPanel>
           <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
             {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}

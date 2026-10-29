@@ -44,6 +44,7 @@ import {
   Plug,
   Radar,
   RotateCcw,
+  Scale,
   ScanSearch,
   ScrollText,
   Settings,
@@ -132,6 +133,7 @@ export enum AdminTab {
   AuditLog = 66,
   Dashboard = 67,
   SignupDomainHolds = 68,
+  PreferenceArena = 69,
 }
 
 /**
@@ -237,6 +239,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Wrench, tab: AdminTab.ToolDefinitions, label: 'Tools' },
       { Icon: Settings, tab: AdminTab.ManageGears, label: 'Gears' },
       { Icon: ChartColumn, tab: AdminTab.ModelMetrics, label: 'Model metrics' },
+      { Icon: Scale, tab: AdminTab.PreferenceArena, label: 'Preference arena', testid: 'admin-preference-arena-btn' },
       { Icon: CalendarX, tab: AdminTab.ModelLifecycle, label: 'Model lifecycle', testid: 'admin-model-lifecycle-btn' },
       { Icon: ScanSearch, tab: AdminTab.RetrievalRate, label: 'Retrieval', testid: 'admin-retrieval-rate-btn' },
       {

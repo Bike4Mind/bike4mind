@@ -52,6 +52,10 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
 vi.mock('@client/app/hooks/useAppVersion', () => ({ useAppVersion: () => ({ data: undefined }) }));
 const desktopPromo = vi.hoisted(() => ({ enabled: false }));
 vi.mock('@client/app/hooks/useDesktopPromoEnabled', () => ({ useDesktopPromoEnabled: () => desktopPromo.enabled }));
+const preferenceArena = vi.hoisted(() => ({ enabled: false }));
+vi.mock('@client/app/hooks/usePreferenceArenaEnabled', () => ({
+  usePreferenceArenaEnabled: () => preferenceArena.enabled,
+}));
 const features = vi.hoisted(() => ({ enabled: new Set<string>() }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: (key: string) => features.enabled.has(key) }),
@@ -474,6 +478,7 @@ describe('ProfileMenu - desktop app link', () => {
 
   afterEach(() => {
     desktopPromo.enabled = false;
+    preferenceArena.enabled = false;
   });
 
   const openMenu = () => {
@@ -497,6 +502,18 @@ describe('ProfileMenu - desktop app link', () => {
     openMenu();
     expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
     expect(screen.queryByTestId('profile-menu-desktop-app')).not.toBeInTheDocument();
+  });
+
+  it('opens the preference arena when the deployment enabled it', () => {
+    preferenceArena.enabled = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-arena'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/arena' });
+  });
+
+  it('hides the preference arena row while the flag is off', () => {
+    openMenu();
+    expect(screen.queryByTestId('profile-menu-arena')).not.toBeInTheDocument();
   });
 });
 
