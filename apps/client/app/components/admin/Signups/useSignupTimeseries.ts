@@ -27,7 +27,9 @@ export function useSignupTimeseries(range: SignupTimeseriesRange) {
  */
 export function useSignupVerdicts(range: SignupTimeseriesRange, asOf: string | undefined, userIds: readonly string[]) {
   return useQuery({
-    queryKey: ['users', 'signup-verdicts', range, asOf, userIds] as const,
+    // Not under ['users']: a user mutation refreshes the chart, whose new `until` re-keys this query, so
+    // invalidating it as well would only classify the range once more for a result thrown away.
+    queryKey: ['signup-verdicts', range, asOf, userIds] as const,
     queryFn: async () =>
       (
         await api.get<SignupVerdicts>('/api/admin/users/signup-verdicts', {

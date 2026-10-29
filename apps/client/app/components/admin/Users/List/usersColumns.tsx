@@ -252,6 +252,8 @@ export function usersColumns({
             <Box
               component="span"
               tabIndex={0}
+              // A generic span may not carry aria-label; img makes it a labelled, non-interactive status.
+              role="img"
               aria-label={`${shown.label}. ${shown.title}`}
               onClick={event => event.stopPropagation()}
               sx={{ display: 'inline-flex', borderRadius: 'md', ...adminFocus }}

@@ -146,6 +146,10 @@ function classifyCohort(since: Date, now: Date) {
   const key = `${since.getTime()}:${now.getTime()}`;
   const cached = cohortCache.get(key);
   if (cached && Date.now() - cached.cachedAt < COHORT_CACHE_TTL_MS) return cached.result;
+  // Each chart load has its own `now`, so an unread key would otherwise hold its cohort until eviction.
+  for (const [staleKey, entry] of cohortCache) {
+    if (Date.now() - entry.cachedAt >= COHORT_CACHE_TTL_MS) cohortCache.delete(staleKey);
+  }
   const result = computeCohort(since, now);
   result.catch(() => cohortCache.delete(key));
   cohortCache.set(key, { cachedAt: Date.now(), result });
