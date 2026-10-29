@@ -31,7 +31,7 @@ import {
   type AddressScope,
   type ParsedAddress,
 } from './addressPolicy';
-import { ServerCredentialsError, ServerUnreachableError } from './errors';
+import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 import { createServerFetch, ServerRedirectError, ServerTransportError, type ServerEndpoint } from './serverFetch';
@@ -343,12 +343,13 @@ export class ModelServerRegistry {
     }
   }
 
-  /** The runtime's 401/403 as a credentials error, and the cause of a connection error it wrapped. */
+  /** The runtime's 401 as a credentials error, its 403 as a refusal, and the cause of a connection error it wrapped. */
   private unwrapFailure(err: unknown, entry: Entry): unknown {
     const inner = err instanceof RuntimeConnectionError && err.cause !== undefined ? err.cause : err;
-    if (inner instanceof RuntimeHttpError && (inner.status === 401 || inner.status === 403)) {
+    if (inner instanceof RuntimeHttpError && inner.status === 401) {
       return new ServerCredentialsError(entry.record.name, !!this.deps.store.headers(entry.record));
     }
+    if (inner instanceof RuntimeHttpError && inner.status === 403) return new ServerForbiddenError(entry.record.name);
     return inner;
   }
 
@@ -594,7 +595,11 @@ function failureHealth(err: unknown, label: string): ModelServerHealth | null {
   if (err instanceof ServerCredentialsError) {
     return { state: 'credentials', version: null, latencyMs: null, checkedAt, error: err.message };
   }
-  if (err instanceof ServerTransportError || err instanceof ServerRedirectError) {
+  if (
+    err instanceof ServerTransportError ||
+    err instanceof ServerRedirectError ||
+    err instanceof ServerForbiddenError
+  ) {
     return { state: 'refused', version: null, latencyMs: null, checkedAt, error: err.message };
   }
   const connection =
@@ -640,7 +645,7 @@ async function detect(
     expected === 'openai-compatible' ? null : get('/api/version'),
     expected === 'ollama' ? null : get('/v1/models'),
   ]);
-  const auth = [version, models].some(result => result?.status === 401 || result?.status === 403);
+  const auth = [version, models].some(result => result?.status === 401);
   const ollamaVersion = (version?.body as { version?: unknown } | null)?.version;
   if (version && version.status === 200 && typeof ollamaVersion === 'string') {
     const tags = await get('/api/tags');
@@ -674,7 +679,8 @@ async function detect(
     };
   }
   const failure = [version, models].find(result => result && result.error)?.error;
-  const refused = failure instanceof ServerTransportError || failure instanceof ServerRedirectError;
+  const forbidden = !auth && [version, models].some(result => result?.status === 403);
+  const refused = forbidden || failure instanceof ServerTransportError || failure instanceof ServerRedirectError;
   const status = [version, models].find(result => result && result.status > 0)?.status;
   return {
     kind: null,
@@ -684,13 +690,15 @@ async function detect(
     models: null,
     auth,
     refused,
-    error: failure
-      ? refused
-        ? describeFailure(failure)
-        : `Could not reach ${label}: ${describeFailure(failure)}`
-      : status
-        ? `${label} answered HTTP ${status}, not as Ollama or an OpenAI-compatible server.`
-        : null,
+    error: forbidden
+      ? new ServerForbiddenError(label).message
+      : failure
+        ? refused
+          ? describeFailure(failure)
+          : `Could not reach ${label}: ${describeFailure(failure)}`
+        : status
+          ? `${label} answered HTTP ${status}, not as Ollama or an OpenAI-compatible server.`
+          : null,
   };
 }
 
