@@ -157,7 +157,7 @@ describe('settings/update large signup grant guard', () => {
 
   it('refuses enabling staging over a staged total above the limit', async () => {
     rows = [{ settingName: 'signupGrantCredits', settingValue: 500 }];
-    await expectRefusal(runHandler('stagedSignupGrantEnabled', true), /Refusing to raise/);
+    await expectRefusal(runHandler('stagedSignupGrantEnabled', true), /Refusing to enable staged signup grants/);
     expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 
