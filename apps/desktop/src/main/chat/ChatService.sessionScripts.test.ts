@@ -184,6 +184,18 @@ describe('ChatService running a script written in the same session', () => {
     });
   });
 
+  it.each([
+    ["sed -i.bak 's/old/new/' run.sh", 'run.sh'],
+    ['mkdir out && tar -cf a.tar run.sh && tar -xf a.tar -C out', 'out/run.sh'],
+  ])('asks before running a script after %s', async (edit, script) => {
+    const id = await session('auto');
+    await reply(id, [shell(edit), shell(`bash ${script}`)]);
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain(`${script}, which was written in this session`);
+    expect(calls('bash_execute', 'done')).toHaveLength(1);
+  });
+
   it('asks before running a script from another folder after a cd', async () => {
     const id = await session('auto');
     await reply(id, [write('tools/go.sh'), shell('cd tools && bash go.sh')]);

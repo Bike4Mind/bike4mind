@@ -120,6 +120,47 @@ describe('DeepSeekBackend reasoning capture', () => {
     expect(assistantTurn?.reasoning_content).toBe('step one');
   });
 
+  it('replays a parallel round as ONE assistant message carrying every call and the reasoning', async () => {
+    // One assistant message per call left every message after the first without
+    // reasoning_content, and DeepSeek thinking mode rejects that history with a 400.
+    const toolFn = vi.fn().mockResolvedValue('tool output');
+    const { backend, create } = backendReturning([]);
+    create.mockResolvedValueOnce({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: '',
+            reasoning_content: 'search twice',
+            tool_calls: [
+              { id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+              { id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    create.mockResolvedValue({
+      choices: [{ index: 0, message: { content: 'done' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 12, completion_tokens: 6 },
+    });
+
+    await runTurn(backend, ChatModels.DEEPSEEK_FLASH, { tools: searchTool(toolFn) });
+
+    expect(toolFn).toHaveBeenCalledTimes(2);
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages).toHaveLength(1);
+    expect(toolCallMessages[0].reasoning_content).toBe('search twice');
+    expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
+    expect(secondRequest.messages.slice(-2).map(m => [m.role, m.tool_call_id])).toEqual([
+      ['tool', 't1'],
+      ['tool', 't2'],
+    ]);
+  });
+
   it('throws a diagnosable error when reasoning consumed the whole output budget', async () => {
     // A turn that hits max_tokens mid-reasoning returns empty content, which
     // otherwise surfaces as a blank reply with no error at all.
@@ -469,6 +510,45 @@ describe('DeepSeekBackend streaming reasoning', () => {
     expect(joined).toContain('<think>let me search</think>');
     expect(joined).toContain('the answer');
     expect(joined.match(/<think>/g)?.length).toBe(joined.match(/<\/think>/g)?.length);
+  });
+
+  it('replays a streamed parallel round as ONE assistant message carrying the reasoning', async () => {
+    const toolFn = vi.fn().mockResolvedValue('42');
+    const { backend, create } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'search twice' } }] },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"a"}' } },
+                  { index: 1, id: 't2', type: 'function', function: { name: 'search', arguments: '{"q":"b"}' } },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'the answer' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 12, completion_tokens: 6 },
+        },
+      ],
+    ]);
+
+    await runStream(backend, ChatModels.DEEPSEEK_FLASH, { tools: searchTool(toolFn) });
+
+    expect(toolFn).toHaveBeenCalledTimes(2);
+    const secondRequest = create.mock.calls[1][0] as { messages: Array<Record<string, unknown>> };
+    const toolCallMessages = secondRequest.messages.filter(m => m.role === 'assistant' && m.tool_calls);
+    expect(toolCallMessages).toHaveLength(1);
+    expect(toolCallMessages[0].reasoning_content).toBe('search twice');
+    expect((toolCallMessages[0].tool_calls as Array<{ id: string }>).map(c => c.id)).toEqual(['t1', 't2']);
   });
 
   it('throws a diagnosable error when a stream produces no content and no tool', async () => {

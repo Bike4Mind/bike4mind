@@ -140,6 +140,91 @@ describe('DELETE /api/projects/[id]/members (real DB)', () => {
   });
 });
 
+describe('DELETE /api/projects/[id]/members - pinned files the leaver can no longer read (real DB)', () => {
+  // What accept.ts mints when a file is added to a project: a projectId-tagged grant per participant.
+  const projectGrant = (userId: string, projectId: string) => ({
+    userId,
+    permissions: [Permission.read, Permission.update],
+    projectId,
+  });
+  const pin = (userId: string, fileId: string) =>
+    User.updateOne({ _id: userId }, { $set: { systemFiles: [{ fileId, enabled: true }] } });
+  const pinned = async (userId: string) => ((await User.findById(userId).lean())?.systemFiles ?? []).map(f => f.fileId);
+
+  const seedProjectFiles = async () => {
+    const { owner, member, projectId } = await seed();
+    const stayer = await User.create({
+      name: 'Stayer',
+      username: `stayer-${Math.random().toString(36).slice(2, 10)}`,
+      password: null,
+      hasUsablePassword: false,
+    });
+    await Project.updateOne(
+      { _id: projectId },
+      { $push: { users: { userId: stayer.id, permissions: [Permission.read, Permission.update] } } }
+    );
+    const ownerFile = await FabFile.create({
+      userId: owner.id,
+      fileName: 'owner.md',
+      type: KnowledgeType.FILE,
+      users: [projectGrant(member.id, projectId), projectGrant(stayer.id, projectId)],
+    });
+    const memberFile = await FabFile.create({
+      userId: member.id,
+      fileName: 'member.md',
+      type: KnowledgeType.FILE,
+      users: [projectGrant(stayer.id, projectId)],
+    });
+    await Project.updateOne({ _id: projectId }, { $set: { fileIds: [ownerFile.id, memberFile.id] } });
+    await pin(member.id, ownerFile.id);
+    await pin(stayer.id, memberFile.id);
+    return { owner, member, stayer, projectId, ownerFile, memberFile };
+  };
+
+  it("a member leaving loses the project's files from their pins, and the others lose the leaver's files", async () => {
+    const { member, stayer, projectId } = await seedProjectFiles();
+    const { req, res } = request(member, projectId);
+
+    await deleteHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(await pinned(member.id)).toEqual([]);
+    expect(await pinned(stayer.id)).toEqual([]);
+  });
+
+  it('keeps a pin the leaver can still read through another grant', async () => {
+    const { owner, member, projectId, ownerFile } = await seedProjectFiles();
+    await FabFile.updateOne({ _id: ownerFile.id }, { $set: { isGlobalRead: true } });
+    const { req, res } = request(owner, projectId, { userId: member.id });
+
+    await deleteHandler(req, res);
+
+    expect(await pinned(member.id)).toEqual([ownerFile.id]);
+  });
+
+  it('cleans nothing when the leave is rolled back', async () => {
+    const { owner, member, projectId, ownerFile } = await seedProjectFiles();
+    vi.mocked(logEvent).mockRejectedValueOnce(new Error('post-update failure'));
+    const { req, res } = request(owner, projectId, { userId: member.id });
+
+    await expect(deleteHandler(req, res)).rejects.toThrow('post-update failure');
+
+    expect(await pinned(member.id)).toEqual([ownerFile.id]);
+  });
+
+  it("drops the owner's pin on the leaver's file once the owner's project grant is revoked", async () => {
+    const { owner, member, projectId, memberFile } = await seedProjectFiles();
+    await FabFile.updateOne({ _id: memberFile.id }, { $push: { users: projectGrant(owner.id, projectId) } });
+    await pin(owner.id, memberFile.id);
+    const { req, res } = request(member, projectId);
+
+    await deleteHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(await pinned(owner.id)).toEqual([]);
+  });
+});
+
 describe("DELETE /api/projects/[id]/members - the owner's grant on a departing member's documents (real DB)", () => {
   const addOwnFileAsMember = async (member: { id: string }, projectId: string) => {
     const file = await FabFile.create({ userId: member.id, fileName: 'member.md', type: KnowledgeType.FILE });

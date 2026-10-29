@@ -7,7 +7,7 @@ import {
   memoryLedgerRepository,
   userRepository,
 } from '@bike4mind/database';
-import { getQuestErrorCode, LAKE_MEMORY_EXTRACTION_LEASE_MS, type IUserDocument } from '@bike4mind/common';
+import { isTerminalCreditRefusal, LAKE_MEMORY_EXTRACTION_LEASE_MS, type IUserDocument } from '@bike4mind/common';
 import { apiKeyService, dataLakeService } from '@bike4mind/services';
 import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -368,12 +368,13 @@ export async function extractLakeMemoryForBatch(
         lastCoveredId = doc.fabFileId;
         consecutiveFailures = 0;
       } catch (err) {
-        // Out of credits is not a bad document: every later doc would be refused too. Stop like an
-        // abort, so the cursor stays at the last covered doc and the next finalize resumes there.
-        if (getQuestErrorCode(err) === 'insufficient_credits') {
+        // A credit refusal (out of credits, free-tier daily cap) is not a bad document: every later doc
+        // would be refused too. Stop like an abort, so the cursor stays at the last covered doc and the
+        // next finalize resumes there.
+        if (isTerminalCreditRefusal(err)) {
           aborted = true;
           logger.warn(
-            `[lakeMemory] lake ${datalakeTag}: the lake owner is out of credits after ${docsAttempted}/${docs.length} docs; stopping`
+            `[lakeMemory] lake ${datalakeTag}: the lake owner cannot be billed after ${docsAttempted}/${docs.length} docs; stopping: ${(err as Error).message}`
           );
           break;
         }

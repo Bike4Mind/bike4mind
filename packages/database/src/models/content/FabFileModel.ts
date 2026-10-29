@@ -4022,10 +4022,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     sessionId: { type: String, required: false },
     notes: { type: String, default: '' },
     // The owner's note and the two pipeline markers are separate fields on purpose (#2016) - see
-    // IFabFile.notes. The enum documents the allowed values but does NOT enforce them at runtime:
-    // mongoose skips validators on update paths unless the caller passes `runValidators: true`, and
-    // no writer here does. TypeScript is what actually stops a typo producing a value
-    // `isChunkStalled` silently reads as "not stalled".
+    // IFabFile.notes. The enum is enforced on updates by rejectOutOfEnumStatusUpdate below, so a
+    // typo cannot store a value `isChunkStalled` silently reads as "not stalled".
     chunkStallReason: { type: String, enum: [...CHUNK_STALL_REASONS, null], default: null },
     noExtractableTextAt: { type: Date, default: null },
     contentHash: { type: String },
@@ -4116,6 +4114,49 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
 );
 
 FabFileSchema.plugin(softDeletePlugin);
+
+// Mongoose runs schema enums on create/save only; update paths skip them unless the caller passes
+// `runValidators`. Gating these paths here instead covers every writer, including the repository's
+// generic update(). Not `runValidators` via this hook: that would also validate every other path
+// in the same update. Pipeline updates are checked for literal values only; an expression (`$cond`,
+// a `$field` reference) is computed server-side and cannot be checked before the write.
+const ENUM_GATED_UPDATE_PATHS = ['status', 'moderationStatus', 'chunkStallReason'] as const;
+
+function rejectOutOfEnumStatusUpdate(this: mongoose.Query<unknown, unknown>): void {
+  const update = this.getUpdate();
+  if (!update) return;
+  const containers: unknown[] = Array.isArray(update)
+    ? update.flatMap((stage: Record<string, unknown>) => [stage?.$set, stage?.$addFields])
+    : [update, update.$set, update.$setOnInsert];
+  const isPipeline = Array.isArray(update);
+  for (const container of containers) {
+    if (!container || typeof container !== 'object') continue;
+    for (const path of ENUM_GATED_UPDATE_PATHS) {
+      if (!Object.hasOwn(container, path)) continue;
+      const value: unknown = (container as Record<string, unknown>)[path];
+      if (value == null) continue;
+      if (isPipeline && (typeof value === 'object' || (typeof value === 'string' && value.startsWith('$')))) continue;
+      const allowed: readonly unknown[] = FabFileSchema.path(path).options.enum;
+      if (typeof value === 'string' && allowed.includes(value)) continue;
+      const error = new mongoose.Error.ValidationError();
+      error.addError(
+        path,
+        new mongoose.Error.ValidatorError({
+          path,
+          value,
+          type: 'enum',
+          message: `\`${String(value)}\` is not a valid enum value for path \`${path}\`.`,
+        })
+      );
+      throw error;
+    }
+  }
+}
+
+FabFileSchema.pre(
+  ['updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'findOneAndReplace'],
+  rejectOutOfEnumStatusUpdate
+);
 
 // Add critical FabFiles indexes for performance optimization
 FabFileSchema.index({ isChunk: 1, userId: 1 });

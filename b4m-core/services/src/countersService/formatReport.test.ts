@@ -156,6 +156,19 @@ describe('formatCustomSlackMessage - most active users leaderboard', () => {
     expect(message).not.toContain('a&b<c>');
   });
 
+  it('measures engagement by events, not credits', () => {
+    const message = formatCustomSlackMessage('App', {
+      metrics: {},
+      userActivity: activity([
+        { _id: 'u1', email: 'a@example.com', interactions: 10, creditsSpent: 5 },
+        { _id: 'u2', email: 'b@example.com', interactions: 1, creditsSpent: 5 },
+      ]),
+    });
+
+    // 1 of 10 events is the lowest tier, though both spent the same.
+    expect(message).toContain('🥈 ⭐ b@example.com - 5 credits, 1 events');
+  });
+
   it('falls back to event counts for engagement when nobody spent', () => {
     const message = formatCustomSlackMessage('App', {
       metrics: {},

@@ -1,6 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { systemPromptRepository } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 import { z } from 'zod';
 
@@ -168,6 +169,13 @@ const handler = adminApi({
         createdBy: req.user?.email || 'system',
         lastUpdatedBy: req.user?.email || 'system',
         lastUpdatedByName: req.user?.name || 'System',
+      });
+
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.system_prompt.created',
+        target: { kind: 'settings', id: promptData.promptId, displayName: promptData.name },
+        summary: `created system prompt ${promptData.promptId}`,
+        details: { category: newPrompt.category, enabled: newPrompt.enabled, version: newPrompt.version },
       });
 
       return res.status(201).json({
