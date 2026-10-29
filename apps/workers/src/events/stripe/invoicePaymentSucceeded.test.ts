@@ -66,8 +66,9 @@ vi.mock('@bike4mind/database', () => ({
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
-const buildSub = (metadata: Record<string, string>) => ({
+const buildSub = (metadata: Record<string, string>, status = 'active') => ({
   id: 'sub_inv_u',
+  status,
   metadata,
   items: { data: [{ price: { id: 'price_pro' } }] },
 });
@@ -333,13 +334,23 @@ describe('invoicePaymentSucceeded - signup grant unblock', () => {
   it('releases the signup grant on a paid invoice', async () => {
     stubInvoice(2000);
     await run();
-    expect(unlockSignupGrantFromSubscription).toHaveBeenCalledWith('u1');
+    expect(unlockSignupGrantFromSubscription).toHaveBeenCalledWith('u1', expect.anything());
   });
 
   it.each([[0], [undefined as unknown as number]])('does not release on a $0 invoice (%s)', async amount => {
     stubInvoice(amount);
     await run();
     expect(unlockSignupGrantFromSubscription).not.toHaveBeenCalled();
+  });
+
+  it('does not release, and warns, when the subscription is not active', async () => {
+    (stripe.invoices.retrieve as any).mockResolvedValue({ id: 'in_1', amount_paid: 2000, currency: 'usd' });
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      buildSub({ userId: 'u1', stage: 'test', ownerType: 'User' }, 'incomplete')
+    );
+    await run();
+    expect(unlockSignupGrantFromSubscription).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
   });
 
   it('does not release for an organization subscription', async () => {

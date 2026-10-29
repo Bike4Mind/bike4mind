@@ -100,10 +100,17 @@ export const handler = withEventContext(async (event, logger) => {
     // A $0 invoice (card verification, full-discount coupon) is not a paid subscription. Non-throwing:
     // a retry of this handler would re-run credit granting.
     if (invoice.amount_paid > 0) {
-      try {
-        await unlockSignupGrantFromSubscription(metadata.userId);
-      } catch (error) {
-        logger.error(`Signup grant not released for invoice ${invoiceId}`, { error });
+      if (subscription.status !== 'active' && subscription.status !== 'trialing') {
+        logger.warn(`Signup grant not released: subscription is not active for invoice ${invoiceId}`, {
+          subscriptionId: subscription.id,
+          status: subscription.status,
+        });
+      } else {
+        try {
+          await unlockSignupGrantFromSubscription(metadata.userId, logger);
+        } catch (error) {
+          logger.error(`Signup grant not released for invoice ${invoiceId}`, { error });
+        }
       }
     }
     await emitPurchaseEvents({

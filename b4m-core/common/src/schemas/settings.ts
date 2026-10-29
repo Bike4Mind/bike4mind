@@ -4147,13 +4147,13 @@ export const settingsMap = {
   }),
   signupGrantActivityMinDays: makeNumberSetting({
     key: 'signupGrantActivityMinDays',
-    name: 'Signup Activity Minimum Days',
+    name: 'Signup Activity Minimum Days (deprecated)',
     defaultValue: 0,
     min: 0,
     max: 365,
     int: true,
     description:
-      'Private minimum distinct UTC activity days and elapsed whole days between first and last activity. Zero disables eligibility.',
+      'Deprecated and unused: the activity drip is paid per qualifying UTC day and no longer reads this value. Leave at zero.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4164,6 +4164,7 @@ export const settingsMap = {
     min: 0,
     max: 10000,
     int: true,
+    userReadable: true,
     description:
       'Credits released from the staged signup remainder for each UTC day of qualifying chat activity. Zero disables the activity drip.',
     group: API_SERVICE_GROUPS.CREDITS.id,

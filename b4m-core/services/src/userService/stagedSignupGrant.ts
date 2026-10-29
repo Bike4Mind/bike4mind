@@ -43,7 +43,7 @@ function isReleaseEligible(
 ): user is IUserDocument & { signupGrant: SignupGrant } {
   if (!user?.signupGrant || accountBlockReasons(user).length || isAiAccessRevoked(user)) return false;
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
-  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche before a card unlock.
+  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or subscription unlock.
   return user.signupGrant.stage !== 'pending_email';
 }
 
@@ -154,10 +154,13 @@ async function releaseStage(
       let creditTransactionId: string | undefined;
       if (amount > 0) {
         if (!BUDGET_EXEMPT_REASONS.has(reason) && !adapters.bypassBudget) {
-          const reservation = await reserveSignupGrantBudget(db, transactionId, amount);
+          const reservation = await reserveSignupGrantBudget(db, transactionId, amount, dripDay);
           reservations.push(reservation);
+          // A same-day drip that did not make the draw fresh belongs to a concurrent attempt that may
+          // still refund it; paying on that reservation could pay unmetered.
+          if (dripDay && reservation.outcome === 'reserved' && !reservation.fresh) return noGrant();
           if (reservation.outcome === 'exhausted') {
-            // The tranche stays pending (and tagged) so a later day or a card unlock can pay it.
+            // The tranche stays pending (and tagged) until a card or subscription unlock pays it; nothing retries it on a schedule.
             if (expected === 'pending_email') {
               await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
               await db.users.update({ id: userId, signupGrantHeldReason: 'budget_exhausted' });
@@ -270,7 +273,7 @@ async function unlockWithHeldTranche(
   return { ...remainder, creditsGranted, currentCredits: remainder.currentCredits ?? tranche.currentCredits };
 }
 
-async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettings']) {
+export async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettings']) {
   const read = async (key: 'signupGrantActivityDailyCredits' | 'signupGrantActivityMaxCredits') => {
     const parsed = settingsMap[key].schema.safeParse((await adminSettings.findBySettingName(key))?.settingValue);
     return parsed.success ? parsed.data : 0;
@@ -284,7 +287,7 @@ async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettin
 /**
  * Pays one UTC day's activity drip. The caller has already established that `day` qualifies; this owns
  * the rate, the cap, the once-per-day ledger id and the daily budget draw. Signup tranches still held
- * for the budget are paid first, so a drip is skipped (withheld) while any exist.
+ * for the budget are paid first, so a drip is skipped (withheld) while a live one from `day` exists.
  */
 export async function dripSignupGrant(
   userId: string,
@@ -296,10 +299,18 @@ export async function dripSignupGrant(
   if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || user.signupGrant.lastDripDay === day) return noGrant();
-  // Existence only: a count would scan every held account on the chat hot path.
+  // Existence only, and bounded: holders that are blocked, AI-revoked or untouched since before `day`
+  // are ignored so one abandoned hold cannot stall every drip. The schema has no held timestamp, so
+  // updatedAt (the hold itself writes it) stands in; a hold older than the day is treated as stale.
   const heldTranche = await adapters.db.users.findOne({
     signupGrantHeldReason: 'budget_exhausted',
     'signupGrant.stage': 'pending_email',
+    isBanned: { $ne: true },
+    isModerated: { $ne: true },
+    disputePending: { $ne: true },
+    'moderation.status': { $ne: 'suspended' },
+    deletedAt: { $exists: false },
+    updatedAt: { $gte: new Date(`${day}T00:00:00.000Z`) },
   });
   if (heldTranche) return { ...noGrant(), withheld: true };
   return releaseStage(

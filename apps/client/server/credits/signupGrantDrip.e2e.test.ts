@@ -180,6 +180,7 @@ describe('signup activity drip', () => {
     expect(await spentToday()).toBe(1000);
   });
 
+  // A held tranche is paid by a card or subscription unlock; the test calls the release directly to stand in for it.
   it('pays held signup tranches before any drip', async () => {
     const dripper = await createSignupStageUser(0);
     config.signupGrantDailyBudget = '1000';
@@ -187,6 +188,9 @@ describe('signup activity drip', () => {
     await userService.releaseSignupTranche((await createUser(2)).id, adapters);
     const held = await createUser(1);
     expect(await userService.releaseSignupTranche(held.id, adapters)).toMatchObject({ withheld: true });
+    const heldOn = async (n: number) =>
+      User.collection.updateOne({ _id: held._id }, { $set: { updatedAt: new Date(`${day(n)}T09:00:00Z`) } });
+    await heldOn(0);
     expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
     expect(await dripRows(dripper.id)).toHaveLength(0);
 
@@ -194,6 +198,46 @@ describe('signup activity drip', () => {
     expect(await userService.releaseSignupTranche(held.id, adapters)).toMatchObject({ creditsGranted: 1000 });
     clock = new Date(`${day(2)}T09:00:00Z`);
     expect(await drip(dripper.id, 2)).toMatchObject({ creditsGranted: 1000 });
+  });
+
+  it('is not stalled by a stale, banned or AI-revoked held tranche', async () => {
+    const dripper = await createSignupStageUser(0);
+    config.signupGrantDailyBudget = '5000';
+    clock = new Date(`${day(0)}T09:00:00Z`);
+    const held = await createUser(1);
+    await User.collection.updateOne(
+      { _id: held._id },
+      { $set: { signupGrantHeldReason: 'budget_exhausted', 'signupGrant.stage': 'pending_email' } }
+    );
+    const setUpdatedAt = (d: string) =>
+      User.collection.updateOne({ _id: held._id }, { $set: { updatedAt: new Date(`${d}T09:00:00Z`) } });
+    await setUpdatedAt(day(0));
+    expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
+    expect(await drip(dripper.id, 1)).toMatchObject({ creditsGranted: 1000 });
+    await setUpdatedAt(day(2));
+    expect(await drip(dripper.id, 2)).toMatchObject({ creditsGranted: 0, withheld: true });
+    for (const [n, flag] of [
+      [2, { isBanned: true }],
+      [3, { isModerated: true }],
+    ] as const) {
+      await User.collection.updateOne(
+        { _id: held._id },
+        { $set: { ...flag, updatedAt: new Date(`${day(n)}T09:00:00Z`) } }
+      );
+      expect(await drip(dripper.id, n)).toMatchObject({ creditsGranted: 1000 });
+      await User.collection.updateOne({ _id: held._id }, { $unset: { isBanned: '', isModerated: '' } });
+    }
+  });
+
+  it('does not pay a drip on a reservation another attempt still owns', async () => {
+    const user = await createSignupStageUser();
+    config.signupGrantDailyBudget = '5000';
+    clock = new Date(`${day(0)}T09:00:00Z`);
+    const repository = adapters.signupProtection.grantBudget.repository;
+    vi.spyOn(repository, 'reserve').mockResolvedValueOnce({ spent: 1000, fresh: false });
+    expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 0 });
+    expect(await dripRows(user.id)).toHaveLength(0);
+    expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 1000 });
   });
 
   it('skips accounts with a pending tranche or no staged grant', async () => {

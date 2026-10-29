@@ -98,8 +98,10 @@ export const grantFreeCredits = async (
   if (legacyGrant) return { creditsGranted: 0, currentCredits: null };
 
   const transactionId = `verify-grant:${user.id}`;
-  // An invite-resolved amount is an explicit grant (admin/unlimited code, subscriber), not the open-signup budget.
-  const isExplicitGrant = user.pendingCreditGrant !== null && user.pendingCreditGrant !== undefined;
+  // An invite-resolved amount is an explicit grant (admin/unlimited code, subscriber), not the open-signup
+  // budget. A referral invitee also carries one (staging off) but is an open-signup grant: it stays metered.
+  const isExplicitGrant =
+    user.pendingCreditGrant !== null && user.pendingCreditGrant !== undefined && !persisted?.referredByUserId;
   const budget =
     bypassBudget || isExplicitGrant
       ? { outcome: 'unmetered' as const, release: async () => {} }

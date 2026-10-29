@@ -7168,6 +7168,7 @@ export class ChatCompletionProcess {
         this.sendStatusUpdate(finalQuest ?? quest, null, { skipPayloadOptimization: true });
       }
       const settledQuest = finalQuest ?? quest;
+      // Awaited deliberately: a detached call can be dropped when the Lambda freezes after the turn.
       if (this.onSignupActivityTurnDone && settledQuest?.status === 'done' && settledQuest.signupActivity) {
         try {
           await this.onSignupActivityTurnDone({ userId: this.user.id, questId });

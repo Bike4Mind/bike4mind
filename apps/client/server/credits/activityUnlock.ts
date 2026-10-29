@@ -41,12 +41,21 @@ async function qualifiesOnDay(user: IUserDocument, day: string): Promise<boolean
   return (rows[0]?.messages ?? 0) >= messages;
 }
 
-/** Pays the activity drip for the current UTC day when that day qualifies; a day pays at most once. */
+/**
+ * Pays the activity drip for the current UTC day when that day qualifies; a day pays at most once.
+ * Runs awaited inside the chat turn on purpose: a detached call can be dropped when the Lambda freezes.
+ * The cheap exits come first so an unlocked, capped or already-paid account costs one user read.
+ */
 export async function unlockSignupGrantFromActivity(userId: string, now: Date = new Date()) {
   const user = await userRepository.findById(userId);
-  if (!user?.signupGrant || user.signupGrant.stage === 'pending_email') return noGrant();
-  const day = now.toISOString().slice(0, 10);
-  if (user.signupGrant.lastDripDay === day || !(await qualifiesOnDay(user, day))) return noGrant();
+  const grant = user?.signupGrant;
+  if (!user || !grant || grant.stage === 'pending_email' || grant.stage === 'unlocked') return noGrant();
+  // One clock for both the drip day and the budget draw, so they cannot straddle UTC midnight.
+  const day = (signupProtection.grantBudget?.now?.() ?? now).toISOString().slice(0, 10);
+  if (grant.lastDripDay === day) return noGrant();
+  const { dailyCredits, maxCredits } = await userService.resolveDripLimits(adminSettingsRepository);
+  if (!(dailyCredits > 0) || !(maxCredits > 0) || (grant.dripCredits ?? 0) >= maxCredits) return noGrant();
+  if (!(await qualifiesOnDay(user, day))) return noGrant();
   return userService.dripSignupGrant(userId, day, {
     db: {
       users: userRepository,

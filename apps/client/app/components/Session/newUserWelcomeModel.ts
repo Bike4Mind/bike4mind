@@ -52,7 +52,7 @@ interface CreditsLineArgs {
   dailyDripCredits?: number;
 }
 
-/** Every way to release the rest of a staged signup grant. */
+/** The self-serve unlock paths we advertise; org invites and admin releases also unlock but are not offered here. */
 export function unlockPathsCopy(dailyDripCredits: number): string {
   const drip = dailyDripCredits > 0 ? `up to ${formatCreditBalance(dailyDripCredits)} for each day you use chat, ` : '';
   return `The rest unlocks ${drip}all at once when you subscribe, or all at once when you verify a card.`;
