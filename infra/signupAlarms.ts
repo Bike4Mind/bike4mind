@@ -155,7 +155,8 @@ if (isMonitoredStage) {
 
   new aws.cloudwatch.MetricAlarm('signupGrantProtectionGap', {
     name: `${$app.name}-${$app.stage}-signup-grant-protection-gap`,
-    alarmDescription: 'A large signup grant was released while a signup protection setting is still off',
+    alarmDescription:
+      'A signup grant release was attempted while a large grant is configured and a signup protection setting is still off',
     comparisonOperator: 'GreaterThanOrEqualToThreshold',
     evaluationPeriods: 1,
     metricName: 'SignupGrantProtectionGaps',
