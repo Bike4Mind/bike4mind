@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { type INetworkMeta, type IUserDocument } from '@bike4mind/common';
 import { authEventRepository, signupTraceRepository } from '@bike4mind/database';
 import type { userService } from '@bike4mind/services';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { Config } from '../utils/config';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
