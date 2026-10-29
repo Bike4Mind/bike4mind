@@ -31,6 +31,7 @@ export * from './mailAlarms';
 export * from './signupAlarms';
 export * from './turnstileAlarms';
 export * from './accountCreationAlarms';
+export * from './analyticsRollup';
 export * from './llmSpend';
 // serviceHealthAlarms must come after subscriberFanout + chatCompletion (it alarms on both)
 export * from './serviceHealthAlarms';
