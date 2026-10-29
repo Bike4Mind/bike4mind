@@ -19,6 +19,7 @@ import {
   creditLotRepository,
   creditTransactionRepository,
   githubUnlockClaimRepository,
+  signupGrantBudgetRepository,
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -141,6 +142,39 @@ describe('grantNoCardUnlock on a real replica set', () => {
     expect(
       await CreditTransaction.countDocuments({ transactionId: noCardUnlockTransactionId('github_verified', id) })
     ).toBe(1);
+  });
+
+  it('refuses while the signup tranche is held, and draws the daily signup budget otherwise', async () => {
+    await seedSettings({ signupGrantDailyBudget: GITHUB });
+    const held = await seedUser({ signupGrantHeldReason: 'budget_exhausted' });
+    const base = await build();
+    const budgeted = {
+      ...base,
+      signupProtection: {
+        repository: {
+          findReview: async () => null,
+          observe: async () => {},
+          recent: async () => [],
+          createHold: async () => false,
+          isOrganizationDomain: async () => false,
+        },
+        grantBudget: { repository: signupGrantBudgetRepository },
+      },
+    };
+    expect(await grantNoCardUnlock(held, 'github_verified', budgeted)).toEqual({
+      granted: false,
+      refusal: 'signup_grant_pending',
+    });
+    expect(await balance(held)).toBe(0);
+
+    const first = await seedUser();
+    expect(await grantNoCardUnlock(first, 'github_verified', budgeted)).toMatchObject({ granted: true });
+    const fourth = await seedUser();
+    expect(await grantNoCardUnlock(fourth, 'work_email_verified', budgeted)).toEqual({
+      granted: false,
+      refusal: 'daily_budget_reached',
+    });
+    expect(await balance(fourth)).toBe(0);
   });
 
   it('refuses a young GitHub account and leaves the balance unchanged', async () => {

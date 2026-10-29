@@ -325,6 +325,8 @@ export interface IUser extends ICreditHolder {
   /** Absent on accounts created before staged grants were enabled. */
   signupGrant?: SignupGrant;
   signupGrantAssessment?: SignupGrantAssessment;
+  /** Why free credits are being withheld; cleared when they are paid. */
+  signupGrantHeldReason?: 'budget_exhausted' | 'risk_review' | null;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;

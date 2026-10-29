@@ -37,4 +37,5 @@ export * from './signupClusterKeys';
 export * from './signupCohorts';
 export * from './signupBurstDetector';
 export * from './signupProtection';
+export * from './signupGrantBudget';
 export * from './domainIntelligence';

@@ -13,6 +13,7 @@ import { addCredits } from '../creditService';
 import type { SignupRiskSignals } from './signupRisk';
 import { releaseSignupTranche } from './stagedSignupGrant';
 import { protectSignupCredits } from './signupProtection';
+import { reserveSignupGrantBudget } from './signupGrantBudget';
 
 type FreeCreditUser = {
   id: string;
@@ -31,6 +32,8 @@ export type FreeCreditAdapters = {
   reason: string;
   /** Network signals for a staged grant's first assessment; without it only signupMeta is read. */
   collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
+  /** Pays without drawing the daily signup grant budget (admin overrides, card unlock of a held tranche). */
+  bypassBudget?: boolean;
 };
 
 type FreeCreditLogger = { error: (message: string, ...args: unknown[]) => void };
@@ -75,10 +78,10 @@ const legacyOtcRegisterTransactionId = (userId: string) => `otc-register-grant:$
  */
 export const grantFreeCredits = async (
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
-  { db, reason, collectRiskSignals }: FreeCreditAdapters
+  { db, reason, collectRiskSignals, bypassBudget }: FreeCreditAdapters
 ): Promise<GrantFreeCreditsResult> => {
   const persisted = await db.users.findById(user.id);
-  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason, collectRiskSignals });
+  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason, collectRiskSignals, bypassBudget });
   if (await protectSignupCredits(user.id, db)) {
     const alreadyGranted = await db.creditTransactions.findOne({
       transactionId: { $in: [`verify-grant:${user.id}`, legacyOtcRegisterTransactionId(user.id)] },
@@ -94,26 +97,48 @@ export const grantFreeCredits = async (
   });
   if (legacyGrant) return { creditsGranted: 0, currentCredits: null };
 
-  // The transactionId dedupes per account; the claim dedupes the open-registration default per
-  // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
-  // none. An invite-resolved amount is an explicit grant to that account and is not claimed.
-  const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
-  if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
-    return { creditsGranted: 0, currentCredits: null };
+  const transactionId = `verify-grant:${user.id}`;
+  const budget = bypassBudget
+    ? { outcome: 'unmetered' as const, release: async () => {} }
+    : await reserveSignupGrantBudget(db, transactionId, amount);
+  if (budget.outcome === 'exhausted') {
+    await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
+    await db.users.update({ id: user.id, signupGrantHeldReason: 'budget_exhausted' });
+    return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
 
-  const holder = await addCredits(
-    {
-      ownerId: user.id,
-      ownerType: CreditHolderType.User,
-      credits: amount,
-      type: 'generic_add',
-      transactionId: `verify-grant:${user.id}`,
-      reason,
-    },
-    { db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots }, creditHolderMethods: db.users }
-  );
-  return { creditsGranted: amount, currentCredits: holder.currentCredits };
+  try {
+    // addCredits treats a repeated transactionId as success, which would leave this reservation spent.
+    if (budget.outcome === 'reserved' && (await db.creditTransactions.findOne({ transactionId }))) {
+      await budget.release();
+      return { creditsGranted: 0, currentCredits: null };
+    }
+    // The transactionId dedupes per account; the claim dedupes the open-registration default per
+    // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
+    // none. An invite-resolved amount is an explicit grant to that account and is not claimed.
+    const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
+    if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
+      await budget.release();
+      return { creditsGranted: 0, currentCredits: null };
+    }
+
+    const holder = await addCredits(
+      {
+        ownerId: user.id,
+        ownerType: CreditHolderType.User,
+        credits: amount,
+        type: 'generic_add',
+        transactionId,
+        reason,
+      },
+      { db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots }, creditHolderMethods: db.users }
+    );
+    if (persisted?.signupGrantHeldReason) await db.users.update({ id: user.id, signupGrantHeldReason: null });
+    return { creditsGranted: amount, currentCredits: holder.currentCredits };
+  } catch (error) {
+    await budget.release();
+    throw error;
+  }
 };
 
 /**

@@ -1004,6 +1004,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
     signupGrantAssessment: { type: Schema.Types.Mixed, default: undefined },
+    signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
     signupGrant: {
       type: new Schema(
         {

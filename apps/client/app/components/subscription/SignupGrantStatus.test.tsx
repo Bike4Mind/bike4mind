@@ -6,13 +6,14 @@ import type { SignupGrant } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   grant: undefined as SignupGrant | undefined,
+  held: undefined as 'budget_exhausted' | undefined,
   enabled: true as boolean | string | undefined,
   organizationInvites: false as boolean | string | undefined,
   post: vi.fn(),
   refresh: vi.fn(),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { signupGrant: h.grant }, refreshUser: h.refresh }),
+  useUser: () => ({ currentUser: { signupGrant: h.grant, signupGrantHeldReason: h.held }, refreshUser: h.refresh }),
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: h.post } }));
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -31,6 +32,7 @@ describe('signup grant status', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.enabled = true;
+    h.held = undefined;
     h.organizationInvites = false;
     h.grant = {
       stage: 'signup',
@@ -130,5 +132,25 @@ describe('signup grant status', () => {
     fireEvent.click(screen.getByTestId('signup-grant-check-btn'));
     await waitFor(() => expect(screen.getByTestId('signup-grant-result')).toHaveTextContent('try again later'));
     expect(screen.getByTestId('signup-grant-check-btn')).not.toBeDisabled();
+  });
+
+  it('says free credits are being prepared while the daily budget holds the tranche', () => {
+    h.held = 'budget_exhausted';
+    h.grant = { ...h.grant!, stage: 'pending_email', creditsReleased: 0, nextCondition: 'email_verification' };
+    show();
+    expect(screen.getByTestId('signup-grant-status').textContent).toBe('Your free credits are being prepared.');
+  });
+
+  it('shows the held message for a flat-grant account with no staged grant', () => {
+    h.held = 'budget_exhausted';
+    h.grant = undefined;
+    show();
+    expect(screen.getByText('Your free credits are being prepared.')).toBeTruthy();
+  });
+
+  it('ignores a held flag once the tranche has been released', () => {
+    h.held = 'budget_exhausted';
+    show();
+    expect(screen.queryByText('Your free credits are being prepared.')).toBeNull();
   });
 });

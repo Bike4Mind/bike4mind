@@ -11,6 +11,7 @@ import type { FreeCreditAdapters, GrantFreeCreditsResult } from './freeCredits';
 import { evaluateSignupRisk, signupRiskPolicySchema, type SignupRiskSignals } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
+import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
 
 type GrantAdapters = FreeCreditAdapters & {
   audit?: (input: { userId: string; credits: number; creditTransactionId?: string }) => Promise<void>;
@@ -23,18 +24,19 @@ export type SignupGrantValidator = (
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
+/** Card verification and admin releases are never throttled by the daily signup grant budget. */
+const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = new Set(['card_verified', 'admin']);
+
 class InboxGrantClaimDeniedError extends Error {}
 
 function isReleaseEligible(
   user: IUserDocument | null | undefined,
   expected: SignupGrant['stage']
 ): user is IUserDocument & { signupGrant: SignupGrant } {
-  return !!(
-    user?.signupGrant &&
-    !accountBlockReasons(user).length &&
-    !isAiAccessRevoked(user) &&
-    (expected === 'pending_email' ? user.signupGrant.stage === expected : user.signupGrant.stage !== 'pending_email')
-  );
+  if (!user?.signupGrant || accountBlockReasons(user).length || isAiAccessRevoked(user)) return false;
+  if (expected === 'pending_email') return user.signupGrant.stage === expected;
+  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche before a card unlock.
+  return user.signupGrant.stage !== 'pending_email';
 }
 
 async function releaseStage(
@@ -58,8 +60,11 @@ async function releaseStage(
       return { ...noGrant(), withheld: true };
     }
   }
+  // A re-run of the payout transaction re-reserves as a no-op, so every attempt's hold is kept for the refund.
+  const reservations: SignupGrantBudgetReservation[] = [];
+  const releaseReservations = () => Promise.all(reservations.map(held => held.release()));
   try {
-    return await withTransaction(async () => {
+    const result = await withTransaction(async () => {
       const user = await db.users.findById(userId);
       if (!isReleaseEligible(user, expected)) return noGrant();
       const grant = user.signupGrant;
@@ -125,6 +130,18 @@ async function releaseStage(
       let balance = user.currentCredits;
       let creditTransactionId: string | undefined;
       if (amount > 0) {
+        if (!BUDGET_EXEMPT_REASONS.has(reason) && !adapters.bypassBudget) {
+          const reservation = await reserveSignupGrantBudget(db, transactionId, amount);
+          reservations.push(reservation);
+          if (reservation.outcome === 'exhausted') {
+            // The tranche stays pending (and tagged) so a later day or a card unlock can pay it.
+            if (expected === 'pending_email') {
+              await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
+              await db.users.update({ id: userId, signupGrantHeldReason: 'budget_exhausted' });
+            }
+            return { ...noGrant(), withheld: true };
+          }
+        }
         // Staged and legacy default grants share one canonical-inbox entitlement. Claim on
         // the first actual payout, including an unlock after a zero-valued signup tranche.
         // A duplicate claim may have aborted Mongo's transaction; throw out of it before
@@ -153,6 +170,7 @@ async function releaseStage(
       const updated = await db.users.update({
         id: userId,
         ...(assessment ? { signupGrantAssessment: assessment } : {}),
+        ...(user.signupGrantHeldReason && amount > 0 ? { signupGrantHeldReason: null } : {}),
         signupGrant: {
           ...grant,
           stage: unlocked ? 'unlocked' : 'signup',
@@ -168,7 +186,11 @@ async function releaseStage(
       await audit?.({ userId, credits: amount, creditTransactionId });
       return { creditsGranted: amount, currentCredits: balance };
     });
+    if (result.creditsGranted === 0) await releaseReservations();
+    return result;
   } catch (error) {
+    // The counter sits outside the payout transaction, so an aborted payout must hand its draw back.
+    await releaseReservations();
     if (!(error instanceof DuplicateCreditTransactionError) && !(error instanceof InboxGrantClaimDeniedError))
       throw error;
     return noGrant();
@@ -195,5 +217,30 @@ export const unlockSignupGrant = (
 ) => {
   const validator = adapters.validators[reason];
   if (!validator || (reason === 'admin' && !adapters.audit)) return Promise.resolve(noGrant());
-  return releaseStage(userId, 'signup', reason, async user => (user.emailVerified ? validator(user) : false), adapters);
+  const unlock = () =>
+    releaseStage(userId, 'signup', reason, async user => (user.emailVerified ? validator(user) : false), adapters);
+  if (reason !== 'card_verified') return unlock();
+  return unlockWithHeldTranche(userId, adapters, unlock);
 };
+
+/**
+ * A card unlock on an account whose signup tranche is held for the budget pays the tranche under its
+ * own verify-grant id, then the remainder, each once and outside the budget.
+ */
+async function unlockWithHeldTranche(
+  userId: string,
+  adapters: GrantAdapters,
+  unlock: () => Promise<GrantFreeCreditsResult>
+): Promise<GrantFreeCreditsResult> {
+  const { users } = adapters.db;
+  const user = await users.findById(userId);
+  if (user?.signupGrant?.stage !== 'pending_email' || user.signupGrantHeldReason !== 'budget_exhausted')
+    return unlock();
+  const tranche = await releaseSignupTranche(userId, { ...adapters, bypassBudget: true });
+  const afterTranche = await users.findById(userId);
+  if (afterTranche?.signupGrant?.stage === 'pending_email') return tranche;
+  if (afterTranche?.signupGrantHeldReason) await users.update({ id: userId, signupGrantHeldReason: null });
+  const remainder = await unlock();
+  const creditsGranted = tranche.creditsGranted + remainder.creditsGranted;
+  return { ...remainder, creditsGranted, currentCredits: remainder.currentCredits ?? tranche.currentCredits };
+}

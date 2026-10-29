@@ -21,6 +21,7 @@ import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../cre
 import { accountBlockReasons } from './accountState';
 import { isDisposableEmail } from './disposableEmail';
 import { protectSignupCredits } from './signupProtection';
+import { reserveSignupGrantBudget, type SignupGrantBudgetReservation } from './signupGrantBudget';
 
 /** `reasonGranted`: this user already holds a ledger row for the reason, e.g. a concurrent request won the grant. */
 export type NoCardUnlockRelease = (opts: { reasonGranted: boolean }) => Promise<void>;
@@ -238,6 +239,9 @@ export async function grantNoCardUnlock(
   const user = await db.users.findById(userId);
   if (!user || !user.emailVerified || accountBlockReasons(user).length > 0) return refused('disabled');
 
+  // An unlock waits until the signup tranche has been paid, so no account holds the remainder without it.
+  if (user.signupGrant?.stage === 'pending_email' || user.signupGrantHeldReason) return refused('signup_grant_pending');
+
   const transactionId = noCardUnlockTransactionId(reason, userId);
   if (await db.creditTransactions.findOne({ transactionId })) return refused('already_granted');
 
@@ -256,6 +260,7 @@ export async function grantNoCardUnlock(
 
   let result: GrantNoCardUnlockResult | null = null;
   let failure: unknown = null;
+  const reservations: SignupGrantBudgetReservation[] = [];
   try {
     result = await withTransaction(async () => {
       const current = await db.users.findById(userId);
@@ -264,6 +269,14 @@ export async function grantNoCardUnlock(
       const granted = await sumGranted(db, userId);
       const amount = Math.min(reasonCredits, settings.maxCredits - granted);
       if (amount <= 0) return refused('cap_reached');
+
+      const reservation = await reserveSignupGrantBudget(
+        { adminSettings: db.adminSettings, signupProtection },
+        transactionId,
+        amount
+      );
+      reservations.push(reservation);
+      if (reservation.outcome === 'exhausted') return refused('daily_budget_reached');
 
       const { creditHolder } = await addCreditsWithLedgerRow(
         {
@@ -286,6 +299,7 @@ export async function grantNoCardUnlock(
     if (error instanceof DuplicateCreditTransactionError) result = refused('already_granted');
     else failure = error;
   }
+  if (!result?.granted) await Promise.all(reservations.map(held => held.release()));
   if (commit?.ok && !result?.granted) {
     try {
       const reasonGranted = Boolean(await db.creditTransactions.findOne({ transactionId }));

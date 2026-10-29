@@ -15,6 +15,13 @@ export default function SignupGrantStatus() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const grant = currentUser?.signupGrant;
+  if (currentUser?.signupGrantHeldReason === 'budget_exhausted' && (!grant || grant.stage === 'pending_email')) {
+    return (
+      <Typography level="body-sm" data-testid="signup-grant-status">
+        Your free credits are being prepared.
+      </Typography>
+    );
+  }
   if (!grant) return null;
   const remaining = signupGrantRemaining(grant);
   return (

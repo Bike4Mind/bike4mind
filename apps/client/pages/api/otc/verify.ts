@@ -444,7 +444,9 @@ const handler = baseApi({ auth: false })
           }
         );
       // Roll back the losing account when concurrent signups redeem one single-use invite.
-      newUser = inviteCode ? await withTransaction(register, { logger: req.logger }) : await register();
+      newUser = inviteCode
+        ? await userService.refundBudgetOnFailure(() => withTransaction(register, { logger: req.logger }))
+        : await register();
     } catch (err) {
       if (bootstrapClaimId) {
         await releaseBootstrapAdminClaim(bootstrapClaimId).catch(releaseErr =>
