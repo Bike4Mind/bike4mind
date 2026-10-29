@@ -142,13 +142,8 @@ async function runFullPipeline(
     buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() })
   );
 
-  const defaultOptions = getDefaultChatCompletionOptions();
   const chatCompletionOptions = {
-    ...defaultOptions,
-    // A tool that re-reads the owner by id must see the same withheld role as `user`.
-    db: sessionCtx.adminRoleWithheld
-      ? { ...defaultOptions.db, users: ownerWithheldUsers(sessionCtx.userId, defaultOptions.db.users) }
-      : defaultOptions.db,
+    ...getDefaultChatCompletionOptions(),
     queue: noopQueue,
     tokenizer: getSharedTokenizer(logger),
     user,
@@ -171,6 +166,14 @@ async function runFullPipeline(
     // whole completion happens synchronously here.
     invokeLambda: async () => {},
   };
+  // A tool that re-reads the owner by id must see the same withheld role as `user`. Kept out of the
+  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  if (sessionCtx.adminRoleWithheld) {
+    chatCompletionOptions.db = {
+      ...chatCompletionOptions.db,
+      users: ownerWithheldUsers(sessionCtx.userId, chatCompletionOptions.db.users),
+    };
+  }
 
   const invokeBody = {
     sessionId: sessionCtx.sessionId,

@@ -227,11 +227,8 @@ async function handleChat(
   });
 
   // Shared options for ChatCompletionInvoke and ChatCompletionProcess
-  const defaultOptions = getDefaultChatCompletionOptions();
   const chatCompletionOptions = {
-    ...defaultOptions,
-    // wait=true runs tools inline: one that re-reads the owner by id must see the same role as req.user.
-    db: { ...defaultOptions.db, users: requesterScopedUsers(req, defaultOptions.db.users) },
+    ...getDefaultChatCompletionOptions(),
     queue: new SQSService(), // Create per-request to ensure fresh credentials
     tokenizer: getSharedTokenizer(req.logger),
     user: req.user,
@@ -255,6 +252,12 @@ async function handleChat(
       // wait=false: hand off to the always-on ChatCompletion (HTTP, 202 ACK).
       await dispatchQuest(params, req.logger);
     },
+  };
+  // wait=true runs tools inline: one that re-reads the owner by id must see the same role as req.user.
+  // Kept out of the literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  chatCompletionOptions.db = {
+    ...chatCompletionOptions.db,
+    users: requesterScopedUsers(req, chatCompletionOptions.db.users),
   };
 
   // Create the quest (this is immediate)
