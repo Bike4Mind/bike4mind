@@ -69,7 +69,8 @@ export const isAdminBlockedEmailDomain = async (
  * regardless of that toggle, which exists to work around a false positive in the lists. A failed
  * list read throws, so callers fail closed. Shared by registerUser, the OAuth signup gate in
  * apps/client/server/utils/auth/verifyCallback.ts and the free-credit eligibility check in
- * apps/client/server/auth/emailVerifiedGrants.ts (email change) so they cannot drift.
+ * apps/client/server/auth/emailVerifiedGrants.ts (email change and admin signup-domain holds) so they
+ * cannot drift.
  */
 export const shouldBlockDisposableEmail = async (
   email: string,
