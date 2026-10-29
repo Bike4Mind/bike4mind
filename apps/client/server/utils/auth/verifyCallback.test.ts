@@ -1136,6 +1136,21 @@ describe('verifyCallback - invite gate on federated first login', () => {
     expect(user).toBeTruthy();
     expect(mockCreate).toHaveBeenCalled();
   });
+
+  it('reports registration_closed ahead of the email checks on an invite-only instance', async () => {
+    noExistingUser();
+    mockIsOpenRegistrationAllowed.mockResolvedValue(false);
+    mockShouldBlockDisposableEmail.mockResolvedValue(true);
+
+    const { info } = await runStandard(AuthStrategy.Google, {
+      ...freshProfile,
+      emails: [{ value: 'new@example.com', verified: false }],
+    });
+
+    expect(info).toMatchObject({ code: 'registration_closed' });
+    expect(mockShouldBlockDisposableEmail).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe('verifyCallback - partner-domain bypass of the invite gate', () => {
@@ -1475,10 +1490,13 @@ describe('selfServeVerifyCallback - signup network limits', () => {
     emails: [{ value: 'net@example.com', verified: true }],
   };
   const req = { headers: { 'cloudfront-viewer-address': '203.0.113.9:4444', 'cloudfront-viewer-asn': '64500' } };
-  const runSelfServe = (strategy: AuthStrategy): Promise<{ err: unknown; user: unknown; info: unknown }> =>
+  const runSelfServe = (
+    strategy: AuthStrategy,
+    profile: Record<string, unknown> = freshProfile
+  ): Promise<{ err: unknown; user: unknown; info: unknown }> =>
     new Promise(resolve => {
       const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
-      void selfServeVerifyCallback(strategy)(req, 'access-tok', 'refresh-tok', freshProfile, done);
+      void selfServeVerifyCallback(strategy)(req, 'access-tok', 'refresh-tok', profile, done);
     });
 
   it('declares the arity passport-oauth2 needs to pass the request first', () => {
@@ -1497,6 +1515,21 @@ describe('selfServeVerifyCallback - signup network limits', () => {
       expect.objectContaining({ ip: '203.0.113.9', asn: 64500 }),
       expect.anything()
     );
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['signup_email_unverified', { ...freshProfile, emails: [{ value: 'net@example.com', verified: false }] }, false],
+    ['signup_email_blocked', freshProfile, true],
+  ])('reports %s ahead of the network cap', async (code, profile, blocked) => {
+    mockFindOne.mockResolvedValue(null);
+    mockIsSignupNetworkOverLimit.mockResolvedValue(true);
+    mockShouldBlockDisposableEmail.mockResolvedValue(blocked);
+
+    const { info } = await runSelfServe(AuthStrategy.Github, profile);
+
+    expect(info).toMatchObject({ code });
+    expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
