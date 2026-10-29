@@ -27,6 +27,7 @@ const renderPanel = (overrides: Partial<React.ComponentProps<typeof FiltersPanel
     setShowMessageCounts: vi.fn(),
     onOpenBulkActions: vi.fn(),
     onClose: vi.fn(),
+    anchorRef: { current: null },
     ...overrides,
   };
   render(<FiltersPanel {...props} />, { wrapper: TestWrapper });
@@ -35,6 +36,34 @@ const renderPanel = (overrides: Partial<React.ComponentProps<typeof FiltersPanel
 
 const isChecked = (testId: string) =>
   (screen.getByTestId(testId).querySelector('input[type="radio"]') as HTMLInputElement).checked;
+
+describe('FiltersPanel placement', () => {
+  // The sidebar's scroll region clipped the panel and stretched it to the sidebar's width; it now
+  // portals to <body> and sits centred under the Filters button, only as wide as its rows.
+  it('opens on <body>, centred under the button and 8px below it', () => {
+    const anchor = document.createElement('div');
+    anchor.getBoundingClientRect = () => ({
+      top: 100,
+      bottom: 136,
+      left: 294,
+      right: 330,
+      width: 36,
+      height: 36,
+      x: 294,
+      y: 100,
+      toJSON: () => ({}),
+    });
+    renderPanel({ anchorRef: { current: anchor } });
+    const panel = screen.getByTestId('sidenav-filters-panel');
+    expect(panel.parentElement).toBe(document.body);
+    const style = getComputedStyle(panel);
+    expect(style.position).toBe('fixed');
+    expect(style.top).toBe('144px');
+    expect(style.left).toBe('312px');
+    expect(style.transform).toBe('translateX(-50%)');
+    expect(style.width).toBe('max-content');
+  });
+});
 
 describe('FiltersPanel content and origin sections', () => {
   it('renders every option and checks the current choices', () => {
