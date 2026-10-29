@@ -62,7 +62,7 @@ const NO_GRANT: SignupDomainGrantResult = {
  * admin verify-email route) re-runs this function and reaches the hooks.
  *
  * The credits are part of the one free-credit grant allowed per canonical inbox, so they are
- * withheld when another account already claimed this user's inbox (#313); everything else the
+ * withheld when another account already claimed this user's inbox; everything else the
  * domain confers - entitlements, membership, tags, subscription - still applies.
  *
  * Never throws: each step logs and swallows its own failure so the caller's already-successful

@@ -100,7 +100,7 @@ export const grantFreeCredits = async (
   // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
   // none.
   //
-  // Invite-resolved amounts are deliberately exempt (#313). `pendingCreditGrant` is set only on
+  // Invite-resolved amounts are deliberately exempt. `pendingCreditGrant` is set only on
   // the invite path (register.ts), so the exemption is "an operator issued this account a specific
   // amount", not anything the signer-up controls: self-serve registration leaves it null and takes
   // the claimed branch below. The cost of an extra identity on this path is an invite code rather
