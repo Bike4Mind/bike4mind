@@ -5,6 +5,7 @@ import {
   TERMINAL_SUBSCRIPTION_STATUSES,
   isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
+  isLiveStripeBilledSubscription,
   pickDisplayedSubscription,
   pickSubscriptionByPrice,
 } from './types';
@@ -162,5 +163,27 @@ describe('pickSubscriptionByPrice', () => {
 
     expect(pickSubscriptionByPrice([grant, dunned], 'price_pro')?.subscriptionId).toBe('sub_dunned');
     expect(pickSubscriptionByPrice([dunned, grant], 'price_pro')?.subscriptionId).toBe('sub_dunned');
+  });
+});
+
+describe('isLiveStripeBilledSubscription', () => {
+  it.each([
+    ['an active Stripe row', { source: SubscriptionSource.Stripe, subscriptionId: 'sub_x', status: 'active' }],
+    ['a dunning Stripe row', { source: SubscriptionSource.Stripe, subscriptionId: 'sub_x', status: 'past_due' }],
+    ['a legacy row with no source and a Stripe id', { subscriptionId: 'sub_x', status: 'active' }],
+  ] as const)('treats %s as still billed', (_label, sub) => {
+    expect(isLiveStripeBilledSubscription(sub)).toBe(true);
+  });
+
+  it.each([
+    ['a comp', { source: SubscriptionSource.AdminGrant, subscriptionId: 'admin_grant_abc', status: 'active' }],
+    ['a legacy comp with no source', { subscriptionId: 'admin_granted_abc', status: 'active' }],
+    ['a canceled Stripe row', { source: SubscriptionSource.Stripe, subscriptionId: 'sub_x', status: 'canceled' }],
+    [
+      'an expired Stripe row',
+      { source: SubscriptionSource.Stripe, subscriptionId: 'sub_x', status: 'incomplete_expired' },
+    ],
+  ] as const)('does not treat %s as billed', (_label, sub) => {
+    expect(isLiveStripeBilledSubscription(sub)).toBe(false);
   });
 });

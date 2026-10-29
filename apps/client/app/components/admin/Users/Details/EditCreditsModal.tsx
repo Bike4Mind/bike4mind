@@ -47,7 +47,6 @@ const EditCreditsModal: React.FC<EditCreditsModalProps> = ({
 
   useEffect(() => {
     setCreditsPerCycle(currentCreditsPerCycle);
-    setReason(EMPTY_ADMIN_REASON);
   }, [currentCreditsPerCycle, open]);
 
   const isFormValid = creditsPerCycle > 0 && isAdminReasonComplete(reason);
@@ -122,7 +121,7 @@ const EditCreditsModal: React.FC<EditCreditsModalProps> = ({
           )}
 
           <ReasonPicker
-            presets={ADMIN_REASON_PRESETS.compChange}
+            presets={ADMIN_REASON_PRESETS.creditRateChange}
             value={reason}
             onChange={setReason}
             data-testid="credits-reason-input"
