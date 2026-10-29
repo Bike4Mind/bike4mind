@@ -185,6 +185,7 @@ describe('useModelCatalog when a model finishes installing', () => {
 
   it('stops listening on unmount', async () => {
     await mount(false);
+    expect(installedListeners).toHaveLength(1);
     await act(async () => root.render(null));
     expect(installedListeners).toHaveLength(0);
   });
