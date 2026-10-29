@@ -9,7 +9,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { contextToLogs } from '@bike4mind/server-utils/utils/logger';
 
-// Rollup collections are written by upsert only, so their unique indexes must exist before the first write.
+// The rollup upserts rely on the unique indexes, so create them before the first write.
 export const ensureAnalyticsIndexes = async () => {
   await AnalyticsUserDay.createIndexes();
   await AnalyticsDaily.createIndexes();
