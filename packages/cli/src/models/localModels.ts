@@ -354,8 +354,7 @@ export function requireRemovable(target: RuntimeTarget): void {
 
 export async function removeInstalled(target: RuntimeTarget, name: string, signal: AbortSignal): Promise<void> {
   try {
-    const installed = findInstalledModel(await abortable(target.runtime.list(), signal), name);
-    await abortable(target.runtime.remove(installed?.name ?? name), signal);
+    await abortable(target.runtime.remove(name), signal);
   } catch (error) {
     if (error instanceof ModelNotFoundError)
       throw new Error(`No model named ${clean(name)} on ${runtimeLabel(target)}.`);

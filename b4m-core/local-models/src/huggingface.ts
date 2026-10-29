@@ -200,7 +200,7 @@ export interface HubModelDetail extends HubModelSummary {
    */
   canDownload: boolean | null;
   /**
-   * True for a gated or private repo. Ollama pulls from hf.co with its own SSH key and never sees `token`, so the
+   * True for a gated or private repo. Ollama downloads with its own SSH key and never sees `token`, so the
    * Ollama host's public key (`~/.ollama/id_ed25519.pub`) must first be added at `HUGGING_FACE_SSH_KEYS_URL`
    * (Hugging Face Hub docs, "Use Ollama with any GGUF Model on Hugging Face Hub").
    */

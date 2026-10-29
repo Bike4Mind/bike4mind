@@ -462,7 +462,9 @@ describe('model tools', () => {
       expect((await call('models_remove', { name: 'smollm2:135m' })).data.removed).toBe(false);
       expect(prompts[0].params.message).toContain('Remove smollm2:135m');
       expect(runtime.remove).not.toHaveBeenCalled();
+      const listsBeforeRemoval = vi.mocked(runtime.list).mock.calls.length;
       const removed = await call('models_remove', { name: 'smollm2:135m' });
+      expect(runtime.list).toHaveBeenCalledTimes(listsBeforeRemoval + 1);
       expect(removed.data).toEqual(expect.objectContaining({ status: 'removed', removed: true, wasDefault: false }));
       expect(runtime.remove).toHaveBeenCalledWith('smollm2:135m');
     });

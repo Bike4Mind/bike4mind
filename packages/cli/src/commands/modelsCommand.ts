@@ -386,7 +386,8 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
       return 0;
     }
   }
-  await removeInstalled(target, name, deps.signal);
+  const installed = findInstalledModel(await abortable(target.runtime.list(), deps.signal), name);
+  await removeInstalled(target, installed?.name ?? name, deps.signal);
   deps.log(`Removed ${clean(name)}.`);
   if (deps.config.defaultModel && sameModelName(deps.config.defaultModel, name)) {
     deps.log('It was your default model; pick another with: b4m models use <name>');
