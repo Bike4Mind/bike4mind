@@ -33,13 +33,18 @@ or delete it, and tearing a preview down leaves it in place.
 ## Keeping it current
 
 This is the operational risk of sharing: a preview's own function was regenerated on
-every deploy, the shared one is not. Whenever `USER_FILE_CSP`, `userFileCdnPrefixes`,
+every deploy, the shared one is not. Whenever `USER_FILE_CSP`, `USER_FILE_MARKER_HEADER`,
 `userFileCspInjection` or `noindexResponseInjection` change in
-`infra/routerFunctionCode.ts`, run the script again in each preview account before (or
-with) the deploy that carries the change; until then every preview on the shared
-function serves the old headers. `--check` exits non-zero when the LIVE code differs
-from the current source, so the deployer can gate on it; `--print` shows the code that
-would be published.
+`infra/routerFunctionCode.ts`, run the script again in each preview account; until then
+every preview on the shared function serves the old headers. A `userFileCdnPrefixes`
+change is already covered, because each stage's own viewer-request function stamps the
+marker header from the current list; republish anyway so `--check` stays clean.
+
+Publish from `main` after the change merges. Publishing from a PR branch puts unmerged
+code on every preview in the account, so a PR that changes the response code cannot be
+checked on its own preview; check it on a stage without the variable set instead.
+`--check` exits non-zero when the LIVE code differs from the current source, so the
+deployer can gate on it; `--print` shows the code that would be published.
 
 `infra/__tests__/routerSharedResponseFunction.test.ts` pins the shared code to what a
 preview's own function would contain.
