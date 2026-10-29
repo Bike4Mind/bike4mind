@@ -108,7 +108,8 @@ const handler = baseApi({ auth: false })
           const logFailure = reason === 'internal' ? console.error : console.warn;
           logFailure('Passport Authenticate User Not Found Info:', info);
           // Counted by the OAuthSignupsRefused metric filter in infra/authAbuseAlarms.ts; keep the
-          // message in sync with its pattern.
+          // message in sync with its pattern. Only registration_closed is logged on purpose: the alarm
+          // tracks closed-registration waves, while the auto-block runner also counts the other reasons.
           if (reason === 'registration_closed') req.logger?.info('oauth-signup-refused');
           try {
             await authFailLogRepository.create({
