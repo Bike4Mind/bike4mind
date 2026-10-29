@@ -1,5 +1,4 @@
 import { cacheRepository } from '@bike4mind/database';
-import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -28,7 +27,6 @@ export async function reserveEmailSendBudget(
   userId: string,
   recipientCount: number
 ): Promise<{ retryAfter: number } | undefined> {
-  if (isE2EEnabled()) return undefined;
   const cost = emailSendCost(recipientCount);
 
   for (const { name, units, windowMs } of EMAIL_SEND_WINDOWS) {
