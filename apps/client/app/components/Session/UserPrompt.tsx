@@ -146,9 +146,12 @@ const promptMarkdownComponents: Omit<Components, 'img'> = {
       node?.position?.start.line === node?.position?.end.line &&
       node?.position?.start.column !== node?.position?.end.column;
 
+    // An empty fence has no children at all.
+    const text = String(children ?? '');
+
     return !inline ? (
-      <CodeBlockHeader code={children!.toString()} language={language}>
-        <HighlightedCode code={String(children).replace(/\n$/, '')} language={language} />
+      <CodeBlockHeader code={text} language={language}>
+        <HighlightedCode code={text.replace(/\n$/, '')} language={language} />
       </CodeBlockHeader>
     ) : (
       <Box

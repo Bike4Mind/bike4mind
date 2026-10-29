@@ -2,6 +2,7 @@ export * from './accept';
 export * from './authorizeByInviteType';
 export * from './cancel';
 export * from './cancelInviteById';
+export * from './cleanUpRevokedFileReferences';
 export * from './create';
 export * from './get';
 export * from './listByDocumentIdAndType';

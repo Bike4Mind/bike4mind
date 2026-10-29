@@ -22,7 +22,7 @@ import {
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { applyUntrustedRateLimit } from '@server/utils/apiKeyTrust';
+import { resolveUntrustedKeyLimits } from '@server/utils/apiKeyTrust';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 
@@ -63,6 +63,8 @@ export interface ApiKeyInfo {
   spendCap?: number;
   /** Cumulative settled spend in credits at validation time; embed keys only. */
   currentSpend?: number;
+  /** The owner's API key trust standing as judged at verification (see apiKeyTrust.ts). */
+  ownerUntrusted?: boolean;
   /** The admin who provisioned the key for its owner; exempts it from the paid-only switch. */
   createdByUserId?: string;
 }
@@ -312,8 +314,9 @@ export async function verifyApiKey(
 
     const info = toApiKeyInfo(validation);
     const owner = await assertOwnerAccountUsable(info);
-    // Apply the trust ceiling only after the access policy has accepted the owner.
-    return { ...info, rateLimit: await applyUntrustedRateLimit(owner, info) };
+    // Apply the trust ceiling only after the access policy has accepted the owner; same ceiling apiKeyAuth applies.
+    const { rateLimit, ownerUntrusted } = await resolveUntrustedKeyLimits(owner, info);
+    return { ...info, rateLimit, ownerUntrusted };
   } catch (error) {
     throw toApiKeyAuthError(error);
   }

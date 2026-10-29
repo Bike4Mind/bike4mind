@@ -280,6 +280,20 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
   'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
 
+  // Handler coverage: system prompts and agent ops
+  'settings.system_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_saved': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_switched': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.reset': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.version_added': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.seeded': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.version_activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 

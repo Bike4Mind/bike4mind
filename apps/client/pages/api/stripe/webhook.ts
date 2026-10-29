@@ -25,11 +25,18 @@ import {
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { minorUnitsPerMajor } from '@server/integrations/stripe/currency';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
+import {
+  adminOwnerSlackRef,
+  endedLifecycleEvent,
+  paymentFailedLifecycleEvent,
+  postSubscriptionLifecycleToSlack,
+} from '@server/integrations/slack/subscriptionLifecycle';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { emitBillingEvent, emitPurchaseEvents } from '@server/analytics/signupEvents';
 import { reverseSubscriptionRewardForRefund } from '@server/referrals/subscriptionReward';
 import {
@@ -41,6 +48,9 @@ import {
 } from '@server/analytics/billingEventDetails';
 import dayjs from 'dayjs';
 import { Resource } from 'sst';
+
+// Shorter than the 10s default: the post precedes invoice voiding, which a hung webhook must not starve.
+const DELETED_SLACK_POST_TIMEOUT_MS = 3_000;
 
 const handler = baseApi({ auth: false }).post(async (req, res) => {
   if (!isStripeConfigured()) {
@@ -244,10 +254,16 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       const subscription = event.data.object;
 
       // Update subscription status in unified Subscription model
-      const updated = await subscriptionRepository.updateByStripeSubscriptionId(subscription.id, {
-        status: 'canceled',
+      const canceled = {
+        status: 'canceled' as const,
         canceledAt: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
-      });
+        ...stripeMirrorFields(subscription),
+      };
+      const previous = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+        subscription.id,
+        canceled
+      );
+      const updated = previous && { ...previous, ...canceled };
 
       // Ownership guard, and the only thing standing between a misrouted event and an
       // irreversible void: a stage with no row for this subscription does not own it
@@ -256,6 +272,17 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       if (!updated) {
         req.logger.warn(`Ignoring deleted subscription ${subscription.id}: no matching row in this stage`);
         break;
+      }
+
+      // Posted by whichever write moves the row into canceled (customerSubscriptionUpdated.ts may get
+      // there first); a redelivery finds it canceled, so this precedes the slower work below.
+      if (previous?.status !== 'canceled') {
+        await postSubscriptionLifecycleToSlack(
+          endedLifecycleEvent(updated, subscription.cancellation_details?.reason),
+          {
+            timeoutMs: DELETED_SLACK_POST_TIMEOUT_MS,
+          }
+        );
       }
 
       // Safely access userId from metadata (may be missing for legacy subscriptions)
@@ -449,7 +476,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
               const org = await organizationRepository.findByStripeCustomerId(customerId);
               if (org) {
                 await postMessageToSlack(
-                  `⚠️ *Stripe Dispute (Subscription/Org)* — dispute ${dispute.id}\n*Organization:* ${org.name} (${org.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Admin action required.`
+                  `\u26A0\uFE0F *Stripe Dispute (Subscription/Org)* \u2014 dispute ${dispute.id}\n*Organization:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.Organization, ownerId: org.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nNo automatic clawback for org subscription disputes. Admin action required.`
                 );
                 req.logger.warn(`Dispute ${dispute.id} linked to org ${org.id}, manual review needed`);
                 break;
@@ -469,12 +496,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         });
 
         await postMessageToSlack(
-          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.`
+          `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.`
         );
         req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
       } else {
         await postMessageToSlack(
-          `⚠️ *Stripe Dispute Created — No User Found* — dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Manual review required.`
+          `\u26A0\uFE0F *Stripe Dispute Created \u2014 No User Found* \u2014 dispute ${dispute.id}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nCould not identify user. Manual review required.`
         );
         req.logger.warn(`Could not find user for dispute ${dispute.id}`);
       }
@@ -518,7 +545,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         await userRepository.update({ id: user.id, disputePending: false });
 
         await postMessageToSlack(
-          `✅ *Stripe Dispute Won* — dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\nAccount dispute flag cleared.`
+          `\u2705 *Stripe Dispute Won* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\nAccount dispute flag cleared.`
         );
         req.logger.info(`Cleared disputePending for user ${user.id} after winning dispute ${dispute.id}`);
       } else {
@@ -600,7 +627,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           });
 
           await postMessageToSlack(
-            `ℹ️ *Stripe Refund* — refund ${refund.id}\n*User:* ${user.name || user.email} (${user.id})\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${creditsToClawback} (${Math.round(refundRatio * 100)}% of purchase)`
+            `\u2139\uFE0F *Stripe Refund* \u2014 refund ${refund.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${creditsToClawback} (${Math.round(refundRatio * 100)}% of purchase)`
           );
         } catch (err: unknown) {
           if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
@@ -646,9 +673,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         });
       }
 
-      await postMessageToSlack(
-        `⚠️ *Subscription Payment Failed* \u2014 invoice ${invoice.id}\n*Subscription:* ${subscriptionId}\n*Owner:* ${updated.ownerType} ${updated.ownerId}\nStatus set to past_due.`
-      );
+      // First attempt only: Stripe's retries would otherwise post once per attempt.
+      if (invoice.attempt_count === 1) {
+        await postSubscriptionLifecycleToSlack(paymentFailedLifecycleEvent(updated, invoice));
+      }
       req.logger.info(`Subscription ${subscriptionId} set to past_due after payment failure`);
 
       await notifyPaymentFailed(updated, invoice, req.logger);

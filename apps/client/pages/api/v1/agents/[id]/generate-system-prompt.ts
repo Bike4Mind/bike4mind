@@ -10,20 +10,23 @@ import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1Ag
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
-import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 
 const handler = nextRouteForContract(generateAgentSystemPromptContract, {
   rateLimit: perUserRateLimit(AUTHORING_RATE_LIMIT_BUCKET),
-}).post(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
+}).post(
+  withRequestCompletionQuota(async (req: ContractRequest<typeof generateAgentSystemPromptContract>, res) => {
+    assertAiAccessAllowed(req.user);
+    const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
 
-  try {
-    return res.json({ system_prompt: await generateAgentSystemPrompt(agent, req.user.id, req.logger) });
-  } catch (error) {
-    req.logger.error('Error generating agent system prompt:', error);
-    throw toV1AuthoringError(error);
-  }
-});
+    try {
+      return res.json({ system_prompt: await generateAgentSystemPrompt(agent, req.user.id, req.logger) });
+    } catch (error) {
+      req.logger.error('Error generating agent system prompt:', error);
+      throw toV1AuthoringError(error);
+    }
+  })
+);
 
 export default handler;

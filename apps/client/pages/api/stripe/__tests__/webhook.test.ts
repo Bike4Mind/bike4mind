@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   notifyCanceledForNonPayment: vi.fn(),
   sendToClient: vi.fn(),
   postMessageToSlack: vi.fn(),
+  postSubscriptionLifecycleToSlack: vi.fn(),
   voidOpenSubscriptionInvoices: vi.fn(),
   findUserById: vi.fn(),
   findUserByStripeCustomerId: vi.fn(),
@@ -57,7 +58,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
-    updateByStripeSubscriptionId: mocks.updateByStripeSubscriptionId,
+    updateByStripeSubscriptionIdReturningBefore: mocks.updateByStripeSubscriptionId,
     markPastDue: mocks.markPastDue,
   },
 }));
@@ -78,6 +79,11 @@ vi.mock('@server/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: mocks.voidOpenSubscriptionInvoices,
 }));
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: mocks.postMessageToSlack }));
+// The real event builders run; the post itself (stage gate, wording) is covered in subscriptionLifecycle.test.ts.
+vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/integrations/slack/subscriptionLifecycle')>()),
+  postSubscriptionLifecycleToSlack: mocks.postSubscriptionLifecycleToSlack,
+}));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
 vi.mock('@server/billing/grantCreditPurchase', () => ({ grantCreditPurchase: vi.fn() }));
 vi.mock('@server/analytics/signupEvents', () => ({
@@ -189,13 +195,65 @@ describe('invoice.payment_failed', () => {
     expect(mocks.markPastDue).not.toHaveBeenCalled();
     expect(mocks.notifyPaymentFailed).not.toHaveBeenCalled();
   });
+
+  it('posts the first failed attempt to the subscriptions channel, after the row is marked', async () => {
+    await deliver(failedInvoice({ attempt_count: 1, amount_due: 2000, currency: 'usd' }));
+
+    expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledWith({
+      kind: 'payment_failed',
+      owner: { ownerType: SubscriptionOwnerType.User, ownerId: 'user_1' },
+      plan: { plan: 'unknown' },
+      amountDue: { amountMinor: 2000, currency: 'usd' },
+    });
+    expect(mocks.markPastDue.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.postSubscriptionLifecycleToSlack.mock.invocationCallOrder[0]
+    );
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it("does not post Stripe's later retries", async () => {
+    await deliver(failedInvoice({ attempt_count: 2, amount_due: 2000, currency: 'usd' }));
+
+    expect(mocks.postSubscriptionLifecycleToSlack).not.toHaveBeenCalled();
+    expect(mocks.notifyPaymentFailed).toHaveBeenCalled();
+  });
+
+  it('does not post a first attempt for a row this stage does not own or has closed', async () => {
+    mocks.markPastDue.mockResolvedValue(null);
+
+    await deliver(failedInvoice({ attempt_count: 1, amount_due: 2000, currency: 'usd' }));
+
+    expect(mocks.postSubscriptionLifecycleToSlack).not.toHaveBeenCalled();
+  });
 });
+
+// The Stripe subscription fields stripeMirrorFields projects; every real deleted payload carries them.
+const mirrorPayload = {
+  customer: 'cus_1',
+  currency: 'usd',
+  cancel_at_period_end: false,
+  cancel_at: null,
+  trial_end: null,
+  items: {
+    data: [
+      {
+        price: {
+          id: 'price_1',
+          unit_amount: 2000,
+          currency: 'usd',
+          recurring: { interval: 'month', interval_count: 1 },
+        },
+      },
+    ],
+  },
+};
 
 describe('customer.subscription.deleted', () => {
   const deleted = (reason: string | null) => ({
     type: 'customer.subscription.deleted',
     data: {
       object: {
+        ...mirrorPayload,
         id: 'sub_1',
         canceled_at: 1_760_000_000,
         metadata: {},
@@ -227,6 +285,81 @@ describe('customer.subscription.deleted', () => {
     await deliver(deleted('payment_failed'));
 
     expect(mocks.notifyCanceledForNonPayment).not.toHaveBeenCalled();
+    expect(mocks.postSubscriptionLifecycleToSlack).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['payment_failed', 'payment_failed'],
+    ['cancellation_requested', 'cancellation_requested'],
+    [null, 'unknown'],
+  ])('posts the end with its reason (%s) once the row is marked canceled', async (reason, expected) => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'active' });
+
+    await deliver(deleted(reason));
+
+    expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledOnce();
+    expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledWith(
+      {
+        kind: 'ended',
+        owner: { ownerType: SubscriptionOwnerType.User, ownerId: 'user_1' },
+        plan: { plan: 'unknown' },
+        reason: expected,
+      },
+      { timeoutMs: 3_000 }
+    );
+    expect(mocks.updateByStripeSubscriptionId.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.postSubscriptionLifecycleToSlack.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('posts the end before the invoice cleanup, so a delivery that times out in it has still posted', async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'active' });
+    mocks.voidOpenSubscriptionInvoices.mockReturnValueOnce(new Promise(() => {}));
+
+    // Not awaited: the handler waits on the cleanup, which here never settles.
+    void deliver(deleted('cancellation_requested'));
+    await vi.waitFor(() => expect(mocks.voidOpenSubscriptionInvoices).toHaveBeenCalled());
+
+    expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledOnce();
+  });
+
+  it('posts the end once across a redelivery', async () => {
+    mocks.updateByStripeSubscriptionId
+      .mockResolvedValueOnce({ ...userRow, status: 'active' })
+      .mockResolvedValueOnce({ ...userRow, status: 'canceled' });
+
+    await deliver(deleted('cancellation_requested'));
+    await deliver(deleted('cancellation_requested'));
+
+    expect(mocks.postSubscriptionLifecycleToSlack).toHaveBeenCalledOnce();
+  });
+
+  it('leaves the end to customer.subscription.updated when its sync reached canceled first', async () => {
+    mocks.updateByStripeSubscriptionId.mockResolvedValue({ ...userRow, status: 'canceled' });
+
+    await deliver(deleted('payment_failed'));
+
+    expect(mocks.postSubscriptionLifecycleToSlack).not.toHaveBeenCalled();
+    expect(mocks.notifyCanceledForNonPayment).toHaveBeenCalled();
+    expect(mocks.emitBillingEvent).toHaveBeenCalledWith(expect.objectContaining({ event: 'subscription_ended' }));
+  });
+
+  it("writes the subscription's final Stripe mirror with the canceled status", async () => {
+    await deliver(deleted(null));
+
+    expect(mocks.updateByStripeSubscriptionId).toHaveBeenCalledWith('sub_1', {
+      status: 'canceled',
+      canceledAt: new Date(1_760_000_000 * 1000),
+      unitAmount: 2000,
+      currency: 'usd',
+      interval: 'month',
+      intervalCount: 1,
+      cancelAtPeriodEnd: false,
+      cancelAt: null,
+      trialEndsAt: null,
+      stripeCustomerId: 'cus_1',
+      lastSyncedAt: expect.any(Date),
+    });
   });
 });
 
@@ -308,7 +441,13 @@ describe('billing events for Overwatch', () => {
       await deliver({
         type: 'customer.subscription.deleted',
         data: {
-          object: { id: 'sub_1', canceled_at: 1_769_860_800, metadata: {}, cancellation_details: { reason: null } },
+          object: {
+            ...mirrorPayload,
+            id: 'sub_1',
+            canceled_at: 1_769_860_800,
+            metadata: {},
+            cancellation_details: { reason: null },
+          },
         },
       });
     } finally {
@@ -340,6 +479,7 @@ describe('billing events for Overwatch', () => {
       type: 'customer.subscription.deleted',
       data: {
         object: {
+          ...mirrorPayload,
           id: 'sub_1',
           start_date: at('2026-01-01T00:00:00Z'),
           // Requested on Feb 11, effective at the period end on Mar 31.
@@ -358,7 +498,15 @@ describe('billing events for Overwatch', () => {
     mocks.updateByStripeSubscriptionId.mockResolvedValue(null);
     await deliver({
       type: 'customer.subscription.deleted',
-      data: { object: { id: 'sub_1', canceled_at: null, metadata: {}, cancellation_details: { reason: null } } },
+      data: {
+        object: {
+          ...mirrorPayload,
+          id: 'sub_1',
+          canceled_at: null,
+          metadata: {},
+          cancellation_details: { reason: null },
+        },
+      },
     });
     expect(mocks.emitBillingEvent).not.toHaveBeenCalled();
   });

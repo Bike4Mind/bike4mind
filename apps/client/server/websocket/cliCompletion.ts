@@ -35,6 +35,7 @@ import { ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/ut
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
+import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
 
@@ -163,7 +164,17 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
+  let quota = NO_COMPLETION_QUOTA;
   try {
+    if (apiKeyInfo) {
+      quota = await admitApiKeyCompletion({
+        owner: userId,
+        ownerUntrusted: apiKeyInfo.ownerUntrusted,
+        billingOwnerType: apiKeyInfo.billingOwnerType,
+        holdSlot: true,
+      });
+    }
+
     // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
     await checkFreeTierDailySpendCap({
       userId,
@@ -274,6 +285,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       logger: logger as unknown as Logger,
     });
+  } finally {
+    await quota.release();
   }
 
   return { statusCode: 200 };

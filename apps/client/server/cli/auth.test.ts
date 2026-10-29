@@ -71,12 +71,13 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   },
 }));
 
-const applyUntrustedRateLimit = vi.hoisted(() =>
-  vi.fn(
-    async (_owner: unknown, key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }) => key.rateLimit
-  )
+const resolveUntrustedKeyLimits = vi.hoisted(() =>
+  vi.fn(async (_owner: unknown, key: { rateLimit: { requestsPerMinute: number; requestsPerDay: number } }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }))
 );
-vi.mock('@server/utils/apiKeyTrust', () => ({ applyUntrustedRateLimit }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits }));
 
 vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
   extractApiKeyFromHeaders: vi.fn(),
@@ -590,12 +591,13 @@ describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
     const owner = { id: 'u1', isBanned: false };
     const clamped = { requestsPerMinute: 3, requestsPerDay: 100 };
     vi.mocked(User.findById).mockResolvedValue(owner);
-    applyUntrustedRateLimit.mockResolvedValueOnce(clamped);
+    resolveUntrustedKeyLimits.mockResolvedValueOnce({ rateLimit: clamped, ownerUntrusted: true });
 
     const info = await verifyApiKey({});
 
     expect(info.rateLimit).toEqual(clamped);
-    expect(applyUntrustedRateLimit).toHaveBeenLastCalledWith(
+    expect(info.ownerUntrusted).toBe(true);
+    expect(resolveUntrustedKeyLimits).toHaveBeenLastCalledWith(
       owner,
       expect.objectContaining({ rateLimit: validKey.rateLimit })
     );
@@ -788,7 +790,7 @@ describe('api-key paid-only access switch (mirrors apiKeyAuth)', () => {
 
   beforeEach(() => {
     isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
-    applyUntrustedRateLimit.mockClear();
+    resolveUntrustedKeyLimits.mockClear();
     vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_key');
     vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
     vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(orgKey);
@@ -804,18 +806,18 @@ describe('api-key paid-only access switch (mirrors apiKeyAuth)', () => {
       statusCode: 403,
       message: 'API keys require an active paid subscription',
     });
-    expect(applyUntrustedRateLimit).not.toHaveBeenCalled();
+    expect(resolveUntrustedKeyLimits).not.toHaveBeenCalled();
   });
 
   it('preserves the trust ceiling for a personal key accepted by the access switch', async () => {
     const { billingOwnerType: _billing, organizationId: _organization, ...personalKey } = orgKey;
     vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValueOnce(personalKey);
     const clamped = { requestsPerMinute: 3, requestsPerDay: 100 };
-    applyUntrustedRateLimit.mockResolvedValueOnce(clamped);
+    resolveUntrustedKeyLimits.mockResolvedValueOnce({ rateLimit: clamped, ownerUntrusted: true });
 
     expect((await verifyApiKey({})).rateLimit).toEqual(clamped);
     expect(isApiKeyAccessAllowedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      applyUntrustedRateLimit.mock.invocationCallOrder[0]!
+      resolveUntrustedKeyLimits.mock.invocationCallOrder[0]!
     );
   });
 

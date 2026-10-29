@@ -227,7 +227,7 @@ export class StatusManager {
     researchData: {
       configurationId: string;
       streamedTexts: string[];
-      completionInfo?: any;
+      completionInfo?: { inputTokens: number; outputTokens: number };
     }
   ): Promise<void> {
     try {

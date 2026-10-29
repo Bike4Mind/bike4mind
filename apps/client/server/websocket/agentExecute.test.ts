@@ -98,7 +98,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-import { ApiKeyScope, PROMPT_TEXT_MAX } from '@bike4mind/common';
+import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/common';
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
@@ -670,6 +670,31 @@ describe('start command credential threading', () => {
 
     const input = vi.mocked(startAgentExecution).mock.calls[0][0];
     expect(input.apiKeyInfo).toBe(key);
+  });
+
+  it('relays quota error metadata to the websocket caller', async () => {
+    mockApiGwSend.mockClear();
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted: true,
+    } as never);
+    vi.mocked(startAgentExecution).mockRejectedValueOnce(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 7 })
+    );
+    await (func as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>)(
+      startEvent('b4m_live_x'),
+      {},
+      noopLogger
+    );
+    const [sent] = mockApiGwSend.mock.calls[0];
+    expect(JSON.parse(sent.input.Data.toString())).toEqual({
+      action: 'agent_error',
+      message: 'Token rate limit exceeded',
+      errorCode: 'token_rate_limit_exceeded',
+      retryAfter: 7,
+    });
   });
 
   it('reports a billing refusal as a message-only error frame', async () => {
