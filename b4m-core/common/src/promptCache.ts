@@ -1,5 +1,5 @@
 import { parseClaudeModelId } from './claudeModelId';
-import { ModelBackend, type ModelInfo, type TurnUsage } from './models';
+import { ModelBackend, type TurnUsage } from './models';
 
 export const PROMPT_CACHE_TTLS = ['5m', '1h'] as const;
 export type PromptCacheTtl = (typeof PROMPT_CACHE_TTLS)[number];
@@ -21,7 +21,7 @@ export function isPromptCacheTtl(value: unknown): value is PromptCacheTtl {
  * to the models the Claude API reference lists as current (Haiku 4.5, the 4.6+ Sonnet and Opus, and
  * every 5.x family), so an older model never sees a TTL it may reject.
  */
-export function supportsOneHourPromptCache(model: Pick<ModelInfo, 'id' | 'backend'> | undefined): boolean {
+export function supportsOneHourPromptCache(model: { id: string; backend?: string } | undefined): boolean {
   if (!model || (model.backend !== ModelBackend.Anthropic && model.backend !== ModelBackend.Bedrock)) return false;
   const parsed = parseClaudeModelId(model.id);
   if (!parsed) return false;
@@ -40,7 +40,7 @@ export function resolvePromptCacheTtl({
   chatTtl,
   userDefaultTtl,
 }: {
-  model: Pick<ModelInfo, 'id' | 'backend'> | undefined;
+  model: { id: string; backend?: string } | undefined;
   chatTtl?: unknown;
   userDefaultTtl?: unknown;
 }): PromptCacheTtl {
