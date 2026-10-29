@@ -163,6 +163,52 @@ describe('ModelServerRegistry', () => {
     expect(probe).toMatchObject({ ok: false, needsCredentials: true });
   });
 
+  it("refuses this computer's own Ollama address before sending anything", async () => {
+    const fake = fakeOllama();
+    const { registry: servers, store } = registry(fake);
+    for (const address of ['http://127.0.0.1:11434', '127.0.0.1:11434', 'localhost:11434', 'http://[::1]:11434/']) {
+      const probe = await servers.probe({ address, credential: none });
+      expect(probe).toMatchObject({ ok: false, address: null });
+      expect(probe.error).toMatch(/is This computer, which is already listed.*different local port/);
+    }
+    await expect(
+      servers.add({ address: '127.0.0.1:11434', credential: none, name: 'tunnel', kind: 'ollama', access: 'chat' })
+    ).rejects.toThrow(/This computer/);
+    expect(fake.calls).toHaveLength(0);
+    expect(await store.list()).toHaveLength(0);
+    expect((await servers.probe({ address: '127.0.0.1:21434', credential: none })).ok).toBe(true);
+  });
+
+  it('keeps the session-only message through the first picker load after a restart', async () => {
+    const fake = fakeOllama();
+    fake.state.wantToken = TOKEN;
+    const file = memoryFile();
+    const noKeyring: SecretCipher = { ...cipher, isEncryptionAvailable: () => false };
+    const silent = { debug: () => undefined, warn: () => undefined };
+    await new ModelServerStore(noKeyring, file, silent).add(
+      {
+        name: 'gpu box',
+        kind: 'ollama',
+        transport: { type: 'http', baseUrl: 'http://127.0.0.2:11434' },
+        access: 'chat',
+      },
+      { type: 'bearer', token: TOKEN }
+    );
+    const servers = new ModelServerRegistry({
+      store: new ModelServerStore(noKeyring, file, silent),
+      logger: silent,
+      fetchFor: fake.fetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+      resolve: async () => [],
+    });
+    const [model] = await servers.models();
+    expect(fake.calls).toHaveLength(0);
+    expect(model).toBeUndefined();
+    const view = (await servers.views())[1];
+    expect(view.health.state).toBe('credentials');
+    expect(view.health.error).toMatch(/kept only until Desktop quit/);
+  });
+
   describe('a server that answers 403', () => {
     const notCredentials = /credential|token/i;
 

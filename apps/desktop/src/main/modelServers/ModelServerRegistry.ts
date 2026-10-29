@@ -153,6 +153,11 @@ export class ModelServerRegistry {
     });
     const parsed = parseServerAddress(input.address);
     if (!parsed) return failed('Enter an address like https://host, http://192.168.1.5:11434 or host:port.');
+    if (isLocalOllama(parsed)) {
+      return failed(
+        `${new URL(parsed.baseUrl).host} is ${LOCAL_SERVER_NAME}, which is already listed. To reach another machine through an SSH tunnel, forward a different local port, such as 21434.`
+      );
+    }
     let headers: Record<string, string> | null;
     try {
       headers = credentialHeaders(input.credential);
@@ -267,6 +272,12 @@ export class ModelServerRegistry {
     const lists = await Promise.all(
       [...this.entries.values()].map(async entry => {
         const server = { id: entry.record.id, name: entry.record.name };
+        // Asking without the credential would get a 401 that replaces this message with a vaguer one.
+        const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
+        if (missing && entry.health.error !== missing.error) {
+          this.setHealth(entry, missing);
+          this.emit();
+        }
         // A picker refresh retries a server that was down, without hammering one that keeps failing.
         if (entry.health.state !== 'online' && entry.health.state !== 'unknown' && this.stale(entry)) {
           await this.checkEntry(entry);
@@ -388,15 +399,7 @@ export class ModelServerRegistry {
   private async checkEntry(entry: Entry): Promise<void> {
     entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
     if (this.deps.store.credentialMissing(entry.record)) {
-      this.setHealth(entry, {
-        state: 'credentials',
-        version: null,
-        latencyMs: null,
-        checkedAt: new Date().toISOString(),
-        error: this.deps.store.credentialPersisted()
-          ? 'The saved credential could not be read. Enter it again.'
-          : 'The credential was kept only until Desktop quit. Enter it again.',
-      });
+      this.setHealth(entry, this.missingCredentialHealth());
       return;
     }
     const outcome = await detect(
@@ -448,6 +451,18 @@ export class ModelServerRegistry {
         `MODEL SERVERS: listing ${entry.record.id} failed: ${err instanceof Error ? err.name : 'unknown'}`
       );
     }
+  }
+
+  private missingCredentialHealth(): ModelServerHealth {
+    return {
+      state: 'credentials',
+      version: null,
+      latencyMs: null,
+      checkedAt: new Date().toISOString(),
+      error: this.deps.store.credentialPersisted()
+        ? 'The saved credential could not be read. Enter it again.'
+        : 'The credential was kept only until Desktop quit. Enter it again.',
+    };
   }
 
   private stale(entry: Entry): boolean {
@@ -548,6 +563,14 @@ export class ModelServerRegistry {
       return null;
     }
   }
+}
+
+const LOCAL_OLLAMA_PORT = new URL(LOCAL_OLLAMA_URL).port;
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+
+/** The port "This computer" already uses: saving it again would list the same Ollama twice. */
+function isLocalOllama(parsed: ParsedAddress): boolean {
+  return LOOPBACK_NAMES.has(parsed.host.toLowerCase()) && new URL(parsed.origin).port === LOCAL_OLLAMA_PORT;
 }
 
 async function resolveAll(host: string): Promise<string[]> {
