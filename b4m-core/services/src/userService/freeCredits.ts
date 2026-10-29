@@ -13,6 +13,7 @@ import { addCredits } from '../creditService';
 import type { SignupRiskSignals } from './signupRisk';
 import { releaseSignupTranche } from './stagedSignupGrant';
 import { protectSignupCredits } from './signupProtection';
+import { logUnprotectedSignupGrant } from './signupGrantProtectionAlarm';
 
 type FreeCreditUser = {
   id: string;
@@ -33,7 +34,10 @@ export type FreeCreditAdapters = {
   collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
 };
 
-type FreeCreditLogger = { error: (message: string, ...args: unknown[]) => void };
+type FreeCreditLogger = {
+  error: (message: string, ...args: unknown[]) => void;
+  warn?: (message: string, ...args: unknown[]) => void;
+};
 
 export type GrantFreeCreditsResult = {
   withheld?: boolean;
@@ -132,6 +136,7 @@ export const releasePendingFreeCredits = async (
       await protectSignupCredits(user.id, adapters.db);
       return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
     }
+    await logUnprotectedSignupGrant(adapters.db.adminSettings, adapters.logger);
     const { creditsGranted, currentCredits, withheld } = await grantFreeCredits(user, adapters);
     if (withheld) return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
     return {
