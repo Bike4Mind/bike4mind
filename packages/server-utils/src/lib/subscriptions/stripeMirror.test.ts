@@ -66,6 +66,7 @@ describe('stripeMirrorFields', () => {
 
   it('stores a null amount for a price with no flat unit amount', () => {
     const subscription = makeSubscription({
+      currency: 'eur',
       items: {
         data: [
           {
@@ -87,7 +88,41 @@ describe('stripeMirrorFields', () => {
     });
   });
 
-  it('falls back to the subscription currency when it has no item', () => {
+  describe('a subscription billed in a currency other than the price default', () => {
+    const billedInEur = (currencyOptions?: Record<string, { unit_amount: number | null }>) =>
+      makeSubscription({
+        currency: 'eur',
+        items: {
+          data: [
+            {
+              price: {
+                id: 'price_multi',
+                unit_amount: 2000,
+                currency: 'usd',
+                ...(currencyOptions && { currency_options: currencyOptions }),
+                recurring: { interval: 'month', interval_count: 1 },
+              },
+            },
+          ],
+        } as unknown as Stripe.ApiList<Stripe.SubscriptionItem>,
+      });
+
+    it('takes the amount from the currency option for the billed currency', () => {
+      const subscription = billedInEur({ usd: { unit_amount: 2000 }, eur: { unit_amount: 1800 } });
+      expect(stripeMirrorFields(subscription, SYNCED_AT)).toMatchObject({ unitAmount: 1800, currency: 'eur' });
+    });
+
+    it('stores a null amount, never the default-currency one, when the options are absent', () => {
+      expect(stripeMirrorFields(billedInEur(), SYNCED_AT)).toMatchObject({ unitAmount: null, currency: 'eur' });
+    });
+
+    it('stores a null amount when the options lack the billed currency', () => {
+      const subscription = billedInEur({ usd: { unit_amount: 2000 } });
+      expect(stripeMirrorFields(subscription, SYNCED_AT)).toMatchObject({ unitAmount: null, currency: 'eur' });
+    });
+  });
+
+  it('mirrors the subscription currency and no price fields when it has no price', () => {
     const subscription = makeSubscription({
       currency: 'gbp',
       items: { data: [] } as unknown as Stripe.ApiList<Stripe.SubscriptionItem>,

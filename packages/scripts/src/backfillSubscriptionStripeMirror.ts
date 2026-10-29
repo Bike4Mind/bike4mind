@@ -35,7 +35,7 @@ export interface BackfillSubscriptionStripeMirrorOptions {
 export interface BackfillSubscriptionStripeMirrorResult {
   scanned: number;
   updated: number;
-  /** Rows a webhook re-synced between this run's Stripe read and its write; left as the webhook wrote them. */
+  /** Rows another sync (a webhook) rewrote after the scan read them; left as that sync wrote them. */
   skippedNewer: number;
   missingInStripe: number;
   failed: number;
@@ -46,8 +46,8 @@ export interface BackfillSubscriptionStripeMirrorResult {
  * Stripe read per row. Stripe is only read; Mongo is the only thing written. By default only rows
  * without `lastSyncedAt` are touched, so a re-run picks up where a failed one stopped and is
  * otherwise a no-op. A row whose Stripe read fails is counted and skipped, never guessed at. The
-write is guarded on `lastSyncedAt`, so a webhook sync landing after this run's read is never
-overwritten with the older state.
+ * write is a compare-and-set on the `lastSyncedAt` the scan read, so a sync written after the scan
+ * (a webhook landing during the Stripe read) is never overwritten, whatever either side's clock says.
  */
 export async function backfillSubscriptionStripeMirror(
   options: BackfillSubscriptionStripeMirrorOptions
@@ -68,7 +68,7 @@ export async function backfillSubscriptionStripeMirror(
     failed: 0,
   };
 
-  for await (const row of subscriptions.find(filter, { projection: { subscriptionId: 1 } })) {
+  for await (const row of subscriptions.find(filter, { projection: { subscriptionId: 1, lastSyncedAt: 1 } })) {
     result.scanned += 1;
     const subscriptionId: unknown = row.subscriptionId;
     if (typeof subscriptionId !== 'string') {
@@ -89,11 +89,11 @@ export async function backfillSubscriptionStripeMirror(
         result.updated += 1;
         continue;
       }
-      const notSyncedSinceRead = resync
-        ? { $or: [{ lastSyncedAt: { $exists: false } }, { lastSyncedAt: { $lt: readAt } }] }
-        : { lastSyncedAt: { $exists: false } };
+      const scannedSyncedAt: unknown = row.lastSyncedAt;
+      const unchangedSinceScan =
+        scannedSyncedAt === undefined ? { lastSyncedAt: { $exists: false } } : { lastSyncedAt: scannedSyncedAt };
       const { matchedCount } = await subscriptions.updateOne(
-        { _id: row._id, ...notSyncedSinceRead },
+        { _id: row._id, ...unchangedSinceScan },
         { $set: stripeMirrorFields(subscription, readAt) }
       );
       if (matchedCount) result.updated += 1;

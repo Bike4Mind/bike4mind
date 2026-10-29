@@ -29,13 +29,21 @@ export type StripeSubscriptionMirrorSource = Pick<
   items: {
     data: ReadonlyArray<{
       price: Pick<Stripe.Price, 'unit_amount' | 'currency'> & {
+        currency_options?: { [currency: string]: { unit_amount: number | null } };
         recurring: Pick<Stripe.Price.Recurring, 'interval' | 'interval_count'> | null;
       };
     }>;
   };
 };
 
+type MirrorPrice = StripeSubscriptionMirrorSource['items']['data'][number]['price'];
+
 const fromUnix = (seconds: number | null): Date | null => (seconds ? new Date(seconds * 1000) : null);
+
+// A multi-currency price reports its default currency and amount; the subscription's currency is
+// what Stripe bills. currency_options is only on the object when the caller expanded it.
+const unitAmountIn = (price: MirrorPrice, currency: string): number | null =>
+  price.currency === currency ? price.unit_amount : (price.currency_options?.[currency]?.unit_amount ?? null);
 
 /**
  * The Subscription mirror fields projected from a Stripe subscription. Every path that syncs a row
@@ -55,8 +63,8 @@ export const stripeMirrorFields = (
   // Our plans are single-item subscriptions; every write path reads the same first item.
   const price = subscription.items.data[0]?.price;
   return {
-    unitAmount: price?.unit_amount ?? null,
-    currency: price?.currency ?? subscription.currency,
+    unitAmount: price ? unitAmountIn(price, subscription.currency) : null,
+    currency: subscription.currency,
     interval: price?.recurring?.interval ?? null,
     intervalCount: price?.recurring?.interval_count ?? null,
     cancelAtPeriodEnd: subscription.cancel_at_period_end,

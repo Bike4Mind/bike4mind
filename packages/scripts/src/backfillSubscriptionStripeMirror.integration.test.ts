@@ -122,16 +122,23 @@ describe('backfillSubscriptionStripeMirror', () => {
     expect(await subscriptions().findOne({ subscriptionId: 'sub_new' })).not.toHaveProperty('lastSyncedAt');
   });
 
-  it.each([false, true])(
-    'keeps a webhook sync that lands between the Stripe read and the write (resync: %s)',
-    async resync => {
-      const webhookSyncedAt = new Date(Date.now() + 60_000);
+  // Stamped before this run's own clock, as by a webhook on a host running behind: only a
+  // compare-and-set on the scanned value, not a time comparison, recognizes it as newer.
+  const WEBHOOK_SYNCED_AT = new Date(SYNCED_EARLIER.getTime() + 60_000);
+
+  it.each([
+    { resync: false, subscriptionId: 'sub_new' },
+    { resync: true, subscriptionId: 'sub_new' },
+    { resync: true, subscriptionId: 'sub_synced' },
+  ])(
+    'keeps a sync written after the scan read the row (resync: $resync, $subscriptionId)',
+    async ({ resync, subscriptionId }) => {
       const retrieve: RetrieveStripeSubscription = async id => {
         const stale = stripeSubscription(id);
-        if (id === 'sub_new') {
+        if (id === subscriptionId) {
           await subscriptions().updateOne(
             { subscriptionId: id },
-            { $set: { cancelAtPeriodEnd: true, lastSyncedAt: webhookSyncedAt } }
+            { $set: { cancelAtPeriodEnd: true, lastSyncedAt: WEBHOOK_SYNCED_AT } }
           );
         }
         return stale;
@@ -140,12 +147,24 @@ describe('backfillSubscriptionStripeMirror', () => {
       const result = await run({ retrieve, resync });
 
       expect(result.skippedNewer).toBe(1);
-      expect(await subscriptions().findOne({ subscriptionId: 'sub_new' })).toMatchObject({
+      expect(await subscriptions().findOne({ subscriptionId })).toMatchObject({
         cancelAtPeriodEnd: true,
-        lastSyncedAt: webhookSyncedAt,
+        lastSyncedAt: WEBHOOK_SYNCED_AT,
       });
     }
   );
+
+  it('writes a row unchanged since the scan, even when its lastSyncedAt is ahead of this clock', async () => {
+    const aheadOfThisClock = new Date(Date.now() + 60 * 60_000);
+    await subscriptions().updateOne({ subscriptionId: 'sub_synced' }, { $set: { lastSyncedAt: aheadOfThisClock } });
+
+    const result = await run({ resync: true });
+
+    expect(result.skippedNewer).toBe(0);
+    const row = await subscriptions().findOne({ subscriptionId: 'sub_synced' });
+    expect(row).toMatchObject({ unitAmount: 2000 });
+    expect(row?.lastSyncedAt).not.toEqual(aheadOfThisClock);
+  });
 });
 
 describe('retrieveFromStripe', () => {

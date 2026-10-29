@@ -166,8 +166,9 @@ export interface ISubscription {
   /**
    * Mirror of the Stripe subscription, written through `stripeMirrorFields` (./stripeMirror.ts)
    * by every path that syncs from a Stripe subscription object. Absent on admin grants and on
-   * rows not yet synced or backfilled. `unitAmount` is per unit in minor units, before discounts;
-   * null when the price has no flat unit amount (tiered or decimal pricing).
+   * rows not yet synced or backfilled. `currency` is the billed currency and `unitAmount` is per
+   * unit in its minor units, before discounts; null when the price has no flat unit amount (tiered
+   * or decimal pricing) or none known in that currency.
    */
   unitAmount?: number | null;
   currency?: string;
