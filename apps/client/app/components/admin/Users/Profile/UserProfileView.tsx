@@ -205,6 +205,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
             onAction={setAction}
             onViewActivity={() => onTabChange('activity')}
             onViewCredits={() => onTabChange('credits')}
+            onAudit={openAdminLog}
           />
         );
       case 'activity':

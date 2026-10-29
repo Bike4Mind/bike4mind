@@ -34,6 +34,21 @@ describe('describeAuditEntry', () => {
     );
   });
 
+  it('names the organization on membership entries', () => {
+    const details = { organizationName: 'Acme' };
+    expect(describeAuditEntry(makeAuditEntry({ action: 'org.member.added', details }))).toBe('Added to Acme');
+    expect(describeAuditEntry(makeAuditEntry({ action: 'org.member.removed', details }))).toBe('Removed from Acme');
+    expect(
+      describeAuditEntry(
+        makeAuditEntry({
+          action: 'org.member.role_changed',
+          details,
+          changes: [{ field: 'role', before: 'member', after: 'manager' }],
+        })
+      )
+    ).toBe('Made a manager of Acme');
+  });
+
   it('falls back to the stored summary', () => {
     expect(describeAuditEntry(makeAuditEntry({ action: 'user.misc', summary: 'did a thing' }))).toBe('Did a thing');
   });

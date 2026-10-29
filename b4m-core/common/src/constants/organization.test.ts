@@ -4,6 +4,8 @@ import {
   canManageMemberCreditBudgets,
   canRevokeOrgMember,
   isOrgOwnerOrCurrentAdmin,
+  organizationMemberRole,
+  organizationSeatUsage,
 } from './organization';
 
 describe('isOrgOwnerOrCurrentAdmin', () => {
@@ -128,5 +130,39 @@ describe('canRevokeOrgMember', () => {
   it('refuses a manager who is no longer on the roster, whoever the target is', () => {
     const stale = { ...org, users: [{ userId: 'member-id' }] };
     expect(canRevokeOrgMember({ id: 'mgr-id' }, stale, 'member-id')).toBe(false);
+  });
+});
+
+describe('organizationSeatUsage', () => {
+  it('counts the owner, who holds a seat without a users[] row', () => {
+    expect(organizationSeatUsage({ users: [{}, {}], seats: 10 })).toEqual({ used: 3, seats: 10, full: false });
+  });
+
+  it('is full once owner plus members reach the paid seats', () => {
+    expect(organizationSeatUsage({ users: new Array(9).fill({}), seats: 10 })).toMatchObject({ used: 10, full: true });
+    expect(organizationSeatUsage({ users: new Array(12).fill({}), seats: 10 }).full).toBe(true);
+  });
+
+  it('treats a missing roster as the owner alone', () => {
+    expect(organizationSeatUsage({ users: null, seats: 1 })).toEqual({ used: 1, seats: 1, full: true });
+  });
+});
+
+describe('organizationMemberRole', () => {
+  const org = {
+    userId: 'owner-id',
+    adminUserIds: ['manager-id', 'stale-admin-id'],
+    users: [{ userId: 'manager-id' }, { userId: 'member-id' }],
+  };
+
+  it('names the owner, a manager and a member', () => {
+    expect(organizationMemberRole(org, 'owner-id')).toBe('owner');
+    expect(organizationMemberRole(org, 'manager-id')).toBe('manager');
+    expect(organizationMemberRole(org, 'member-id')).toBe('member');
+  });
+
+  it('is null off the roster, even for an appointment without a users[] row', () => {
+    expect(organizationMemberRole(org, 'stale-admin-id')).toBeNull();
+    expect(organizationMemberRole(org, 'stranger-id')).toBeNull();
   });
 });
