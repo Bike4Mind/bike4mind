@@ -11,6 +11,7 @@ type Method = 'get' | 'post' | 'patch' | 'delete';
 
 const handlers = vi.hoisted(() => ({}) as Record<string, Partial<Record<Method, Handler>>>);
 const currentModule = vi.hoisted(() => ({ name: '' }));
+const baseApiOptions = vi.hoisted(() => ({}) as Record<string, unknown>);
 
 vi.mock('@server/middlewares/baseApi', () => {
   const makeChain = () => {
@@ -24,7 +25,9 @@ vi.mock('@server/middlewares/baseApi', () => {
     };
     return chain;
   };
-  return { baseApi: () => makeChain() };
+  return {
+    baseApi: (options: unknown) => ((baseApiOptions[currentModule.name] = options), makeChain()),
+  };
 });
 
 const repo = vi.hoisted(() => ({
@@ -93,6 +96,10 @@ beforeEach(() => {
   resolveDefaultChatModel.mockResolvedValue({ model: 'default-model' });
   repo.create.mockImplementation(async (doc: Record<string, unknown>) => ({ id: OID, ...doc }));
   repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) => loop(patch));
+});
+
+it.each(['collection', 'item', 'run'])('%s route refuses API keys (jwtOnly)', mod => {
+  expect(baseApiOptions[mod]).toEqual({ auth: 'jwtOnly' });
 });
 
 describe('EnableLoops gate', () => {

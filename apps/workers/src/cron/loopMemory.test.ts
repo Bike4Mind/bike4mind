@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLoopSystemContext, LOOP_MEMORY_TAIL_CHARS, parseLoopMemory } from './loopMemory';
+import { buildLoopQuery, LOOP_MEMORY_TAIL_CHARS, parseLoopMemory } from './loopMemory';
 
 const previous = { notes: 'old notes', nextAction: 'old next' };
 const block = (json: string) => '```loop-memory\n' + json + '\n```';
@@ -32,9 +32,10 @@ describe('parseLoopMemory', () => {
   });
 });
 
-describe('buildLoopSystemContext', () => {
-  it('carries the memory and the write-back instruction', () => {
-    const context = buildLoopSystemContext({ notes: 'saw 3 issues', nextAction: 'triage #2' });
+describe('buildLoopQuery', () => {
+  it('carries the goal, the memory and the write-back instruction', () => {
+    const context = buildLoopQuery('Watch the inbox', { notes: 'saw 3 issues', nextAction: 'triage #2' });
+    expect(context.startsWith('Watch the inbox')).toBe(true);
     expect(context).toContain('saw 3 issues');
     expect(context).toContain('triage #2');
     expect(context).toContain('```loop-memory');

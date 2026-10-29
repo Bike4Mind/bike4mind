@@ -21,7 +21,7 @@ import {
   validateLoopTools,
 } from '@server/utils/loopValidation';
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-collection' }))
   .get(async (req, res) => {
     await assertLoopsEnabled();

@@ -9,7 +9,7 @@ import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
 import { Resource } from 'sst';
-import { buildLoopSystemContext, parseLoopMemory } from './loopMemory';
+import { buildLoopQuery, parseLoopMemory } from './loopMemory';
 
 /** Claim lease; covers one dispatch, after which `activeExecutionId` keeps the loop from overlapping. */
 export const LOOP_LEASE_MS = 5 * 60 * 1000;
@@ -124,14 +124,13 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
         userId: loop.userId,
         sessionId: loop.sessionId,
         questId: loop.sessionId,
-        query: loop.goal,
+        query: buildLoopQuery(loop.goal, loop.memory),
         model: loop.model,
         connectionId: HEADLESS_CONNECTION_ID,
         apiKeyInfo: undefined,
         ...(loop.organizationId && { organizationId: loop.organizationId }),
         ...(loop.agentId && { agentId: loop.agentId }),
         enabledTools: loop.tools,
-        systemContext: buildLoopSystemContext(loop.memory),
       },
       logger
     );
@@ -167,10 +166,13 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
     return;
   }
 
-  await loopRepository.updateForUser(loop.id, loop.userId, {
-    status: 'needs_you',
-    statusReason: result.message,
-    leaseUntil: null,
-  });
+  // Conditional on 'live' so an owner's pause landing mid-dispatch is not overwritten.
+  const parked = await loopRepository.updateForUser(
+    loop.id,
+    loop.userId,
+    { status: 'needs_you', statusReason: result.message, leaseUntil: null },
+    'live'
+  );
+  if (!parked) await loopRepository.releaseLease(loop.id);
   logger.warn(`[Loops] Loop ${loop.id} needs its owner: ${result.reason}`);
 }

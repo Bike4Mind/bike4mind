@@ -8,7 +8,7 @@ import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@serve
  * Run now: makes the loop due, so the next scheduler tick (at most 5 minutes away) runs it.
  * It does not dispatch inline - the scheduler's claim is what keeps runs from overlapping.
  */
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-run' }))
   .post(async (req, res) => {
     await assertLoopsEnabled();

@@ -85,7 +85,7 @@ describe('runLoopSchedulerTick', () => {
       userId: 'user-1',
       sessionId: 'session-1',
       questId: 'session-1',
-      query: 'Summarize the inbox',
+      query: expect.stringMatching(/^Summarize the inbox\n/),
       connectionId: 'headless',
       apiKeyInfo: undefined,
       enabledTools: ['web_search', 'mcp__srv__do_thing'],
@@ -268,10 +268,26 @@ describe('runLoopSchedulerTick', () => {
     expect(await reload(loop.id)).toMatchObject({ status: 'needs_you', statusReason: 'Session not found' });
   });
 
+  it('keeps an owner pause that lands while a refused dispatch is in flight', async () => {
+    const loop = await createLoop();
+    h.startAgentExecution.mockImplementation(async () => {
+      await Loop.updateOne({ _id: loop.id }, { $set: { status: 'paused' } });
+      return { ok: false, reason: 'session_not_found', message: 'Session not found' };
+    });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const after = await reload(loop.id);
+    expect(after.status).toBe('paused');
+    expect(after.leaseUntil).toBeUndefined();
+  });
+
   it('feeds the memory written by run N into the prompt of run N+1', async () => {
     const loop = await createLoop();
     await runLoopSchedulerTick(NOW, logger);
-    expect(h.startAgentExecution.mock.calls[0][0].systemContext).toContain('(none - this is the first run)');
+    expect(h.startAgentExecution.mock.calls[0][0].query).toContain('(none - this is the first run)');
+    // Model-written memory must never reach the system message.
+    expect(h.startAgentExecution.mock.calls[0][0].systemContext).toBeUndefined();
 
     executions['exec-1'] = {
       status: 'completed',
@@ -282,7 +298,7 @@ describe('runLoopSchedulerTick', () => {
     await runLoopSchedulerTick(later, logger);
 
     expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
-    const context = h.startAgentExecution.mock.calls[1][0].systemContext;
+    const context = h.startAgentExecution.mock.calls[1][0].query;
     expect(context).toContain('triaged 4 emails');
     expect(context).toContain('reply to Bob');
     expect(await reload(loop.id)).toMatchObject({ runCount: 1, lastExecutionId: 'exec-2' });

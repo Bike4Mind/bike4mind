@@ -21,7 +21,7 @@ import {
 
 const notFound = (id: string) => new NotFoundError('Loop not found for id: ' + id);
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // Explicit bucket: the raw pathname embeds the loop id, which would make the limit per-loop.
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-item' }))
   .get(async (req, res) => {
