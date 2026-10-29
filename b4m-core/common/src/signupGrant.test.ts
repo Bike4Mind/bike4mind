@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { newSignupGrant, resolveSignupGrantSettings } from './signupGrant';
+import {
+  LARGE_SIGNUP_GRANT_CREDITS,
+  findUnsetSignupProtections,
+  largestSignupGrant,
+  newSignupGrant,
+  raisesGrantAboveLimit,
+  signupGrantPathTotal,
+  resolveSignupGrantSettings,
+} from './signupGrant';
 
 const settings = (values: Record<string, unknown>) =>
   ({
@@ -36,5 +44,66 @@ describe('signup grant configuration', () => {
       creditsReleased: 0,
       nextCondition: 'email_verification',
     });
+  });
+});
+
+describe('signup grant protections', () => {
+  const allOn = {
+    signupGrantRiskPolicy: { enabled: true },
+    maxSignupsPerIpPerDay: 5,
+    maxSignupsPerAsnPerHour: '20',
+    signupBurstAutoHold: 'true',
+  };
+
+  it('reports every protection at its off default', () => {
+    expect(findUnsetSignupProtections({})).toEqual([
+      'signupGrantRiskPolicy',
+      'maxSignupsPerIpPerDay',
+      'maxSignupsPerAsnPerHour',
+      'signupBurstAutoHold',
+    ]);
+    expect(findUnsetSignupProtections({ signupGrantRiskPolicy: { enabled: false }, maxSignupsPerIpPerDay: 0 })).toEqual(
+      ['signupGrantRiskPolicy', 'maxSignupsPerIpPerDay', 'maxSignupsPerAsnPerHour', 'signupBurstAutoHold']
+    );
+  });
+
+  it('accepts boolean and string forms of an enabled protection', () => {
+    expect(findUnsetSignupProtections(allOn)).toEqual([]);
+    expect(findUnsetSignupProtections({ ...allOn, signupBurstAutoHold: true })).toEqual([]);
+  });
+
+  it('reports only the protections still off', () => {
+    expect(findUnsetSignupProtections({ ...allOn, maxSignupsPerAsnPerHour: 0 })).toEqual(['maxSignupsPerAsnPerHour']);
+    expect(findUnsetSignupProtections({ ...allOn, signupGrantRiskPolicy: 'on' })).toEqual(['signupGrantRiskPolicy']);
+  });
+
+  it('takes the larger of the flat grant and the staged total', () => {
+    expect(largestSignupGrant({ defaultFreeCredits: 80 })).toBe(80);
+    expect(largestSignupGrant({ defaultFreeCredits: 10, signupGrantCredits: '60', verifiedUnlockCredits: '70' })).toBe(
+      130
+    );
+    expect(largestSignupGrant({ defaultFreeCredits: 'junk', signupGrantCredits: -5 })).toBe(0);
+  });
+
+  it('counts fractional and oversized flat grants the schema accepts', () => {
+    expect(largestSignupGrant({ defaultFreeCredits: 150.5 })).toBe(150.5);
+    expect(largestSignupGrant({ defaultFreeCredits: '150.5' })).toBe(150.5);
+    expect(largestSignupGrant({ defaultFreeCredits: 1e21 })).toBe(1e21);
+    expect(largestSignupGrant({ defaultFreeCredits: '   ' })).toBe(0);
+  });
+
+  it('totals each grant path separately', () => {
+    const values = { defaultFreeCredits: 0, signupGrantCredits: 500, verifiedUnlockCredits: 10 };
+    expect(signupGrantPathTotal('defaultFreeCredits', values)).toBe(0);
+    expect(signupGrantPathTotal('signupGrantCredits', values)).toBe(510);
+    expect(signupGrantPathTotal('verifiedUnlockCredits', values)).toBe(510);
+  });
+
+  it('refuses only a raise above the limit, never a hold or a reduction', () => {
+    expect(raisesGrantAboveLimit(0, LARGE_SIGNUP_GRANT_CREDITS)).toBe(false);
+    expect(raisesGrantAboveLimit(0, LARGE_SIGNUP_GRANT_CREDITS + 1)).toBe(true);
+    expect(raisesGrantAboveLimit(500, 500)).toBe(false);
+    expect(raisesGrantAboveLimit(500, 200)).toBe(false);
+    expect(raisesGrantAboveLimit(500, 501)).toBe(true);
   });
 });
