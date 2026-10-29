@@ -50,7 +50,7 @@ export type ArenaServiceDeps = {
     | 'goldRaters'
     | 'distinctRaterCount'
     | 'votesByRaters'
-    | 'delete'
+    | 'deleteUnclaimedServed'
   >;
   loadUser: (userId: string) => Promise<ArenaUser | null>;
   loadSettings: () => Promise<PreferenceArenaSettings>;
@@ -126,7 +126,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
     const pair = await pairs.findById(outstanding.pairId);
     if (pair?.active) return { status: 'ready', pair: toView(pair, outstanding.swapped) };
     // The pair was retired under a served row; drop it so the user is not stuck on it.
-    await votes.delete(outstanding.id);
+    await votes.deleteUnclaimedServed(outstanding.id, new Date(now().getTime() - CLAIM_STALE_MS));
     return null;
   }
 
@@ -184,7 +184,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
 
     const pair = await pairs.findById(pairId);
     if (!pair?.active) {
-      await votes.delete(row.id);
+      await votes.deleteUnclaimedServed(row.id, new Date(now().getTime() - CLAIM_STALE_MS));
       throw new NotFoundError('Pair is no longer available');
     }
 

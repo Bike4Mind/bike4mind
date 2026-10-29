@@ -121,6 +121,20 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
   }
 
   /**
+   * Releases a served row nobody is judging. A live claim (newer than `staleBefore`) is never
+   * deleted, since its submit is about to pay; returns whether a row was removed.
+   */
+  async deleteUnclaimedServed(id: string, staleBefore: Date): Promise<boolean> {
+    if (!mongoose.isObjectIdOrHexString(id)) return false;
+    const result = await this.model.deleteOne({
+      _id: id,
+      status: 'served',
+      $or: [{ claimedAt: { $exists: false } }, { claimedAt: null }, { claimedAt: { $lt: staleBefore } }],
+    });
+    return result.deletedCount > 0;
+  }
+
+  /**
    * Claims the outstanding row for judging, so concurrent submits of one pair cannot each judge it
    * differently and pay. Returns null when another submit holds a live claim or the row is settled.
    * A claim older than `staleBefore` is taken over, so a crashed submit does not strand the row.

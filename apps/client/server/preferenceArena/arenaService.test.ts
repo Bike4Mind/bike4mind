@@ -65,7 +65,7 @@ function build(over: { user?: ArenaUser | null; settings?: Partial<PreferenceAre
     goldRaters: vi.fn(),
     distinctRaterCount: vi.fn(),
     votesByRaters: vi.fn(),
-    delete: vi.fn(),
+    deleteUnclaimedServed: vi.fn().mockResolvedValue(true),
   };
   const pairs = {
     findById: vi.fn().mockResolvedValue(pair()),
@@ -147,7 +147,7 @@ describe('serveNextPair', () => {
       status: 'ready',
       pair: { pairId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
     });
-    expect(votes.delete).toHaveBeenCalledWith('stale');
+    expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('stale', expect.any(Date));
   });
 
   it('shows the winner of a serve race', async () => {
@@ -233,7 +233,7 @@ describe('submitVote', () => {
     const { service, votes, pairs, addCredits } = build();
     pairs.findById.mockResolvedValue(pair({ active: false }));
     await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(NotFoundError);
-    expect(votes.delete).toHaveBeenCalledWith('vote1');
+    expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('vote1', expect.any(Date));
     expect(addCredits).not.toHaveBeenCalled();
     expect(votes.recordVote).not.toHaveBeenCalled();
   });

@@ -148,3 +148,34 @@ describe('arenaVoteRepository cap and quality reads', () => {
     expect(rated[0].choice).toBe('b');
   });
 });
+
+describe('arenaVoteRepository deleteUnclaimedServed', () => {
+  const staleBefore = new Date('2026-03-02T09:59:00Z');
+
+  it('deletes an unclaimed served row', async () => {
+    const row = await repo.serve({ userId: 'u1', pairId: newPairId(), swapped: false, isGold: false });
+    expect(await repo.deleteUnclaimedServed(row!.id, staleBefore)).toBe(true);
+    expect(await ArenaVote.countDocuments({ userId: 'u1' })).toBe(0);
+  });
+
+  it('keeps a row under a live claim', async () => {
+    const pairId = newPairId();
+    const row = await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
+    await repo.claim('u1', pairId, new Date('2026-03-02T10:00:00Z'), staleBefore);
+    expect(await repo.deleteUnclaimedServed(row!.id, staleBefore)).toBe(false);
+    expect(await ArenaVote.countDocuments({ userId: 'u1' })).toBe(1);
+  });
+
+  it('deletes a row whose claim went stale', async () => {
+    const pairId = newPairId();
+    const row = await repo.serve({ userId: 'u1', pairId, swapped: false, isGold: false });
+    await repo.claim('u1', pairId, new Date('2026-03-02T09:00:00Z'), staleBefore);
+    expect(await repo.deleteUnclaimedServed(row!.id, staleBefore)).toBe(true);
+  });
+
+  it('never deletes a voted row', async () => {
+    const voted = await castVote('u1');
+    expect(await repo.deleteUnclaimedServed(voted!.id, new Date())).toBe(false);
+    expect(await ArenaVote.countDocuments({ userId: 'u1' })).toBe(1);
+  });
+});
