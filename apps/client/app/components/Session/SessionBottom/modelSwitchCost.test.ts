@@ -89,6 +89,16 @@ describe('getModelSwitchCostNotice', () => {
     expect(getModelSwitchCostNotice({ ...base, selectedModel: SONNET, previousInputTokens: 0 })).toBeNull();
   });
 
+  it("prices the provider's count of the last prompt over the local estimate", () => {
+    const credits = getModelSwitchCostNotice({
+      ...base,
+      previousInputTokens: 300_000,
+      providerInputTokens: 150_000,
+      selectedModel: SONNET,
+    });
+    expect(credits).toBe(roundNoticeCredits(modelSwitchCacheCredits(SONNET, 150_000, OPUS.id)!));
+  });
+
   it('hides below the threshold', () => {
     expect(getModelSwitchCostNotice({ ...base, selectedModel: SONNET, previousInputTokens: 2_000 })).toBeNull();
   });

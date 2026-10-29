@@ -48,6 +48,7 @@ export function usePromptCacheComposer({
       answeredModelId: contextUsage?.answeredModelId,
       previousInputTokens: contextUsage?.actualInputTokens,
       previousInputModelId: contextUsage?.inputModelId,
+      providerInputTokens: contextUsage?.providerInputTokens,
       cacheTtl,
     };
     return {

@@ -42,6 +42,8 @@ interface CacheCostNoticeInput {
   answeredModelId: string | undefined;
   previousInputTokens: number | undefined;
   previousInputModelId: string | undefined;
+  /** The provider's count of the last prompt, in the answering model's tokens; preferred over the estimate. */
+  providerInputTokens?: number;
   /** The TTL the next message will write at. */
   cacheTtl?: PromptCacheTtl;
 }
@@ -56,11 +58,19 @@ export function getModelSwitchCostNotice({
   answeredModelId,
   previousInputTokens,
   previousInputModelId,
+  providerInputTokens,
   cacheTtl,
 }: CacheCostNoticeInput): number | null {
   if (!selectedModel || !answeredModelId || !previousInputTokens) return null;
   if (selectedModel.id === answeredModelId) return null;
-  return noticeCredits(selectedModel, previousInputTokens, previousInputModelId, cacheTtl);
+  return noticeCredits(
+    selectedModel,
+    previousInputTokens,
+    previousInputModelId,
+    answeredModelId,
+    providerInputTokens,
+    cacheTtl
+  );
 }
 
 /**
@@ -74,20 +84,32 @@ export function getCacheExpiryCostNotice({
   answeredModelId,
   previousInputTokens,
   previousInputModelId,
+  providerInputTokens,
   cacheTtl,
 }: CacheCostNoticeInput & { expired: boolean }): number | null {
   if (!expired || !selectedModel || !answeredModelId || !previousInputTokens) return null;
   if (selectedModel.id !== answeredModelId) return null;
-  return noticeCredits(selectedModel, previousInputTokens, previousInputModelId, cacheTtl);
+  return noticeCredits(
+    selectedModel,
+    previousInputTokens,
+    previousInputModelId,
+    answeredModelId,
+    providerInputTokens,
+    cacheTtl
+  );
 }
 
 function noticeCredits(
   model: ModelInfo,
   previousInputTokens: number,
   previousInputModelId: string | undefined,
+  answeredModelId: string,
+  providerInputTokens: number | undefined,
   cacheTtl: PromptCacheTtl | undefined
 ): number | null {
-  const credits = modelSwitchCacheCredits(model, previousInputTokens, previousInputModelId, cacheTtl);
+  const credits = providerInputTokens
+    ? modelSwitchCacheCredits(model, providerInputTokens, answeredModelId, cacheTtl)
+    : modelSwitchCacheCredits(model, previousInputTokens, previousInputModelId, cacheTtl);
   if (credits === null || credits < MODEL_SWITCH_NOTICE_MIN_CREDITS) return null;
   return roundNoticeCredits(credits);
 }

@@ -1027,9 +1027,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // markHistoryCacheAnchor in @bike4mind/services). This backend forwards IMessage objects into
     // the request body, so the control flag has to become cache_control on the message's last
     // content block - and must never be serialized, since the wire has no such field.
-    body.messages = filteredMessages.map(message => {
+    // On a tool round only the newest flagged message is still read; see the same rule in anthropicBackend.
+    const newestFlagged =
+      (options._internal?.toolCallCount ?? 0) > 0 ? filteredMessages.findLastIndex(m => m.cache === true) : -1;
+    body.messages = filteredMessages.map((message, index) => {
       const { cache, ...wire } = message;
-      if (!emitCaching || cache !== true) return wire;
+      if (!emitCaching || cache !== true || index < newestFlagged) return wire;
       const content =
         typeof wire.content === 'string'
           ? [{ type: 'text' as const, text: wire.content }]
