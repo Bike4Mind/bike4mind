@@ -39,3 +39,4 @@ export * from './signupBurstDetector';
 export * from './signupProtection';
 export * from './signupGrantBudget';
 export * from './domainIntelligence';
+export * from './heldSignupGrants';

@@ -212,6 +212,19 @@ describe('free credits service', () => {
       expect(result.creditsGranted).toBe(5000);
     });
 
+    it('reports no grant when the transaction id was already paid', async () => {
+      const adapters = buildAdapters('100');
+      addCreditsSpy.mockRejectedValueOnce(new creditService.DuplicateCreditTransactionError());
+
+      const result = await grantFreeCredits({ id: 'user-1' }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
+      expect(addCreditsSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ transactionId: 'verify-grant:user-1' }),
+        expect.objectContaining({ duplicateTransactionId: 'throw' })
+      );
+    });
+
     it('does not spend the inbox claim when there is nothing to grant', async () => {
       const adapters = buildAdapters('0');
       await grantFreeCredits({ id: 'user-1' }, adapters);
@@ -265,7 +278,7 @@ describe('free credits service', () => {
 
       const result = await releasePendingFreeCredits(user, adapters);
 
-      expect(result).toEqual({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+      expect(result).toEqual({ released: false, failed: true, creditsGranted: 0, currentCredits: null, patch: {} });
       expect(user.tags).toEqual(['Customer', PENDING_FREE_CREDITS_TAG]);
       expect(user.pendingCreditGrant).toBe(250);
       expect(adapters.logger.error).toHaveBeenCalledExactlyOnceWith(
@@ -324,7 +337,7 @@ describe('free credits service', () => {
 
       const result = await releasePendingFreeCredits({ id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG] }, adapters);
 
-      expect(result).toEqual({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+      expect(result).toEqual({ released: false, failed: true, creditsGranted: 0, currentCredits: null, patch: {} });
       expect(adapters.logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
     });
   });

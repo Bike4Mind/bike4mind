@@ -672,6 +672,16 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.held_signup_grants',
+    section: 'admin',
+    label: 'Held signup grants',
+    description: 'Release free signup credits held by the daily budget, in bulk, with revoke',
+    navigationType: 'tab',
+    target: '69', // AdminTab.HeldSignupGrants
+    keywords: ['held grants', 'signup budget', 'free credits', 'release credits', 'bulk release'],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.migrate_users',
     section: 'admin',
     label: 'Migration',

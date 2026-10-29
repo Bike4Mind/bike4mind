@@ -23,6 +23,7 @@ import {
   GitBranch,
   GitPullRequest,
   Globe,
+  HandCoins,
   Handshake,
   Hash,
   HeartPulse,
@@ -132,6 +133,7 @@ export enum AdminTab {
   AuditLog = 66,
   Dashboard = 67,
   SignupDomainHolds = 68,
+  HeldSignupGrants = 69,
 }
 
 /**
@@ -196,6 +198,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: MailCheck, tab: AdminTab.EmailVerification, label: 'Email verification' },
       { Icon: Handshake, tab: AdminTab.PartnerSignupRules, label: 'Partner signups' },
       { Icon: Handshake, tab: AdminTab.SignupDomainHolds, label: 'Signup domain holds' },
+      { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },
