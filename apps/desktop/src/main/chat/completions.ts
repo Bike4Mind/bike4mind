@@ -2,7 +2,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
-import type { ReasoningEffort } from '@bike4mind/common';
+import { isToolChangeMessage, type ReasoningEffort } from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -64,9 +64,14 @@ function canCarryBreakpoint(message: CompletionMessage): boolean {
  */
 export function withCacheBreakpoints(messages: readonly CompletionMessage[]): CompletionMessage[] {
   let rolling = messages.length - 1;
-  while (rolling >= 0 && !canCarryBreakpoint(messages[rolling])) rolling--;
+  // A tool change message takes no breakpoint: the provider puts it on the turn before it.
+  while (rolling >= 0 && (isToolChangeMessage(messages[rolling]) || !canCarryBreakpoint(messages[rolling]))) {
+    rolling--;
+  }
   return messages.map((message, index) =>
-    index === rolling || message.role === 'system' ? { ...message, cache: true } : message
+    index === rolling || (message.role === 'system' && !isToolChangeMessage(message))
+      ? { ...message, cache: true }
+      : message
   );
 }
 

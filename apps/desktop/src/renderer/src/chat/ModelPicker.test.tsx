@@ -36,7 +36,7 @@ afterEach(() => {
   host = null;
 });
 
-function mount(models = MODELS) {
+function mount(models = MODELS, switchCredits?: (model: ChatModelOption) => number | null) {
   const onSelect = vi.fn<(model: string) => void>();
   const catalog: ModelCatalogController = { models, loading: false, error: null, reload: vi.fn() };
   host = document.createElement('div');
@@ -45,7 +45,12 @@ function mount(models = MODELS) {
   act(() => {
     root?.render(
       <CssVarsProvider>
-        <ModelPicker catalog={catalog} modelId={models[0]?.id ?? null} onSelect={onSelect} />
+        <ModelPicker
+          catalog={catalog}
+          modelId={models[0]?.id ?? null}
+          onSelect={onSelect}
+          switchCredits={switchCredits}
+        />
       </CssVarsProvider>
     );
   });
@@ -130,6 +135,16 @@ describe('ModelPicker filter box', () => {
     act(() => row.focus());
 
     expect(document.activeElement).toBe(row);
+  });
+});
+
+describe('ModelPicker switch cost', () => {
+  it('prices every other priced model and says nothing for the current or an unpriced one', () => {
+    mount(MODELS.slice(0, 3), model => (model.id === MODELS[2]!.id ? null : 1234));
+    const costs = options().map(
+      row => row.querySelector('[data-testid="model-picker-switch-cost"]')?.textContent ?? null
+    );
+    expect(costs).toEqual([null, 'About 1,234 credits to re-read this chat', null]);
   });
 });
 

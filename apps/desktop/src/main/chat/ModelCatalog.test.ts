@@ -28,6 +28,20 @@ describe('selectUsableModels', () => {
     expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('maxOutputTokens');
   });
 
+  it('carries well-formed pricing tiers and drops malformed ones', () => {
+    const pricing = {
+      200000: { input: 3e-6, output: 15e-6, cache_write: 3.75e-6 },
+      1000000: { input: 'x', output: 1 },
+      flat: { input: 1, output: 1 },
+    };
+    expect(selectUsableModels([wireModel({ pricing })])[0]?.pricing).toEqual({
+      200000: { input: 3e-6, output: 15e-6, cache_write: 3.75e-6 },
+    });
+    expect(selectUsableModels([wireModel({ pricing: { flat: { input: 1, output: 1 } } })])[0]).not.toHaveProperty(
+      'pricing'
+    );
+  });
+
   it('keeps only text models that can call tools', () => {
     const models = selectUsableModels([
       wireModel(),

@@ -44,6 +44,7 @@ interface WireModel {
   supportsTools?: unknown;
   supportsVision?: unknown;
   can_think?: unknown;
+  pricing?: unknown;
 }
 
 export interface ModelCatalogLogger {
@@ -273,7 +274,32 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       supportsReasoningEffort: supportsReasoningEffort(model.id as string),
       supportsTools: true,
       ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
+      ...pricingOf(model.pricing),
     }));
+}
+
+/** Only well-formed tiers, so a malformed row prices nothing rather than a wrong figure. */
+function pricingOf(wire: unknown): Pick<ChatModelOption, 'pricing'> {
+  if (!wire || typeof wire !== 'object') return {};
+  const pricing: NonNullable<ChatModelOption['pricing']> = {};
+  const rate = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+  for (const [key, tier] of Object.entries(wire)) {
+    const threshold = Number(key);
+    if (!Number.isFinite(threshold) || !tier || typeof tier !== 'object') continue;
+    const fields = tier as Record<string, unknown>;
+    const input = rate(fields.input);
+    const output = rate(fields.output);
+    if (input === undefined || output === undefined) continue;
+    const cacheRead = rate(fields.cache_read);
+    const cacheWrite = rate(fields.cache_write);
+    pricing[threshold] = {
+      input,
+      output,
+      ...(cacheRead !== undefined ? { cache_read: cacheRead } : {}),
+      ...(cacheWrite !== undefined ? { cache_write: cacheWrite } : {}),
+    };
+  }
+  return Object.keys(pricing).length > 0 ? { pricing } : {};
 }
 
 /**
