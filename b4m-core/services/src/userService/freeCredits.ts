@@ -107,6 +107,7 @@ export const grantFreeCredits = async (
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
 
+  let credited = false;
   try {
     // addCredits treats a repeated transactionId as success, which would leave this reservation spent.
     if (budget.outcome === 'reserved' && (await db.creditTransactions.findOne({ transactionId }))) {
@@ -133,10 +134,12 @@ export const grantFreeCredits = async (
       },
       { db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots }, creditHolderMethods: db.users }
     );
+    credited = true;
     if (persisted?.signupGrantHeldReason) await db.users.update({ id: user.id, signupGrantHeldReason: null });
     return { creditsGranted: amount, currentCredits: holder.currentCredits };
   } catch (error) {
-    await budget.release();
+    // Once the ledger row is written the draw is spent; a later throw must not hand it back.
+    if (!credited) await budget.release();
     throw error;
   }
 };

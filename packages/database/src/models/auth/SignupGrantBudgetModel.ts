@@ -34,13 +34,14 @@ const detached = { session: null } as const;
 
 export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
   async reserve(day, transactionId, amount, budget) {
-    if (amount > budget) return null;
+    // A grant larger than the whole budget could never fit any day, so it may draw only on an untouched day.
+    const headroom = Math.max(0, budget - amount);
     // Two first-of-day callers can both miss the upsert filter and race to insert the day row; the
     // loser gets a duplicate-key error and retries against the row the winner created.
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const updated = await SignupGrantBudgetDayModel.findOneAndUpdate(
-          { _id: day, spent: { $lte: budget - amount }, reservedIds: { $ne: transactionId } },
+          { _id: day, spent: { $lte: headroom }, reservedIds: { $ne: transactionId } },
           { $inc: { spent: amount }, $addToSet: { reservedIds: transactionId } },
           { upsert: true, new: true, ...detached }
         ).lean();
@@ -49,7 +50,7 @@ export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
         if (!isDuplicate(error)) throw error;
         const existing = await SignupGrantBudgetDayModel.findById(day, null, detached).lean();
         if (existing?.reservedIds.includes(transactionId)) return { spent: existing.spent, fresh: false };
-        if (existing && existing.spent > budget - amount) return null;
+        if (existing && existing.spent > headroom) return null;
       }
     }
     throw new Error('Signup grant budget reservation contended');

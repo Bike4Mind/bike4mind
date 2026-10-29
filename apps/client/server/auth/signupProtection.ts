@@ -15,7 +15,9 @@ export const signupProtection: SignupProtection = {
     async notify(alert) {
       try {
         const outcome = await postMessageToSlackWithOutcome(
-          `Signup grant budget at ${alert.threshold}% for ${alert.day}: ${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid.`,
+          alert.threshold === 100
+            ? `Signup grant budget exhausted for ${alert.day}: new grants are held (daily budget ${alert.budget.toLocaleString('en-US')} credits).`
+            : `Signup grant budget at ${alert.threshold}% for ${alert.day}: ${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid.`,
           'SlackSecurityAlertsWebhookUrl',
           { timeoutMs: 3000 }
         );

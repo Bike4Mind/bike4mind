@@ -190,7 +190,8 @@ async function releaseStage(
     return result;
   } catch (error) {
     // The counter sits outside the payout transaction, so an aborted payout must hand its draw back.
-    await releaseReservations();
+    // A duplicate ledger row means a concurrent release paid under this id: its draw stays spent.
+    if (!(error instanceof DuplicateCreditTransactionError)) await releaseReservations();
     if (!(error instanceof DuplicateCreditTransactionError) && !(error instanceof InboxGrantClaimDeniedError))
       throw error;
     return noGrant();

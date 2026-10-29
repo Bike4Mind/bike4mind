@@ -260,6 +260,50 @@ describe('signup grant daily budget', () => {
     await repo.refund('2030-02-01', 'tx-1', 10);
     await repo.refund('2030-02-01', 'tx-1', 10);
     expect((await SignupGrantBudgetDayModel.findById('2030-02-01').lean())?.spent).toBe(0);
-    expect(await repo.reserve('2030-02-01', 'tx-2', 30, 25)).toBeNull();
+    expect(await repo.reserve('2030-02-01', 'tx-2', 30, 25)).toEqual({ spent: 30, fresh: true });
+  });
+
+  it('lets a grant larger than the whole budget draw only on an untouched day', async () => {
+    const repo = signupGrantBudgetRepository;
+    expect(await repo.reserve('2030-02-02', 'tx-small', 5, 10)).toEqual({ spent: 5, fresh: true });
+    expect(await repo.reserve('2030-02-02', 'tx-big', 30, 10)).toBeNull();
+    expect(await repo.reserve('2030-02-03', 'tx-big', 30, 10)).toEqual({ spent: 30, fresh: true });
+    expect(await repo.reserve('2030-02-03', 'tx-other', 30, 10)).toBeNull();
+  });
+
+  it('keeps the draw when a concurrent release already paid the same grant', async () => {
+    config.signupGrantDailyBudget = '30';
+    const user = await createUser(true, 0);
+    const results = await Promise.all([
+      userService.releaseSignupTranche(user.id, adapters),
+      userService.releaseSignupTranche(user.id, adapters),
+    ]);
+    expect(results.filter(r => r.creditsGranted === 12)).toHaveLength(1);
+    expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${user.id}` })).toBe(1);
+    expect(await spentToday()).toBe(12);
+  });
+
+  it('keeps the draw when the follow-up write fails after the grant was paid', async () => {
+    config.signupGrantDailyBudget = '30';
+    config.defaultFreeCredits = '12';
+    const held = await createUser(false, 0);
+    await User.updateOne({ _id: held.id }, { $set: { signupGrantHeldReason: 'budget_exhausted' } });
+    const failing = {
+      ...adapters,
+      db: {
+        ...adapters.db,
+        users: new Proxy(userRepository, {
+          get: (target, prop, receiver) =>
+            prop === 'update'
+              ? async () => {
+                  throw new Error('write failed');
+                }
+              : Reflect.get(target, prop, receiver),
+        }),
+      },
+    };
+    await expect(userService.grantFreeCredits(held, failing)).rejects.toThrow('write failed');
+    expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${held.id}` })).toBe(1);
+    expect(await spentToday()).toBe(12);
   });
 });

@@ -260,6 +260,7 @@ export async function grantNoCardUnlock(
 
   let result: GrantNoCardUnlockResult | null = null;
   let failure: unknown = null;
+  let paidByPeer = false;
   const reservations: SignupGrantBudgetReservation[] = [];
   try {
     result = await withTransaction(async () => {
@@ -296,10 +297,13 @@ export async function grantNoCardUnlock(
       return { granted: true, credits: amount, currentCredits: creditHolder.currentCredits };
     });
   } catch (error) {
-    if (error instanceof DuplicateCreditTransactionError) result = refused('already_granted');
-    else failure = error;
+    if (error instanceof DuplicateCreditTransactionError) {
+      result = refused('already_granted');
+      paidByPeer = true;
+    } else failure = error;
   }
-  if (!result?.granted) await Promise.all(reservations.map(held => held.release()));
+  // A duplicate ledger row means a concurrent grant paid under this id, so its draw stays spent.
+  if (!result?.granted && !paidByPeer) await Promise.all(reservations.map(held => held.release()));
   if (commit?.ok && !result?.granted) {
     try {
       const reasonGranted = Boolean(await db.creditTransactions.findOne({ transactionId }));
