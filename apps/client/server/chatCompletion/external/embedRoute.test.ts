@@ -519,19 +519,23 @@ describe('POST /api/embed/chat', () => {
     });
   }
 
-  it('denies an opaque origin on the session-token path using the live key allow-list', async () => {
-    // The token carries no allow-list; the gate must read the re-loaded key's.
+  it('gates the session-token path on the live key allow-list, not the token copy', async () => {
+    // Only the stale token lists this origin, so reading the token's list instead would let it through.
     mockVerifyEmbedSessionToken.mockReturnValue({
       keyId: 'key-1',
       agentId: 'agent-1',
       organizationId: 'org-1',
       sessionId: 'sess-1',
-      allowedOrigins: [],
+      allowedOrigins: ['https://stale.example'],
     });
     mockVerifyEmbedKeyById.mockResolvedValue(VALID_INFO);
     const res = await fetch(`${baseUrl}/api/embed/chat`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer session.jwt.token', origin: 'null' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer session.jwt.token',
+        origin: 'https://stale.example',
+      },
       body: JSON.stringify(CHAT),
     });
     expect(res.status).toBe(403);
