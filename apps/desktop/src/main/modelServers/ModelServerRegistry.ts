@@ -566,7 +566,7 @@ export class ModelServerRegistry {
 }
 
 const LOCAL_OLLAMA_PORT = new URL(LOCAL_OLLAMA_URL).port;
-const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0', '::', '::ffff:7f00:1']);
 
 /** The port "This computer" already uses: saving it again would list the same Ollama twice. */
 function isLocalOllama(parsed: ParsedAddress): boolean {

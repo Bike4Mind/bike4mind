@@ -166,7 +166,14 @@ describe('ModelServerRegistry', () => {
   it("refuses this computer's own Ollama address before sending anything", async () => {
     const fake = fakeOllama();
     const { registry: servers, store } = registry(fake);
-    for (const address of ['http://127.0.0.1:11434', '127.0.0.1:11434', 'localhost:11434', 'http://[::1]:11434/']) {
+    for (const address of [
+      'http://127.0.0.1:11434',
+      '127.0.0.1:11434',
+      'localhost:11434',
+      'http://[::1]:11434/',
+      '0.0.0.0:11434',
+      'http://[::ffff:127.0.0.1]:11434',
+    ]) {
       const probe = await servers.probe({ address, credential: none });
       expect(probe).toMatchObject({ ok: false, address: null });
       expect(probe.error).toMatch(/is This computer, which is already listed.*different local port/);
