@@ -104,6 +104,7 @@ import type {
   HubSearchRequest,
   HubSearchResult,
   InstalledModelsResult,
+  MachineView,
   ModelPull,
   ModelPullRequest,
   ModelPullResult,
@@ -272,6 +273,7 @@ export const IPC_CHANNELS = {
   modelServersUpdate: 'servers:update',
   modelServersRemove: 'servers:remove',
   modelServersCheck: 'servers:check',
+  modelServersProbedHardware: 'servers:probed-hardware',
   /** main -> renderer push; a server was added, changed, or its health was rechecked. */
   modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
@@ -590,7 +592,7 @@ export interface DesktopApi {
     getStatus(serverId?: string): Promise<ModelRuntimeStatus>;
     listInstalled(serverId?: string): Promise<InstalledModelsResult>;
     search(request: HubSearchRequest): Promise<HubSearchResult>;
-    getDetail(repo: string): Promise<HubDetailResult>;
+    getDetail(repo: string, serverId?: string): Promise<HubDetailResult>;
     listCurated(serverId?: string): Promise<CuratedList>;
     getCuratedPull(entryId: string, buildId: string, serverId?: string): Promise<CuratedPullResult>;
     /** Checks an installed curated build against its review again, after Ollama could not describe it. */
@@ -1025,6 +1027,8 @@ export interface DesktopApi {
     remove(id: string): Promise<ModelServerMutationResult>;
     /** Rechecks one server, or all of them when `id` is omitted. */
     check(id?: string): Promise<ModelServerView[]>;
+    /** This computer's hardware as probed, before entered specs; null when the probe failed. */
+    probedHardware(): Promise<MachineView | null>;
     onChanged(listener: (servers: ModelServerView[]) => void): () => void;
   };
   /** User-made sidebar sections; see @shared/sidebarSections. */

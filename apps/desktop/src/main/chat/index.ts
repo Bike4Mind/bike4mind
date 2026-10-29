@@ -97,6 +97,9 @@ import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels } from '../modelServers/LocalModels';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { withEnteredSpecs } from '../models/enteredHardware';
+import { machineView } from '../models/fit';
+import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -450,7 +453,13 @@ export function registerChat(
       models.forgetLocal();
       send(IPC_CHANNELS.modelServersChanged, servers);
     },
+    localSpecsChanged: () => {
+      forgetLocalContexts();
+      localSizing.forget?.();
+      models.forgetLocal();
+    },
   });
+  localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
   const local = new LocalModels(new OllamaLocal((url, init) => net.fetch(url, init), localSizing), modelServers);
   const models = new ModelCatalog(
@@ -640,7 +649,10 @@ export function registerChat(
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
-  registerModelServersIpc(ipcMain, modelServers);
+  registerModelServersIpc(ipcMain, modelServers, async () => {
+    const probed = await localHardware.probed();
+    return probed && machineView(probed);
+  });
   ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
   registerLocalContextIpc(ipcMain, {
     preference: localContext,

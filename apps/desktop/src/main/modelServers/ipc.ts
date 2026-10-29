@@ -7,9 +7,11 @@ import type {
   ModelServerKind,
   ModelServerMutationResult,
   ModelServerProbeInput,
+  ModelServerSpecs,
   ModelServerUpdateInput,
   ModelServerView,
 } from '@shared/modelServers';
+import type { MachineView } from '@shared/models';
 import type { ModelServerRegistry } from './ModelServerRegistry';
 import { MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS } from './ModelServerStore';
 
@@ -40,6 +42,20 @@ export function credentialInput(value: unknown): ModelServerCredentialInput {
   return { type: 'none' };
 }
 
+/** Undefined leaves the specs as they are; null clears them. The store checks the figures. */
+export function specsInput(value: unknown): ModelServerSpecs | null | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null) return null;
+  const raw = value as Record<string, unknown>;
+  const figure = (field: unknown) => (typeof field === 'number' ? field : null);
+  return {
+    ramGiB: figure(raw.ramGiB),
+    gpuMemoryGiB: figure(raw.gpuMemoryGiB),
+    bandwidthGBps: figure(raw.bandwidthGBps),
+    unified: raw.unified === true,
+  };
+}
+
 function probeInput(value: unknown): ModelServerProbeInput {
   const raw = (value ?? {}) as Record<string, unknown>;
   return { address: text(raw.address, 2_048), credential: credentialInput(raw.credential) };
@@ -47,7 +63,9 @@ function probeInput(value: unknown): ModelServerProbeInput {
 
 export function registerModelServersIpc(
   ipc: Pick<IpcMain, 'handle'>,
-  registry: Pick<ModelServerRegistry, 'views' | 'probe' | 'add' | 'update' | 'remove' | 'check'>
+  registry: Pick<ModelServerRegistry, 'views' | 'probe' | 'add' | 'update' | 'remove' | 'check'>,
+  /** This computer's hardware as probed, before any entered specs; null when the probe failed. */
+  probedHardware: () => Promise<MachineView | null> = async () => null
 ): void {
   const mutate = async (work: () => Promise<ModelServerView[]>): Promise<ModelServerMutationResult> => {
     try {
@@ -77,9 +95,11 @@ export function registerModelServersIpc(
       ...(kind(raw.kind) ? { kind: kind(raw.kind) } : {}),
       ...(access(raw.access) ? { access: access(raw.access) } : {}),
       ...(raw.credential !== undefined ? { credential: credentialInput(raw.credential) } : {}),
+      ...(raw.specs !== undefined ? { specs: specsInput(raw.specs) } : {}),
     };
     return mutate(() => registry.update(text(id, 64), update));
   });
+  ipc.handle(IPC_CHANNELS.modelServersProbedHardware, () => probedHardware().catch(() => null));
   ipc.handle(IPC_CHANNELS.modelServersRemove, (_event, id: unknown) => mutate(() => registry.remove(text(id, 64))));
   ipc.handle(IPC_CHANNELS.modelServersCheck, (_event, id: unknown) =>
     registry.check(typeof id === 'string' ? text(id, 64) : undefined)
