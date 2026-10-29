@@ -353,6 +353,30 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       );
     });
 
+    it("refreshes the buyer's model catalog and entitlements once the grant commits", async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+
+      await invokeWebhookWithEvent(packEvent);
+
+      expect(mockSendToClient).toHaveBeenCalledWith('user123', expect.anything(), {
+        action: 'invalidate_query',
+        queryKey: ['llm', 'models'],
+      });
+      expect(mockSendToClient).toHaveBeenCalledWith('user123', expect.anything(), {
+        action: 'invalidate_query',
+        queryKey: ['entitlements'],
+      });
+    });
+
+    it('acknowledges the delivery when the catalog refresh fails', async () => {
+      mockFindByStripeCustomerId.mockResolvedValue({ ...mockUser });
+      mockSendToClient.mockRejectedValueOnce(new Error('socket gone')).mockRejectedValueOnce(new Error('socket gone'));
+
+      const { res } = await invokeWebhookWithEvent(packEvent);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
     it('falls back to the metadata userId when no user holds the intent customer', async () => {
       mockFindByStripeCustomerId.mockResolvedValue(null);
       mockFindById.mockResolvedValue({ ...mockUser });

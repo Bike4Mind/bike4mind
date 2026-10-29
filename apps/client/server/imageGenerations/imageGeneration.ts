@@ -1,3 +1,4 @@
+import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -55,6 +56,7 @@ export const getImageGeneration = (): ImageGenerationService => {
       // doors - a lake-only image the workbench admitted must still resolve as an image-gen input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),
       creditHolds: imageCreditHolds,
+      assertModelAdmission: assertMediaModelAdmission,
       startImageGenerationProcess: async body => {
         const queueUrl = getSourceQueueUrl('imageGenerationQueue');
         imageLogger.log('Queueing image generation', {

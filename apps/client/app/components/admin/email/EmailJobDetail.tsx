@@ -105,13 +105,13 @@ const RECIPIENT_TYPE_INFO: Record<RecipientType, { label: string; description: s
     icon: <PersonIcon />,
   },
   all_subscribers: {
-    label: 'All Subscribers',
-    description: 'Newsletter subscribers (may not have accounts)',
+    label: 'Waitlist',
+    description: 'People on the waitlist (may not have accounts)',
     icon: <GroupIcon />,
   },
   both: {
-    label: 'All Users & Subscribers',
-    description: 'Both registered users and newsletter subscribers (deduplicated)',
+    label: 'All users and waitlist',
+    description: 'Both registered users and the waitlist (deduplicated)',
     icon: <PeopleIcon />,
   },
   specific_emails: {

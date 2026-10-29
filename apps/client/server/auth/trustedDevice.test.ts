@@ -29,12 +29,13 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 import {
-  TRUSTED_DEVICE_COOKIE,
+  LEGACY_TRUSTED_DEVICE_COOKIE,
   clearTrustedDeviceCookie,
   consumeTrustedDevice,
   describeDevice,
   grantTrustedDevice,
   identifyTrustedDevice,
+  trustedDeviceCookieName,
   trustedDevicesAllowed,
 } from './trustedDevice';
 
@@ -42,6 +43,8 @@ const sha256 = (v: string) => createHash('sha256').update(v).digest('hex');
 
 const VALID_ID = '507f1f77bcf86cd799439011';
 const VALID_SECRET = 'A'.repeat(43);
+const COOKIE_A = trustedDeviceCookieName('user-a');
+const COOKIE_B = trustedDeviceCookieName('user-b');
 
 const makeReq = (cookie?: string): any => ({
   headers: { cookie, 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X) Chrome/120.0 Safari/537.36' },
@@ -78,17 +81,14 @@ describe('consumeTrustedDevice', () => {
   });
 
   it('returns null for a malformed cookie without hitting the database', async () => {
-    expect(await consumeTrustedDevice(makeReq(`${TRUSTED_DEVICE_COOKIE}=garbage`), 'user-a')).toBeNull();
+    expect(await consumeTrustedDevice(makeReq(`${COOKIE_A}=garbage`), 'user-a')).toBeNull();
     expect(mockFindValidForUser).not.toHaveBeenCalled();
   });
 
   it('accepts a cookie whose secret hashes to the stored hash', async () => {
     mockFindValidForUser.mockResolvedValue({ id: VALID_ID, tokenHash: sha256(VALID_SECRET) });
 
-    const device = await consumeTrustedDevice(
-      makeReq(`${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`),
-      'user-a'
-    );
+    const device = await consumeTrustedDevice(makeReq(`${COOKIE_A}=${VALID_ID}.${VALID_SECRET}`), 'user-a');
 
     expect(device?.id).toBe(VALID_ID);
     expect(mockFindValidForUser).toHaveBeenCalledWith(VALID_ID, 'user-a');
@@ -98,33 +98,31 @@ describe('consumeTrustedDevice', () => {
   it('rejects a cookie carrying the right device id but the wrong secret', async () => {
     mockFindValidForUser.mockResolvedValue({ id: VALID_ID, tokenHash: sha256('the-real-secret') });
 
-    const forged = `${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${'B'.repeat(43)}`;
+    const forged = `${COOKIE_A}=${VALID_ID}.${'B'.repeat(43)}`;
     expect(await consumeTrustedDevice(makeReq(forged), 'user-a')).toBeNull();
     expect(mockTouch).not.toHaveBeenCalled();
   });
 
   it('rejects when the repository scopes the device away from this user', async () => {
     mockFindValidForUser.mockResolvedValue(null);
-    const cookie = `${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`;
+    const cookie = `${COOKIE_A}=${VALID_ID}.${VALID_SECRET}`;
     expect(await consumeTrustedDevice(makeReq(cookie), 'someone-else')).toBeNull();
   });
 
   it('degrades to "not trusted" when the database throws, never to a bypass', async () => {
     mockFindValidForUser.mockRejectedValue(new Error('mongo is down'));
-    const cookie = `${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`;
+    const cookie = `${COOKIE_A}=${VALID_ID}.${VALID_SECRET}`;
     expect(await consumeTrustedDevice(makeReq(cookie), 'user-a')).toBeNull();
   });
 
   it('ignores an unrelated cookie of a similar name', async () => {
-    expect(
-      await consumeTrustedDevice(makeReq(`${TRUSTED_DEVICE_COOKIE}_other=${VALID_ID}.${VALID_SECRET}`), 'user-a')
-    ).toBeNull();
+    expect(await consumeTrustedDevice(makeReq(`${COOKIE_A}_other=${VALID_ID}.${VALID_SECRET}`), 'user-a')).toBeNull();
     expect(mockFindValidForUser).not.toHaveBeenCalled();
   });
 
   it('finds its cookie among several', async () => {
     mockFindValidForUser.mockResolvedValue({ id: VALID_ID, tokenHash: sha256(VALID_SECRET) });
-    const cookie = `theme=dark; ${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}; other=1`;
+    const cookie = `theme=dark; ${COOKIE_A}=${VALID_ID}.${VALID_SECRET}; other=1`;
     expect(await consumeTrustedDevice(makeReq(cookie), 'user-a')).not.toBeNull();
   });
 });
@@ -133,10 +131,7 @@ describe('identifyTrustedDevice', () => {
   it('resolves the same device as consume but records no use', async () => {
     mockFindValidForUser.mockResolvedValue({ id: VALID_ID, tokenHash: sha256(VALID_SECRET) });
 
-    const device = await identifyTrustedDevice(
-      makeReq(`${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`),
-      'user-a'
-    );
+    const device = await identifyTrustedDevice(makeReq(`${COOKIE_A}=${VALID_ID}.${VALID_SECRET}`), 'user-a');
 
     expect(device?.id).toBe(VALID_ID);
     // Listing or revoking must not make "last used" read as today.
@@ -145,7 +140,7 @@ describe('identifyTrustedDevice', () => {
 
   it('applies the same secret check as consume', async () => {
     mockFindValidForUser.mockResolvedValue({ id: VALID_ID, tokenHash: sha256('other') });
-    const cookie = `${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`;
+    const cookie = `${COOKIE_A}=${VALID_ID}.${VALID_SECRET}`;
     expect(await identifyTrustedDevice(makeReq(cookie), 'user-a')).toBeNull();
   });
 });
@@ -182,11 +177,7 @@ describe('grantTrustedDevice', () => {
     mockFindValidForUser.mockResolvedValue({ id: VALID_ID, tokenHash: sha256(VALID_SECRET) });
     const res = makeRes();
 
-    const device = await grantTrustedDevice(
-      makeReq(`${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`),
-      res,
-      'user-a'
-    );
+    const device = await grantTrustedDevice(makeReq(`${COOKIE_A}=${VALID_ID}.${VALID_SECRET}`), res, 'user-a');
 
     expect(device?.id).toBe(VALID_ID);
     expect(mockExtend).toHaveBeenCalled();
@@ -198,7 +189,7 @@ describe('grantTrustedDevice', () => {
     mockCreate.mockResolvedValue({ id: '507f1f77bcf86cd799439012', expiresAt: new Date() });
     const res = makeRes();
 
-    await grantTrustedDevice(makeReq(`${TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`), res, 'user-a');
+    await grantTrustedDevice(makeReq(`${COOKIE_A}=${VALID_ID}.${VALID_SECRET}`), res, 'user-a');
 
     expect(mockExtend).not.toHaveBeenCalled();
     expect(mockCreate).toHaveBeenCalled();
@@ -214,15 +205,127 @@ describe('grantTrustedDevice', () => {
     const cookies = setCookieValues(res);
     expect(cookies).toHaveLength(2);
     expect(cookies[0]).toContain('session=abc');
-    expect(cookies[1]).toContain(TRUSTED_DEVICE_COOKIE);
+    expect(cookies[1]).toContain(`${COOKIE_A}=`);
   });
 });
 
 describe('clearTrustedDeviceCookie', () => {
   it('expires the cookie immediately', () => {
     const res = makeRes();
-    clearTrustedDeviceCookie(res);
-    expect(setCookieValues(res)[0]).toContain('Max-Age=0');
+    clearTrustedDeviceCookie(res, 'user-a');
+    expect(setCookieValues(res)).toEqual([expect.stringMatching(new RegExp(`^${COOKIE_A}=;.*Max-Age=0`))]);
+  });
+
+  it("leaves other accounts' cookies and the legacy shared cookie alone", () => {
+    const res = makeRes();
+    clearTrustedDeviceCookie(res, 'user-a');
+    const cleared = setCookieValues(res).join('\n');
+    expect(cleared).not.toContain(`${COOKIE_B}=`);
+    expect(cleared).not.toContain(`${LEGACY_TRUSTED_DEVICE_COOKIE}=`);
+  });
+});
+
+/**
+ * Switching accounts on one browser: each account keeps its own trust, so remembering
+ * one never re-prompts the other for TOTP.
+ */
+describe('per-account cookies', () => {
+  it('names the cookie per account without exposing the raw user id', () => {
+    const userId = '507f1f77bcf86cd799439099';
+    const name = trustedDeviceCookieName(userId);
+    expect(name).not.toContain(userId);
+    expect(name).toBe(trustedDeviceCookieName(userId));
+    expect(name).not.toBe(trustedDeviceCookieName('507f1f77bcf86cd799439098'));
+    expect(name).not.toBe(LEGACY_TRUSTED_DEVICE_COOKIE);
+  });
+
+  it("does not read another account's cookie", async () => {
+    expect(await consumeTrustedDevice(makeReq(`${COOKIE_B}=${VALID_ID}.${VALID_SECRET}`), 'user-a')).toBeNull();
+    expect(mockFindValidForUser).not.toHaveBeenCalled();
+  });
+
+  it("granting one account never touches another account's cookie", async () => {
+    mockCreate.mockResolvedValue({ id: '507f1f77bcf86cd799439012', expiresAt: new Date() });
+    const res = makeRes();
+
+    await grantTrustedDevice(makeReq(`${COOKIE_A}=${VALID_ID}.${VALID_SECRET}`), res, 'user-b');
+
+    const cookies = setCookieValues(res);
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]).toMatch(new RegExp(`^${COOKIE_B}=507f1f77bcf86cd799439012\\.`));
+  });
+
+  it('still honors a trust from the legacy shared cookie', async () => {
+    mockFindValidForUser.mockResolvedValue({ id: VALID_ID, tokenHash: sha256(VALID_SECRET) });
+
+    const device = await consumeTrustedDevice(
+      makeReq(`${LEGACY_TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`),
+      'user-a'
+    );
+
+    expect(device?.id).toBe(VALID_ID);
+  });
+
+  it('only honors a legacy cookie for the account that owns it', async () => {
+    mockFindValidForUser.mockImplementation(async (id: string, userId: string) =>
+      userId === 'user-b' ? { id, tokenHash: sha256(VALID_SECRET) } : null
+    );
+    const cookie = `${LEGACY_TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`;
+
+    expect(await consumeTrustedDevice(makeReq(cookie), 'user-a')).toBeNull();
+    expect(mockFindValidForUser).toHaveBeenCalledWith(VALID_ID, 'user-a');
+    expect((await consumeTrustedDevice(makeReq(cookie), 'user-b'))?.id).toBe(VALID_ID);
+  });
+
+  it("retires the account's legacy cookie on re-grant even when its own cookie wins", async () => {
+    const legacyId = '507f1f77bcf86cd799439012';
+    mockFindValidForUser.mockImplementation(async (id: string) => ({ id, tokenHash: sha256(VALID_SECRET) }));
+    const res = makeRes();
+    const cookie = `${COOKIE_A}=${VALID_ID}.${VALID_SECRET}; ${LEGACY_TRUSTED_DEVICE_COOKIE}=${legacyId}.${VALID_SECRET}`;
+
+    const device = await grantTrustedDevice(makeReq(cookie), res, 'user-a');
+
+    expect(device?.id).toBe(VALID_ID);
+    const cookies = setCookieValues(res);
+    expect(cookies[0]).toContain(`${COOKIE_A}=${VALID_ID}.`);
+    expect(cookies[1]).toMatch(new RegExp(`^${LEGACY_TRUSTED_DEVICE_COOKIE}=;.*Max-Age=0`));
+  });
+
+  it("prefers the account's own cookie and falls back to the legacy one when it fails", async () => {
+    const otherId = '507f1f77bcf86cd799439012';
+    mockFindValidForUser.mockImplementation(async (id: string) =>
+      id === otherId ? { id: otherId, tokenHash: sha256(VALID_SECRET) } : null
+    );
+    const cookie = `${COOKIE_A}=${VALID_ID}.${VALID_SECRET}; ${LEGACY_TRUSTED_DEVICE_COOKIE}=${otherId}.${VALID_SECRET}`;
+
+    const device = await identifyTrustedDevice(makeReq(cookie), 'user-a');
+
+    expect(mockFindValidForUser.mock.calls.map(([id]) => id)).toEqual([VALID_ID, otherId]);
+    expect(device?.id).toBe(otherId);
+  });
+
+  it("migrates the account's legacy cookie to its own name on re-grant", async () => {
+    mockFindValidForUser.mockResolvedValue({ id: VALID_ID, tokenHash: sha256(VALID_SECRET) });
+    const res = makeRes();
+
+    await grantTrustedDevice(makeReq(`${LEGACY_TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`), res, 'user-a');
+
+    expect(mockCreate).not.toHaveBeenCalled();
+    const cookies = setCookieValues(res);
+    expect(cookies[0]).toContain(`${COOKIE_A}=${VALID_ID}.${VALID_SECRET};`);
+    expect(cookies[1]).toMatch(new RegExp(`^${LEGACY_TRUSTED_DEVICE_COOKIE}=;.*Max-Age=0`));
+  });
+
+  it("keeps another account's legacy cookie when granting a new trust", async () => {
+    mockFindValidForUser.mockResolvedValue(null);
+    mockCreate.mockResolvedValue({ id: '507f1f77bcf86cd799439012', expiresAt: new Date() });
+    const res = makeRes();
+
+    await grantTrustedDevice(makeReq(`${LEGACY_TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`), res, 'user-b');
+
+    const cookies = setCookieValues(res);
+    expect(cookies).toHaveLength(1);
+    expect(cookies[0]).toContain(`${COOKIE_B}=`);
   });
 });
 

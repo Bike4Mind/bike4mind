@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 type RouteFn = (req: unknown, res: unknown) => unknown;
+type Middleware = (req: unknown, res: unknown, next: () => void) => void;
 
 const h = vi.hoisted(() => ({
   audit: vi.fn(),
@@ -19,9 +20,14 @@ const h = vi.hoisted(() => ({
 vi.mock('@client/server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, RouteFn> = {};
+    const middlewares: Middleware[] = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => routes[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
+        use: (fn: Middleware) => (middlewares.push(fn), chain),
         get: () => chain,
         post: (fn: RouteFn) => ((routes.POST = fn), chain),
         put: (fn: RouteFn) => ((routes.PUT = fn), chain),

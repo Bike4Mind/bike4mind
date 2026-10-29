@@ -1,4 +1,12 @@
 // @vitest-environment node
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: vi.fn(async () => ({
+    assert: vi.fn(async (_modelId: string) => {}),
+    admits: vi.fn(async (_modelId: string) => true),
+  })),
+}));
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ApiKeyScope, TooManyRequestsError } from '@bike4mind/common';
 
@@ -67,6 +75,19 @@ describe('POST /api/v1/voice/sessions - admin role in the session token', () => 
     h.signToken.mockReturnValue('signed');
     h.createSession.mockResolvedValue({ id: 'session-1', name: 'Voice' });
     h.trustSettings.mockResolvedValue({ gateEnabled: false });
+  });
+
+  it('refuses the voice transport even when the reasoning model would be admitted', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (modelId: string) => {
+      if (modelId === 'elevenlabs') throw refusal;
+    });
+    vi.mocked(createModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => true });
+    await expect(run()).rejects.toBe(refusal);
+    expect(assertAdmission).toHaveBeenCalledWith('elevenlabs');
+    expect(createModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'owner-1' }));
+    expect(h.createSession).not.toHaveBeenCalled();
+    expect(h.signToken).not.toHaveBeenCalled();
   });
 
   it('marks the role withheld for a key without the admin scope', async () => {
