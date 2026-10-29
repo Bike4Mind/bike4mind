@@ -59,6 +59,11 @@ export function sortByRecency(models: readonly ChatModelOption[]): ChatModelOpti
   });
 }
 
+/** A saved server's rows sit under its own heading, so they name no provider. */
+function providerLabel(model: ChatModelOption): string | undefined {
+  return model.server ? undefined : model.backend;
+}
+
 /** The first model row of the menu the filter box sits in - the one the query narrowed to. */
 function topMatch(filterInput: HTMLElement): HTMLElement | null {
   return (
@@ -143,7 +148,7 @@ export function ModelPicker({
     const query = filter.trim().toLowerCase();
     const sorted = sortByRecency(models);
     if (!query) return sorted;
-    return sorted.filter(model => model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query));
+    return sorted.filter(model => [model.name, providerLabel(model)].some(text => text?.toLowerCase().includes(query)));
   }, [models, filter]);
   const groups = useMemo(() => groupByServer(matches), [matches]);
 
@@ -300,17 +305,17 @@ export function ModelPicker({
               >
                 <Stack sx={{ minWidth: 0 }}>
                   <Typography level="body-sm" noWrap>
-                    {model.id === modelId ? '• ' : ''}
+                    {model.id === modelId ? '\u2022 ' : ''}
                     {model.name}
                   </Typography>
-                  {(model.unavailable ?? (!model.server && model.backend)) && (
+                  {(model.unavailable ?? providerLabel(model)) && (
                     <Typography
                       level="body-xs"
                       textColor="text.tertiary"
                       noWrap
                       data-testid="model-picker-option-detail"
                     >
-                      {model.unavailable ?? model.backend}
+                      {model.unavailable ?? providerLabel(model)}
                     </Typography>
                   )}
                 </Stack>

@@ -111,11 +111,11 @@ describe('ModelPicker filter box', () => {
     mount();
     const input = filterBox();
 
-    typeInto(input, 'model-11');
+    typeInto(input, 'model 11');
     // Joy re-focuses its highlighted item on every narrowing; the box has to win each time.
     hover(options()[0]!);
 
-    expect(input.value).toBe('model-11');
+    expect(input.value).toBe('model 11');
     expect(document.activeElement).toBe(input);
     expect(options()).toHaveLength(1);
   });
@@ -191,7 +191,7 @@ describe('ModelPicker recency order', () => {
 
   it('lists rows newest first and hides the model id, showing the provider instead', () => {
     mount(dated);
-    expect(options().map(option => option.textContent?.replace('• ', ''))).toEqual([
+    expect(options().map(option => option.textContent?.replace('\u2022 ', ''))).toEqual([
       'New' + 'anthropic',
       'Tie 1',
       'Tie 2',
@@ -202,14 +202,30 @@ describe('ModelPicker recency order', () => {
     expect(options().some(option => option.textContent?.includes('undated-a'))).toBe(false);
   });
 
-  it('renders no secondary line for a row with nothing to say, and still filters on the id', () => {
+  it('renders no secondary line for a row with nothing to say', () => {
     mount([...dated, ...MODELS]);
     expect(
       options()
         .find(option => option.textContent?.includes('Undated A'))
         ?.querySelector('[data-testid="model-picker-option-detail"]')
     ).toBeNull();
-    typeInto(filterBox(), 'undated-a');
-    expect(options().map(option => option.textContent?.replace('• ', ''))).toEqual(['Undated A']);
+  });
+
+  it('filters on what a row shows - the name and provider - not the hidden id', () => {
+    mount([...dated, ...MODELS]);
+    const rows = () => options().map(option => option.textContent?.replace('\u2022 ', ''));
+
+    typeInto(filterBox(), 'undated a');
+    expect(rows()).toEqual(['Undated A']);
+
+    act(() => el('model-picker-btn').click());
+    act(() => el('model-picker-btn').click());
+    typeInto(filterBox(), 'anthropic');
+    expect(rows()).toEqual(['New' + 'anthropic']);
+
+    act(() => el('model-picker-btn').click());
+    act(() => el('model-picker-btn').click());
+    typeInto(filterBox(), 'vendor/');
+    expect(options()).toHaveLength(0);
   });
 });
