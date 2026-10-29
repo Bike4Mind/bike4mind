@@ -284,7 +284,7 @@ jobs:
         env:
           E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
           E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
-          E2E_PREVIEW_SEED: ${{ secrets.E2E_CLEANUP_SECRET_PREVIEW }}
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           STAGE: ${{ steps.config.outputs.stage }}
         # A preview run sent its derived value, not the staging secret, so scrub that one.
         run: |
