@@ -117,6 +117,49 @@ Missing required observations instead appear in the decision's `missing` array.
 Telemetry failures warn after commit and do not fail the grant. Diagnostics
 contain no raw policy, network observations, or collector error contents.
 
+The web integration supplies network counts, blocked/disposable domain observations
+(including refreshed lists), and prior canonical-inbox entitlement collisions.
+Collision means another account already claimed that inbox's default grant, not
+merely that an alias account exists. The unique entitlement claim remains the
+concurrency guard. Domain lookup failures keep the assessment pending for retry.
+Only a real, server-verified Turnstile pass is carried through signed OTC tokens
+or browser-bound OAuth state and stored in `signupMeta` before the first grant.
+Skipped checks, public test secrets, fail-open outages and legacy accounts leave
+the challenge observation unknown. Account-age, first-key and early-spend signals
+remain in the separate young-account rescorer; future activity cannot be known at
+the initial grant.
+
+Admins can find zero-credit assessments through Users > High risk (the Risk filter),
+then inspect the signup assessment's score, matched signals and missing observations
+on the user profile. The existing signup grant unlock action requires an audit
+reason and admin access. It releases the configured maximum, including
+the verification tranche; it is not an initial-tranche-only override. The separate
+young-account risk review queue does not replace this grant assessment surface.
+
+### Private cohort replay
+
+Run the same pure grant evaluator against privately labeled observations before
+enabling or tuning a production policy:
+
+```bash
+pnpm --filter @bike4mind/scripts exec tsx src/replaySignupRisk.ts /private/path/signup-risk.json
+```
+
+The input has `policy` (an enabled `signupRiskPolicySchema` policy) and a `samples`
+array. Each sample has `cohort` (`suspected` or `legitimate`), `signupCredits` and
+`signals` (the observations understood by `evaluateSignupRisk`). Use observations
+available at grant time, anchor network windows at signup, and leave unavailable
+facts absent or null. Do not substitute zero for missing historical counts or
+infer a challenge pass from a successful signup. Keep labels independent of the
+candidate policy to avoid evaluating it against its own decisions.
+
+The command performs no database writes and prints only aggregate band and
+missing-observation counts for each cohort. Keep input files, actual weights,
+sample identities and calibration results outside this public repository. Compare
+the suspected cohort's reduced/review share and the legitimate cohort's full share
+against privately agreed acceptance targets. Synthetic tests establish behavior,
+not real-world accuracy; a private replay is still required for that claim.
+
 Before enabling staging, retire existing quest subscriptions, restart subscriber
 fanout, and reconnect clients so every live stream uses the new private-field
 exclusions. Fanout persists subscription projections and does not rebuild an

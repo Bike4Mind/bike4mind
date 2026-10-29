@@ -31,6 +31,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 vi.mock('sst', () => ({ Resource: { E2E_CLEANUP_SECRET: e2eSecret } }));
 
 import { requireTurnstile } from './requireTurnstile';
+import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 
 async function run(body: unknown = { turnstileToken: 'tok' }, headers: Record<string, string> = {}) {
   const json = vi.fn();
@@ -40,10 +41,22 @@ async function run(body: unknown = { turnstileToken: 'tok' }, headers: Record<st
   const req = { body, headers, logger, requestId: 'r1' } as unknown as Request;
   const res = { status } as unknown as Response;
   await requireTurnstile('otc-send')(req, res, next);
-  return { json, status, next, logger };
+  return { json, status, next, logger, verified: wasTurnstileVerified(req) };
 }
 
 describe('requireTurnstile', () => {
+  it('records proof only for a real verification, never bypasses, test secrets, or fail-open outages', async () => {
+    verify.mockResolvedValue({ ok: true });
+    expect((await run()).verified).toBe(true);
+    policy.value.active = false;
+    expect((await run()).verified).toBeNull();
+    policy.value.active = true;
+    policy.value.secret = TEST_SECRET;
+    expect((await run()).verified).toBeNull();
+    policy.value.secret = 'secret';
+    verify.mockResolvedValue({ ok: false, reason: 'unavailable' });
+    expect((await run()).verified).toBeNull();
+  });
   beforeEach(() => {
     verify.mockReset();
     getPolicy.mockReset();
