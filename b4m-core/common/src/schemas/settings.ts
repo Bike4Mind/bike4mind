@@ -652,6 +652,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
   'apiRateLimitCreditsPerMin',
+  'apiRateLimitDefaultWritePerMin',
+  'apiRateLimitDefaultWriteMode',
   'apiKeyAccess',
 
   // FREE-TIER MODEL ALLOWLIST
@@ -1047,6 +1049,14 @@ function makeStringSetting(
  * this change exists to expose for a sort-memory failure on the same large lakes. Raise it only
  * alongside keyset file pagination.
  */
+/**
+ * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
+ * them (apps/client/server/middlewares/defaultWriteRateLimit.ts), which falls back to these values.
+ */
+export const DEFAULT_WRITE_RATE_LIMIT_MODES = ['off', 'log', 'enforce'] as const;
+export type DefaultWriteRateLimitMode = (typeof DEFAULT_WRITE_RATE_LIMIT_MODES)[number];
+export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
+
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
 
@@ -2268,14 +2278,17 @@ export const API_SERVICE_GROUPS = {
   RATE_LIMITING: {
     id: 'rateLimitingService',
     name: 'API Rate Limiting',
-    description: 'Per-user request rate limits on every per-user rate-limited API route, tunable per subscription tier',
+    description:
+      'Per-user request rate limits on API routes: per subscription tier on rate-limited routes, plus a default cap on every signed-in write',
     icon: 'Speed',
     settings: [
       { key: 'apiRateLimitFreePerMin', order: 1 },
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
       { key: 'apiRateLimitCreditsPerMin', order: 4 },
-      { key: 'apiKeyAccess', order: 5 },
+      { key: 'apiRateLimitDefaultWritePerMin', order: 5 },
+      { key: 'apiRateLimitDefaultWriteMode', order: 6 },
+      { key: 'apiKeyAccess', order: 7 },
     ],
   },
   API_KEY_TRUST: {
@@ -3243,6 +3256,32 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 4,
   }),
+  // Both read by apps/client/server/middlewares/defaultWriteRateLimit.ts, which falls back to log mode
+  // at DEFAULT_WRITE_RATE_LIMIT_PER_MIN when they cannot be read.
+  apiRateLimitDefaultWritePerMin: makeNumberSetting({
+    key: 'apiRateLimitDefaultWritePerMin',
+    name: 'Default Write Rate Limit (writes/min per user)',
+    defaultValue: DEFAULT_WRITE_RATE_LIMIT_PER_MIN,
+    min: 1,
+    max: 100000,
+    int: true,
+    description:
+      "Shared per-minute cap on one signed-in user's write requests (POST, PUT, PATCH, DELETE), counted together across all routes. Reads, API-key requests (metered per key), admins, developer-tagged users and routes that opt out are not counted. What happens at the cap is set by Default Write Rate Limit Mode. Changes apply within 15 seconds.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 5,
+  }),
+  apiRateLimitDefaultWriteMode: makeStringSetting({
+    key: 'apiRateLimitDefaultWriteMode',
+    name: 'Default Write Rate Limit Mode',
+    defaultValue: 'log',
+    description:
+      '"log": writes over the cap are allowed and logged, to measure real usage before enforcing. "enforce": writes over the cap get 429 Too Many Requests. "off": not counted at all. Changes apply within 15 seconds.',
+    options: [...DEFAULT_WRITE_RATE_LIMIT_MODES],
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 6,
+  }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
   apiKeyAccess: makeStringSetting({
@@ -3256,7 +3295,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 5,
+    order: 7,
   }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',

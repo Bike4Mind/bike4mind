@@ -66,6 +66,8 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `apiRateLimitFreePerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | `apps/client/server/utils/userRateTier.ts`, applied by the per-user rate limiter (`apps/client/server/middlewares/perUserRateLimit.ts`) on every per-user rate-limited API route (`/api/chat`, `/api/opti`, and the other routes that opt in). A Free value of 0 blocks all free-tier requests on those routes. | no. A request rate limit. | Usage limits |
 | `apiRateLimitBasicPerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | Same as `apiRateLimitFreePerMin`. | no. A request rate limit. | Usage limits |
 | `apiRateLimitProPerMin` | Admin Settings > Security > API Rate Limiting (linked from Growth and Pricing) | Same as `apiRateLimitFreePerMin`. | no. A request rate limit. | Usage limits |
+| `apiRateLimitDefaultWritePerMin` | Admin Settings > Security > API Rate Limiting | The default per-user write limit (`apps/client/server/middlewares/defaultWriteRateLimit.ts`), mounted by `baseApi` on every authenticated route: one counter per signed-in user across all POST, PUT, PATCH and DELETE requests. API-key requests, admins, developer-tagged users and routes that opt out are not counted. | no. A request rate limit. | Usage limits |
+| `apiRateLimitDefaultWriteMode` | Admin Settings > Security > API Rate Limiting | The same middleware: `log` allows and logs writes over the limit, `enforce` refuses them with 429, `off` stops counting. | no. A request rate limit. | Usage limits |
 
 ## Pricing that is not an admin setting
 
@@ -389,5 +391,17 @@ No match outside the definition and tests.
 <details><summary><code>apiRateLimitProPerMin</code> (1 file)</summary>
 
 - `apps/client/server/utils/userRateTier.ts`
+
+</details>
+
+<details><summary><code>apiRateLimitDefaultWritePerMin</code> (1 file)</summary>
+
+- `apps/client/server/middlewares/defaultWriteRateLimit.ts`
+
+</details>
+
+<details><summary><code>apiRateLimitDefaultWriteMode</code> (1 file)</summary>
+
+- `apps/client/server/middlewares/defaultWriteRateLimit.ts`
 
 </details>
