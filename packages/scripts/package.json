@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.97",
+  "version": "0.1.98",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -69,6 +69,7 @@
     "trim:ai-edit-versions": "tsx src/trim-ai-edit-versions.ts",
     "sweep:orphaned-storage": "tsx src/sweep-orphaned-storage.ts",
     "backfill:show-credits-used": "tsx src/backfill-show-credits-used.ts",
+    "backfill:subscription-stripe-mirror": "tsx src/backfill-subscription-stripe-mirror.ts",
     "backfill:fabfile-owner-organization": "tsx src/backfill-fabfile-owner-organization.ts",
     "report:signup-baseline": "tsx src/signup-baseline.ts",
     "report:external-active-users": "tsx src/external-active-users.ts",
