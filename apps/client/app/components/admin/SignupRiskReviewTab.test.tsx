@@ -116,7 +116,9 @@ describe('SignupRiskReviewTab', () => {
   });
 
   it('puts the high risk cut halfway between a custom review threshold and 100', () => {
-    m.useSignupRiskReviews.mockReturnValue(queue(ROWS, { data: { data: ROWS, truncated: false, reviewThreshold: 20 } }));
+    m.useSignupRiskReviews.mockReturnValue(
+      queue(ROWS, { data: { data: ROWS, truncated: false, reviewThreshold: 20 } })
+    );
     renderTab();
 
     expect(within(screen.getByTestId('signup-risk-row-u1')).getByText('High risk')).toBeTruthy();
@@ -132,7 +134,10 @@ describe('SignupRiskReviewTab', () => {
   });
 
   it('says when the queue is capped', () => {
-    m.useSignupRiskReviews.mockReturnValue({ ...queue(ROWS), data: { data: ROWS, truncated: true, reviewThreshold: 50 } });
+    m.useSignupRiskReviews.mockReturnValue({
+      ...queue(ROWS),
+      data: { data: ROWS, truncated: true, reviewThreshold: 50 },
+    });
     renderTab();
 
     expect(screen.getByTestId('signup-risk-truncated')).toBeTruthy();

@@ -252,10 +252,13 @@ export const SignupRiskReviewTab: React.FC = () => {
         <MoreHorizontal size={16} />
       </MenuButton>
       <Menu placement="bottom-end">
-        <MenuItem data-testid={`signup-risk-approve-${row.userId}`} onClick={() => {
+        <MenuItem
+          data-testid={`signup-risk-approve-${row.userId}`}
+          onClick={() => {
             decision.reset();
             setApproving([row]);
-          }}>
+          }}
+        >
           Approve account
         </MenuItem>
         <MenuItem
