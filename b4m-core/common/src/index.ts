@@ -138,6 +138,8 @@ export * from './utils/imageCapabilities';
 export * from './utils/activity';
 export * from './utils/sseEvents';
 export * from './utils/streamVisibility';
+export * from './utils/subQuestStatusPresentation';
+export * from './utils/questMarkdown';
 export * from './utils/replyChoices';
 export * from './utils/narratedToolCalls';
 export * from './utils/ttfvt';
