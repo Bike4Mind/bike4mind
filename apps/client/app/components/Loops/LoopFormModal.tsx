@@ -143,11 +143,11 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
   const set = <K extends keyof LoopFormValues>(key: K, value: LoopFormValues[K]) =>
     setValues(prev => ({ ...prev, [key]: value }));
 
-  // The executor names MCP tools `<server>__<tool>` (sharedToolBuilder generateMcpToolsFromCache).
+  // The executor names MCP tools `<lowercased server>__<tool>` (toolGenerators generateMcpToolsFromCache).
   const mcpTools = mcpServers
     .filter(server => server.enabled)
     .flatMap(server =>
-      server.tools.map(tool => ({ value: `${server.name}__${tool}`, label: `${server.name}: ${tool}` }))
+      server.tools.map(tool => ({ value: `${server.name.toLowerCase()}__${tool}`, label: `${server.name}: ${tool}` }))
     );
   const removedStages = loop ? loop.stages.filter(s => !values.stages.includes(s)) : [];
 

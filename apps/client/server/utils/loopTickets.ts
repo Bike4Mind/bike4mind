@@ -36,6 +36,7 @@ export function ticketMovePatch(
 ): WorkItemPatch {
   const stages = loop.stages;
   const last = lastStageOf(loop);
+  if (stages.length < 2) throw new BadRequestError('A loop needs at least two stages to hold tickets');
   if (move.status === 'in_progress') throw new BadRequestError('A loop ticket is set in_progress by its loop');
 
   let stage =
@@ -44,13 +45,21 @@ export function ticketMovePatch(
       : current?.stage && stages.includes(current.stage)
         ? current.stage
         : resolveTicketStage(loop);
+  // A plain stage move keeps the ticket's status (blocked stays blocked, a running ticket keeps its run);
+  // only the last stage closes it and leaving it reopens it.
   const status: WorkItemStatus =
-    move.status ?? (move.stage !== undefined ? (stage === last ? 'closed' : 'open') : (current?.status ?? 'open'));
+    move.status ??
+    (stage === last && move.stage !== undefined
+      ? 'closed'
+      : current?.status === 'closed' && move.stage !== undefined
+        ? 'open'
+        : (current?.status ?? 'open'));
+  const keepsReason = status === 'blocked' && current?.status === 'blocked' && move.reason === undefined;
 
   if (status === 'closed') stage = last;
   else if (stage === last) stage = stages.at(-2)!;
 
-  if (status === 'blocked' && (typeof move.reason !== 'string' || !move.reason.trim())) {
+  if (status === 'blocked' && !keepsReason && (typeof move.reason !== 'string' || !move.reason.trim())) {
     throw new BadRequestError('A reason is required to block a ticket');
   }
 
@@ -58,7 +67,7 @@ export function ticketMovePatch(
     stage,
     status,
     closedAt: status === 'closed' ? (current?.status === 'closed' ? undefined : new Date()) : null,
-    statusReason: status === 'blocked' ? (move.reason as string).trim().slice(0, 1000) : null,
+    statusReason: keepsReason ? undefined : status === 'blocked' ? (move.reason as string).trim().slice(0, 1000) : null,
   };
 }
 
@@ -92,8 +101,8 @@ export async function assertLoopTicketAccess(
 }
 
 /** Makes a live loop due now when it has a ticket ready to work, so a new ticket does not wait out the interval. */
-export async function makeDueIfReady(loop: ILoop): Promise<void> {
+export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<void> {
   if (loop.status !== 'live') return;
   const ready = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
-  if (ready) await loopRepository.makeDueNow(loop.id, new Date());
+  if (ready) await loopRepository.makeDueNow(loop.id, now);
 }

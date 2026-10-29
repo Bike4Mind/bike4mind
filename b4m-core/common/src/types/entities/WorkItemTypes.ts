@@ -128,8 +128,9 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
    * Items with status `open` whose every dependency is closed or no longer
    * exists. `in_progress` (already picked up) and `blocked` (held back
    * deliberately) are excluded, so this answers "what can I start now".
+   * Plain items only, unless `loopId` asks for that loop's tickets instead.
    */
-  listReadyForUser(userId: string): Promise<IWorkItemReadyResult>;
+  listReadyForUser(userId: string, loopId?: string): Promise<IWorkItemReadyResult>;
 
   buildGraphForUser(userId: string): Promise<IWorkItemGraph>;
 
@@ -146,7 +147,7 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   findNextReadyForLoop(userId: string, loopId: string, lastStage: string): Promise<IWorkItem | null>;
 
   /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
-  claimForRun(id: string): Promise<IWorkItem | null>;
+  claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;
 
   setExecution(id: string, executionId: string): Promise<void>;
 
