@@ -32,7 +32,7 @@ import {
 } from '@bike4mind/voice';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
@@ -142,8 +142,13 @@ async function runFullPipeline(
     buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() })
   );
 
+  const defaultOptions = getDefaultChatCompletionOptions();
   const chatCompletionOptions = {
-    ...getDefaultChatCompletionOptions(),
+    ...defaultOptions,
+    // A tool that re-reads the owner by id must see the same withheld role as `user`.
+    db: sessionCtx.adminRoleWithheld
+      ? { ...defaultOptions.db, users: ownerWithheldUsers(sessionCtx.userId, defaultOptions.db.users) }
+      : defaultOptions.db,
     queue: noopQueue,
     tokenizer: getSharedTokenizer(logger),
     user,

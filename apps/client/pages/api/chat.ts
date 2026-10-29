@@ -15,7 +15,7 @@ import {
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { adminRoleWithheldFor, requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import {
   getDefaultChatCompletionOptions,
@@ -227,8 +227,11 @@ async function handleChat(
   });
 
   // Shared options for ChatCompletionInvoke and ChatCompletionProcess
+  const defaultOptions = getDefaultChatCompletionOptions();
   const chatCompletionOptions = {
-    ...getDefaultChatCompletionOptions(),
+    ...defaultOptions,
+    // wait=true runs tools inline: one that re-reads the owner by id must see the same role as req.user.
+    db: { ...defaultOptions.db, users: requesterScopedUsers(req, defaultOptions.db.users) },
     queue: new SQSService(), // Create per-request to ensure fresh credentials
     tokenizer: getSharedTokenizer(req.logger),
     user: req.user,
