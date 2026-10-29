@@ -998,7 +998,6 @@ export class ChatCompletionProcess {
   public logEvent: IChatCompletionServiceOptions['logEvent'];
   public queue: IChatCompletionServiceOptions['queue'];
   public autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
-  private onSignupActivityTurnDone: IChatCompletionServiceOptions['onSignupActivityTurnDone'];
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
@@ -1210,7 +1209,6 @@ export class ChatCompletionProcess {
     this.logEvent = options.logEvent;
     this.queue = options.queue;
     this.autoNameSession = options.autoNameSession;
-    this.onSignupActivityTurnDone = options.onSignupActivityTurnDone;
     this.summarizeSession = options.summarizeSession;
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
@@ -7166,15 +7164,6 @@ export class ChatCompletionProcess {
       // Use quest directly - finalQuest may not be set if the final save was fire-and-forget
       if (finalQuest || quest) {
         this.sendStatusUpdate(finalQuest ?? quest, null, { skipPayloadOptimization: true });
-      }
-      const settledQuest = finalQuest ?? quest;
-      // Awaited deliberately: a detached call can be dropped when the Lambda freezes after the turn.
-      if (this.onSignupActivityTurnDone && settledQuest?.status === 'done' && settledQuest.signupActivity) {
-        try {
-          await this.onSignupActivityTurnDone({ userId: this.user.id, questId });
-        } catch (hookErr) {
-          logger.warn('[SignupActivity] Activity drip evaluation failed', { questId, error: hookErr });
-        }
       }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Final status updates completed in ${

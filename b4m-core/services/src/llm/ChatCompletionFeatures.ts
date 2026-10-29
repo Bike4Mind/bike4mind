@@ -422,8 +422,6 @@ export interface IChatCompletionServiceOptions {
    */
   workspaceSessionSettings: WorkspaceSessionSettingsTable;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
-  /** Runs after a first-party turn finishes `done`; must not be relied on to succeed (errors are logged, never thrown). */
-  onSignupActivityTurnDone?: (input: { userId: string; questId: string }) => Promise<void>;
   invokeCreateMemento: (
     questId: string,
     sessionId: string,
