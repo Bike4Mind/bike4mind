@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ZodError } from 'zod';
 
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
@@ -30,12 +31,12 @@ vi.mock('@bike4mind/services', () => ({
   projectService: { listInvites },
 }));
 
-const tryIncrementWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
+const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
 const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
 
 vi.mock('@bike4mind/database', () => ({
-  cacheRepository: { tryIncrementWithinLimitFixedWindow },
+  cacheRepository: { tryAddWithinLimitFixedWindow },
   projectRepository: {},
   inviteRepository: {},
   userRepository: {},
@@ -65,12 +66,15 @@ import '@pages/api/projects/[id]/invites';
  * to mint a share link for a different project. The schema parse strips unknown keys,
  * so only the query param id reaches the service.
  */
+const isZodErrorOn = (field: string) => (error: unknown) =>
+  error instanceof ZodError && error.issues.some(issue => issue.path[0] === field);
+
 describe('POST /api/projects/:id/invites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'inv-1', recipients: { pending: [] } });
     mockRefs.accounts = [];
-    tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
+    tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
   });
 
   it('rate limits invite creation per user with the bucket every invite route shares', () => {
@@ -88,7 +92,7 @@ describe('POST /api/projects/:id/invites', () => {
     });
     (req as any).user = { id: 'u1' };
 
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    await expect(mockRefs.postHandler!(req, res)).rejects.toSatisfy(isZodErrorOn('recipients'));
     expect(createInvite).not.toHaveBeenCalled();
   });
 
@@ -100,14 +104,12 @@ describe('POST /api/projects/:id/invites', () => {
     });
     (req as any).user = { id: 'u1' };
 
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    await expect(mockRefs.postHandler!(req, res)).rejects.toSatisfy(isZodErrorOn('description'));
     expect(createInvite).not.toHaveBeenCalled();
   });
 
-  it('charges each typed address against the hourly budget and stops once it is spent', async () => {
-    tryIncrementWithinLimitFixedWindow
-      .mockResolvedValueOnce({ success: true, expiresAt: new Date() })
-      .mockResolvedValueOnce({ success: false, expiresAt: new Date() });
+  it('charges the typed addresses against the hourly budget in one step and refuses them once it is spent', async () => {
+    tryAddWithinLimitFixedWindow.mockResolvedValueOnce({ success: false, expiresAt: new Date() });
     const { req, res } = createMocks({
       method: 'POST',
       query: { id: '507f1f77bcf86cd799439033' },
@@ -116,9 +118,10 @@ describe('POST /api/projects/:id/invites', () => {
     (req as any).user = { id: 'u1' };
 
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many email invitations/);
-    expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(2);
-    expect(tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledOnce();
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
       'rate-limit:u1:project-invite-typed-address',
+      2,
       20,
       60 * 60 * 1000
     );
@@ -136,7 +139,7 @@ describe('POST /api/projects/:id/invites', () => {
 
     await mockRefs.postHandler!(req, res);
 
-    expect(tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
     expect(createInvite).toHaveBeenCalledOnce();
   });
 

@@ -23,21 +23,22 @@ const MAX_EMAILED_NAME_LENGTH = 60;
 const capLength = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 3)}...` : value);
 
 /**
- * Charges each typed address (a recipient containing '@') against the user's hourly budget and
- * throws once it is spent. Call it before the invite is created. Only project invites need it:
- * they are the one type the sharing service lets name an address with no account
- * (sharingService/create.ts); every other type refuses or drops such an address.
+ * Charges the typed addresses (recipients containing '@') against the user's hourly budget in one
+ * all-or-nothing step, and throws if they do not all fit. Call it before the invite is created.
+ * Only project invites need it: they are the one type the sharing service lets name an address
+ * with no account (sharingService/create.ts); every other type refuses or drops such an address.
  */
 export async function chargeTypedAddressBudget(userId: string, recipients: string[] | undefined): Promise<void> {
-  const typedAddresses = (recipients ?? []).filter(recipient => recipient.includes('@'));
-  for (let i = 0; i < typedAddresses.length; i++) {
-    const { success } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-      `rate-limit:${userId}:project-invite-typed-address`,
-      TYPED_ADDRESS_INVITES_PER_HOUR,
-      HOUR_MS
-    );
-    if (!success) throw new TooManyRequestsError('Too many email invitations. Try again later.');
-  }
+  const typedAddressCount = (recipients ?? []).filter(recipient => recipient.includes('@')).length;
+  if (typedAddressCount === 0) return;
+  const { success } = await cacheRepository.tryAddWithinLimitFixedWindow(
+    // Legacy project-only key name, kept so counters survive the move to this shared helper.
+    `rate-limit:${userId}:project-invite-typed-address`,
+    typedAddressCount,
+    TYPED_ADDRESS_INVITES_PER_HOUR,
+    HOUR_MS
+  );
+  if (!success) throw new TooManyRequestsError('Too many email invitations. Try again later.');
 }
 
 /**

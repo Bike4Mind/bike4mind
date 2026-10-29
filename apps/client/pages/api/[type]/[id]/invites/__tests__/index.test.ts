@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ZodError } from 'zod';
 
 /**
  * GET /api/[type]/[id]/invites delegates listing to sharingService.listInvitesForDocument
@@ -45,7 +46,7 @@ vi.mock('@bike4mind/services', () => ({
   sharingService: { listInvitesForDocument, createInvite, cancelInvite },
 }));
 
-const tryIncrementWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
+const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
 const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
 
@@ -56,7 +57,7 @@ vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  cacheRepository: { tryIncrementWithinLimitFixedWindow },
+  cacheRepository: { tryAddWithinLimitFixedWindow },
   User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
   FabFile: { findById: () => Promise.resolve({ fileName: 'report.pdf' }) },
   Group: { findById: groupFindById },
@@ -78,6 +79,9 @@ vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import '@pages/api/[type]/[id]/invites/index';
+
+const isZodErrorOn = (field: string) => (error: unknown) =>
+  error instanceof ZodError && error.issues.some(issue => issue.path[0] === field);
 
 describe('GET /api/[type]/[id]/invites', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -155,7 +159,7 @@ describe('POST /api/[type]/[id]/invites', () => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
     mockRefs.accounts = [];
-    tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
+    tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
   });
 
   it('rate limits invite creation per user with the bucket every invite route shares', () => {
@@ -176,7 +180,7 @@ describe('POST /api/[type]/[id]/invites', () => {
 
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/project invites/);
     expect(createInvite).not.toHaveBeenCalled();
-    expect(tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
   });
 
   it('refuses more recipients than one request may name', async () => {
@@ -188,7 +192,7 @@ describe('POST /api/[type]/[id]/invites', () => {
     });
     (req as any).user = { id: 'u1' };
 
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    await expect(mockRefs.postHandler!(req, res)).rejects.toSatisfy(isZodErrorOn('recipients'));
     expect(createInvite).not.toHaveBeenCalled();
   });
 
@@ -200,7 +204,7 @@ describe('POST /api/[type]/[id]/invites', () => {
     });
     (req as any).user = { id: 'u1' };
 
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow();
+    await expect(mockRefs.postHandler!(req, res)).rejects.toSatisfy(isZodErrorOn('description'));
     expect(createInvite).not.toHaveBeenCalled();
   });
 
@@ -216,7 +220,7 @@ describe('POST /api/[type]/[id]/invites', () => {
 
     await mockRefs.postHandler!(req, res);
 
-    expect(tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
     expect(createInvite).toHaveBeenCalledOnce();
   });
 
