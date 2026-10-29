@@ -60,6 +60,8 @@ export interface INetworkMeta {
 
 export interface ISignupMeta extends INetworkMeta {
   capturedAt: Date;
+  /** Server-verified challenge proof; absent/null when skipped, unavailable, or a test secret was used. */
+  challengeVerified?: true | null;
 }
 
 /**
@@ -325,6 +327,10 @@ export interface IUser extends ICreditHolder {
   /** Absent on accounts created before staged grants were enabled. */
   signupGrant?: SignupGrant;
   signupGrantAssessment?: SignupGrantAssessment;
+  /** Why free credits are being withheld; cleared when they are paid. */
+  signupGrantHeldReason?: 'budget_exhausted' | 'risk_review' | null;
+  /** When the signup tranche was last held for an exhausted daily budget. */
+  signupGrantHeldAt?: Date | null;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;
@@ -910,6 +916,13 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * in id order; pass the last id back as `afterId` for the next page.
    */
   findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /** Unbanned users whose risk review is pending, highest score first, at most `limit`. */
+  findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
+  /**
+   * Move a user's review from `from` to `to`, only if it is still `from`; false when it was not
+   * (already decided, rescored out of pending, or no score). Used for admin approve and its undo.
+   */
+  setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
   /**
    * Record a user's moderation appeal: stamps `moderation.appealedAt` and stores
    * the appeal text for admin review. Returns the updated user.

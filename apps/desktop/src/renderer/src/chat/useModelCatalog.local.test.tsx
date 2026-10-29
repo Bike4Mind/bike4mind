@@ -14,6 +14,9 @@ const status = (reachable: boolean): ModelRuntimeStatus => ({
   version: reachable ? '0.9.0' : null,
   url: 'http://127.0.0.1:11434',
   error: null,
+  serverId: 'local',
+  serverName: 'This computer',
+  management: 'allowed',
 });
 
 const listModels = vi.fn<(force?: boolean) => Promise<ChatModelCatalog>>();

@@ -30,13 +30,13 @@ const domainIntelSchema = new Schema<DomainIntel>({
 });
 domainIntelSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-export const DisposableDomainModel =
+export const DisposableDomainModel: mongoose.Model<DisposableDomain> =
   (mongoose.models.DisposableDomain as mongoose.Model<DisposableDomain>) ??
   mongoose.model('DisposableDomain', disposableDomainSchema);
-export const DisposableDomainSourceModel =
+export const DisposableDomainSourceModel: mongoose.Model<DisposableSourceStatus> =
   (mongoose.models.DisposableDomainSource as mongoose.Model<DisposableSourceStatus>) ??
   mongoose.model('DisposableDomainSource', disposableSourceSchema);
-export const DomainIntelligenceModel =
+export const DomainIntelligenceModel: mongoose.Model<DomainIntel> =
   (mongoose.models.DomainIntelligence as mongoose.Model<DomainIntel>) ??
   mongoose.model('DomainIntelligence', domainIntelSchema);
 

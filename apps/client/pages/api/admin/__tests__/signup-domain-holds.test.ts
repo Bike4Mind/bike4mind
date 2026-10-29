@@ -112,7 +112,9 @@ describe('signup domain hold decisions', () => {
     expect(release).toHaveBeenCalledWith(
       { id: 'user-1', tags: [PENDING_FREE_CREDITS_TAG], pendingCreditGrant: 25 },
       'Signup domain hold released by admin',
-      expect.anything()
+      expect.anything(),
+      undefined,
+      { bypassBudget: true }
     );
     expect(res._getJSONData()).toEqual({ status: 'released', creditsReleased: 25, remaining: 0, nextCursor: null });
     // A single page saw every candidate, so the unindexed regex is not scanned a second time.

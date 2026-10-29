@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ACTIVITY_REPORT_VERSION } from '@bike4mind/common';
+import { DAILY_ACTIVITY_REPORT_VERSION, WEEKLY_ACTIVITY_REPORT_VERSION } from '@bike4mind/common';
 
 /**
  * A failed report used to come back as report text and be cached for an hour, and stored past
@@ -175,7 +175,7 @@ describe('GET /api/users/counterLogs - report failures and versioning', () => {
   describe('stored report version', () => {
     it.each([
       ['has no version', undefined],
-      ['predates the current version', ACTIVITY_REPORT_VERSION - 1],
+      ['predates the current version', DAILY_ACTIVITY_REPORT_VERSION - 1],
     ])('regenerates a stored past day that %s', async (_label, reportVersion) => {
       mockRefs.storedDaily = [{ date: PAST_DAY, report: 'No activity data found for old', reportVersion }];
 
@@ -187,7 +187,9 @@ describe('GET /api/users/counterLogs - report failures and versioning', () => {
     });
 
     it('serves a stored past day at the current version without regenerating', async () => {
-      mockRefs.storedDaily = [{ date: PAST_DAY, report: 'stored report', reportVersion: ACTIVITY_REPORT_VERSION }];
+      mockRefs.storedDaily = [
+        { date: PAST_DAY, report: 'stored report', reportVersion: DAILY_ACTIVITY_REPORT_VERSION },
+      ];
 
       const body = await getDaily(PAST_DAY);
 
@@ -210,7 +212,7 @@ describe('GET /api/users/counterLogs - report failures and versioning', () => {
         ...PAST_WEEK,
         report: 'stored weekly',
         aiInsights: null,
-        reportVersion: ACTIVITY_REPORT_VERSION,
+        reportVersion: WEEKLY_ACTIVITY_REPORT_VERSION,
       };
       const { req, res } = mocks({ ...PAST_WEEK, weeklyReport: 'true' });
 
@@ -218,6 +220,21 @@ describe('GET /api/users/counterLogs - report failures and versioning', () => {
 
       expect(serviceMocks.generateDailyReport).not.toHaveBeenCalled();
       expect(res._getJSONData().reports[0].report).toBe('stored weekly');
+    });
+  });
+
+  describe('current week', () => {
+    it('generates the whole week range from now and does not persist it', async () => {
+      const { req, res } = mocks({ startDate: '2026-08-10', endDate: '2026-08-16', weeklyReport: 'true' });
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(serviceMocks.generateDailyReport).toHaveBeenCalledWith(
+        expect.objectContaining({ startDate: '2026-08-10', endDate: '2026-08-16' }),
+        expect.anything()
+      );
+      expect(res._getJSONData().reports[0].report).toBe('formatted weekly report');
+      expect(databaseMocks.upsertWeekly).not.toHaveBeenCalled();
     });
   });
 

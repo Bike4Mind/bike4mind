@@ -178,14 +178,14 @@ export class AdminPage extends BasePage {
   }
 
   /** Pick an action from the profile header's More menu. */
-  private async clickProfileMenuItem(action: 'loginAs' | 'delete') {
+  private async clickProfileMenuItem(action: 'editProfile' | 'loginAs' | 'delete') {
     await this.page.getByTestId('user-profile-more-btn').click();
     await this.page.getByTestId(`user-profile-menu-${action}-item`).click();
   }
 
   async clickUserProfileButton(name: string) {
     await this.openUserProfile(name);
-    await this.page.getByTestId('admin-user-profile-btn').click();
+    await this.clickProfileMenuItem('editProfile');
     await expect(this.page.getByTestId('admin-profile-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 

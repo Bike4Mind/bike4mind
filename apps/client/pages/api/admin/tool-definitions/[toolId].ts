@@ -1,8 +1,8 @@
 import { toolDefinitionOverrideRepository } from '@bike4mind/database';
 import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { TOOL_MAPPING, TOOL_CATEGORIES } from '@client/app/utils/toolMapping';
 import { z } from 'zod';
 
@@ -61,13 +61,12 @@ function findCodeTool(toolId: string): { toolName: string; description: string; 
   return null;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { toolId } = req.query;
 
       if (!toolId || typeof toolId !== 'string') {
@@ -131,18 +130,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       return res.status(500).json({ error: 'Failed to fetch tool definition' });
     }
   })
   .put(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { toolId } = req.query;
 
       if (!toolId || typeof toolId !== 'string') {
@@ -268,18 +260,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       return res.status(500).json({ error: 'Failed to update tool definition' });
     }
   })
   .delete(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { toolId } = req.query;
 
       if (!toolId || typeof toolId !== 'string') {
@@ -335,9 +320,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
-      }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
       }
       return res.status(500).json({ error: 'Failed to delete tool definition override' });
     }
