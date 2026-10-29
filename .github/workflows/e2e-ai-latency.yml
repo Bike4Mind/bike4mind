@@ -172,11 +172,11 @@ jobs:
           API_URL: ${{ steps.config.outputs.api_url }}
           # dev reads E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper below
           # (same-account). Preview stacks live in a SEPARATE AWS account the dev role
-          # can't `sst shell` into, so for pr<N> runs we inject it directly from this repo
-          # secret (the preview-tier value the deployer seeds onto preview stages), and
-          # leave it empty for dev so SST wins. It is the ONLY SST value the suite needs.
+          # can't `sst shell` into, so for pr<N> runs we derive it per stage from this seed
+          # secret (matching what the deployer sets on preview stages), and
+          # leave it unset for dev so SST wins. It is the ONLY SST value the suite needs.
           # Same pattern as e2e-run.yml / e2e-on-label.yml.
-          E2E_CLEANUP_SECRET: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
           STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: discover-models
@@ -187,7 +187,8 @@ jobs:
           set -o pipefail
           case "$STAGE" in
             pr[0-9]*)
-              # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Preview (cross-account): use the derived secret, no sst shell.
+              . .github/scripts/derive-preview-e2e-secret.sh "$STAGE"
               # Skip rather than `exit 1` so this does not read as a broken discovery
               # test. A full-matrix run genuinely cannot continue without the discovered
               # models, so setup-matrix still stops the run - but it names THIS cause,
@@ -436,11 +437,11 @@ jobs:
           API_URL: ${{ steps.config.outputs.api_url }}
           # dev reads E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper below
           # (same-account). Preview stacks live in a SEPARATE AWS account the dev role
-          # can't `sst shell` into, so for pr<N> runs we inject it directly from this repo
-          # secret (the preview-tier value the deployer seeds onto preview stages), and
-          # leave it empty for dev so SST wins. It is the ONLY SST value the suite needs.
+          # can't `sst shell` into, so for pr<N> runs we derive it per stage from this seed
+          # secret (matching what the deployer sets on preview stages), and
+          # leave it unset for dev so SST wins. It is the ONLY SST value the suite needs.
           # Same pattern as e2e-run.yml / e2e-on-label.yml.
-          E2E_CLEANUP_SECRET: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
           STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
@@ -453,7 +454,8 @@ jobs:
           set -o pipefail
           case "$STAGE" in
             pr[0-9]*)
-              # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Preview (cross-account): use the derived secret, no sst shell.
+              . .github/scripts/derive-preview-e2e-secret.sh "$STAGE"
               # Skip rather than `exit 1` - a red cell here is indistinguishable from a
               # real latency/quality failure. Exiting 0 alone would only swap that for a
               # misleading green, so `preview_skipped` is published as a job output and the
