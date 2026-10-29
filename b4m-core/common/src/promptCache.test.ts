@@ -26,7 +26,7 @@ describe('supportsOneHourPromptCache', () => {
 
   it('accepts Claude on Bedrock and nothing else', () => {
     expect(supportsOneHourPromptCache(claude('us.anthropic.claude-opus-5-5-v1:0', ModelBackend.Bedrock))).toBe(true);
-    expect(supportsOneHourPromptCache({ id: 'gpt-5', backend: ModelBackend.OpenAI } as never)).toBe(false);
+    expect(supportsOneHourPromptCache({ id: 'gpt-5', backend: ModelBackend.OpenAI })).toBe(false);
     expect(supportsOneHourPromptCache(undefined)).toBe(false);
   });
 });
