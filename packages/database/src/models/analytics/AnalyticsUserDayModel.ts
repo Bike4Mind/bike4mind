@@ -33,7 +33,7 @@ const AnalyticsUserDaySchema = new Schema<IAnalyticsUserDayDocument>(
     signupDay: { type: String, required: false, match: ANALYTICS_DAY_PATTERN },
     suspected: { type: Boolean, required: true, default: false },
   },
-  { timestamps: true }
+  { timestamps: true, collection: 'analytics_user_days' }
 );
 
 AnalyticsUserDaySchema.index({ day: 1, userId: 1 }, { unique: true });

@@ -250,7 +250,7 @@ Cohort: counted users who signed up in the range (legit only unless toggled), an
 Live aggregation over `usageevents` for 12 months and cohort retention does not fit a 60 s request. The page reads precomputed rollups; only "today" is live.
 
 **`analytics_user_days`** (new collection): one row per counted user per active UTC day.
-- Fields: `day` (`YYYY-MM-DD`), `userId`, `ownerType`, `orgId?`, `requests`, `creditsCharged`, `features` (string array), `sources` (string array), `signupDay`, `suspected` (boolean, frozen at write).
+- Fields: `day` (`YYYY-MM-DD`), `userId`, `ownerType`, `orgId?`, `requests`, `creditsCharged`, `features` (string array), `sources` (string array), `signupDay`, `suspected` (boolean; the signup verdict for the user, set when the user first appears and refreshed with the signup cohort for the trailing 14 days).
 - Indexes, declared together at the bottom of the schema: unique `{ day: 1, userId: 1 }`; `{ userId: 1, day: 1 }` (retention); `{ signupDay: 1, day: 1 }` (cohorts).
 - DAU = count of rows for `day`; WAU/MAU = distinct `userId` over 7/28 days of rows (one `$group` over at most 28 x DAU rows).
 

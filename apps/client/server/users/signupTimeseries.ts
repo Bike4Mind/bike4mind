@@ -50,7 +50,7 @@ function quantile(sorted: number[], q: number): number {
   return sorted[low] + (sorted[high] - sorted[low]) * (position - low);
 }
 
-async function countByBucket(since: Date, until: Date, unit: 'hour' | 'day', tzOffsetMinutes: number) {
+export async function countByBucket(since: Date, until: Date, unit: 'hour' | 'day', tzOffsetMinutes: number) {
   // Only createdAt is read, so this is a covered scan of the createdAt index.
   const rows = await User.aggregate<{ _id: Date; count: number }>([
     { $match: { createdAt: { $gte: since, $lt: until } } },

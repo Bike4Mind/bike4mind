@@ -54,7 +54,7 @@ const AnalyticsDailySchema = new Schema<IAnalyticsDailyDocument>(
     creditsConsumed: { type: Number, required: true, default: 0 },
     computedAt: { type: Date, required: true },
   },
-  { timestamps: true, minimize: false }
+  { timestamps: true, minimize: false, collection: 'analytics_daily' }
 );
 
 AnalyticsDailySchema.index({ day: 1 }, { unique: true });

@@ -9,15 +9,17 @@ import {
   type IAnalyticsDailySignups,
   type IAnalyticsUserDay,
 } from '@bike4mind/database';
-import { internalStaffEmailRegex, parseInternalStaffDomains } from '@bike4mind/common';
+import { internalStaffEmailRegex, parseInternalStaffDomains, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
 import { isSuspectedSignup } from '@client/app/utils/signupSignals';
-import { classifySignups, DORMANCY_MIN_AGE_MS } from '../users/signupClassifier';
-import { loadCandidates } from '../users/signupTimeseries';
+import { classifySignups, DORMANCY_MIN_AGE_MS, SPIKE_BASELINE_HOURS } from '../users/signupClassifier';
+import { countByBucket, loadCandidates } from '../users/signupTimeseries';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const QUERY_DEADLINE_MS = 120_000;
 const USER_BATCH = 1000;
-const UNKNOWN = 'unknown';
+const HOUR_MS = 60 * 60 * 1000;
+const MAU_WINDOW_DAYS = 28;
+const WAU_WINDOW_DAYS = 7;
 
 export const SIGNUP_REEVALUATION_DAYS = 14;
 
@@ -55,16 +57,13 @@ type UserFlags = {
   isAdmin?: boolean;
   isSystem?: boolean;
   isSynthetic?: boolean;
-  deletedAt?: Date | null;
 };
 
-const isCountedUser = (user: UserFlags | undefined, staffRegex: RegExp | null): user is UserFlags =>
-  !!user &&
-  !user.isAdmin &&
-  !user.isSystem &&
-  !user.isSynthetic &&
-  !user.deletedAt &&
-  !(staffRegex && user.email && staffRegex.test(user.email));
+// Negation of internalAccountCondition: only admin/system/synthetic/staff-domain accounts are excluded, so
+// orphaned and non-ObjectId ids still count and DAU matches a direct distinct count over usageevents.
+const isCountedUser = (user: UserFlags | undefined, staffRegex: RegExp | null): boolean =>
+  !user ||
+  !(user.isAdmin || user.isSystem || user.isSynthetic || (staffRegex && user.email && staffRegex.test(user.email)));
 
 const currentStaffRegex = () =>
   internalStaffEmailRegex(parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS));
@@ -76,7 +75,7 @@ async function loadUsers(userIds: string[]): Promise<Map<string, UserFlags>> {
   const users = new Map<string, UserFlags>();
   for (let i = 0; i < valid.length; i += USER_BATCH) {
     const rows = await User.find({ _id: { $in: valid.slice(i, i + USER_BATCH) } })
-      .select('_id email createdAt isAdmin isSystem isSynthetic deletedAt')
+      .select('_id email createdAt isAdmin isSystem isSynthetic')
       .maxTimeMS(QUERY_DEADLINE_MS)
       .lean<UserFlags[]>();
     for (const row of rows) users.set(String(row._id), row);
@@ -86,26 +85,29 @@ async function loadUsers(userIds: string[]): Promise<Map<string, UserFlags>> {
 
 type Signal = string;
 
-/**
- * Classifies the accounts created on `day` and writes the result back: the `suspected` flag on
- * that cohort's user-day rows and the signup counts on the day's analytics_daily row. Unclassified
- * means too young for the dormancy signal to be evaluable and otherwise clean; it never counts as legit.
- */
-export async function evaluateSignupDay(day: string, { now = new Date(), logger }: RollupOptions = {}) {
+type CohortResult = { signups: IAnalyticsDailySignups; suspectedIds: string[] };
+
+async function classifyCohort(day: string, { now = new Date(), logger }: RollupOptions): Promise<CohortResult> {
   const { start, end } = dayBounds(day);
   const staffRegex = currentStaffRegex();
   // A one-day margin each side lets cohort signals (bursts, shared network) see accounts across midnight.
-  const { candidates, truncated } = await loadCandidates(
-    new Date(start.getTime() - DAY_MS),
-    new Date(end.getTime() + DAY_MS),
-    QUERY_DEADLINE_MS
-  );
+  const scanSince = new Date(start.getTime() - DAY_MS);
+  const [{ candidates, truncated }, hourlyCounts] = await Promise.all([
+    loadCandidates(scanSince, new Date(end.getTime() + DAY_MS), QUERY_DEADLINE_MS),
+    // UTC hours, same baseline window as getSignupTimeseries, so the spike signal agrees with the live view.
+    countByBucket(
+      new Date(scanSince.getTime() - SPIKE_BASELINE_HOURS * HOUR_MS),
+      new Date(end.getTime() + DAY_MS),
+      'hour',
+      0
+    ),
+  ]);
   if (truncated) logger?.warn(`analytics rollup: signup candidate scan truncated for ${day}`);
 
   const onDay = candidates.filter(c => c.createdAt >= start && c.createdAt < end);
   const users = await loadUsers(onDay.map(c => c.id));
   const counted = onDay.filter(c => isCountedUser(users.get(c.id), staffRegex));
-  const signalsById = classifySignups(candidates, now);
+  const signalsById = classifySignups(candidates, now, hourlyCounts);
 
   const signups: IAnalyticsDailySignups = { legit: 0, suspected: 0, unclassified: 0, bySignal: {} };
   const suspectedIds: string[] = [];
@@ -115,19 +117,74 @@ export async function evaluateSignupDay(day: string, { now = new Date(), logger 
     if (isSuspectedSignup(signals as never)) {
       signups.suspected += 1;
       suspectedIds.push(candidate.id);
-    } else if (signals.length === 0 && now.getTime() - candidate.createdAt.getTime() < DORMANCY_MIN_AGE_MS) {
+    } else if (signals.length < 2 && now.getTime() - candidate.createdAt.getTime() < DORMANCY_MIN_AGE_MS) {
+      // Too young for dormancy to be evaluable, and one more weak signal would make it suspected.
       signups.unclassified += 1;
     } else {
       signups.legit += 1;
     }
   }
+  return { signups, suspectedIds };
+}
 
+/**
+ * Classifies the accounts created on `day` and writes the result back: the `suspected` flag on
+ * that cohort's user-day rows and the signup counts on the day's analytics_daily row. Unclassified
+ * means too young for the dormancy signal to be evaluable and not yet suspected; it never counts as legit.
+ */
+export async function evaluateSignupDay(day: string, options: RollupOptions = {}) {
+  const { signups, suspectedIds } = await classifyCohort(day, options);
   await AnalyticsUserDay.updateMany({ signupDay: day }, { $set: { suspected: false } });
   if (suspectedIds.length > 0) {
     await AnalyticsUserDay.updateMany({ signupDay: day, userId: { $in: suspectedIds } }, { $set: { suspected: true } });
   }
   return signups;
 }
+
+/**
+ * Suspected verdict for each user. A user already holding user-day rows keeps their verdict (the
+ * trailing re-evaluation refreshes recent cohorts); a user's first appearance classifies their signup cohort.
+ */
+async function resolveSuspected(entries: [string, string | undefined][], options: RollupOptions): Promise<Set<string>> {
+  const ids = entries.map(([id]) => id);
+  const known = new Set<string>();
+  const suspected = new Set<string>();
+  for (let i = 0; i < ids.length; i += USER_BATCH) {
+    const slice = ids.slice(i, i + USER_BATCH);
+    const rows = await AnalyticsUserDay.find({ userId: { $in: slice } }, { userId: 1, suspected: 1 })
+      .maxTimeMS(QUERY_DEADLINE_MS)
+      .lean();
+    for (const row of rows) {
+      known.add(row.userId);
+      if (row.suspected) suspected.add(row.userId);
+    }
+  }
+  const cohorts = new Map<string, Set<string>>();
+  for (const [id, signupDay] of entries) {
+    if (known.has(id) || !signupDay) continue;
+    if (!cohorts.has(signupDay))
+      cohorts.set(signupDay, new Set((await classifyCohort(signupDay, options)).suspectedIds));
+    if (cohorts.get(signupDay)?.has(id)) suspected.add(id);
+  }
+  return suspected;
+}
+
+/** Recomputes WAU/MAU for rolled-up days after `day`, whose windows include it. */
+async function refreshLaterWindows(day: string) {
+  const later = await AnalyticsDaily.find({ day: { $gt: day, $lte: shiftDay(day, MAU_WINDOW_DAYS - 1) } }, { day: 1 })
+    .maxTimeMS(QUERY_DEADLINE_MS)
+    .lean();
+  for (const { day: laterDay } of later) {
+    const [wau, mau] = await windowCounts(laterDay);
+    await AnalyticsDaily.updateOne({ day: laterDay }, { $set: { wau, mau } });
+  }
+}
+
+const windowCounts = (day: string) =>
+  Promise.all([
+    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day),
+    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day),
+  ]);
 
 type EventGroup = {
   _id: {
@@ -206,11 +263,18 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
     owner.requests += group.requests;
     acc.byOwner.set(ownerKey, owner);
     bump(byFeature, feature, group.requests);
-    bump(bySource, source ?? UNKNOWN, group.requests);
+    bump(bySource, source ?? UNCLASSIFIED_SOURCE, group.requests);
     bump(byModel, model, group.requests);
     creditsConsumed += group.credits;
   }
 
+  const suspectedUsers = await resolveSuspected(
+    [...perUser.keys()].map(userId => {
+      const created = users.get(userId)?.createdAt;
+      return [userId, created ? formatDay(new Date(created)) : undefined] as [string, string | undefined];
+    }),
+    options
+  );
   const ops = [...perUser.entries()].map(([userId, acc]) => {
     const owners = [...acc.byOwner.values()].sort((a, b) => b.requests - a.requests);
     const org = owners.find(o => o.ownerType === 'Organization');
@@ -229,8 +293,8 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
             features: [...acc.features].sort(),
             sources: [...acc.sources].sort(),
             signupDay: user?.createdAt ? formatDay(new Date(user.createdAt)) : undefined,
+            suspected: suspectedUsers.has(userId),
           },
-          $setOnInsert: { suspected: false },
         },
         upsert: true,
       },
@@ -242,10 +306,7 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
   await AnalyticsUserDay.deleteMany({ day, userId: { $nin: [...perUser.keys()] } });
 
   const signups = await evaluateSignupDay(day, options);
-  const [wau, mau] = await Promise.all([
-    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -6), day),
-    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -27), day),
-  ]);
+  const [wau, mau] = await windowCounts(day);
   await analyticsDailyRepository.upsertDay(day, {
     signups,
     dau: perUser.size,
@@ -257,6 +318,7 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
     creditsConsumed,
     computedAt,
   });
+  await refreshLaterWindows(day);
   return { day, dau: perUser.size, wau, mau };
 }
 
