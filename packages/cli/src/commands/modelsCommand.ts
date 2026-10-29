@@ -21,6 +21,7 @@ import {
   REF_ISSUES,
   UNPULLABLE,
   abortable,
+  buildTag,
   clean,
   formatBytes,
   gatedMessage,
@@ -28,7 +29,7 @@ import {
   hubAccessMessage,
   licenseFor,
   listInstalled,
-  normalizeModelName,
+  findInstalledModel,
   pickBuild,
   planPull,
   rankSearchHits,
@@ -38,6 +39,7 @@ import {
   requireUnchangedManifest,
   resolveRuntimeTarget,
   runtimeLabel,
+  sameModelName,
   shortDigest,
   type HubClient,
   type LicenseInfo,
@@ -250,9 +252,9 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   }
   deps.log('Builds (smallest first):');
   const lines = table([
-    ['QUANT', 'SIZE', 'FIT', 'OLLAMA REF'],
+    ['BUILD', 'SIZE', 'FIT', 'OLLAMA REF'],
     ...detail.builds.map(build => [
-      clean(build.quant) || clean(build.id),
+      clean(build.label),
       formatBytes(build.sizeBytes),
       FIT_LABELS[fitOf(build).verdict],
       build.ollamaRef ? clean(build.ollamaRef) : `none: ${REF_ISSUES[build.ollamaRefIssue ?? 'unsupported-name']}`,
@@ -275,7 +277,7 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   const suggested = pickBuild(pullable, null) ?? pullable.find(build => build.ollamaRef);
   if (suggested?.quant) {
     deps.log('');
-    deps.log(`Pull one with: b4m models pull ${id}:${clean(suggested.quant)}`);
+    deps.log(`Pull one with: b4m models pull ${id}:${clean(buildTag(suggested))}`);
   }
   return 0;
 }
@@ -387,7 +389,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
   }
 
   const { hub, detail, build, id, target, license, projectorBytes: projector } = plan;
-  deps.log(`Model:    ${id} (${clean(build.quant)})`);
+  deps.log(`Model:    ${id} (${clean(build.label)})`);
   deps.log(`File:     ${build.files.map(file => clean(file.path)).join(', ')}`);
   deps.log(
     `Size:     ${formatBytes(build.sizeBytes)}${projector > 0 ? ` plus a vision projector of up to ${formatBytes(projector)}` : ''}`
@@ -419,7 +421,7 @@ export async function pullModel(input: string, deps: ModelsDeps, opts: ModelsOpt
   }
   if (!ref) {
     throw new Error(
-      `Hugging Face's registry does not serve this exact ${clean(build.quant)} file to Ollama, so nothing was downloaded. ` +
+      `Hugging Face's registry does not serve this exact ${clean(build.label)} file to Ollama, so nothing was downloaded. ` +
         `Pick another build from: b4m models show ${id}`
     );
   }
@@ -436,9 +438,10 @@ export async function removeModel(name: string, deps: ModelsDeps, opts: ModelsOp
       return 0;
     }
   }
-  await removeInstalled(target, name, deps.signal);
+  const installed = findInstalledModel(await abortable(target.runtime.list(), deps.signal), name);
+  await removeInstalled(target, installed?.name ?? name, deps.signal);
   deps.log(`Removed ${clean(name)}.`);
-  if (deps.config.defaultModel && normalizeModelName(deps.config.defaultModel) === normalizeModelName(name)) {
+  if (deps.config.defaultModel && sameModelName(deps.config.defaultModel, name)) {
     deps.log('It was your default model; pick another with: b4m models use <name>');
   }
   return 0;
@@ -451,10 +454,7 @@ export async function useModel(name: string, deps: ModelsDeps): Promise<number> 
   if (runtime.kind !== 'ollama')
     throw new Error(`The CLI chats with local models through Ollama; ${runtimeLabel(target)} is not Ollama.`);
   const models = await abortable(runtime.list(), deps.signal);
-  const wanted = name.replace(/^library\//i, '');
-  const model =
-    models.find(entry => entry.name === name || entry.name === wanted) ??
-    models.find(entry => entry.name === `${wanted}:latest`);
+  const model = findInstalledModel(models, name);
   if (!model) throw new Error(`No model named ${clean(name)} on ${runtimeLabel(target)}. See: b4m models ls`);
   await deps.config.save({
     defaultModel: model.name,

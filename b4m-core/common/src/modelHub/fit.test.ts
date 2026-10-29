@@ -88,6 +88,14 @@ const mac = (budgetGiB: number): HardwareProfile => ({
   ...machine('unified', 128),
   gpuWorkingSetBytes: budgetGiB * GIB,
 });
+/** Strix Halo: RAM the OS sees and the device memory ROCm reports. */
+const strix = (ramGiB: number, deviceGiB: number): HardwareProfile => ({
+  ...machine('unified', ramGiB),
+  platform: 'linux',
+  arch: 'x64',
+  gpuMemoryBytes: deviceGiB * GIB,
+  gpuVendor: 'amd',
+});
 
 function fit(over: Partial<FitInput> & { weightsGiB?: number; arch?: ModelArch } = {}) {
   const { weightsGiB = 10, arch: a = ARCH_64K, ...rest } = over;
@@ -297,6 +305,14 @@ describe('estimateFit', () => {
     expect(compute(mac(64))).toBeGreaterThan(compute(machine('discrete', 64, 24)));
   });
 
+  it('keeps the host mask copy on all unified memory, ROCm included', () => {
+    const compute = (hardware: HardwareProfile) =>
+      fit({ hardware, weightsGiB: 1, context: 32768 }).requested!.memory.computeBytes;
+    expect(compute(strix(31, 96))).toBe(compute(mac(64)));
+    const mask = attentionMaskBytes(ARCH_64K, 32768, 512);
+    expect(compute(strix(31, 96))).toBe(compute(machine('discrete', 64, 24)) + mask);
+  });
+
   it('reserves at least one layer of F16 KV per extra slot on a GPU', () => {
     const compute = (slots: number) =>
       fit({ hardware: mac(64), weightsGiB: 1, context: 32768, runtime: { ...LS, slots } }).requested!.memory
@@ -362,6 +378,24 @@ describe('estimateFit', () => {
     expect(ubatch(machine('discrete', 64, 48))).toBe(2048);
     expect(ubatch(machine('discrete', 64, 48), { kind: 'ollama', flashAttn: 'off' })).toBe(512);
     expect(ubatch(machine('discrete', 64, 8), { kind: 'ollama', flashAttn: 'off' })).toBe(256);
+  });
+
+  it("keys Ollama's flash-attention-off batch on CUDA, so ROCm and Vulkan step down instead", () => {
+    const faOff = (hardware: HardwareProfile) =>
+      fit({ hardware, runtime: { kind: 'ollama', flashAttn: 'off' }, context: 65536 }).requested!.ubatch;
+    expect(faOff({ ...machine('discrete', 64, 48), gpuVendor: 'nvidia' })).toBe(512);
+    expect(faOff({ ...machine('unified', 128), platform: 'linux', arch: 'arm64', gpuVendor: 'nvidia' })).toBe(512);
+    expect(faOff({ ...machine('discrete', 64, 48), gpuVendor: 'amd' })).toBe(2048);
+    expect(faOff({ ...machine('discrete', 64, 48), gpuVendor: 'intel' })).toBe(2048);
+    expect(faOff(strix(31, 96))).toBe(2048);
+  });
+
+  it("steps Ollama's batch down by the RAM the OS sees on unified memory, as Ollama holds an iGPU to free RAM", () => {
+    const ubatch = (hardware: HardwareProfile) =>
+      fit({ hardware, runtime: OLLAMA, weightsGiB: 20, context: 65536 }).requested!.ubatch;
+    // 20 GiB of weights plus a 4 GiB KV prediction is past 60% and 75% of 31 GiB, though not of the 96 GiB carve-out.
+    expect(ubatch(strix(31, 96))).toBe(512);
+    expect(ubatch(strix(125, 96))).toBe(2048);
   });
 
   it('loads Ollama embedding models with one slot and a 2048 batch capped at the context', () => {
@@ -493,6 +527,22 @@ describe('estimateFit', () => {
     expect(fit({ hardware: { ...machine('unified', 64), gpuWorkingSetBytes: 40 * GIB } }).memory.budgetBytes).toBe(
       40 * GIB
     );
+  });
+
+  it('budgets AMD unified memory from what ROCm reports, not a share of the RAM the OS sees', () => {
+    // A 96 GiB carve-out leaves the OS 31 GiB; a small one leaves GTT at about half of RAM.
+    expect(fit({ hardware: strix(31, 96) }).memory.budgetBytes).toBe(96 * GIB);
+    expect(fit({ hardware: strix(125, 62) }).memory.budgetBytes).toBe(62 * GIB);
+    expect(fit({ hardware: strix(31, 96), weightsGiB: 60, runtime: OLLAMA })).toMatchObject({ verdict: 'fast' });
+    expect(fit({ hardware: strix(125, 62), weightsGiB: 70, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+  });
+
+  it('plans a Windows Strix Halo carve-out machine from RAM, since its reported bytes are not the usable pool', () => {
+    const carveOut = { ...strix(64, 0.5), platform: 'win32' } as const;
+    expect(fit({ hardware: carveOut, weightsGiB: 4, runtime: OLLAMA })).toMatchObject({ verdict: 'too-large' });
+    const unknown = { ...carveOut, gpuMemoryBytes: null };
+    expect(fit({ hardware: unknown, weightsGiB: 4, runtime: OLLAMA })).toMatchObject({ verdict: 'fast' });
+    expect(fit({ hardware: unknown, weightsGiB: 4, runtime: OLLAMA }).memory.budgetBytes).toBe(48 * GIB);
   });
 
   it('grows compute with ubatch', () => {

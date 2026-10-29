@@ -11,8 +11,11 @@ import {
   ModelNotFoundError,
   OllamaRuntime,
   detectRuntimes,
+  findHubBuild,
+  hubBuildTag,
   isAbliteratedModel,
   isHubRepoId,
+  ollamaModelKey,
   type DetectedRuntime,
   type HubGgufBuild,
   type HubModelDetail,
@@ -269,15 +272,14 @@ export function parsePullTarget(input: string): PullTarget {
   return { kind: 'hub', repo: path, tag };
 }
 
-/** Matches the tag against each build's planned ref, then its quant label; no tag or `latest` means Q4_K_M. */
+/** The build the tag names, as `findHubBuild` resolves it; no tag or `latest` means Q4_K_M. */
 export function pickBuild(builds: HubGgufBuild[], tag: string | null): HubGgufBuild | undefined {
   // Ollama tags an untagged hf.co pull `latest`, so users copy that form back.
-  const wanted = (tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT).toUpperCase();
-  return (
-    builds.find(build => build.ollamaRef?.slice(build.ollamaRef.lastIndexOf(':') + 1).toUpperCase() === wanted) ??
-    builds.find(build => build.quant === wanted)
-  );
+  return findHubBuild(builds, tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT);
 }
+
+/** The tag `pickBuild` resolves back to `build`. */
+export const buildTag = hubBuildTag;
 
 export async function resolveRuntimeTarget(
   hosts: { flag?: string; env?: string; config?: string },
@@ -322,7 +324,7 @@ export async function listInstalled(
   return models.map(model => ({
     ...model,
     loaded: loadedNames.has(model.name),
-    default: model.name === defaultModel,
+    default: !!defaultModel && sameModelName(model.name, defaultModel),
   }));
 }
 
@@ -331,6 +333,20 @@ export function normalizeModelName(name: string): string {
   return withoutLibrary.lastIndexOf(':') > withoutLibrary.lastIndexOf('/')
     ? withoutLibrary
     : `${withoutLibrary}:latest`;
+}
+
+/** Whether two names are one model, counting hf.co and huggingface.co as the same Hugging Face repo. */
+export function sameModelName(a: string, b: string): boolean {
+  return ollamaModelKey(normalizeModelName(a)) === ollamaModelKey(normalizeModelName(b));
+}
+
+export function findInstalledModel<T extends { name: string }>(models: T[], name: string): T | undefined {
+  const wanted = name.replace(/^library\//i, '');
+  return (
+    models.find(model => model.name === name || model.name === wanted) ??
+    models.find(model => model.name === `${wanted}:latest`) ??
+    models.find(model => sameModelName(model.name, name))
+  );
 }
 
 export function requireRemovable(target: RuntimeTarget): void {
@@ -378,6 +394,8 @@ function changedSinceReview(subject: string, what: string): Error {
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((entry, index) => entry === b[index]);
 
+const sameEntries = (a: string[], b: string[]) => sameList([...a].sort(), [...b].sort());
+
 /**
  * Re-reads the manifest after the user approved it, because Ollama then pulls by tag and a tag can move.
  * Refuses when the license texts or layers differ from the ones shown.
@@ -403,7 +421,13 @@ export async function requireUnchangedLicenses(
 ): Promise<void> {
   const currentDetail = await hub.getModel(detail.id, { signal, refresh: true });
   const now = licenseFor(currentDetail, hub.endpoint);
-  if (!sameList(currentDetail.licenses, detail.licenses) || now.label !== shown.label || now.link !== shown.link) {
+  // The Hub may list the same ids in another order; the label is rebuilt in the order the user saw.
+  const reviewed = licenseFor({ ...currentDetail, licenses: detail.licenses }, hub.endpoint);
+  if (
+    !sameEntries(currentDetail.licenses, detail.licenses) ||
+    reviewed.label !== shown.label ||
+    reviewed.link !== shown.link
+  ) {
     throw changedSinceReview(clean(detail.id), `its license is now ${now.label}`);
   }
 }
@@ -446,15 +470,15 @@ export async function planPull(
 
   const build = pickBuild(detail.builds, parsed.tag);
   if (!build) {
-    const quants = [...new Set(detail.builds.map(entry => entry.quant).filter(Boolean))].map(clean);
+    const tags = detail.builds.map(entry => clean(buildTag(entry)));
     throw new Error(
-      quants.length === 0
+      tags.length === 0
         ? `${id} has no GGUF builds.`
-        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${quants.join(', ')} (${pullCommand} ${id}:<QUANT>)`
+        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${tags.join(', ')} (${pullCommand} ${id}:<BUILD>)`
     );
   }
   if (build.ollamaRefIssue && UNPULLABLE.has(build.ollamaRefIssue)) {
-    throw new Error(`Ollama cannot pull ${id} ${clean(build.quant)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
+    throw new Error(`Ollama cannot pull ${id} ${clean(build.label)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
   }
 
   const target = await requirePullable(deps);

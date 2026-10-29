@@ -32,7 +32,7 @@ b4m models show bartowski/SmolLM2-135M-Instruct-GGUF
 
 ```text
 Builds (smallest first):
-  QUANT     SIZE    FIT   OLLAMA REF
+  BUILD     SIZE    FIT   OLLAMA REF
   IQ3_XS    88 MB   fits  hf.co/bartowski/SmolLM2-135M-Instruct-GGUF:IQ3_XS
   ...
   Q4_K_M    105 MB  fits  hf.co/bartowski/SmolLM2-135M-Instruct-GGUF:Q4_K_M

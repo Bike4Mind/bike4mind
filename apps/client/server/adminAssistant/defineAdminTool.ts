@@ -26,7 +26,7 @@ type AdminToolSpec<S extends AdminToolInput> = {
 const forbidden: AdminToolResult = { ok: false, error: 'forbidden', message: 'Admin access is required.' };
 
 function toParametersSchema(input: AdminToolInput): ToolParametersSchema {
-  const { $schema: _draftUri, ...schema } = z.toJSONSchema(input) as Record<string, unknown>;
+  const { $schema: _draftUri, ...schema } = z.toJSONSchema(input, { io: 'input' }) as Record<string, unknown>;
   // The LLM tool schema format has no slot for the draft URI; every admin input is a z.object,
   // so the remaining shape is the `{ type: 'object', properties }` the format expects.
   return schema as ToolParametersSchema;

@@ -42,6 +42,7 @@ function build(quant: string, sizeBytes: number, extra: Partial<HubGgufBuild> = 
   return {
     id: path.replace(/\.gguf$/, ''),
     quant,
+    label: quant,
     files: [{ path, sizeBytes, sha256: 'a'.repeat(64), url: `${ENDPOINT}/${REPO}/resolve/main/${path}` }],
     sizeBytes,
     split: false,
@@ -563,6 +564,24 @@ describe('models show', () => {
     expect(text).toMatch(/Pull one with: b4m models pull Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
   });
 
+  it('shows builds that share a quant under their own labels, and pulls each by its label', async () => {
+    const qad = build('Q4_0', 219_312_832, {
+      id: 'LFM2.5-350M-QAD-Q4_0',
+      label: 'QAD-Q4_0',
+      ollamaRef: `hf.co/${REPO}:QAD-Q4_0`,
+    });
+    const builds = [build('Q4_0', 219_309_792), qad, build('Q4_K_M', 229_312_224)];
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(detail({ builds })) }) });
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    const text = h.lines.join('\n');
+    expect(text).toMatch(/\n {2}Q4_0 {6}219 MB\s+\S+\s+hf\.co\/\S+:Q4_0\n/);
+    expect(text).toMatch(/\n {2}BUILD\s+SIZE\s+FIT\s+OLLAMA REF\n/);
+    expect(text).toMatch(/\n {2}QAD-Q4_0 {2}219 MB\s+\S+\s+hf\.co\/\S+:QAD-Q4_0\n/);
+    expect(pickBuild(builds, 'qad-q4_0')).toBe(qad);
+    expect(pickBuild(builds, 'Q4_0')).toBe(builds[0]);
+    expect(pickBuild([{ ...qad, ollamaRef: null, ollamaRefIssue: 'ambiguous' }], 'QAD-Q4_0')?.id).toBe(qad.id);
+  });
+
   it('lists a build with an unsupported quant as not pullable with the reason', async () => {
     const hub = fakeHub({
       getModel: vi.fn().mockResolvedValue(
@@ -591,7 +610,7 @@ describe('models show', () => {
       });
       await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
       const text = h.lines.join('\n');
-      expect(text).toMatch(/QUANT\s+SIZE\s+FIT\s+OLLAMA REF/);
+      expect(text).toMatch(/BUILD\s+SIZE\s+FIT\s+OLLAMA REF/);
       expect(text).toMatch(/Q4_K_M\s+20\.0 GB\s+fits\s/);
       expect(text).toMatch(/Q6_K\s+47\.0 GB\s+tight\s/);
       expect(text).toMatch(/Q8_0\s+77\.0 GB\s+too large\s/);
@@ -712,6 +731,31 @@ describe('models pull (Hugging Face)', () => {
     const same = harness({ answers: [true] });
     expect(await pullModel(REPO, same.deps, OPTS)).toBe('pulled');
     expect(same.hub.getModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('pulls when the Hub lists the same license IDs in another order after the prompt', async () => {
+    const getModel = vi
+      .fn()
+      .mockResolvedValueOnce(detail({ licenses: ['apache-2.0', 'mit'] }))
+      .mockResolvedValueOnce(detail({ licenses: ['mit', 'apache-2.0'] }));
+    const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
+    expect(await pullModel(REPO, h.deps, OPTS)).toBe('pulled');
+    expect(h.runtime.pull).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['added', ['apache-2.0', 'mit'], ['apache-2.0', 'mit', 'gemma']],
+    ['removed', ['apache-2.0', 'mit'], ['mit']],
+    ['duplicated', ['mit'], ['mit', 'mit']],
+    ['duplicated in place of another', ['apache-2.0', 'apache-2.0', 'mit'], ['apache-2.0', 'mit', 'mit']],
+  ])('refuses when a license ID was %s after the prompt', async (_label, before, licenses) => {
+    const getModel = vi
+      .fn()
+      .mockResolvedValueOnce(detail({ licenses: before }))
+      .mockResolvedValueOnce(detail({ licenses }));
+    const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
+    await expect(pullModel(REPO, h.deps, OPTS)).rejects.toThrow(/changed since you reviewed it/);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
   });
 
   it('refuses changed license IDs even when their display is unchanged', async () => {
@@ -1173,6 +1217,17 @@ describe('models rm', () => {
     expect(confirmed.lines).toEqual(['Removed qwen2.5:0.5b.', expect.stringMatching(/It was your default model/)]);
   });
 
+  it.each([
+    ['hf.co/acme/m-GGUF:Q4_K_M', 'huggingface.co/acme/m-GGUF:Q4_K_M'],
+    ['huggingface.co/acme/m-GGUF:Q4_K_M', 'hf.co/acme/m-GGUF:Q4_K_M'],
+  ])('removes %s when it is installed as %s', async (name, listedAs) => {
+    const runtime = fakeRuntime({ list: vi.fn().mockResolvedValue([installed(listedAs)]) });
+    const h = harness({ runtime, config: { defaultModel: listedAs } });
+    await runModelsCommand('rm', { _: [], name, yes: true }, h.deps);
+    expect(runtime.remove).toHaveBeenCalledWith(listedAs);
+    expect(h.lines.some(line => line.includes('It was your default model'))).toBe(true);
+  });
+
   it('reports a missing model', async () => {
     const runtime = fakeRuntime({ remove: vi.fn().mockRejectedValue(new ModelNotFoundError('ollama', 'nope')) });
     await expect(runModelsCommand('rm', { _: [], name: 'nope', yes: true }, harness({ runtime }).deps)).rejects.toThrow(
@@ -1196,6 +1251,13 @@ describe('models use', () => {
     const h = harness({ runtime, config: { ollamaHost: 'http://127.0.0.1:11500' } });
     await runModelsCommand('use', { _: [], name: 'llama3' }, h.deps);
     expect(h.saved).toEqual([{ defaultModel: 'llama3:latest', localDefaultModel: 'llama3:latest' }]);
+  });
+
+  it('finds a Hugging Face model installed under the other host name', async () => {
+    const runtime = fakeRuntime({ list: vi.fn().mockResolvedValue([installed('huggingface.co/acme/m-GGUF:Q4_K_M')]) });
+    const h = harness({ runtime });
+    await runModelsCommand('use', { _: [], name: 'hf.co/acme/m-GGUF:Q4_K_M' }, h.deps);
+    expect(h.saved[0]).toMatchObject({ defaultModel: 'huggingface.co/acme/m-GGUF:Q4_K_M' });
   });
 
   it('rejects unknown models and non-Ollama runtimes', async () => {
