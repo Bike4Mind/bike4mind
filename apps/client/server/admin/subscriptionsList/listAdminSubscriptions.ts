@@ -44,10 +44,12 @@ type SubscriptionDoc = {
   source?: AdminSubscriptionRow['source'];
   quantity: number;
   customCreditsPerCycle?: number | null;
-  periodStartsAt: Date;
-  periodEndsAt: Date;
+  // Rows copied in by the UserSubscription migration were raw inserts that skipped schema validation, so
+  // these required-in-schema dates can be missing on legacy documents.
+  periodStartsAt?: Date | null;
+  periodEndsAt?: Date | null;
   canceledAt?: Date | null;
-  createdAt: Date;
+  createdAt?: Date | null;
   unitAmount?: number | null;
   currency?: string | null;
   interval?: string | null;
@@ -202,10 +204,10 @@ export async function toAdminSubscriptionRows(
     quantity: doc.quantity,
     customCreditsPerCycle: doc.customCreditsPerCycle ?? null,
     mrr: subscriptionMrr(doc),
-    periodStartsAt: doc.periodStartsAt.toISOString(),
-    periodEndsAt: doc.periodEndsAt.toISOString(),
+    periodStartsAt: isoOrNull(doc.periodStartsAt),
+    periodEndsAt: isoOrNull(doc.periodEndsAt),
     canceledAt: isoOrNull(doc.canceledAt),
-    createdAt: doc.createdAt.toISOString(),
+    createdAt: isoOrNull(doc.createdAt),
   }));
 }
 
@@ -273,7 +275,8 @@ export async function adminSubscriptionsSummary(
   };
 }
 
-export type ExportCursor = { createdAt: Date; id: string };
+/** `createdAt` is null past the rows that lack one: `{ createdAt: null }` matches a missing field and those sort last. */
+export type ExportCursor = { createdAt: Date | null; id: string };
 
 /** One keyset page of the export, newest first. Reads `limit` rows; the caller asks for one extra to probe for more. */
 export async function adminSubscriptionsExportPage(

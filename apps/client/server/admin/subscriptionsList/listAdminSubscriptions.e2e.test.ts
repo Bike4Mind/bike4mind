@@ -82,6 +82,27 @@ const seedSubscription = (ownerId: string, overrides: SubscriptionOverrides = {}
 
 const catalog = subscriptionPlanCatalog();
 
+// Mirrors the UserSubscription migration's raw insertOne, which skipped schema validation and so could
+// leave the required dates (and timestamps) off a legacy document.
+const seedLegacySubscription = async (ownerId: string) => {
+  const _id = new mongoose.Types.ObjectId();
+  await Subscription.collection.insertOne({
+    _id,
+    subscriptionId: `sub_${nextId()}`,
+    ownerType: 'User',
+    ownerId,
+    priceId: 'price_test',
+    status: 'active',
+    quantity: 1,
+  });
+  return String(_id);
+};
+
+const cursorOf = (row: { createdAt: string | null; id: string }) => ({
+  createdAt: row.createdAt ? new Date(row.createdAt) : null,
+  id: row.id,
+});
+
 describe('listAdminSubscriptions', () => {
   it('lists user and organization rows with the owner hydrated', async () => {
     const user = await seedUser('jane', { stripeCustomerId: 'cus_jane' });
@@ -279,6 +300,22 @@ describe('listAdminSubscriptions', () => {
 
     expect(result.subscriptions[0].owner).toBeNull();
   });
+
+  it('lists a legacy row that has no period dates or createdAt', async () => {
+    const user = await seedUser('jane');
+    await seedSubscription(String(user._id));
+    const legacyId = await seedLegacySubscription(String(user._id));
+
+    const result = await listAdminSubscriptions({ ...params, limit: 1, page: 2 }, NOW);
+
+    expect(result.subscriptions).toHaveLength(1);
+    expect(result.subscriptions[0]).toMatchObject({
+      id: legacyId,
+      periodStartsAt: null,
+      periodEndsAt: null,
+      createdAt: null,
+    });
+  });
 });
 
 describe('adminSubscriptionsSummary', () => {
@@ -443,20 +480,39 @@ describe('adminSubscriptionsExportPage', () => {
 
     const first = await adminSubscriptionsExportPage(match, null, 2, catalog);
     const last = first[first.length - 1];
-    const rest = await adminSubscriptionsExportPage(
-      match,
-      { createdAt: new Date(last.createdAt), id: last.id },
-      5,
-      catalog
-    );
+    const rest = await adminSubscriptionsExportPage(match, cursorOf(last), 5, catalog);
 
     const all = [...first, ...rest];
     expect(all).toHaveLength(4);
     expect(new Set(all.map(row => row.id)).size).toBe(4);
-    const times = all.map(row => new Date(row.createdAt).getTime());
+    const times = all.map(row => Date.parse(row.createdAt ?? ''));
     expect(times).toEqual([...times].sort((a, b) => b - a));
-    const tied = all.filter(row => new Date(row.createdAt).getTime() === tie.getTime()).map(row => row.id);
+    const tied = all.filter(row => Date.parse(row.createdAt ?? '') === tie.getTime()).map(row => row.id);
     expect(tied).toEqual([...tied].sort().reverse());
+  });
+
+  it('pages past legacy rows with no createdAt, which sort last', async () => {
+    const user = await seedUser('jane');
+    await seedSubscription(String(user._id));
+    const legacyIds = [
+      await seedLegacySubscription(String(user._id)),
+      await seedLegacySubscription(String(user._id)),
+      await seedLegacySubscription(String(user._id)),
+    ];
+    const { match } = await adminSubscriptionsMatch({}, NOW, catalog);
+
+    const all = [];
+    let after: ReturnType<typeof cursorOf> | null = null;
+    for (let page = 0; page < 5; page++) {
+      const rows = await adminSubscriptionsExportPage(match, after, 2, catalog);
+      all.push(...rows);
+      if (rows.length < 2) break;
+      after = cursorOf(rows[rows.length - 1]);
+    }
+
+    expect(all).toHaveLength(4);
+    expect(all[0].createdAt).not.toBeNull();
+    expect(all.slice(1).map(row => row.id)).toEqual([...legacyIds].sort().reverse());
   });
 });
 
