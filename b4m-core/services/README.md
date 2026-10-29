@@ -4,6 +4,31 @@
 
 This directory contains the core business logic services for the B4M application. Each service is organized into its own module and follows specific patterns for consistency and maintainability.
 
+## Media admission adapter migration
+
+`ImageGenerationService`, `ImageEditService`, `CreateVideoJobDeps` and
+`CreateMusicJobDeps` require an `assertModelAdmission` callback. The image services accept
+`(user: string | IUserDocument, modelId, adminRoleWithheld?)`; their workers pass the loaded user.
+Video/music job callbacks accept `(userId: string, modelId, adminRoleWithheld?)`.
+Implement it with the shared `createModelAdmission` rule and the caller's current
+entitlements. Preserve a withheld admin role when the third argument is true; it
+is trusted caller metadata, never a request-body option. Propagate refusals before reserving credits or dispatching provider
+work. Image services check both invocation and queue execution.
+
+The Free-Tier Model Gate now applies to all model IDs, including media. Add approved
+media IDs to `freeTierAllowedModels` in Admin Settings to offer them to free accounts;
+the default list contains text models only. Conversational voice uses the billing
+identifier `elevenlabs`; its text reasoning model must also be allowed. A refusal
+uses `model_requires_subscription`. Check the allowlist and the account's paid-plan
+entitlement when diagnosing an unexpected refusal; plan-read outages return a
+retryable error instead of an upgrade prompt.
+
+Media tool hosts must supply `getEntitlements: () => Promise<string[]>` through
+`ToolBuilderConfig`, `ToolBuilderDeps` or `generateTools`' object argument. Proactive message
+adapters require the same callback. Resolve the executing user's current entitlements and let
+read failures reject; `entitlementKeys` remains a retrieval snapshot, not a model admission
+source. A missing or failed resolver returns a retryable refusal when plan verification is needed.
+
 ## Internal user notes migration
 
 `userService.adminUpdateUser` no longer accepts `userNotes`. Existing inline notes

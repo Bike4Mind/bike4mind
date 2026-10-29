@@ -1,5 +1,7 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import { randomUUID } from 'crypto';
 import {
+  DEFAULT_MUSIC_MODEL_ID,
   ApiKeyType,
   isSupportedElevenLabsFormat,
   UnprocessableEntityError,
@@ -54,6 +56,8 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
   if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
+
+  await (await createModelAdmission(req.user!)).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID);
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,

@@ -1,3 +1,4 @@
+import { createModelAdmission } from '@bike4mind/services/llm/modelAdmission';
 // @vitest-environment node
 /**
  * POST /api/ai/test-realtime-voice synthesizes with OpenAI tts-1-hd on the platform key, so it runs
@@ -64,7 +65,11 @@ vi.mock('@bike4mind/services', async () => ({
   organizationService: { isCurrentOrgMember: m.isMember },
   latchUsage: () => undefined,
 }));
-vi.mock('@bike4mind/services/llm/modelAdmission', () => ({}));
+vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
+  createModelAdmission: vi.fn(() => ({ assert: async () => {}, admits: async () => true })),
+  loadModelConfigurations: async () => [],
+  loadFreeTierAllowedModels: async () => undefined,
+}));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 0 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn() }));
@@ -103,6 +108,21 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/test-realtime-voice metering', () => {
+  it('refuses paid-only preview speech before the hold and provider', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createModelAdmission).mockReturnValueOnce({ assert: assertAdmission, admits: async () => false });
+    await expect(call()).rejects.toBe(refusal);
+    expect(createModelAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) })
+    );
+    expect(assertAdmission).toHaveBeenCalledWith('tts-1-hd');
+    expect(holdPreflightCredits).not.toHaveBeenCalled();
+    expect(m.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a zero-credit caller with 422 and never calls the provider', async () => {
     m.balance = 0;
 
