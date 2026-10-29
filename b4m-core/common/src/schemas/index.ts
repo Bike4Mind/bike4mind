@@ -31,6 +31,8 @@ export * from './shareResponse';
 export * from './projectResponse';
 export * from './promptResponse';
 export * from './fabFileResponse';
+export * from './webhookSubscriptionResponse';
+export * from './userActivityResponse';
 export * from './settings';
 export * from './customMcpHosts';
 export * from './customMcpPolicy';
