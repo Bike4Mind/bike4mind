@@ -266,6 +266,31 @@ describe('per-account cookies', () => {
     expect(device?.id).toBe(VALID_ID);
   });
 
+  it('only honors a legacy cookie for the account that owns it', async () => {
+    mockFindValidForUser.mockImplementation(async (id: string, userId: string) =>
+      userId === 'user-b' ? { id, tokenHash: sha256(VALID_SECRET) } : null
+    );
+    const cookie = `${LEGACY_TRUSTED_DEVICE_COOKIE}=${VALID_ID}.${VALID_SECRET}`;
+
+    expect(await consumeTrustedDevice(makeReq(cookie), 'user-a')).toBeNull();
+    expect(mockFindValidForUser).toHaveBeenCalledWith(VALID_ID, 'user-a');
+    expect((await consumeTrustedDevice(makeReq(cookie), 'user-b'))?.id).toBe(VALID_ID);
+  });
+
+  it("retires the account's legacy cookie on re-grant even when its own cookie wins", async () => {
+    const legacyId = '507f1f77bcf86cd799439012';
+    mockFindValidForUser.mockImplementation(async (id: string) => ({ id, tokenHash: sha256(VALID_SECRET) }));
+    const res = makeRes();
+    const cookie = `${COOKIE_A}=${VALID_ID}.${VALID_SECRET}; ${LEGACY_TRUSTED_DEVICE_COOKIE}=${legacyId}.${VALID_SECRET}`;
+
+    const device = await grantTrustedDevice(makeReq(cookie), res, 'user-a');
+
+    expect(device?.id).toBe(VALID_ID);
+    const cookies = setCookieValues(res);
+    expect(cookies[0]).toContain(`${COOKIE_A}=${VALID_ID}.`);
+    expect(cookies[1]).toMatch(new RegExp(`^${LEGACY_TRUSTED_DEVICE_COOKIE}=;.*Max-Age=0`));
+  });
+
   it("prefers the account's own cookie and falls back to the legacy one when it fails", async () => {
     const otherId = '507f1f77bcf86cd799439012';
     mockFindValidForUser.mockImplementation(async (id: string) =>

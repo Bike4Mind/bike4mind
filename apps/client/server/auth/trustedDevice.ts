@@ -95,16 +95,16 @@ function presentedTokens(req: TrustedDeviceRequest, userId: string): PresentedTo
   return [...(own ? [{ ...own, legacy: false }] : []), ...(legacy ? [{ ...legacy, legacy: true }] : [])];
 }
 
-/** The first presented token that verifies against a live trust of `userId`. */
-async function findPresentedTrust(
-  req: TrustedDeviceRequest,
-  userId: string
-): Promise<{ device: ITrustedDeviceDocument; token: PresentedToken } | null> {
+type PresentedTrust = { device: ITrustedDeviceDocument; token: PresentedToken };
+
+/** Every presented token that verifies against a live trust of `userId`, own cookie first. */
+async function findPresentedTrusts(req: TrustedDeviceRequest, userId: string): Promise<PresentedTrust[]> {
+  const trusts: PresentedTrust[] = [];
   for (const token of presentedTokens(req, userId)) {
     const device = await trustedDeviceRepository.findValidForUser(token.id, userId);
-    if (device && secretMatches(token.secret, device.tokenHash)) return { device, token };
+    if (device && secretMatches(token.secret, device.tokenHash)) trusts.push({ device, token });
   }
-  return null;
+  return trusts;
 }
 
 /** Append rather than overwrite - a string Set-Cookie replaces the whole header. */
@@ -127,8 +127,8 @@ const expireCookie = (res: Response, name: string): void => setCookie(res, name,
 
 /**
  * Drops `userId`'s cookie only, leaving other accounts' trusts on this browser intact.
- * A legacy shared cookie is left alone because it may belong to another account; once
- * the caller revokes this user's records it no longer verifies for them anyway.
+ * A legacy shared cookie is left alone because it may belong to another account. It is
+ * retired on this user's next grant instead (see grantTrustedDevice).
  */
 export function clearTrustedDeviceCookie(res: Response, userId: string): void {
   expireCookie(res, trustedDeviceCookieName(userId));
@@ -185,13 +185,15 @@ export async function grantTrustedDevice(
 
   const cookieName = trustedDeviceCookieName(userId);
 
-  const presented = await findPresentedTrust(req, userId);
-  if (presented) {
-    const { device, token } = presented;
+  const presented = await findPresentedTrusts(req, userId);
+  const [current] = presented;
+  if (current) {
+    const { device, token } = current;
     await trustedDeviceRepository.extend(device.id, expiresAt, ip);
     setCookie(res, cookieName, `${token.id}.${token.secret}`, maxAgeSeconds);
-    // It verified for this user, so the legacy cookie is theirs and safe to retire.
-    if (token.legacy) expireCookie(res, LEGACY_TRUSTED_DEVICE_COOKIE);
+    // A legacy cookie that verified for this user is theirs, so it is safe to retire, even
+    // when the own cookie won (both can exist after a mixed-version rollout).
+    if (presented.some(({ token: { legacy } }) => legacy)) expireCookie(res, LEGACY_TRUSTED_DEVICE_COOKIE);
     return device;
   }
 
@@ -248,8 +250,8 @@ export async function identifyTrustedDevice(
   userId: string
 ): Promise<ITrustedDeviceDocument | null> {
   try {
-    const presented = await findPresentedTrust(req, userId);
-    return presented?.device ?? null;
+    const [current] = await findPresentedTrusts(req, userId);
+    return current?.device ?? null;
   } catch {
     return null;
   }
