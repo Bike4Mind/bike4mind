@@ -63,6 +63,8 @@ export function impersonationDecision(
 }
 
 export function impersonationGate(req: Request, _res: Response, next: NextFunction) {
+  // Declared locally: the `impersonatedBy` augmentation lives in apps/client/global.d.ts, which a
+  // program importing this file from outside apps/client does not load.
   const user = req.user as Request['user'] & { impersonatedBy?: string; impersonationWriteEnabled?: boolean };
   if (!user?.impersonatedBy) return next();
   const decision = impersonationDecision(req.method, req.url, !!user.impersonationWriteEnabled);
