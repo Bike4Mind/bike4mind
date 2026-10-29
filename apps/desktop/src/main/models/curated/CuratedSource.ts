@@ -64,6 +64,7 @@ export class CuratedSource {
   #cached: Copy | null = null;
   #state: CuratedCheckState = { lastSuccessAt: null, lastAttemptAt: null, failures: 0, floors: {} };
   #revoked = new Set<string>();
+  #revocationsSaved = true;
   // Set while both copies of the revoked set are damaged and only a recovery-signed list may rebuild it.
   #repairing = false;
   // Set while the revoked set could not be read at all; nothing from disk is used and each check reads it again.
@@ -133,6 +134,7 @@ export class CuratedSource {
       await this.#deps.store.writeEnabled(enabled);
     } catch (error) {
       this.#log(`could not save the curated list setting: ${String(error)}`);
+      throw error;
     }
     this.#enabled = enabled;
     this.#status = 'idle';
@@ -213,8 +215,10 @@ export class CuratedSource {
     const copy = await store.readCopy(source);
     const verdict = copy ? this.#verify(copy.manifest, copy.signature) : null;
     if (copy && verdict && !verdict.ok) {
-      this.#log(`deleted the cached curated list: ${verdict.detail}`);
-      await store.deleteCopy(source);
+      this.#log(`ignored the cached curated list: ${verdict.detail}`);
+      await store.deleteCopy(source).catch((error: unknown) => {
+        this.#log(`could not delete the cached curated list: ${String(error)}`);
+      });
     }
     const recovered = verdict?.ok ? this.#revocations(verdict) : null;
     const lost = revoked.status === 'lost';
@@ -250,9 +254,11 @@ export class CuratedSource {
   /** Applies `ids` in memory at once, then saves them with one retry; false when they could not be saved. */
   async #revoke(ids: readonly string[]): Promise<boolean> {
     this.#revoked = new Set([...this.#revoked, ...ids]);
+    this.#revocationsSaved = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         this.#revoked = new Set([...this.#revoked, ...(await this.#deps.store.addRevoked(this.#revoked))]);
+        this.#revocationsSaved = true;
         return true;
       } catch (error) {
         this.#log(`could not save revoked keys (attempt ${attempt}): ${String(error)}`);
@@ -302,7 +308,11 @@ export class CuratedSource {
     this.#deps.onChange();
     let outcome: Outcome;
     try {
-      outcome = this.#unread && !(await this.#restore()) ? 'failed' : await this.#run(this.#deps.url as string);
+      if (this.#unread && !(await this.#restore())) outcome = 'failed';
+      // Until the revoked set is durable, the recovery-signed cached list is its only disk copy. Do not let a
+      // later list (or the unchanged-signature shortcut) replace it or report another successful check.
+      else if (!this.#revocationsSaved && !(await this.#revoke([]))) outcome = 'failed';
+      else outcome = await this.#run(this.#deps.url as string);
     } catch (error) {
       this.#log(`curated list check failed: ${String(error)}`);
       outcome = 'failed';

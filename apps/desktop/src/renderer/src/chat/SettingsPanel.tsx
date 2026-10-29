@@ -165,14 +165,19 @@ function localContextEntry(
 
 function curatedListEntry(
   settings: CuratedListSettingsState | null,
-  onEnabled: (enabled: boolean) => void
+  onEnabled: (enabled: boolean) => void,
+  error: string | null,
+  onRetry: () => void,
+  saving: boolean
 ): ConfigEntry {
   return {
     id: 'curated-list',
     icon: <DownloadIcon />,
     label: 'Curated models list',
-    summary: curatedListSummary(settings),
-    control: <CuratedListSettings settings={settings} onEnabled={onEnabled} />,
+    summary: !settings && error ? error : curatedListSummary(settings),
+    control: (
+      <CuratedListSettings settings={settings} onEnabled={onEnabled} error={error} onRetry={onRetry} saving={saving} />
+    ),
   };
 }
 
@@ -333,7 +338,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
-  const [curatedList, setCuratedEnabled] = useCuratedListSettings();
+  const curatedList = useCuratedListSettings();
 
   return {
     general: [
@@ -341,7 +346,13 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
-      curatedListEntry(curatedList, setCuratedEnabled),
+      curatedListEntry(
+        curatedList.settings,
+        enabled => void curatedList.setEnabled(enabled),
+        curatedList.error,
+        () => void curatedList.reload(),
+        curatedList.saving
+      ),
       localHistoryEntry(),
       ...(import.meta.env.DEV ? [dollarCostsEntry(showDollarCosts, setShowDollarCosts)] : []),
       ...(auth ? [serverEntry(auth)] : []),

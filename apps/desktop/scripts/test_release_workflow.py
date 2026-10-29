@@ -58,7 +58,8 @@ class ReleaseWorkflowTest(unittest.TestCase):
     def test_curated_build_check_runs_between_each_build_and_packaging(self):
         build = job('build')
         self.assertIn('B4M_CURATED_MANIFEST_URL: ${{ vars.B4M_CURATED_MANIFEST_URL }}', build)
-        check = 'pnpm --filter @bike4mind/scripts curated:check-build out'
+        self.assertIn('CURATED_PUBLIC_URL: ${{ vars.CURATED_PUBLIC_URL }}', build)
+        check = 'pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL"'
         for step in ('- name: Package installers', '- name: Sign and notarize macOS installers'):
             body = build.split(step, 1)[1].split('- name:', 1)[0]
             with self.subTest(step=step):

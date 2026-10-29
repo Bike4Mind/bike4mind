@@ -11,6 +11,11 @@ on:
       - 'scripts/desktop_affected.py'
       - 'scripts/test_desktop_affected.py'
       - 'catalog/model-hub/**'
+      - 'b4m-core/local-models/**'
+      - 'b4m-core/common/src/schemas/modelHub.ts'
+      - 'packages/scripts/src/curatedCatalog/checkDesktopBuild.ts'
+      - 'packages/scripts/src/curatedCatalog/devKey.ts'
+      - 'packages/scripts/src/curatedCatalog/cli.ts'
   push:
     branches: [main]
     paths:
@@ -21,6 +26,11 @@ on:
       - 'scripts/desktop_affected.py'
       - 'scripts/test_desktop_affected.py'
       - 'catalog/model-hub/**'
+      - 'b4m-core/local-models/**'
+      - 'b4m-core/common/src/schemas/modelHub.ts'
+      - 'packages/scripts/src/curatedCatalog/checkDesktopBuild.ts'
+      - 'packages/scripts/src/curatedCatalog/devKey.ts'
+      - 'packages/scripts/src/curatedCatalog/cli.ts'
   workflow_dispatch:
 
 permissions:

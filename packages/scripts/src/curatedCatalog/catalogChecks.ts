@@ -1,14 +1,8 @@
-import {
-  CuratedCatalogSchema,
-  MIN_CHAT_CONTEXT,
-  parseHubManifest,
-  type HubEntry,
-  type HubManifest,
-} from '@bike4mind/common';
+import { CuratedCatalogSchema, parseHubManifest, type HubManifest } from '@bike4mind/common';
 import {
   CURATED_MAX_MANIFEST_BYTES,
   CURATED_MAX_SIGNATURE_BYTES,
-  isAbliteratedModel,
+  isCuratedListable,
   parseCuratedKey,
   readCapped,
   verifyCurated,
@@ -58,21 +52,6 @@ export async function readMainKeyring(
     if (!key) throw new Error(`${KEYRING_PATH} on main has an invalid entry at index ${i}`);
     return key;
   });
-}
-
-// Must stay in sync with listable() in apps/desktop/src/main/models/ModelHubService.ts: a pick that fails it is
-// silently left out of its slot on every Desktop.
-function slottable(entry: HubEntry, manifest: HubManifest): boolean {
-  if (entry.flags.abliterated || entry.lineage.variantType === 'abliterated' || entry.license.legal === 'blocked')
-    return false;
-  if (entry.roles.includes('chat') && entry.arch.contextMax < MIN_CHAT_CONTEXT) return false;
-  const sources = entry.builds.map(
-    build => build.hf?.repo ?? (build.ollama?.kind === 'library' ? build.ollama.ref : '')
-  );
-  if (isAbliteratedModel({ id: entry.id, tags: [entry.name, ...sources], baseModels: [entry.lineage.base] }))
-    return false;
-  const permissive = entry.license.class === 'permissive' && entry.license.base.class === 'permissive';
-  return permissive || manifest.policy.restrictedLicense === 'curated-labelled';
 }
 
 const issues = (error: { issues: { path: PropertyKey[]; message: string }[] }) =>
@@ -127,7 +106,7 @@ export function verifyCandidate(
   for (const tier of catalog.tiers)
     for (const pick of tier.picks) {
       const entry = catalog.entries.find(candidate => candidate.id === pick.entry);
-      if (entry && !slottable(entry, catalog))
+      if (entry && !isCuratedListable(entry, catalog))
         return { ok: false, error: `${pick.entry} cannot fill the ${pick.slot} slot of a ${tier.memoryKind} tier` };
     }
   return { ok: true, value: { manifest, sig, catalog, signers: verified.keys } };

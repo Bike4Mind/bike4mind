@@ -1,11 +1,6 @@
 import { join } from 'node:path';
 import { app, ipcMain, safeStorage } from 'electron';
-import {
-  HuggingFaceHub,
-  OllamaRuntime,
-  ollamaLibraryLayers,
-  probeHardware,
-} from '@bike4mind/local-models';
+import { HuggingFaceHub, OllamaRuntime, ollamaLibraryLayers, probeHardware } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { CuratedList, HfTokenResult, ModelPull } from '@shared/models';
 import { localHardware } from '../chat/localContextSizing';
@@ -100,7 +95,8 @@ export function registerModels({ localContext }: Pick<ModelHubServiceDeps, 'loca
   ipcMain.handle(IPC_CHANNELS.modelsListCurated, async (): Promise<CuratedList> => {
     await source.loaded();
     void source.checkIfDue();
-    return { ...(await service.curated()), source: source.view() };
+    const sourceView = source.view();
+    return { ...(await service.curated()), source: sourceView };
   });
   ipcMain.handle(IPC_CHANNELS.modelsCheckCuratedList, () => source.checkNow());
   ipcMain.handle(IPC_CHANNELS.modelsCuratedSettings, async () => {

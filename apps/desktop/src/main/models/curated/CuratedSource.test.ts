@@ -494,6 +494,26 @@ describe('CuratedSource', () => {
     logged(/only a recovery-signed list can rebuild the damaged revoked-keys.json/);
   });
 
+  it('requires recovery after lost revocations even when an invalid cached copy cannot be deleted', async () => {
+    const three = listText(3);
+    server.publish(3, three, sigText(three, [signing], 3));
+    await source().checkNow();
+    const sourceDir = join(dir, CuratedStore.sourceKey(LATEST));
+    const pair = JSON.parse(await readFile(join(sourceDir, 'pair.json'), 'utf8')).dir as string;
+    await writeFile(join(sourceDir, pair, 'curated-v2.json.sig'), 'damaged signature');
+    for (const file of REVOKED_FILES) await writeFile(join(dir, file), '[');
+    const broken = new CuratedStore(dir);
+    vi.spyOn(broken, 'deleteCopy').mockRejectedValue(new Error('permission denied'));
+    const restarted = source({ store: broken });
+    await restarted.loaded();
+
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [signing], 4));
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ origin: 'bundled', sequence: 1, check: 'failed' });
+    logged(/only a recovery-signed list can rebuild the damaged revoked-keys.json/);
+  });
+
   it('fails only the check while the revoked set cannot be read, and reads it again on the next one', async () => {
     const three = listText(3, list => (list.revokedKeyIds = [signing.key.keyId]));
     server.publish(3, three, sigText(three, [recovery], 3));
@@ -556,6 +576,61 @@ describe('CuratedSource', () => {
     expect(s.view()).toMatchObject({ sequence: 3, check: 'failed' });
   });
 
+  it('saves pending revocations before a later signing list replaces their recovery-signed cache', async () => {
+    const second = signer('signing');
+    const keys = [signing.key, second.key, recovery.key];
+    const flaky = new CuratedStore(dir);
+    const addRevoked = vi
+      .spyOn(flaky, 'addRevoked')
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockRejectedValueOnce(new Error('disk full'));
+    const revoking = listText(3, list => (list.revokedKeyIds = [signing.key.keyId]));
+    server.publish(3, revoking, sigText(revoking, [recovery], 3));
+    const s = source({ store: flaky, keys });
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'updated' });
+
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [second], 4));
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ sequence: 4, check: 'updated' });
+
+    const five = listText(5);
+    server.publish(5, five, sigText(five, [signing], 5));
+    const restarted = source({ keys });
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ sequence: 4, check: 'failed' });
+    expect(addRevoked).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(await readFile(join(dir, 'revoked-keys.json'), 'utf8'))).toEqual([signing.key.keyId]);
+  });
+
+  it('keeps the recovery-signed cache while pending revocations still cannot be saved', async () => {
+    const second = signer('signing');
+    const keys = [signing.key, second.key, recovery.key];
+    const broken = new CuratedStore(dir);
+    vi.spyOn(broken, 'addRevoked').mockRejectedValue(new Error('disk full'));
+    const revoking = listText(3, list => (list.revokedKeyIds = [signing.key.keyId]));
+    server.publish(3, revoking, sigText(revoking, [recovery], 3));
+    const s = source({ store: broken, keys });
+    await s.checkNow();
+    server.requests = [];
+    // Even the unchanged-signature path must retry the durable revocations first.
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'failed' });
+    expect(server.requests).toEqual([]);
+    const four = listText(4);
+    server.publish(4, four, sigText(four, [second], 4));
+    await s.checkNow();
+    expect(s.view()).toMatchObject({ sequence: 3, check: 'failed' });
+    expect(server.requests).toEqual([]);
+
+    const five = listText(5);
+    server.publish(5, five, sigText(five, [signing], 5));
+    const restarted = source({ keys });
+    await restarted.checkNow();
+    expect(restarted.view()).toMatchObject({ sequence: 3, check: 'failed' });
+  });
+
   it('deletes a cached copy that no longer verifies, and lets a newer bundled list win over the cache', async () => {
     const three = listText(3);
     server.publish(3, three, sigText(three, [signing], 3));
@@ -573,7 +648,7 @@ describe('CuratedSource', () => {
     expect(corrupt.view()).toMatchObject({ origin: 'bundled', sequence: 1 });
     await expect(readFile(join(sourceDir, 'pair.json'))).rejects.toThrow();
     await expect(readFile(join(sourceDir, pair, 'curated-v2.json'))).rejects.toThrow();
-    logged(/deleted the cached curated list/);
+    logged(/ignored the cached curated list/);
   });
 
   it('checks at most every 6 hours, backs off after failures, and lets Check now bypass both', async () => {
@@ -643,5 +718,16 @@ describe('CuratedSource', () => {
     expect(restarted.settings().enabled).toBe(false);
     await restarted.setEnabled(true);
     expect(restarted.view()).toMatchObject({ origin: 'updated', sequence: 3 });
+  });
+
+  it('reports a setting write failure without changing the effective choice', async () => {
+    const broken = new CuratedStore(dir);
+    vi.spyOn(broken, 'writeEnabled').mockRejectedValue(new Error('disk full'));
+    const s = source({ store: broken });
+    await s.loaded();
+    await expect(s.setEnabled(false)).rejects.toThrow('disk full');
+    expect(s.settings()).toEqual({ available: true, enabled: true });
+    expect(s.onChange).not.toHaveBeenCalled();
+    logged(/could not save the curated list setting: Error: disk full/);
   });
 });

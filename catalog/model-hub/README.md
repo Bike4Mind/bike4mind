@@ -1,8 +1,10 @@
-# Bundled curated models
+# Curated models
 
-`curated-v2.json` is bundled with Desktop. It is not fetched remotely. A registry tag that changes
-weights, template, parameters, license, projector or draft stops being offered until the catalog is
-reviewed and a desktop release ships updated pins. Explore remains available for reviewing the live repo.
+`curated-v2.json` is bundled with Desktop as its fallback. Builds with a configured online URL and
+trusted production keys can also accept newer signed lists; no production keys ship yet. A registry
+tag that changes weights, template, parameters, license, projector or draft stops being offered until
+the catalog is reviewed and updated pins arrive in a desktop release or an accepted signed list.
+Explore remains available for reviewing the live repo.
 Do not refresh digests automatically just to make a check green.
 
 Before a desktop release, and whenever changing this catalog:
@@ -19,7 +21,9 @@ Before a desktop release, and whenever changing this catalog:
    with `CURATED_BUILD=gemma-4-e4b/qat-q4-0` when testing different minimum versions. The report logs the
    actual daemon version and declared minimum; a pass on a newer version does not prove the minimum.
 5. Review upstream changes, licenses and model behavior before updating pins. Increment `sequence`,
-   update `updatedAt` and the changelog, run catalog/unit tests, then ship a desktop release.
+   update `updatedAt` and the changelog, run catalog/unit tests, then ship a desktop release. Signed publishing tools are described in
+   [packages/scripts](../../packages/scripts/README.md); the production publishing workflow and
+   storage configuration are separate work.
 
 Registry checks do not prove how Ollama renders installed templates or joins license layers. Keep the
 real installed checks as release evidence, including daemon version and build IDs. GPU, multi-GPU
