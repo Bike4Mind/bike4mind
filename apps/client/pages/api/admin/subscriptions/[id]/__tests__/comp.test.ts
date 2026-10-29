@@ -103,11 +103,17 @@ function call(options: { isAdmin?: boolean; body?: Record<string, unknown>; id?:
     query: { id: options.id ?? ID },
     body: { reason: REASON, ...(options.body ?? { action: 'end' }) },
   });
+  const logger = { info: vi.fn(), error: vi.fn() };
   Object.assign(req, {
     user: { isAdmin: options.isAdmin ?? true, id: options.adminId ?? 'admin-1' },
-    logger: { info: vi.fn() },
+    logger,
   });
-  return { res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
+  return {
+    req,
+    res,
+    logger,
+    run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res),
+  };
 }
 
 const isoIn = (days: number) => new Date(Date.now() + days * DAY).toISOString();
@@ -306,6 +312,18 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
         action: 'invalidate_query',
         queryKey: ['admin', 'user-subscriptions', 'u1'],
       });
+    });
+
+    it('still responds 200 when the post-commit notify fails', async () => {
+      mockSendToClient.mockRejectedValueOnce(new Error('ws down'));
+      const { res, logger, run } = call({ body: { action: 'end' } });
+      await run();
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toHaveProperty('subscription');
+      expect(mockUpdate).toHaveBeenCalled();
+      expect(mockRecordAdminAction).toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith('Failed to notify clients after comp change', expect.any(Error));
     });
 
     it('409s on a comp that already ended', async () => {

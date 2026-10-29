@@ -227,17 +227,21 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       });
     });
 
-    if (owner.notifyUserId) {
-      await sendToClient(owner.notifyUserId, Resource.websocket.managementEndpoint, {
-        action: 'invalidate_query',
-        queryKey: ['subscriptions'],
-      });
-    }
-    if (owner.actingUserId) {
-      await sendToClient(owner.actingUserId, Resource.websocket.managementEndpoint, {
-        action: 'invalidate_query',
-        queryKey: ['admin', 'user-subscriptions', owner.actingUserId],
-      });
+    try {
+      if (owner.notifyUserId) {
+        await sendToClient(owner.notifyUserId, Resource.websocket.managementEndpoint, {
+          action: 'invalidate_query',
+          queryKey: ['subscriptions'],
+        });
+      }
+      if (owner.actingUserId) {
+        await sendToClient(owner.actingUserId, Resource.websocket.managementEndpoint, {
+          action: 'invalidate_query',
+          queryKey: ['admin', 'user-subscriptions', owner.actingUserId],
+        });
+      }
+    } catch (error) {
+      req.logger.error('Failed to notify clients after comp change', error);
     }
 
     const body: AdminCompChangeResponse = { subscription: await readRow(id) };
