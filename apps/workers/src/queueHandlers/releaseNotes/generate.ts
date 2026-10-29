@@ -16,8 +16,8 @@ export interface TokenUsage {
 }
 
 export const ReleaseNoteDraftSchema = z.object({
-  headline: z.string().max(MAX_HEADLINE_CHARS),
-  summary: z.string().max(MAX_SUMMARY_CHARS),
+  headline: z.string(),
+  summary: z.string(),
   items: z.array(ReleaseNoteItemSchema),
 });
 export type ReleaseNoteDraft = z.infer<typeof ReleaseNoteDraftSchema>;
@@ -54,6 +54,21 @@ export function extractJson(text: string): unknown {
   const end = text.lastIndexOf('}');
   if (start === -1 || end <= start) throw new Error('reply contains no JSON object');
   return JSON.parse(text.slice(start, end + 1));
+}
+
+/**
+ * Cuts `text` to at most `max` chars at the last sentence end past the halfway mark, else the last word
+ * boundary, else a hard cut. Never splits a surrogate pair.
+ */
+export function trimToBoundary(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max).replace(/[\uD800-\uDBFF]$/, '');
+  const sentenceEnd = Math.max(...['. ', '! ', '? '].map(end => head.lastIndexOf(end))) + 1;
+  const sentenceEndAtLimit = /[.!?]$/.test(head) && text[head.length] === ' ' ? head.length : 0;
+  const sentence = Math.max(sentenceEnd, sentenceEndAtLimit);
+  if (sentence > max / 2) return head.slice(0, sentence).trimEnd();
+  const word = head.lastIndexOf(' ');
+  return (word > 0 ? head.slice(0, word) : head).trimEnd();
 }
 
 const zodErrors = (error: z.ZodError): string[] =>
@@ -309,11 +324,19 @@ export async function writeReleaseNotes(
     (raw, attempt) => {
       const parsed = ReleaseNoteDraftSchema.safeParse(raw);
       if (!parsed.success) return { ok: false, errors: zodErrors(parsed.error) };
-      const overLong = parsed.data.items.flatMap((item, i) =>
-        item.text.length > MAX_ITEM_CHARS ? [`items.${i}.text: must be at most ${MAX_ITEM_CHARS} characters`] : []
-      );
-      // An over-long item is kept whole if the repair fails or still runs long: a long item beats a cut
-      // sentence or a failed release.
+      const overLong = [
+        ...(parsed.data.headline.length > MAX_HEADLINE_CHARS
+          ? [`headline: must be at most ${MAX_HEADLINE_CHARS} characters`]
+          : []),
+        ...(parsed.data.summary.length > MAX_SUMMARY_CHARS
+          ? [`summary: must be at most ${MAX_SUMMARY_CHARS} characters`]
+          : []),
+        ...parsed.data.items.flatMap((item, i) =>
+          item.text.length > MAX_ITEM_CHARS ? [`items.${i}.text: must be at most ${MAX_ITEM_CHARS} characters`] : []
+        ),
+      ];
+      // An over-long field is kept if the repair fails or still runs long (items whole, headline and summary
+      // trimmed below): a long field beats a failed release.
       if (overLong.length && attempt === 0) return { ok: false, errors: overLong, fallback: parsed.data };
       return { ok: true, value: parsed.data };
     },
@@ -323,6 +346,14 @@ export async function writeReleaseNotes(
   );
   const overLong = written.items.filter(item => item.text.length > MAX_ITEM_CHARS).length;
   if (overLong) logger?.warn(`[releaseNotes] kept ${overLong} item(s) over ${MAX_ITEM_CHARS} chars`);
+  const headline = trimToBoundary(written.headline, MAX_HEADLINE_CHARS);
+  const summary = trimToBoundary(written.summary, MAX_SUMMARY_CHARS);
+  if (headline !== written.headline) {
+    logger?.warn(`[releaseNotes] trimmed headline from ${written.headline.length} to ${headline.length} chars`);
+  }
+  if (summary !== written.summary) {
+    logger?.warn(`[releaseNotes] trimmed summary from ${written.summary.length} to ${summary.length} chars`);
+  }
   // sourcePrs is provenance only (never served publicly), so a stray cited number (e.g. an issue read
   // in a PR description) is dropped with a warning rather than failing the release.
   const strays = new Set<number>();
@@ -331,7 +362,7 @@ export async function writeReleaseNotes(
     item.sourcePrs.filter(n => !notes.has(n)).forEach(n => strays.add(n));
     return { ...item, sourcePrs };
   });
-  const draft = { ...written, items };
+  const draft = { headline, summary, items };
   if (strays.size) logger?.warn(`[releaseNotes] dropped sourcePrs not in the release: ${[...strays].join(', ')}`);
   return { draft, usage };
 }
