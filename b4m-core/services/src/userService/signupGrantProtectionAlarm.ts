@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/common';
 
 type AlarmLogger = {
-  warn?: (message: string, ...args: unknown[]) => void;
+  warn: (message: string, ...args: unknown[]) => void;
   error: (message: string, ...args: unknown[]) => void;
 };
 
@@ -22,7 +22,7 @@ export async function logUnprotectedSignupGrant(
   try {
     const rows = await adminSettings.findBySettingNames([...SIGNUP_GRANT_KEYS, ...SIGNUP_GRANT_PROTECTION_KEYS]);
     const gap = signupGrantProtectionGap(Object.fromEntries(rows.map(row => [row.settingName, row.settingValue])));
-    if (gap) logger.warn?.(SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE, gap);
+    if (gap) logger.warn(SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE, gap);
   } catch (error) {
     logger.error('signup-grant-protection-check-failed', { error });
   }
