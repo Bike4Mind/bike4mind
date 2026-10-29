@@ -30,6 +30,7 @@ const mockUpdateByStripeSubscriptionId = vi.fn();
 const mockMarkPastDue = vi.fn();
 const mockNotifyPaymentFailed = vi.fn();
 const mockPostMessageToSlack = vi.fn();
+const mockPostSubscriptionLifecycleToSlack = vi.fn();
 const mockSendToClient = vi.fn();
 const mockStripeChargesRetrieve = vi.fn();
 const mockConstructEvent = vi.fn();
@@ -75,7 +76,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
-    updateByStripeSubscriptionId: (...args: unknown[]) => mockUpdateByStripeSubscriptionId(...args),
+    updateByStripeSubscriptionIdReturningBefore: (...args: unknown[]) => mockUpdateByStripeSubscriptionId(...args),
     markPastDue: (...args: unknown[]) => mockMarkPastDue(...args),
   },
 }));
@@ -88,6 +89,12 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
 
 vi.mock('@server/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
+}));
+
+// The real event builders and admin links run; only the subscriptions-channel post is captured.
+vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/integrations/slack/subscriptionLifecycle')>()),
+  postSubscriptionLifecycleToSlack: (...args: unknown[]) => mockPostSubscriptionLifecycleToSlack(...args),
 }));
 
 vi.mock('@server/websocket/utils', () => ({
@@ -579,6 +586,10 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       await invokeWebhookWithEvent(disputeEvent);
 
       expect(mockPostMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('dp_abc'));
+      const [message] = mockPostMessageToSlack.mock.calls[0];
+      expect(message).toContain('*User:* `user123`');
+      expect(message).not.toContain('test@example.com');
+      expect(message).not.toContain('Test User');
     });
 
     it('is idempotent — duplicate dispute event is swallowed (code 11000)', async () => {
@@ -623,6 +634,36 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       await invokeWebhookWithEvent(disputeEvent);
 
       expect(mockDeactivateAll).toHaveBeenCalledWith('user123');
+    });
+
+    it('links the disputing user in the admin console when APP_URL is set', async () => {
+      vi.stubEnv('APP_URL', 'https://app.example.com');
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+      mockSubtractCredits.mockResolvedValue({ currentCredits: 300 });
+
+      try {
+        await invokeWebhookWithEvent(disputeEvent);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      expect(mockPostMessageToSlack.mock.calls[0][0]).toContain(
+        '*User:* `user123` - <https://app.example.com/admin/users/user123|Open in admin>'
+      );
+    });
+
+    it('names an organization dispute by organization ID only', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(null);
+      mockStripeChargesRetrieve.mockResolvedValue({ customer: 'cus_org' });
+      mockFindByStripeCustomerId.mockResolvedValue(null);
+      mockFindByOrgStripeCustomerId.mockResolvedValue({ id: 'org_1', name: 'Acme Corp' });
+
+      await invokeWebhookWithEvent(disputeEvent);
+
+      const [message] = mockPostMessageToSlack.mock.calls[0];
+      expect(message).toContain('*Organization:* `org_1`');
+      expect(message).not.toContain('Acme Corp');
     });
 
     it('sends Slack alert and skips clawback when user not found', async () => {
@@ -674,6 +715,8 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       const updatedUser = mockUserUpdate.mock.calls[0][0];
       expect(updatedUser.disputePending).toBe(false);
       expect(mockPostMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('dp_close_abc'));
+      expect(mockPostMessageToSlack.mock.calls[0][0]).toContain('*User:* `user123`');
+      expect(mockPostMessageToSlack.mock.calls[0][0]).not.toMatch(/test@example\.com|Test User/);
       expect(mockDeactivateAll).not.toHaveBeenCalled();
     });
 
@@ -741,6 +784,8 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       );
 
       expect(mockClawbackCreditLotsByStripeRef).toHaveBeenCalledWith('pi_ref', 'proportional', 500, expect.anything());
+      expect(mockPostMessageToSlack.mock.calls[0][0]).toContain('*User:* `user123`');
+      expect(mockPostMessageToSlack.mock.calls[0][0]).not.toMatch(/test@example\.com|\*User:\* Test/);
     });
 
     it('is idempotent — duplicate refund event is swallowed (code 11000)', async () => {
@@ -904,7 +949,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
         expect.anything(),
         expect.objectContaining({ action: 'invalidate_query', queryKey: ['subscriptions'] })
       );
-      expect(mockPostMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('sub_123'));
+      expect(mockPostMessageToSlack).not.toHaveBeenCalled();
     });
 
     it('skips when invoice has no subscription', async () => {
@@ -961,6 +1006,17 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
           id: 'sub_deleted',
           canceled_at: 1700000000,
           metadata: { userId: 'user_xyz' },
+          // The fields stripeMirrorFields projects; a real deleted payload always carries them.
+          customer: 'cus_deleted',
+          currency: 'usd',
+          cancel_at_period_end: false,
+          cancel_at: null,
+          trial_end: null,
+          items: {
+            data: [
+              { price: { unit_amount: 2000, currency: 'usd', recurring: { interval: 'month', interval_count: 1 } } },
+            ],
+          },
         },
       },
     };

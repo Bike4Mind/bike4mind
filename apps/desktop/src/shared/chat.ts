@@ -884,6 +884,8 @@ export interface ChatModelOption {
   name: string;
   /** Provider serving it ("anthropic", "ollama", ...). Shown as a secondary label. */
   backend?: string;
+  /** Release day as YYYY-MM-DD, from the server's catalog. Absent for local and saved-server models. */
+  releaseDate?: string;
   contextWindow?: number;
   /**
    * The most output tokens this model can produce in one reply, sent as `max_tokens` on every

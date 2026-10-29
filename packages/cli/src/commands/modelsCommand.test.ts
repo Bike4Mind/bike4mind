@@ -5,7 +5,12 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   HubAccessError,
   ModelNotFoundError,
+  curatedListing,
+  curatedPicks,
+  curatedSource,
+  loadCuratedManifest,
   type DetectedRuntime,
+  type HardwareProfile,
   type HubGgufBuild,
   type HubModelDetail,
   type InstalledModel,
@@ -30,6 +35,7 @@ import {
   type HubClient,
   type RuntimeTarget,
 } from '../models/localModels.js';
+import { machineReader, type MachineReader } from '../models/fit.js';
 import type { OllamaManifestInfo } from './ollamaRegistry.js';
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
@@ -40,6 +46,7 @@ function build(quant: string, sizeBytes: number, extra: Partial<HubGgufBuild> = 
   return {
     id: path.replace(/\.gguf$/, ''),
     quant,
+    label: quant,
     files: [{ path, sizeBytes, sha256: 'a'.repeat(64), url: `${ENDPOINT}/${REPO}/resolve/main/${path}` }],
     sizeBytes,
     split: false,
@@ -104,6 +111,23 @@ function installed(name: string, extra: Partial<InstalledModel> = {}): Installed
   };
 }
 
+const GIB = 1024 ** 3;
+
+function cpuMachine(ramGiB: number): HardwareProfile {
+  return {
+    platform: 'linux',
+    arch: 'x64',
+    memoryKind: 'cpu',
+    totalMemoryBytes: ramGiB * GIB,
+    gpuMemoryBytes: null,
+    gpuName: null,
+    gpuCount: 0,
+    chip: null,
+    diskFreeBytes: null,
+    confidence: 'high',
+  };
+}
+
 function fakeRuntime(overrides: Partial<LocalRuntime> = {}): LocalRuntime {
   return {
     id: 'ollama:127.0.0.1:11500',
@@ -120,7 +144,8 @@ function fakeRuntime(overrides: Partial<LocalRuntime> = {}): LocalRuntime {
     inspect: vi.fn(),
     pull: vi.fn(async (_ref: string, opts?: PullOptions) => {
       opts?.onProgress?.({ status: 'pulling manifest', completedBytes: 0, totalBytes: null });
-      opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 100, totalBytes: 400 });
+      opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 0, totalBytes: 400 });
+      opts?.onProgress?.({ status: 'pulling def456', completedBytes: 100, totalBytes: 400 });
       opts?.onProgress?.({ status: 'success', completedBytes: 400, totalBytes: 400 });
     }),
     remove: vi.fn().mockResolvedValue(undefined),
@@ -171,6 +196,22 @@ function fakeHub(overrides: Partial<HubClient> = {}): HubClient {
   };
 }
 
+function machine(overrides: Partial<HardwareProfile> = {}): HardwareProfile {
+  return {
+    platform: 'linux',
+    arch: 'x64',
+    memoryKind: 'discrete',
+    totalMemoryBytes: 64 * GIB,
+    gpuMemoryBytes: 24 * GIB,
+    gpuName: 'Test GPU',
+    gpuCount: 1,
+    chip: null,
+    diskFreeBytes: null,
+    confidence: 'high',
+    ...overrides,
+  };
+}
+
 interface Harness {
   deps: ModelsDeps;
   lines: string[];
@@ -190,10 +231,14 @@ function harness(
     registry?: ModelsDeps['ollamaRegistry'];
     resolveRuntime?: ModelsDeps['resolveRuntime'];
     confirm?: ModelsDeps['confirm'];
+    curated?: ModelsDeps['curated'];
+    hardware?: ModelsDeps['hardware'];
     answers?: boolean[];
     isTTY?: boolean;
     source?: RuntimeTarget['source'];
     config?: { defaultModel?: string; ollamaHost?: string };
+    machine?: MachineReader;
+    runtimeHost?: string | null;
   } = {}
 ): Harness {
   const lines: string[] = [];
@@ -227,12 +272,16 @@ function harness(
     isTTY: options.isTTY ?? true,
     log: line => lines.push(line),
     progress: { update: line => progress.push(line), end: () => progress.push('<end>') },
+    machine: options.machine ?? (async () => ({ hardware: cpuMachine(64) })),
+    runtimeHost: () => options.runtimeHost ?? null,
+    curated: options.curated ?? (() => loadCuratedManifest(() => {})),
+    hardware: options.hardware ?? (async () => machine()),
     signal: controller.signal,
   };
   return { deps, lines, questions, progress, saved, runtime, hub, registry, controller };
 }
 
-const OPTS: ModelsOptions = { json: false, yes: false, acceptLicense: false, includeAbliterated: false };
+const OPTS: ModelsOptions = { json: false, yes: false, force: false, acceptLicense: false, includeAbliterated: false };
 
 describe('parsePullTarget', () => {
   it('reads Hugging Face repos with and without a host or quant', () => {
@@ -534,9 +583,27 @@ describe('models show', () => {
     const text = h.lines.join('\n');
     expect(text).toMatch(/License: {3}apache-2\.0\n/);
     expect(text).toMatch(/Gated: {5}no/);
-    expect(text).toMatch(/Q4_K_M\s+491 MB\s+hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
-    expect(text).toMatch(/F16\s+1\.2 GB\s+none: split into shards/);
+    expect(text).toMatch(/Q4_K_M\s+491 MB\s+fits\s+hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
+    expect(text).toMatch(/F16\s+1\.2 GB\s+fits\s+none: split into shards/);
     expect(text).toMatch(/Pull one with: b4m models pull Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M/);
+  });
+
+  it('shows builds that share a quant under their own labels, and pulls each by its label', async () => {
+    const qad = build('Q4_0', 219_312_832, {
+      id: 'LFM2.5-350M-QAD-Q4_0',
+      label: 'QAD-Q4_0',
+      ollamaRef: `hf.co/${REPO}:QAD-Q4_0`,
+    });
+    const builds = [build('Q4_0', 219_309_792), qad, build('Q4_K_M', 229_312_224)];
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(detail({ builds })) }) });
+    await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+    const text = h.lines.join('\n');
+    expect(text).toMatch(/\n {2}Q4_0 {6}219 MB\s+\S+\s+hf\.co\/\S+:Q4_0\n/);
+    expect(text).toMatch(/\n {2}BUILD\s+SIZE\s+FIT\s+OLLAMA REF\n/);
+    expect(text).toMatch(/\n {2}QAD-Q4_0 {2}219 MB\s+\S+\s+hf\.co\/\S+:QAD-Q4_0\n/);
+    expect(pickBuild(builds, 'qad-q4_0')).toBe(qad);
+    expect(pickBuild(builds, 'Q4_0')).toBe(builds[0]);
+    expect(pickBuild([{ ...qad, ollamaRef: null, ollamaRefIssue: 'ambiguous' }], 'QAD-Q4_0')?.id).toBe(qad.id);
   });
 
   it('lists a build with an unsupported quant as not pullable with the reason', async () => {
@@ -549,7 +616,78 @@ describe('models show', () => {
     });
     const h = harness({ hub });
     await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
-    expect(h.lines.join('\n')).toMatch(/Q4_K_L\s+500 MB\s+none: Ollama cannot pull this quant from Hugging Face/);
+    expect(h.lines.join('\n')).toMatch(
+      /Q4_K_L\s+500 MB\s+fits\s+none: Ollama cannot pull this quant from Hugging Face/
+    );
+  });
+
+  describe('fit', () => {
+    const sized = detail({
+      gguf: { architecture: 'qwen2', contextLength: 131072, parameterCount: 72_000_000_000 },
+      builds: [build('Q4_K_M', 20_000_000_000), build('Q6_K', 47_000_000_000), build('Q8_0', 77_000_000_000)],
+    });
+
+    it('rates each build for this machine at the context the CLI requests', async () => {
+      const h = harness({
+        hub: fakeHub({ getModel: vi.fn().mockResolvedValue(sized) }),
+        machine: async () => ({ hardware: cpuMachine(64) }),
+      });
+      await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+      const text = h.lines.join('\n');
+      expect(text).toMatch(/BUILD\s+SIZE\s+FIT\s+OLLAMA REF/);
+      expect(text).toMatch(/Q4_K_M\s+20\.0 GB\s+fits\s/);
+      expect(text).toMatch(/Q6_K\s+47\.0 GB\s+tight\s/);
+      expect(text).toMatch(/Q8_0\s+77\.0 GB\s+too large\s/);
+      expect(text).toContain("Fit is a rough estimate from each file's size for this machine (no GPU, 68.7 GB RAM)");
+    });
+
+    it('adds the fit to each build in JSON', async () => {
+      const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(sized) }) });
+      await runModelsCommand('show', { _: [], repo: REPO, 'output-format': 'json' }, h.deps);
+      const builds = JSON.parse(h.lines.join('\n')).builds as Array<{ quant: string; fit: { verdict: string } }>;
+      expect(builds.map(entry => [entry.quant, entry.fit.verdict])).toEqual([
+        ['Q4_K_M', 'fits'],
+        ['Q6_K', 'tight'],
+        ['Q8_0', 'too-large'],
+      ]);
+    });
+
+    it('says the fit is unknown for an Ollama on another machine', async () => {
+      const h = harness({
+        hub: fakeHub({ getModel: vi.fn().mockResolvedValue(sized) }),
+        machine: machineReader(async () => cpuMachine(64)),
+        runtimeHost: 'http://gpu-box:11434',
+      });
+      await runModelsCommand('show', { _: [], repo: REPO }, h.deps);
+      const text = h.lines.join('\n');
+      expect(text).toMatch(/Q8_0\s+77\.0 GB\s+unknown\s/);
+      expect(text).toContain('Fit is unknown. Ollama at http://gpu-box:11434 runs on another machine');
+    });
+
+    it.each(['weights', 'projector', 'shard'] as const)(
+      'keeps an unknown %s size unknown in show and pull',
+      async missing => {
+        const weights = build('Q4_K_M', missing === 'weights' ? 0 : 491_400_032);
+        if (missing === 'shard') weights.files.push({ ...weights.files[0], path: 'other.gguf', sizeBytes: 0 });
+        const model = detail({
+          builds: [weights],
+          projectors: [
+            {
+              ...weights.files[0],
+              path: 'mmproj.gguf',
+              sizeBytes: missing === 'projector' ? 0 : 500_000_000,
+              quant: 'F16',
+            },
+          ],
+        });
+        const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(model) }), answers: [true] });
+        await runModelsCommand('show', { _: [], repo: REPO, 'output-format': 'json' }, h.deps);
+        expect(JSON.parse(h.lines[0]).builds[0].fit.verdict).toBe('unknown');
+        await runModelsCommand('pull', { _: [], ref: REPO }, h.deps);
+        expect(h.lines).toContain('Fit:      unknown. The download size is unknown.');
+        expect(h.runtime.pull).toHaveBeenCalled();
+      }
+    );
   });
 
   it('explains how to get access to a gated repo', async () => {
@@ -574,6 +712,224 @@ describe('models show', () => {
   });
 });
 
+describe('models curated', () => {
+  const bundled = () => structuredClone(loadCuratedManifest(() => {}));
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const offline = () => {
+    const resolveRuntime = vi.fn<ModelsDeps['resolveRuntime']>().mockRejectedValue(new Error('no runtime'));
+    const getModel = vi.fn();
+    return { resolveRuntime, getModel, h: harness({ resolveRuntime, hub: fakeHub({ getModel }) }) };
+  };
+
+  it("lists this computer's picks in slot order, then every build, without contacting a runtime", async () => {
+    const { resolveRuntime, getModel, h } = offline();
+    expect(await runModelsCommand('curated', { _: [] }, h.deps)).toBe(0);
+    expect(resolveRuntime).not.toHaveBeenCalled();
+    expect(getModel).not.toHaveBeenCalled();
+    expect(h.registry).not.toHaveBeenCalled();
+
+    const manifest = bundled();
+    const { tier, picks } = curatedPicks(manifest, machine());
+    expect(tier).not.toBeNull();
+    expect(h.lines[0]).toBe(
+      `Curated list from ${manifest.updatedAt.slice(0, 10)}. This computer has 64 GiB of RAM and 24 GiB of GPU ` +
+        'memory (Test GPU).'
+    );
+    expect(h.lines).toContain(`For this computer (${tier?.minGiB} GiB+ GPU memory):`);
+    const pickStart = h.lines.findIndex(line => line.startsWith('  SLOT'));
+    expect(h.lines[pickStart]).toMatch(/^ {2}SLOT\s+MODEL\s+REF\s+SIZE\s+LICENSE\s+TAGS$/);
+    picks.forEach(({ pick, entry, build }, index) => {
+      const ref = escape(curatedSource(build).ollamaRef);
+      const slot = { best: 'Best', fast: 'Fast', 'long-context': 'Long context', light: 'Light' }[pick.slot];
+      expect(h.lines[pickStart + 1 + index]).toMatch(
+        new RegExp(
+          `^ {2}${escape(slot)}\\s+${escape(entry.name)}\\s+${ref}\\s+[\\d.]+ (GB|MB)\\s+${escape(entry.license.id)}\\s+`
+        )
+      );
+    });
+
+    const allStart = h.lines.indexOf('All curated models, smallest first:');
+    expect(h.lines[allStart + 1]).toMatch(/^ {2}MODEL\s+PARAMS\s+REF\s+SIZE\s+LICENSE\s+TAGS$/);
+    const rows = curatedListing(manifest).flatMap(({ builds }) =>
+      builds.map(build => curatedSource(build)).sort((a, b) => a.sizeBytes - b.sizeBytes)
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    rows.forEach(({ ollamaRef }, index) => expect(h.lines[allStart + 2 + index]).toContain(ollamaRef));
+    expect(h.lines[h.lines.length - 1]).toBe(
+      `Pull one with: b4m models pull ${curatedSource(picks[0].build).ollamaRef} ` +
+        '(pull does not check the build against the reviewed one)'
+    );
+  });
+
+  it('lists the builds of one entry smallest first, with the Ollama each needs', async () => {
+    const manifest = bundled();
+    const { entry, builds } = curatedListing(manifest).find(listed => listed.builds.length > 1) ?? {};
+    if (!entry || !builds) throw new Error('expected an entry with several builds');
+    builds[0].runtimeMin = { ollama: '9.8.7' };
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    const allStart = h.lines.indexOf('All curated models, smallest first:');
+    const rows = h.lines.slice(allStart).filter(line => line.startsWith(`  ${entry.name} `));
+    const expected = [...builds].sort((a, b) => curatedSource(a).sizeBytes - curatedSource(b).sizeBytes);
+    expect(rows.map(row => expected.findIndex(build => row.includes(curatedSource(build).ollamaRef)))).toEqual(
+      expected.map((_, index) => index)
+    );
+    const row = rows.find(line => line.includes(curatedSource(builds[0]).ollamaRef));
+    expect(row).toMatch(/, needs Ollama >= 9\.8\.7$/);
+  });
+
+  it('notes that the picks are for this computer when the saved Ollama host is elsewhere', async () => {
+    const remote = harness({ config: { ollamaHost: 'http://192.0.2.10:11434' } });
+    await runModelsCommand('curated', { _: [] }, remote.deps);
+    expect(remote.lines).toContain('The picks are for this computer, not the Ollama host at http://192.0.2.10:11434.');
+    for (const host of ['http://127.0.0.1:11434', 'localhost:11434', 'http://[::1]:11434']) {
+      const local = harness({ config: { ollamaHost: host } });
+      await runModelsCommand('curated', { _: [] }, local.deps);
+      expect(local.lines.some(line => line.startsWith('The picks are for this computer'))).toBe(false);
+    }
+  });
+
+  it('flags a restricted base model license in the listing and the JSON', async () => {
+    const manifest = bundled();
+    const [entry] = manifest.entries;
+    entry.license.base.class = 'restricted-commercial';
+    entry.license.base.id = 'llama3.1';
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    expect(h.lines.join('\n')).toMatch(
+      new RegExp(`${escape(entry.name)}.*restricted: ${escape(entry.license.id)} \\(base: llama3\\.1\\)`)
+    );
+    expect(h.lines).toContain(
+      'A restricted license is not a permissive open-source license; pull asks you to accept it first.'
+    );
+
+    const json = harness();
+    await runModelsCommand('curated', { _: [], 'output-format': 'json' }, { ...json.deps, curated: () => manifest });
+    const listed = JSON.parse(json.lines.join('\n')).entries.find((item: { id: string }) => item.id === entry.id);
+    expect(listed.license).toMatchObject({
+      id: entry.license.id,
+      kind: 'restricted',
+      base: { id: 'llama3.1', permissive: false },
+    });
+  });
+
+  it('asks to accept the license before pulling a curated ref whose base license is restricted', async () => {
+    const manifest = bundled();
+    const [entry] = manifest.entries;
+    const ref = curatedSource(entry.builds[0]).ollamaRef;
+    entry.license.base.class = 'restricted-commercial';
+    entry.license.base.id = 'llama3.1';
+
+    const scripted = harness({ isTTY: false, curated: () => manifest });
+    await expect(runModelsCommand('pull', { _: [], ref, yes: true }, scripted.deps)).rejects.toThrow(
+      /--accept-license/
+    );
+    expect(scripted.lines).toContain('License:  Apache-2.0 (base: llama3.1)');
+    expect(scripted.runtime.pull).not.toHaveBeenCalled();
+
+    const asked = harness({ answers: [true, true], curated: () => manifest });
+    expect(await runModelsCommand('pull', { _: [], ref }, asked.deps)).toBe(0);
+    expect(asked.questions[0]).toBe('Do you accept the Apache-2.0 and base model llama3.1 licenses? [y/N] ');
+    expect(asked.runtime.pull).toHaveBeenCalledWith(ref, expect.anything());
+
+    const permissive = harness({ answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref }, permissive.deps)).toBe(0);
+    expect(permissive.questions).toEqual([expect.stringMatching(/^Download .*\? \[y\/N\] $/)]);
+  });
+
+  it("names the list's license when it is restricted but the registry's text reads permissive", async () => {
+    const manifest = bundled();
+    const [entry] = manifest.entries;
+    const ref = curatedSource(entry.builds[0]).ollamaRef;
+    entry.license.class = 'restricted-commercial';
+    entry.license.id = 'gemma';
+
+    const asked = harness({ answers: [true, true], curated: () => manifest });
+    expect(await runModelsCommand('pull', { _: [], ref }, asked.deps)).toBe(0);
+    expect(asked.lines).toContain('License:  Apache-2.0');
+    expect(asked.lines).toContain(
+      'This model is under the gemma license, which is not a permissive open-source license.'
+    );
+    expect(asked.questions[0]).toBe('Do you accept the gemma license? [y/N] ');
+  });
+
+  it('tags tool support from the catalog', async () => {
+    const manifest = bundled();
+    const [first, second] = manifest.entries;
+    first.toolUse = { rating: 'strong' };
+    second.capabilities.tools = false;
+    second.toolUse = { rating: 'unrated' };
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    const rowOf = (name: string) => h.lines.filter(line => line.includes(name)).pop();
+    expect(rowOf(first.name)).toMatch(/tools: strong, needs Ollama >= \d+\.\d+\.\d+$/);
+    expect(rowOf(second.name)).toMatch(/no tools, needs Ollama >= \d+\.\d+\.\d+$/);
+  });
+
+  it('flags a restricted license and never lists an abliterated entry', async () => {
+    const manifest = bundled();
+    const [restricted, abliterated] = manifest.entries;
+    restricted.license.class = 'restricted-commercial';
+    abliterated.flags.abliterated = true;
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    const text = h.lines.join('\n');
+    expect(text).toMatch(new RegExp(`${escape(restricted.name)}.*restricted: ${escape(restricted.license.id)}`));
+    expect(text).toContain('pull asks you to accept it first');
+    expect(text).not.toContain(abliterated.name);
+    for (const build of abliterated.builds) expect(text).not.toContain(curatedSource(build).ollamaRef);
+  });
+
+  it('says so when the list has no picks for this computer', async () => {
+    const manifest = bundled();
+    manifest.tiers = [];
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [] }, { ...h.deps, curated: () => manifest });
+    expect(h.lines).toContain("For this computer: the list has no picks for this computer's memory yet.");
+    expect(h.lines).toContain('All curated models, smallest first:');
+    const [smallest] = curatedListing(manifest)[0]
+      .builds.map(curatedSource)
+      .sort((a, b) => a.sizeBytes - b.sizeBytes);
+    expect(h.lines[h.lines.length - 1]).toBe(
+      `Pull one with: b4m models pull ${smallest.ollamaRef} (pull does not check the build against the reviewed one)`
+    );
+  });
+
+  it('describes a CPU-only machine', async () => {
+    const h = harness({ hardware: async () => machine({ gpuMemoryBytes: null, gpuName: null }) });
+    await runModelsCommand('curated', { _: [] }, h.deps);
+    expect(h.lines[0]).toMatch(/64 GiB of RAM and no GPU memory was detected, so its picks assume the CPU\.$/);
+    expect(h.lines).toContain('For this computer (CPU only):');
+  });
+
+  it('prints the picks and entries as JSON', async () => {
+    const { h } = offline();
+    await runModelsCommand('curated', { _: [], 'output-format': 'json' }, h.deps);
+    const out = JSON.parse(h.lines.join('\n'));
+    const manifest = bundled();
+    const { picks } = curatedPicks(manifest, machine());
+    expect(out.updatedAt).toBe(manifest.updatedAt);
+    expect(out.machine).toEqual({
+      memoryKind: 'discrete',
+      totalMemoryBytes: 64 * GIB,
+      gpuMemoryBytes: 24 * GIB,
+      gpuName: 'Test GPU',
+    });
+    expect(out.tier).toEqual({ memoryKind: 'discrete', minGiB: 24 });
+    expect(out.picks.map((pick: { slot: string; build: { ref: string } }) => [pick.slot, pick.build.ref])).toEqual(
+      picks.map(({ pick, build }) => [pick.slot, curatedSource(build).ollamaRef])
+    );
+    expect(out.entries).toHaveLength(curatedListing(manifest).length);
+    const [entry] = out.entries;
+    expect(entry).toMatchObject({ license: { kind: 'permissive' }, toolUse: { rating: expect.any(String) } });
+    expect(entry.builds[0]).toMatchObject({
+      ref: expect.any(String),
+      sizeBytes: expect.any(Number),
+      ollamaMin: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+    });
+  });
+});
+
 describe('models pull (Hugging Face)', () => {
   it('shows size and license, asks, verifies the ref, then pulls with progress', async () => {
     const h = harness({ answers: [true] });
@@ -589,7 +945,14 @@ describe('models pull (Hugging Face)', () => {
     const verifyOrder = vi.mocked(h.hub.verifyOllamaRef).mock.invocationCallOrder[0];
     const pullOrder = vi.mocked(h.runtime.pull).mock.invocationCallOrder[0];
     expect(verifyOrder).toBeLessThan(pullOrder);
-    expect(h.progress).toEqual(['pulling manifest', 'pulling abc123  25%  100 B / 400 B', 'success', '<end>']);
+    expect(h.progress).toEqual([
+      'pulling manifest',
+      'pulling abc123  0%  0 B / 400 B',
+      'pulling def456  25%  100 B / 400 B',
+      'success',
+      '<end>',
+    ]);
+    expect(h.lines.some(line => line.startsWith('Already downloaded'))).toBe(false);
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pulled hf\.co\/Qwen\/Qwen2\.5-0\.5B-Instruct-GGUF:Q4_K_M\./);
   });
 
@@ -610,6 +973,31 @@ describe('models pull (Hugging Face)', () => {
     const same = harness({ answers: [true] });
     expect(await pullModel(REPO, same.deps, OPTS)).toBe('pulled');
     expect(same.hub.getModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('pulls when the Hub lists the same license IDs in another order after the prompt', async () => {
+    const getModel = vi
+      .fn()
+      .mockResolvedValueOnce(detail({ licenses: ['apache-2.0', 'mit'] }))
+      .mockResolvedValueOnce(detail({ licenses: ['mit', 'apache-2.0'] }));
+    const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
+    expect(await pullModel(REPO, h.deps, OPTS)).toBe('pulled');
+    expect(h.runtime.pull).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['added', ['apache-2.0', 'mit'], ['apache-2.0', 'mit', 'gemma']],
+    ['removed', ['apache-2.0', 'mit'], ['mit']],
+    ['duplicated', ['mit'], ['mit', 'mit']],
+    ['duplicated in place of another', ['apache-2.0', 'apache-2.0', 'mit'], ['apache-2.0', 'mit', 'mit']],
+  ])('refuses when a license ID was %s after the prompt', async (_label, before, licenses) => {
+    const getModel = vi
+      .fn()
+      .mockResolvedValueOnce(detail({ licenses: before }))
+      .mockResolvedValueOnce(detail({ licenses }));
+    const h = harness({ hub: fakeHub({ getModel }), answers: [true] });
+    await expect(pullModel(REPO, h.deps, OPTS)).rejects.toThrow(/changed since you reviewed it/);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
   });
 
   it('refuses changed license IDs even when their display is unchanged', async () => {
@@ -724,7 +1112,7 @@ describe('models pull (Hugging Face)', () => {
       pull: vi.fn(
         (_ref: string, opts?: PullOptions) =>
           new Promise<void>((_resolve, reject) => {
-            opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 50, totalBytes: 400 });
+            opts?.onProgress?.({ status: 'pulling abc123', completedBytes: 0, totalBytes: 400 });
             opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
             h.controller.abort();
           })
@@ -732,7 +1120,7 @@ describe('models pull (Hugging Face)', () => {
     });
     const h = harness({ runtime, answers: [true] });
     expect(await runModelsCommand('pull', { _: [], ref: REPO }, h.deps)).toBe(EXIT_CANCELLED);
-    expect(h.progress).toEqual(['pulling abc123  12%  50 B / 400 B', '<end>']);
+    expect(h.progress).toEqual(['pulling abc123  0%  0 B / 400 B', '<end>']);
     expect(h.lines[h.lines.length - 1]).toMatch(/^Pull cancelled\. Nothing was installed/);
   });
 
@@ -852,6 +1240,67 @@ describe('confirmOnTerminal', () => {
     const answer = confirmOnTerminal('Go? ', controller.signal, streams());
     controller.abort();
     await expect(answer).rejects.toBeInstanceOf(CancelledError);
+  });
+});
+
+describe('models pull fit check', () => {
+  const big = detail({ builds: [build('Q4_K_M', 90_000_000_000)] });
+
+  it('prints the verdict at the context the CLI requests before asking', async () => {
+    const h = harness({ answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).toBe(0);
+    const fit = h.lines.find(line => line.startsWith('Fit:'));
+    expect(fit).toMatch(/^Fit: {6}fits\. Rough estimate from the file size: about \d+ MB before context memory/);
+    expect(fit).toContain('at the 32K context the CLI requests, of the 51.5 GB a model can use in RAM here.');
+  });
+
+  it('refuses a too-large build before asking anything unless --force', async () => {
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }), answers: [true] });
+    await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).rejects.toThrow(
+      `Nothing was downloaded: this build is rated too large for this machine. Pick a smaller quant from: b4m models show ${REPO}, or re-run with --force to download it anyway.`
+    );
+    expect(h.lines.find(line => line.startsWith('Fit:'))).toMatch(/^Fit: {6}too large\. .*exceeds the 51\.5 GB/);
+    expect(h.questions).toEqual([]);
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('says a refusal counts RAM only when the GPU could not be read', async () => {
+    const h = harness({
+      hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }),
+      machine: async () => ({ hardware: { ...cpuMachine(64), confidence: 'low' } }),
+      answers: [true],
+    });
+    await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).rejects.toThrow(
+      'Nothing was downloaded: this build is rated too large from system RAM alone, since the GPU could not be read. If this machine has a GPU that can hold it, re-run with --force to download it anyway.'
+    );
+    expect(h.runtime.pull).not.toHaveBeenCalled();
+  });
+
+  it('pulls a too-large build with --force after the usual prompt', async () => {
+    const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }), answers: [true] });
+    expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M`, force: true }, h.deps)).toBe(0);
+    expect(h.questions).toEqual(['Download 90.0 GB? [y/N] ']);
+    expect(h.runtime.pull).toHaveBeenCalledWith(`hf.co/${REPO}:Q4_K_M`, expect.anything());
+  });
+
+  it('never blocks on an unknown fit', async () => {
+    const h = harness({
+      hub: fakeHub({ getModel: vi.fn().mockResolvedValue(big) }),
+      machine: async () => ({ unknown: "This machine's memory could not be read" }),
+      answers: [true],
+    });
+    expect(await runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).toBe(0);
+    expect(h.lines).toContain("Fit:      unknown. This machine's memory could not be read.");
+    expect(h.runtime.pull).toHaveBeenCalled();
+  });
+
+  it('rates an Ollama registry model at up to the cap, since its trained length is unread', async () => {
+    const h = harness({ registry: async () => manifestInfo(200_000_000_000, [APACHE]) });
+    await expect(runModelsCommand('pull', { _: [], ref: 'huge:latest', yes: true }, h.deps)).rejects.toThrow(
+      'Pick a smaller tag, or re-run with --force'
+    );
+    expect(h.lines.find(line => line.startsWith('Fit:'))).toContain('at up to the 32K context the CLI requests');
+    expect(h.runtime.pull).not.toHaveBeenCalled();
   });
 });
 
@@ -1010,6 +1459,17 @@ describe('models rm', () => {
     expect(confirmed.lines).toEqual(['Removed qwen2.5:0.5b.', expect.stringMatching(/It was your default model/)]);
   });
 
+  it.each([
+    ['hf.co/acme/m-GGUF:Q4_K_M', 'huggingface.co/acme/m-GGUF:Q4_K_M'],
+    ['huggingface.co/acme/m-GGUF:Q4_K_M', 'hf.co/acme/m-GGUF:Q4_K_M'],
+  ])('removes %s when it is installed as %s', async (name, listedAs) => {
+    const runtime = fakeRuntime({ list: vi.fn().mockResolvedValue([installed(listedAs)]) });
+    const h = harness({ runtime, config: { defaultModel: listedAs } });
+    await runModelsCommand('rm', { _: [], name, yes: true }, h.deps);
+    expect(runtime.remove).toHaveBeenCalledWith(listedAs);
+    expect(h.lines.some(line => line.includes('It was your default model'))).toBe(true);
+  });
+
   it('reports a missing model', async () => {
     const runtime = fakeRuntime({ remove: vi.fn().mockRejectedValue(new ModelNotFoundError('ollama', 'nope')) });
     await expect(runModelsCommand('rm', { _: [], name: 'nope', yes: true }, harness({ runtime }).deps)).rejects.toThrow(
@@ -1033,6 +1493,13 @@ describe('models use', () => {
     const h = harness({ runtime, config: { ollamaHost: 'http://127.0.0.1:11500' } });
     await runModelsCommand('use', { _: [], name: 'llama3' }, h.deps);
     expect(h.saved).toEqual([{ defaultModel: 'llama3:latest', localDefaultModel: 'llama3:latest' }]);
+  });
+
+  it('finds a Hugging Face model installed under the other host name', async () => {
+    const runtime = fakeRuntime({ list: vi.fn().mockResolvedValue([installed('huggingface.co/acme/m-GGUF:Q4_K_M')]) });
+    const h = harness({ runtime });
+    await runModelsCommand('use', { _: [], name: 'hf.co/acme/m-GGUF:Q4_K_M' }, h.deps);
+    expect(h.saved[0]).toMatchObject({ defaultModel: 'huggingface.co/acme/m-GGUF:Q4_K_M' });
   });
 
   it('rejects unknown models and non-Ollama runtimes', async () => {

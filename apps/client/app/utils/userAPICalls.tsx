@@ -69,6 +69,10 @@ export interface FetchCounterLogsParams {
   includeInsights?: boolean;
   orgs?: string[] | null;
   excludeOrgs?: string[] | null;
+  /** Drop rows whose counter log carries no organization. */
+  excludeNoOrg?: boolean;
+  /** Drop admin, system, synthetic and staff-domain accounts. */
+  excludeStaff?: boolean;
   isGated?: boolean;
   isHero?: boolean;
   weeklyReport?: boolean;
@@ -96,6 +100,8 @@ export interface AnalyticsReport {
   endDate?: string;
   report: string;
   aiInsights?: string | null;
+  /** Daily mode only: generation failed for this date; `report` is empty. */
+  error?: string;
 }
 
 /** One rendered User Activity row: the server groups per day/counter/user/metadata. */
@@ -124,6 +130,8 @@ export const fetchCounterLogs = async ({
   includeInsights = false,
   orgs = null,
   excludeOrgs = null,
+  excludeNoOrg = false,
+  excludeStaff = false,
   isGated,
   isHero,
   weeklyReport = false,
@@ -157,6 +165,8 @@ export const fetchCounterLogs = async ({
   if (excludeOrgs?.length) {
     queryParams.excludeOrgs = excludeOrgs.map(org => encodeURIComponent(org)).join(',');
   }
+  if (excludeNoOrg) queryParams.excludeNoOrg = 'true';
+  if (excludeStaff) queryParams.excludeStaff = 'true';
   if (isGated !== undefined) queryParams.isGated = String(isGated);
   if (isHero !== undefined) queryParams.isHero = String(isHero);
   if (page !== undefined) queryParams.page = String(page);

@@ -34,7 +34,13 @@ import {
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
-import { createServerFetch, ServerRedirectError, ServerTransportError, type ServerEndpoint } from './serverFetch';
+import {
+  createServerFetch,
+  redactServerResponse,
+  ServerRedirectError,
+  ServerTransportError,
+  type ServerEndpoint,
+} from './serverFetch';
 
 export const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
 const PROBE_TIMEOUT_MS = 5_000;
@@ -493,6 +499,7 @@ export class ModelServerRegistry {
             label: record.name,
             fetch,
             hasCredentials,
+            redact: redactServerResponse,
           })
         : new OpenAICompatibleChat({
             runtimeId,
@@ -501,6 +508,7 @@ export class ModelServerRegistry {
             product,
             fetch,
             hasCredentials,
+            redact: redactServerResponse,
           });
     return {
       record,

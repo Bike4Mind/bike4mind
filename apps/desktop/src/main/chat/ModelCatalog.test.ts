@@ -28,6 +28,15 @@ describe('selectUsableModels', () => {
     expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('maxOutputTokens');
   });
 
+  it('carries the release date only when the server sent a non-empty string', () => {
+    expect(selectUsableModels([wireModel({ releaseDate: '2025-04-14' })])[0]).toMatchObject({
+      releaseDate: '2025-04-14',
+    });
+    expect(selectUsableModels([wireModel()])[0]).not.toHaveProperty('releaseDate');
+    expect(selectUsableModels([wireModel({ releaseDate: '' })])[0]).not.toHaveProperty('releaseDate');
+    expect(selectUsableModels([wireModel({ releaseDate: 20250414 })])[0]).not.toHaveProperty('releaseDate');
+  });
+
   it('keeps only text models that can call tools', () => {
     const models = selectUsableModels([
       wireModel(),
@@ -130,6 +139,25 @@ describe('ModelCatalog', () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5_001);
     local.models.mockResolvedValue([]);
     expect((await catalog.list()).models.some(model => model.id.startsWith('local:'))).toBe(false);
+  });
+
+  it('keeps the last local list past its expiry, without asking the device, until forgotten', async () => {
+    const local = { models: vi.fn().mockResolvedValue([{ id: 'local:ollama:qwen', name: 'qwen' }]) };
+    catalog = new ModelCatalog(
+      {
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => null,
+        getEnvironmentUrl: () => environmentUrl,
+      },
+      local as never
+    );
+    expect(catalog.lastLocal()).toBeNull();
+    await catalog.listLocal();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+    expect(catalog.lastLocal()?.map(model => model.id)).toEqual(['local:ollama:qwen']);
+    expect(local.models).toHaveBeenCalledTimes(1);
+    catalog.forgetLocal();
+    expect(catalog.lastLocal()).toBeNull();
   });
 
   it('discovers a newly started local runtime without expiring or refetching the hosted list', async () => {

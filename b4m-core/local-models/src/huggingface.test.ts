@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import { inspect } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   HubAccessError,
   HubRateLimitError,
@@ -10,13 +10,30 @@ import {
   RuntimeHttpError,
   RuntimeProtocolError,
 } from './errors';
-import { HuggingFaceHub, MAX_VERIFY_TAGS, ggufQuantLabel, hubResolveUrl, type HubModelDetail } from './huggingface';
+import {
+  HUB_CACHE_TTL_MS,
+  HuggingFaceHub,
+  MAX_VERIFY_TAGS,
+  clearHubCache,
+  findHubBuild,
+  ggufQuantLabel,
+  hubBuildTag,
+  hubResolveUrl,
+  ollamaModelKey,
+  ollamaPullRef,
+  ollamaRefAliases,
+  type HubModelDetail,
+} from './huggingface';
 import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
 import {
   gatedInfo,
   gatedMessage,
   gatedSha,
   gatedTree,
+  flashNextSha,
+  flashNextTree,
+  lfmSha,
+  lfmTree,
   qwenInfo,
   qwenSha,
   qwenTree,
@@ -31,7 +48,10 @@ const TOKEN = 'hf_TestTokenThatMustNeverLeak0123456789';
 
 const servers: FakeServer[] = [];
 
+beforeEach(clearHubCache);
+
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(servers.splice(0).map(server => server.close()));
 });
 
@@ -189,6 +209,245 @@ describe('HuggingFaceHub.search', () => {
   });
 });
 
+describe('HuggingFaceHub cache', () => {
+  const repo = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
+
+  it('serves a repeated search and model read from cache for 10 minutes, then asks again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const first = await hub.search({ query: 'qwen' });
+    expect(await hub.search({ query: 'qwen' })).toEqual(first);
+    await hub.getModel(repo);
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(3);
+
+    vi.advanceTimersByTime(HUB_CACHE_TTL_MS - 1);
+    await hub.search({ query: 'qwen' });
+    expect(server.requests).toHaveLength(3);
+    vi.advanceTimersByTime(1);
+    await hub.search({ query: 'qwen' });
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(6);
+  });
+
+  it('keys on the query, cursor and revision, and refresh bypasses the cache', async () => {
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await hub.search({ query: 'a' });
+    await hub.search({ query: 'b' });
+    await hub.search({ query: 'a', cursor: 'next' });
+    expect(server.requests).toHaveLength(3);
+    await hub.search({ query: 'a', refresh: true });
+    await hub.search({ query: 'a' });
+    expect(server.requests).toHaveLength(4);
+    await hub.getModel(repo, { refresh: true });
+    const before = server.requests.length;
+    await hub.getModel(repo);
+    expect(server.requests).toHaveLength(before);
+  });
+
+  it('never reuses an anonymous result for a token, or one token for another', async () => {
+    const server = await serve({ 'GET /api/models': json(searchPage) });
+    const anonymous = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const one = new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN });
+    const two = new HuggingFaceHub({ endpoint: server.baseUrl, token: `${TOKEN}2` });
+    await anonymous.search();
+    await one.search();
+    await two.search();
+    expect(server.requests).toHaveLength(3);
+    expect(server.requests.map(request => request.headers.authorization)).toEqual([
+      undefined,
+      `Bearer ${TOKEN}`,
+      `Bearer ${TOKEN}2`,
+    ]);
+    await new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).search();
+    await anonymous.search();
+    expect(server.requests).toHaveLength(3);
+  });
+
+  it('does not cache errors', async () => {
+    let calls = 0;
+    const server = await serve({
+      'GET /api/models': (_request, response) => {
+        calls++;
+        if (calls === 1) return reply(response, 500, {}, 'boom');
+        return json(searchPage)(_request, response);
+      },
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await expect(hub.search()).rejects.toBeInstanceOf(RuntimeHttpError);
+    expect((await hub.search()).models.length).toBeGreaterThan(0);
+    expect(calls).toBe(2);
+  });
+
+  it('honors cancellation even when search and model answers are cached', async () => {
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await hub.search();
+    await hub.getModel(repo);
+    const signal = AbortSignal.abort();
+
+    await expect(hub.search({ signal })).rejects.toBe(signal.reason);
+    await expect(hub.getModel(repo, { signal })).rejects.toBe(signal.reason);
+    expect(server.requests).toHaveLength(3);
+  });
+
+  it('hands out copies, so a caller that edits a result does not change the next one', async () => {
+    const server = await serve({ 'GET /api/models': json(searchPage) });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const first = await hub.search();
+    const id = first.models[0]?.id;
+    first.models.length = 0;
+    expect((await hub.search()).models[0]?.id).toBe(id);
+  });
+});
+
+describe('HuggingFaceHub rate limit backoff', () => {
+  const limited = (retryAfter: string) => () =>
+    new Response('{"error":"Too many requests"}', { status: 429, headers: { 'retry-after': retryAfter } });
+  const ok = () => new Response(JSON.stringify(searchPage), { headers: { 'content-type': 'application/json' } });
+  const hubWith = (responses: (() => Response)[], options: { maxRateLimitWaitMs?: number } = {}) => {
+    const fetch = vi.fn(async () => (responses.shift() ?? ok)());
+    return { fetch, hub: new HuggingFaceHub({ fetch, ...options }) };
+  };
+
+  it.each([
+    ['seconds', () => '2'],
+    ['an HTTP date', () => new Date(Date.now() + 2000).toUTCString()],
+  ])('retries a 429 after Retry-After given as %s, then succeeds', async (_name, header) => {
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00.000Z') });
+    const { fetch, hub } = hubWith([limited(header())]);
+    const pending = hub.search();
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await pending).models.length).toBeGreaterThan(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('backs off exponentially when the 429 names no wait', async () => {
+    vi.useFakeTimers();
+    const none = () => new Response('', { status: 429 });
+    const { fetch, hub } = hubWith([none, none]);
+    const pending = hub.search();
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('surfaces HubRateLimitError once the total wait would pass the cap', async () => {
+    vi.useFakeTimers();
+    const { fetch, hub } = hubWith([limited('1'), limited('1'), limited('1')], { maxRateLimitWaitMs: 2500 });
+    const error = caught(hub.search());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await error).toBeInstanceOf(HubRateLimitError);
+    expect(await error).toMatchObject({ status: 429, retryAfterMs: 1000 });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not wait at all when Retry-After is longer than the cap', async () => {
+    const { fetch, hub } = hubWith([limited('30')]);
+    expect(await caught(hub.search())).toMatchObject({ name: 'HubRateLimitError', retryAfterMs: 30_000 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['0', 'Thu, 01 Jan 1970 00:00:00 GMT'])(
+    'does not retry with retries disabled even for Retry-After %s',
+    async header => {
+      const { fetch, hub } = hubWith([limited(header)], { maxRateLimitWaitMs: 0 });
+      await expect(hub.search()).rejects.toBeInstanceOf(HubRateLimitError);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('honors the request deadline during backoff without sending another request', async () => {
+    const fetch = vi.fn(async (_input: string, options?: RequestInit) => {
+      options?.signal?.throwIfAborted();
+      return limited('3')();
+    });
+    const hub = new HuggingFaceHub({ fetch, requestTimeoutMs: 30 });
+    const started = performance.now();
+
+    await expect(hub.search()).rejects.toBeInstanceOf(RuntimeConnectionError);
+
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops waiting when the caller aborts, without another request', async () => {
+    vi.useFakeTimers();
+    const { fetch, hub } = hubWith([limited('3')]);
+    const controller = new AbortController();
+    const error = caught(hub.search({ signal: controller.signal }));
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+    expect(await error).toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('HuggingFaceHub install guard', () => {
+  const file = (path: string, url?: string) => ({
+    path,
+    sizeBytes: 1,
+    sha256: null,
+    url: url ?? hubResolveUrl('a/b', 'main', path),
+  });
+
+  it.each(['pytorch_model.bin', 'model.pt', 'model.pth', 'model.ckpt', 'model.safetensors', 'sub/model.gguf.bin', 'x'])(
+    'refuses to download %s before any request',
+    async path => {
+      const server = await serve({});
+      const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+      const error = await caught(
+        hub.download(file(path, `${server.baseUrl}/a/b/resolve/main/${path}`), '/nonexistent/x')
+      );
+      expect(error).toBeInstanceOf(LocalRuntimeError);
+      expect(error.message).toContain('Only .gguf files can be installed');
+      expect(server.requests).toEqual([]);
+    }
+  );
+
+  it('refuses a .gguf name whose resolve URL points at another kind of file', async () => {
+    const hub = new HuggingFaceHub();
+    const error = await caught(
+      hub.download(file('model.gguf', hubResolveUrl('a/b', 'main', 'model.bin')), '/nonexistent/x')
+    );
+    expect(error.message).toContain('Only .gguf files can be installed');
+  });
+
+  it('refuses to verify an Ollama ref for a build that holds a non-GGUF file', async () => {
+    const hub = new HuggingFaceHub();
+    const build = {
+      id: 'model',
+      quant: 'Q4_K_M',
+      files: [{ ...file('model.bin'), sha256: 'a'.repeat(64) }],
+      sizeBytes: 1,
+      split: false,
+      complete: true,
+      ollamaRef: null,
+      ollamaRefIssue: null,
+    };
+    const error = await caught(hub.verifyOllamaRef({ id: 'a/b', builds: [build] }, build));
+    expect(error).toBeInstanceOf(LocalRuntimeError);
+  });
+});
+
 describe('HuggingFaceHub.getModel', () => {
   it('pins the commit and lists each quant with its size, sha256, resolve URL and Ollama ref', async () => {
     const server = await serve(repoRoutes('Qwen/Qwen2.5-0.5B-Instruct-GGUF', qwenSha, qwenInfo, qwenTree));
@@ -220,6 +479,7 @@ describe('HuggingFaceHub.getModel', () => {
     expect(detail.builds[1]).toEqual({
       id: 'qwen2.5-0.5b-instruct-q4_k_m',
       quant: 'Q4_K_M',
+      label: 'Q4_K_M',
       files: [
         {
           path: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
@@ -369,11 +629,202 @@ describe('HuggingFaceHub.getModel', () => {
       ['odd-Q5_0-imat', `hf.co/${repo}:Q5_0-imat`, null],
       ['odd-Q8_0', null, 'incomplete'],
     ]);
+    expect(detail.builds.map(build => build.label)).toEqual([
+      'Q2_K',
+      'b-odd-Q2_K',
+      'Q4_K_XL',
+      'UD-Q4_K_XL',
+      '128k-Q4_K_M',
+      // Q4_K_M is the 128k build's ref tag.
+      'odd-Q4_K_M',
+      'Q6_K',
+      'Q5_0',
+      'Q8_0',
+    ]);
     expect(detail.builds.at(-1)).toMatchObject({ split: true, complete: false, sizeBytes: 6 });
     expect(detail.projectors.map(projector => [projector.path, projector.quant])).toEqual([
       ['vision/odd.mmproj-q8_0.gguf', 'Q8_0'],
     ]);
     expect(detail).toMatchObject({ licenses: [], gguf: null, gated: false, author: 'someone' });
+  });
+
+  it('drops MTP draft heads and imatrix files, so no draft is offered as the quant it is stored in', async () => {
+    const repo = 'unsloth/Qwen3.8-Flash-Next-GGUF';
+    const server = await serve(repoRoutes(repo, flashNextSha, { id: repo, sha: flashNextSha }, flashNextTree));
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(detail.builds.map(build => [build.id, build.label, build.ollamaRefIssue])).toEqual([
+      ['UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL', 'UD-Q4_K_XL', 'split'],
+    ]);
+    expect(detail.projectors.map(projector => projector.path)).toEqual(['mmproj-BF16.gguf', 'mmproj-F16.gguf']);
+  });
+
+  it('drops the draft and imatrix files other publishers name, and keeps models that only resemble them', async () => {
+    const repo = 'someone/drafts-GGUF';
+    const sha = 'e'.repeat(40);
+    const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'f'.repeat(64), size } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('gpt-oss-20b-MXFP4.gguf', 12109566624),
+        file('eagle3-gpt-oss-20b-Q8_0.gguf', 921488000),
+        file('dflash-Qwen3.8-27B-Q4_0.gguf', 1094346080),
+        file('dspark-MiniMax-M3.1-Flash-Q8_0.gguf', 2089384768),
+        file('mtp-gemma-4-E2B-it.gguf', 97817664),
+        file('mtp.gguf', 8),
+        file('eagle3.gguf', 9),
+        file('draft/mtp/x-Q4_0.gguf', 10),
+        file('gemmable-4-12b-Q4_K_M-mtp.gguf', 7),
+        // The registry serves a mid-name MTP file when its metadata says it is a model, so the name cannot decide.
+        file('Ternary-Bonsai-2-27B-MTP-Q8_0.gguf', 1),
+        file('GLM-4.5-Air-MTP-Q4_K_M.gguf', 6),
+        file('Qwen_Qwen3.6-35B-A3B-imatrix.gguf', 192223904),
+        file('imatrix-qwen3.8-27b.gguf', 2),
+        file('imatrix_unsloth.gguf', 463011616),
+        file('Llama-3-8B-Q4_K_M-imatrix.gguf', 5),
+        file('v5-Eagle-7B-Q4_K_M.gguf', 3),
+        file('Smtp-Relay-1B-Q4_0.gguf', 4),
+      ])
+    );
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(detail.builds.map(build => build.id)).toEqual([
+      'Ternary-Bonsai-2-27B-MTP-Q8_0',
+      'v5-Eagle-7B-Q4_K_M',
+      'Smtp-Relay-1B-Q4_0',
+      'Llama-3-8B-Q4_K_M-imatrix',
+      'GLM-4.5-Air-MTP-Q4_K_M',
+      'gpt-oss-20b-MXFP4',
+    ]);
+  });
+
+  it('labels builds that share a quant by the part of the file name that sets them apart', async () => {
+    const lfm = 'LiquidAI/LFM2.5-350M-GGUF';
+    const repo = 'someone/variants-GGUF';
+    const sha = 'f'.repeat(40);
+    const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'a'.repeat(64), size } });
+    const server = await serve({
+      ...repoRoutes(lfm, lfmSha, { id: lfm, sha: lfmSha }, lfmTree),
+      // File names from unsloth/LTX-2.5-GGUF, unsloth/MiniMax-H3-GGUF and a ggml-org Nemotron repo.
+      ...repoRoutes(repo, sha, { id: repo, sha }, [
+        file('distilled/ltx-2.5-22b-distilled-Q4_K_M.gguf', 1),
+        file('ltx-2.5-22b-dev-Q4_K_M.gguf', 2),
+        file('ltx-2.5-22b-dev-Q6_K.gguf', 3),
+        file('minimax_h3_fl2va_pruned-Q8_0.gguf', 4),
+        file('minimax_h3_ref2va_pruned-Q8_0.gguf', 5),
+        file('NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4.gguf', 6),
+        file('lilicorr-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4.gguf', 7),
+        file('odd-Q5_0.gguf', 8),
+        file('odd-Q5_0-imat.gguf', 9),
+      ]),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+
+    expect((await hub.getModel(lfm)).builds.map(build => [build.label, build.sizeBytes, build.ollamaRef])).toEqual([
+      ['Q4_0', 219309792, `hf.co/${lfm}:Q4_0`],
+      ['QAD-Q4_0', 219312832, `hf.co/${lfm}:QAD-Q4_0`],
+      ['Q4_K_M', 229312224, `hf.co/${lfm}:Q4_K_M`],
+      ['Q5_K_M', 260376288, `hf.co/${lfm}:Q5_K_M`],
+      ['Q6_K', 293381856, `hf.co/${lfm}:Q6_K`],
+      ['Q8_0', 379217632, `hf.co/${lfm}:Q8_0`],
+      ['BF16', 711485152, `hf.co/${lfm}:BF16`],
+      ['F16', 711485152, `hf.co/${lfm}:350M-F16`],
+    ]);
+    expect((await hub.getModel(repo)).builds.map(build => [build.label, build.quant])).toEqual([
+      ['distilled-Q4_K_M', 'Q4_K_M'],
+      ['dev-Q4_K_M', 'Q4_K_M'],
+      ['Q6_K', 'Q6_K'],
+      ['fl2va-Q8_0', 'Q8_0'],
+      ['ref2va-Q8_0', 'Q8_0'],
+      ['NVFP4', 'NVFP4'],
+      ['lilicorr-NVFP4', 'NVFP4'],
+      ['Q5_0', 'Q5_0'],
+      ['Q5_0-imat', 'Q5_0'],
+    ]);
+  });
+
+  it('keeps every label a tag that resolves to its own build and to no other', async () => {
+    const repo = 'someone/clashes-GGUF';
+    const sha = 'f'.repeat(40);
+    const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'a'.repeat(64), size } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('Base-Model-Q4_0.gguf', 1),
+        file('Model-Q4_0.gguf', 2),
+        file('Lilicorr-Nemotron-NVFP4.gguf', 3),
+        file('lilicorr-Nemotron-NVFP4.gguf', 4),
+        file('a b/X-Q8_0.gguf', 5),
+        file('c d/X-Q8_0.gguf', 6),
+      ])
+    );
+    const { builds } = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(builds.map(build => [build.label, build.ollamaRef?.split(':')[1] ?? null])).toEqual([
+      ['Base-Q4_0', 'Q4_0'],
+      ['Model-Q4_0', null],
+      ['NVFP4', 'NVFP4'],
+      ['lilicorr-Nemotron-NVFP4-2', null],
+      ['Q8_0', 'Q8_0'],
+      ['c-d-X-Q8_0', null],
+    ]);
+    for (const build of builds) {
+      expect(hubBuildTag(build)).toMatch(/^[A-Za-z0-9_.-]+$/);
+      expect(findHubBuild(builds, hubBuildTag(build))).toBe(build);
+      expect(findHubBuild(builds, build.label.toLowerCase())).toBe(build);
+    }
+  });
+
+  it('keeps labels Ollama-sized tags even for names with no tag characters, long folders and suffix clashes', async () => {
+    const repo = 'someone/odd-names-GGUF';
+    const sha = 'f'.repeat(40);
+    const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'a'.repeat(64), size } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('模型.gguf', 1),
+        file('型.gguf', 2),
+        file(`${'a'.repeat(60)}/${'b'.repeat(60)}-Q4_0.gguf`, 3),
+        file(`${'c'.repeat(70)}/${'b'.repeat(60)}-Q4_0.gguf`, 4),
+        file('M-Q8_0.gguf', 5),
+        file('m-Q8_0.gguf', 6),
+        file('m-Q8_0-2.gguf', 7),
+      ])
+    );
+    const { builds } = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(builds.map(build => build.label)).toEqual([
+      'build',
+      'build-2',
+      'Q4_0',
+      `${'c'.repeat(70)}-${'b'.repeat(9)}`,
+      'Q8_0',
+      'm-Q8_0-3',
+      'Q8_0-2',
+    ]);
+    for (const build of builds) {
+      expect(build.label).toMatch(/^[A-Za-z0-9_][\w.-]{0,79}$/);
+      expect(findHubBuild(builds, hubBuildTag(build))).toBe(build);
+    }
+    // Ollama serves m-Q8_0-2.gguf for this tag, so it must not name the m-Q8_0 build.
+    expect(findHubBuild(builds, 'm-Q8_0-2')).toBeUndefined();
+  });
+
+  it('resolves a quant alone only when a single build has it', async () => {
+    const repo = 'someone/split-pair-GGUF';
+    const sha = 'f'.repeat(40);
+    const file = (path: string, size: number) => ({ type: 'file', path, size, lfs: { oid: 'a'.repeat(64), size } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('a-Q4_0-00001-of-00002.gguf', 5),
+        file('a-Q4_0-00002-of-00002.gguf', 5),
+        file('b-Q4_0-00001-of-00002.gguf', 2),
+        file('b-Q4_0-00002-of-00002.gguf', 2),
+        file('b-Q8_0-00001-of-00002.gguf', 2),
+        file('b-Q8_0-00002-of-00002.gguf', 2),
+      ])
+    );
+    const { builds } = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(builds.map(build => [build.label, build.ollamaRef])).toEqual([
+      ['b-Q4_0', null],
+      ['Q8_0', null],
+      ['a-Q4_0', null],
+    ]);
+    expect(findHubBuild(builds, 'Q4_0')).toBeUndefined();
+    expect(findHubBuild(builds, 'q8_0')?.id).toBe('b-Q8_0');
   });
 
   it('labels bartowski _L builds and blocks only the ones the registry rejects as tags', async () => {
@@ -532,6 +983,55 @@ describe('HuggingFaceHub Ollama refs', () => {
     expect(await hub.verifyOllamaRef(pinned, changed)).toBeNull();
   });
 
+  it('reads every layer a tag serves, and null for a tag the registry lacks', async () => {
+    const projector = 'a'.repeat(64);
+    const server = await serve({
+      [`GET /v2/${llama}/manifests/Q4_K_M`]: json({
+        schemaVersion: 2,
+        layers: [
+          { mediaType: 'application/vnd.ollama.image.model', digest: `sha256:${Q4_OID}`, size: 1 },
+          { mediaType: 'application/vnd.ollama.image.projector', digest: `sha256:${projector}`, size: 1 },
+          { mediaType: 'application/vnd.ollama.image.template', digest: `sha256:${'0'.repeat(64)}`, size: 1 },
+        ],
+      }),
+      [`GET /v2/${llama}/manifests/F16`]: json({ error: 'The requested GGUF file is not available' }, 400),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    expect(await hub.ollamaLayers(llama, 'Q4_K_M')).toEqual({
+      model: Q4_OID,
+      others: [
+        { mediaType: 'application/vnd.ollama.image.projector', digest: projector },
+        { mediaType: 'application/vnd.ollama.image.template', digest: '0'.repeat(64) },
+      ],
+    });
+    expect(await hub.ollamaLayers(llama, 'F16')).toBeNull();
+    await expect(hub.ollamaLayers(llama, '../x')).rejects.toThrow('Invalid Ollama tag');
+  });
+
+  it('verifies a gated or private repo to its huggingface.co name and a public one to hf.co', async () => {
+    const server = await serve({
+      ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
+      [`GET /v2/${llama}/manifests/BF16`]: manifest(BF16_OID),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const detail = await hub.getModel(llama);
+    const bf16 = detail.builds.find(build => build.quant === 'BF16')!;
+    expect(await hub.verifyOllamaRef({ ...detail, ollamaNeedsSshKey: false }, bf16)).toBe(`hf.co/${llama}:BF16`);
+    expect(await hub.verifyOllamaRef({ ...detail, ollamaNeedsSshKey: true }, bf16)).toBe(
+      `huggingface.co/${llama}:BF16`
+    );
+  });
+
+  it('treats hf.co and huggingface.co names of one repo as the same installed model', () => {
+    expect(ollamaPullRef('hf.co/a/b:Q4', true)).toBe('huggingface.co/a/b:Q4');
+    expect(ollamaPullRef('hf.co/a/b:Q4', false)).toBe('hf.co/a/b:Q4');
+    expect(ollamaModelKey('huggingface.co/A/b:Q4')).toBe(ollamaModelKey('hf.co/a/B:q4'));
+    expect(ollamaModelKey('qwen2.5:0.5b')).toBe('qwen2.5:0.5b');
+    expect(ollamaRefAliases('hf.co/A/b:Q4')).toEqual(['hf.co/a/b:q4', 'huggingface.co/a/b:q4']);
+    expect(ollamaRefAliases('huggingface.co/A/b:Q4')).toEqual(['hf.co/a/b:q4', 'huggingface.co/a/b:q4']);
+    expect(ollamaRefAliases('qwen2.5:0.5b')).toEqual(['qwen2.5:0.5b']);
+  });
+
   it('skips the request for builds no tag can pull and maps registry access errors', async () => {
     const server = await serve({
       ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
@@ -560,7 +1060,7 @@ describe('HuggingFaceHub Ollama refs', () => {
   const simpleRoutes = (repo: string, tree: unknown): Record<string, Handler> =>
     repoRoutes(repo, sha, { id: repo, sha }, tree);
 
-  /** The registry rule, plus the skipping of draft files, modeled as an `mtp-` file name prefix. */
+  /** The registry rule, plus the skipping of drafts the file list cannot tell apart, modeled as a `head-` prefix. */
   const registry =
     (tree: { path: string; lfs: { oid: string } }[]): Handler =>
     (request, response) => {
@@ -570,7 +1070,7 @@ describe('HuggingFaceHub Ollama refs', () => {
         .find(entry => {
           const name = entry.path.replace(/^.*\//, '');
           const stem = name.replace(/\.gguf$/i, '').toUpperCase();
-          return !/mmproj/i.test(name) && !/^mtp-/i.test(name) && stem.endsWith(tag);
+          return !/mmproj/i.test(name) && !/^head-/i.test(name) && stem.endsWith(tag);
         });
       return (hit ? manifest(hit.lfs.oid) : json({ error: 'The specified tag is not available' }, 400))(
         request,
@@ -629,11 +1129,11 @@ describe('HuggingFaceHub Ollama refs', () => {
   it('tries the next tag when a skipped draft blocks the first, up to MAX_VERIFY_TAGS requests', async () => {
     const repo = 'someone/drafty-GGUF';
     const tree = [
-      numbered('MTP/mtp-m-BF16.gguf', 1),
-      numbered('MTP/mtp-m-F16.gguf', 2),
+      numbered('Heads/head-m-BF16.gguf', 1),
+      numbered('Heads/head-m-F16.gguf', 2),
       numbered('m-BF16.gguf', 3),
       numbered('m-F16.gguf', 4),
-      numbered('MTP/mtp-a-b-c-d-e-Q8_0.gguf', 5),
+      numbered('Heads/head-a-b-c-d-e-Q8_0.gguf', 5),
       numbered('a-b-c-d-e-Q8_0.gguf', 6),
     ];
     const tags = ['F16', 'm-F16', 'Q8_0', 'e-Q8_0', 'd-e-Q8_0', 'c-d-e-Q8_0', 'b-c-d-e-Q8_0'];
@@ -649,7 +1149,7 @@ describe('HuggingFaceHub Ollama refs', () => {
     expect(f16 && (await hub.verifyOllamaRef(detail, f16))).toBe(`hf.co/${repo}:m-F16`);
 
     // Every tail of the skipped draft reaches the main file instead, so no tag pulls the draft.
-    const draft = detail.builds.find(build => build.id === 'MTP/mtp-a-b-c-d-e-Q8_0');
+    const draft = detail.builds.find(build => build.id === 'Heads/head-a-b-c-d-e-Q8_0');
     const before = server.requests.length;
     expect(draft && (await hub.verifyOllamaRef(detail, draft))).toBeNull();
     expect(server.requests.slice(before).map(request => request.path.split('/').at(-1))).toEqual(
@@ -727,6 +1227,37 @@ describe('HuggingFaceHub gated repos', () => {
   });
 });
 
+describe('HuggingFaceHub.checkToken', () => {
+  it('asks whoami-v2 with the token and reads 200 as valid and 401 as invalid', async () => {
+    const good = await serve({ 'GET /api/whoami-v2': json({ type: 'user', name: 'someone' }) });
+    expect(await new HuggingFaceHub({ endpoint: good.baseUrl, token: TOKEN }).checkToken()).toBe(true);
+    expect(good.requests[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
+
+    const bad = await serve({ 'GET /api/whoami-v2': json({ error: 'Invalid username or password.' }, 401) });
+    expect(await new HuggingFaceHub({ endpoint: bad.baseUrl, token: TOKEN }).checkToken()).toBe(false);
+  });
+
+  it('answers false without a token and sends nothing', async () => {
+    const server = await serve({});
+    expect(await new HuggingFaceHub({ endpoint: server.baseUrl }).checkToken()).toBe(false);
+    expect(server.requests).toEqual([]);
+  });
+
+  it('rejects an outage or a rate limit instead of calling the token invalid, without echoing it', async () => {
+    const server = await serve({ 'GET /api/whoami-v2': json({ error: `bad ${TOKEN}` }, 500) });
+    const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).checkToken());
+    expect(error).toBeInstanceOf(RuntimeHttpError);
+    expect(inspect(error, { depth: 5 })).not.toContain(TOKEN);
+
+    const limited = await serve({
+      'GET /api/whoami-v2': withHeaders({ error: 'slow down' }, { 'retry-after': '5' }, 429),
+    });
+    expect(await caught(new HuggingFaceHub({ endpoint: limited.baseUrl, token: TOKEN }).checkToken())).toBeInstanceOf(
+      HubRateLimitError
+    );
+  });
+});
+
 describe('HuggingFaceHub errors', () => {
   const infoPath = 'GET /api/models/a/b/revision/main';
 
@@ -769,7 +1300,7 @@ describe('HuggingFaceHub errors', () => {
       [infoPath]: withHeaders({ error: 'slow down' }, { ratelimit: '"api";r=0;t=53' }, 429),
       'GET /api/models/a/c/revision/main': json({ error: 'slow down' }, 429),
     });
-    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl, maxRateLimitWaitMs: 0 });
     const search = await caught(hub.search());
     expect(search).toBeInstanceOf(HubRateLimitError);
     expect(search).toBeInstanceOf(RuntimeHttpError);

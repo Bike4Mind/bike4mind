@@ -14,6 +14,8 @@ export interface OpenAICompatibleServer {
   product: OpenAICompatibleProduct | null;
   fetch: FetchLike;
   hasCredentials(): boolean;
+  /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
+  redact: (text: string, response: Response) => string;
 }
 
 const PROPS_TIMEOUT_MS = 5_000;
@@ -184,10 +186,14 @@ export class OpenAICompatibleChat implements LocalChat {
       response = await post(false);
     }
     if (!response.ok || !response.body) throw await this.httpError(response);
-    await this.readStream(response.body, onEvent);
+    await this.readStream(response.body, onEvent, text => this.server.redact(text, response));
   }
 
-  private async readStream(body: ReadableStream<Uint8Array>, onEvent: (event: CompletionStreamEvent) => void) {
+  private async readStream(
+    body: ReadableStream<Uint8Array>,
+    onEvent: (event: CompletionStreamEvent) => void,
+    redact: (text: string) => string
+  ) {
     const calls = new Map<number, { id?: string; name: string; arguments: string }>();
     let stopReason: string | undefined;
     let usage: { inputTokens?: number; outputTokens?: number } | undefined;
@@ -208,7 +214,9 @@ export class OpenAICompatibleChat implements LocalChat {
         }
         if (chunk.error) {
           const detail = (chunk.error as { message?: unknown }).message;
-          failure = new Error(`${this.server.label}: ${typeof detail === 'string' ? detail : 'the reply failed.'}`);
+          failure = new Error(
+            `${this.server.label}: ${typeof detail === 'string' ? redact(detail) : 'the reply failed.'}`
+          );
           return;
         }
         const choice = chunk.choices?.[0];

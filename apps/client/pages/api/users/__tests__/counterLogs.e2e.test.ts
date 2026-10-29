@@ -8,7 +8,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { CounterLog, User } from '@bike4mind/database';
-import { SAFE_USER_LOOKUP_PROJECT, USER_SECRET_FIELDS } from '@bike4mind/common';
+import { INTERNAL_ACCOUNT_FLAGS, SAFE_USER_LOOKUP_PROJECT, USER_SECRET_FIELDS } from '@bike4mind/common';
 
 /**
  * End-to-end tests for the `{logs}` branch, driving the real handler against createMongoServer.
@@ -194,8 +194,9 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
   });
 
   it('builds the user $lookup with an inner $project restricted to non-secret fields', () => {
-    // email is the only field the route reads off the joined user; the organization comes off
-    // the counter log itself, which is also what the org filters match on.
+    // email and the internal-account flags (for the staff exclusion) are the only fields the route
+    // reads off the joined user; the organization comes off the counter log itself, which is also
+    // what the org filters match on.
     // Asserts on the EXPORTED builder the handler calls, so deleting or widening the production
     // $project fails here. Do not inline a copy of the stages: the $lookup's projection has no
     // effect on the HTTP response (the outer $group/$project already forward only named scalars),
@@ -216,7 +217,9 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     // Exact key set: an inclusion projection that gains a field is exactly the regression to catch,
     // so assert equality rather than a subset. Secret fields are named explicitly too, so the
     // intent survives even if SAFE_USER_LOOKUP_PROJECT itself is ever widened by mistake.
-    expect(new Set(Object.keys(projection!))).toEqual(new Set([...Object.keys(SAFE_USER_LOOKUP_PROJECT), 'email']));
+    expect(new Set(Object.keys(projection!))).toEqual(
+      new Set([...Object.keys(SAFE_USER_LOOKUP_PROJECT), 'email', ...INTERNAL_ACCOUNT_FLAGS])
+    );
     for (const secret of USER_SECRET_FIELDS) {
       expect(projection, `secret field "${secret}" must never be projected`).not.toHaveProperty(secret);
     }
@@ -424,5 +427,44 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     // Only 'keep' satisfies both operators. The previous code assigned userOrganization twice, so
     // the $nin overwrote the $in and 'unlisted' came back too.
     expect(rows.map(r => r.metadata.sessionId)).toEqual(['keep']);
+  });
+
+  it('applies the no-org and staff exclusion params', async () => {
+    const customer = await User.create({ username: 'e2e-customer', name: 'Customer', email: 'customer@example.com' });
+    const admin = await User.create({
+      username: 'e2e-admin',
+      name: 'Admin',
+      email: 'admin@example.com',
+      isAdmin: true,
+    });
+
+    const log = (userId: string, userOrganization: string, sessionId: string) => ({
+      userId,
+      userName: 'u',
+      userLevel: 'User',
+      userOrganization,
+      // Distinct counters, or the customer's two rows would group into one (same day and user).
+      counterName: `Session ${sessionId}`,
+      counterValue: 1,
+      datetime: new Date('2026-07-21T10:00:00.000Z'),
+      metadata: { sessionId },
+    });
+    await CounterLog.create([
+      log(customer.id, 'Acme', 'customer-org'),
+      log(customer.id, '', 'customer-no-org'),
+      log(admin.id, 'Acme', 'admin'),
+    ]);
+
+    const sessionsFor = async (query: Record<string, string>) => {
+      const { res, promise } = run({ startDate: '2026-07-21', endDate: '2026-07-21', ...query });
+      await promise;
+      const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{ metadata: { sessionId: string } }>;
+      return rows.map(r => r.metadata.sessionId).sort();
+    };
+
+    expect(await sessionsFor({})).toEqual(['admin', 'customer-no-org', 'customer-org']);
+    expect(await sessionsFor({ excludeNoOrg: 'true' })).toEqual(['admin', 'customer-org']);
+    expect(await sessionsFor({ excludeStaff: 'true' })).toEqual(['customer-no-org', 'customer-org']);
+    expect(await sessionsFor({ excludeNoOrg: 'true', excludeStaff: 'true' })).toEqual(['customer-org']);
   });
 });
