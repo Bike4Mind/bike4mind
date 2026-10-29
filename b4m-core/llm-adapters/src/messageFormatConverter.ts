@@ -40,7 +40,7 @@ interface OpenAIAssistantMessage {
 export interface OpenAIConvertOptions {
   /**
    * Replay `reasoning_content` on an assistant tool-call message that carries it.
-   * DeepSeek REQUIRES it whenever the request has tools; every other target must
+   * DeepSeek and Kimi REQUIRE it inside a tool-call loop; every other target must
    * not receive it, so it defaults to off - see convertMessageToOpenAIFormat.
    */
   preserveReasoningContent?: boolean;
@@ -85,12 +85,12 @@ export function convertMessageToOpenAIFormat(
 ): OpenAIFormattedMessage[] {
   // Already in OpenAI format (has tool_calls property from OpenAI backend's pushToolMessages)
   if (hasToolCalls(msg)) {
-    // reasoning_content is replayed only for DeepSeek, which requires the prior
-    // turn's monologue back on this message whenever the request has tools.
-    // Stripped for every other target rather than passed through: DeepSeek
-    // mutates the caller's message array in place, ChatCompletionProcess builds
+    // reasoning_content is replayed only for DeepSeek and Kimi, which require the
+    // prior turn's monologue back on this message inside a tool-call loop.
+    // Stripped for every other target rather than passed through: those backends
+    // mutate the caller's message array in place, ChatCompletionProcess builds
     // that array once and hands the same object to every backend it tries, so a
-    // fallback hop off DeepSeek would otherwise post a provider-private field to
+    // fallback hop off either would otherwise post a provider-private field to
     // whoever rescues the turn.
     const reasoningContent = (msg as { reasoning_content?: unknown }).reasoning_content;
     return [
