@@ -609,7 +609,7 @@ export function buildPRReviewCommentBlocks(data: PRReviewCommentData): BlockTemp
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${escapeSlackLine(data.commenter)}* commented on *<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>*\n`${escapedPath}`\n> ${bodyPreview}`,
+          text: `*${escapeSlackLine(data.commenter)}* commented on *<${data.prUrl}|#${data.prNumber} ${escapeSlackLine(data.prTitle)}>*\n\`${escapedPath}\`\n> ${bodyPreview}`,
         },
       },
       {
