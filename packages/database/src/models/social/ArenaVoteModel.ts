@@ -49,6 +49,7 @@ ArenaVoteSchema.index({ userId: 1, pairId: 1 }, { unique: true });
 ArenaVoteSchema.index({ userId: 1 }, { unique: true, partialFilterExpression: { status: 'served' } });
 ArenaVoteSchema.index({ userId: 1, status: 1, votedAt: -1 });
 ArenaVoteSchema.index({ pairId: 1 });
+ArenaVoteSchema.index({ status: 1, isGold: 1 });
 
 export interface IArenaVoteModel extends Model<IArenaVoteDocument> {}
 

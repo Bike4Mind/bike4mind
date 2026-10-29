@@ -272,7 +272,12 @@ export function createArenaService(deps: ArenaServiceDeps) {
     if (qualifiedUserIds.length === 0) return [];
     const ratedVotes = await votes.votesByRaters(qualifiedUserIds);
     const pairById = new Map(
-      (await pairs.findByIds([...new Set(ratedVotes.map(vote => vote.pairId))])).map(pair => [pair.id, pair])
+      (
+        await pairs.findByIds([...new Set(ratedVotes.map(vote => vote.pairId))], {
+          taskType: 1,
+          'answers.modelId': 1,
+        })
+      ).map(pair => [pair.id, pair])
     );
     const tallies = new Map<string, ArenaModelWinRate>();
     const tally = (taskType: string, modelId: string): ArenaModelWinRate => {

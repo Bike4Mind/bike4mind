@@ -79,7 +79,11 @@ export class ArenaPairRepository extends BaseRepository<IArenaPairDocument> {
 
   async listPage(skip: number, limit: number): Promise<{ data: IArenaPairDocument[]; total: number }> {
     const [docs, total] = await Promise.all([
-      this.model.find().sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.model
+        .find({}, { prompt: 1, taskType: 1, source: 1, 'answers.modelId': 1, goldChoice: 1, active: 1, createdAt: 1 })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
       this.model.countDocuments(),
     ]);
     return { data: docs.map(doc => doc.toObject()), total };
@@ -100,9 +104,10 @@ export class ArenaPairRepository extends BaseRepository<IArenaPairDocument> {
     return { total, gold, active };
   }
 
-  async findByIds(ids: string[]): Promise<IArenaPairDocument[]> {
+  /** `projection` limits the fetched fields; the answer texts are large and rarely needed in bulk. */
+  async findByIds(ids: string[], projection?: Record<string, 1>): Promise<IArenaPairDocument[]> {
     const valid = ids.filter(id => mongoose.isObjectIdOrHexString(id));
-    const docs = await this.model.find({ _id: { $in: valid } });
+    const docs = await this.model.find({ _id: { $in: valid } }, projection);
     return docs.map(doc => doc.toObject());
   }
 }
