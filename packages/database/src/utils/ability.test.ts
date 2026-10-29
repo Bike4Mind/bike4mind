@@ -21,7 +21,7 @@ vi.mock('../models', () => ({
 }));
 
 import { defineAbilitiesFor } from './ability';
-import { Prompt, FabFile, FeedbackModel, Project } from '../models';
+import { Prompt, FabFile, FeedbackModel, Project, ModalModel, User, AdminSettings } from '../models';
 import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
@@ -70,6 +70,34 @@ describe('db-core defineAbilitiesFor - Prompt library', () => {
 // image/video generators compile into a Mongo query via accessibleBy - the path where a
 // cross-element group match actually bites. Must stay in sync with the HTTP ability
 // (apps/client/server/auth/ability.ts); these mirror that file's group tests exactly.
+describe('db-core defineAbilitiesFor - Modal management', () => {
+  const canManageModals = (a: ReturnType<typeof defineAbilitiesFor>) =>
+    a.can('create', ModalModel) && a.can('update', ModalModel) && a.can('delete', ModalModel);
+
+  it('lets a full admin and a settings:manage delegate create/update/delete modals', () => {
+    expect(canManageModals(defineAbilitiesFor(makeUser({ isAdmin: true })))).toBe(true);
+    expect(canManageModals(defineAbilitiesFor(makeUser({ adminPermissions: ['settings:manage'] })))).toBe(true);
+  });
+
+  it.each([
+    ['no permissions', { adminPermissions: undefined }],
+    ['an empty grant list', { adminPermissions: [] }],
+    ['a different permission', { adminPermissions: ['support:read'] }],
+  ])('denies modal writes to a user with %s', (_label, overrides) => {
+    const a = defineAbilitiesFor(makeUser(overrides as Partial<IUserDocument>));
+    expect(a.can('create', ModalModel)).toBe(false);
+    expect(a.can('update', ModalModel)).toBe(false);
+    expect(a.can('delete', ModalModel)).toBe(false);
+    expect(a.can('read', ModalModel)).toBe(true);
+  });
+
+  it('does not extend a settings:manage delegate to User or AdminSettings writes', () => {
+    const a = defineAbilitiesFor(makeUser({ adminPermissions: ['settings:manage'] }));
+    expect(a.can('delete', User)).toBe(false);
+    expect(a.can('update', AdminSettings)).toBe(false);
+  });
+});
+
 describe('db-core defineAbilitiesFor - group-shared document access', () => {
   type GroupShare = { groupId: string; permissions: string[] };
   const sharedWithGroups = (groups: GroupShare[]) =>
