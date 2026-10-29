@@ -483,6 +483,31 @@ describe('AuthService token refresh', () => {
     service.dispose();
   });
 
+  it('restores the production session even when persisting the preset migration fails', async () => {
+    vi.useFakeTimers();
+    process.env[BAKED] = HOSTED;
+    const { service, vault, accepted, device } = buildWithSharedClient({ refreshToken: vi.fn() });
+    const typed = `${HOSTED.toUpperCase()}/`;
+    accepted.add('access-0');
+    await vault.setEnvironment({ preset: 'custom', customUrl: typed });
+    await vault.setTokens(typed, storedTokens(0, 30 * 60_000));
+    const persist = vi.spyOn(vault, 'setEnvironment').mockRejectedValue(new Error('read-only vault'));
+    silentLogger.warn.mockClear();
+
+    await service.initialize();
+
+    expect(persist).toHaveBeenCalledExactlyOnceWith({ preset: 'hosted' });
+    expect(silentLogger.warn).toHaveBeenCalledWith('AUTH: could not store the migrated environment: read-only vault');
+    expect(service.getState()).toMatchObject({
+      status: 'signed-in',
+      environment: { preset: 'hosted', url: HOSTED, label: 'Production' },
+      user: { id: 'user-1' },
+    });
+    expect(await vault.getTokens(HOSTED)).toMatchObject({ accessToken: 'access-0' });
+    expect(device.initiateDeviceFlow).not.toHaveBeenCalled();
+    service.dispose();
+  });
+
   it('keeps the session and the vault when a proactive refresh fails transiently', async () => {
     const { service, vault } = await signedIn(vi.fn().mockRejectedValue(httpError(503)));
 

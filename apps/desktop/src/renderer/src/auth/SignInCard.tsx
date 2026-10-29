@@ -80,7 +80,7 @@ function ServerChoice({ state, disabled }: { state: AuthState; disabled: boolean
     return (
       <>
         <Divider />
-        <EnvironmentPicker state={state} disabled={disabled} />
+        <EnvironmentPicker state={state} disabled={disabled} onApplied={() => setChanging(false)} />
       </>
     );
   }

@@ -91,6 +91,22 @@ describe('resolveEnvironment', () => {
 });
 
 describe('migrateSelection', () => {
+  it.each([
+    ['https://hosted.example.com/Api', 'https://hosted.example.com/api'],
+    ['https://hosted.example.com?tenant=Acme', 'https://hosted.example.com?tenant=acme'],
+    ['https://User:Secret@hosted.example.com', 'https://user:secret@hosted.example.com'],
+    ['https://hosted.example.com?tenant=acme/', 'https://hosted.example.com?tenant=acme'],
+  ])('preserves a distinct custom endpoint %s', (baked, customUrl) => {
+    process.env[BAKED] = baked;
+    const selection = { preset: 'custom' as const, customUrl };
+
+    expect(migrateSelection(selection)).toBe(selection);
+    expect(normalizeSelection(selection)).toEqual(selection);
+    expect(resolveEnvironment(selection, false)).toMatchObject({
+      environment: { preset: 'custom', url: customUrl },
+    });
+  });
+
   it('turns a custom pick of the production URL into the hosted preset', () => {
     process.env[BAKED] = HOSTED;
 

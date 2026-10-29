@@ -9,8 +9,7 @@ import type { EnvironmentSelection, ResolvedEnvironment } from '@shared/auth';
 
 /**
  * Default service endpoint, baked in at build time (see the `define` block in
- * electron.vite.config.ts), exactly as the CLI bakes `B4M_DEFAULT_API_URL` via tsdown. Empty
- * for an unbranded fork, which then has no `hosted` option and must pick local or custom.
+ * electron.vite.config.ts). Builds default to Production; publishers can override the URL.
  */
 export function bakedDefaultApiUrl(): string {
   return process.env.B4M_DEFAULT_API_URL ?? '';
@@ -20,10 +19,13 @@ export function hostedAvailable(): boolean {
   return bakedDefaultApiUrl() !== '';
 }
 
-/** Compared by token cache key, so a match is guaranteed to keep the user's stored session. */
+/** Require both the same endpoint and token key before reusing a stored session. */
 function isBakedDefault(url: string): boolean {
-  const baked = bakedDefaultApiUrl();
-  return baked !== '' && normalizeEnvKey(url) === normalizeEnvKey(baked);
+  const bakedUrl = bakedDefaultApiUrl();
+  const baked = parseApiUrl(bakedUrl);
+  if ('error' in baked) return false;
+  // Cache keys lowercase paths too; endpoint matching must preserve their case.
+  return new URL(url).href === new URL(bakedUrl).href && normalizeEnvKey(url) === normalizeEnvKey(bakedUrl);
 }
 
 /**
@@ -51,9 +53,8 @@ function labelFor(endpoint: Extract<ApiEndpoint, { status: 'configured' }>): str
 /**
  * Turn a user's picker choice into a concrete endpoint, or report that none resolves.
  *
- * `devFallback` is `!app.isPackaged`: a developer running from source gets the local server
- * rather than an unconfigured app, while a packaged unbranded build is honestly unconfigured
- * instead of silently pointing at a localhost that is not there.
+ * `devFallback` is `!app.isPackaged`: when no baked default is available, a source run uses
+ * the local server while a packaged build stays unconfigured. Normal builds bake Production.
  */
 export function resolveEnvironment(
   selection: EnvironmentSelection | undefined,

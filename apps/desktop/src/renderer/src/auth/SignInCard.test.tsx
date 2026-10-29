@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
 import { SignInCard } from './SignInCard';
 
@@ -36,6 +36,7 @@ describe('SignInCard', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.unstubAllGlobals();
   });
 
   function render(state: AuthState) {
@@ -71,6 +72,56 @@ describe('SignInCard', () => {
     expect(byTestId('signin-server-text')).toBeNull();
     // Production is still the pending choice, so no URL field to fill in.
     expect(byTestId('environment-url-input')).toBeNull();
+  });
+
+  function enterCustomUrl(byTestId: (id: string) => Element | null, url: string) {
+    const input = byTestId('environment-url-input')?.querySelector('input');
+    if (!input) throw new Error('Expected the custom server URL input');
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    if (!setValue) throw new Error('Expected an input value setter');
+    act(() => {
+      setValue.call(input, url);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  it.each(['https://other.example.com', `${HOSTED}/`])(
+    'collapses the picker after successfully applying %s, including an unchanged normalized endpoint',
+    async url => {
+      const setEnvironment = vi.fn().mockResolvedValue({ ok: true });
+      vi.stubGlobal('b4m', { auth: { setEnvironment } });
+      const { byTestId } = render({
+        ...production,
+        environment: { preset: 'custom', url: HOSTED, label: 'Remote' },
+      });
+      act(() => (byTestId('signin-change-server-link') as HTMLElement).click());
+      enterCustomUrl(byTestId, url);
+
+      await act(async () => (byTestId('environment-apply-btn') as HTMLButtonElement).click());
+
+      expect(setEnvironment).toHaveBeenCalledExactlyOnceWith({ preset: 'custom', customUrl: url });
+      expect(byTestId('environment-select-btn')).toBeNull();
+      expect(byTestId('signin-change-server-link')).not.toBeNull();
+    }
+  );
+
+  it('keeps the picker and its error visible after an unsuccessful apply', async () => {
+    const setEnvironment = vi.fn().mockResolvedValue({ ok: false, error: 'Invalid server URL' });
+    vi.stubGlobal('b4m', { auth: { setEnvironment } });
+    const { byTestId } = render({
+      ...production,
+      environment: { preset: 'custom', url: HOSTED, label: 'Remote' },
+    });
+    act(() => (byTestId('signin-change-server-link') as HTMLElement).click());
+    enterCustomUrl(byTestId, 'invalid');
+
+    await act(async () => (byTestId('environment-apply-btn') as HTMLButtonElement).click());
+
+    expect(setEnvironment).toHaveBeenCalledExactlyOnceWith({ preset: 'custom', customUrl: 'invalid' });
+    expect(byTestId('environment-select-btn')).not.toBeNull();
+    expect(byTestId('environment-error-alert')?.textContent).toBe('Invalid server URL');
+    expect(byTestId('signin-server-text')).toBeNull();
+    expect((byTestId('environment-apply-btn') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('leaves the picker open when no server resolves', () => {
