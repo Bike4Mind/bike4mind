@@ -141,6 +141,13 @@ vi.mock('@/app/contexts/WebsocketContext', () => ({
 // seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.
 // The real module is not spread in: it imports the Subscription model, which suites that stub
 // @bike4mind/database cannot load.
+// The default per-user write limit (defaultWriteRateLimit.ts) reads admin settings and a Mongo
+// counter on every signed-in write that baseApi serves, so route suites that stub the database
+// would hang on it. Pass through by default; its own suite unmocks it.
+vi.mock('@server/middlewares/defaultWriteRateLimit', () => ({
+  defaultWriteRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 vi.mock('@server/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',

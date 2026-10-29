@@ -9,6 +9,7 @@ import { oauthRouteGate } from '@server/middlewares/oauthRouteGate';
 import { impersonationGate, impersonationAnonymousGate } from './impersonationGate';
 import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetection';
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
+import { defaultWriteRateLimit } from '@server/middlewares/defaultWriteRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { connectDB } from '@bike4mind/database';
 import { ApiKeyScopeValue, MethodNotAllowedError } from '@bike4mind/common';
@@ -85,6 +86,12 @@ interface BaseAPIOptions {
    * no-match answer is a 404 that only fires after auth has already run.
    */
   allowedMethods?: readonly string[];
+  /**
+   * `false` opts this route out of the default per-user write limit (defaultWriteRateLimit.ts), for
+   * high-frequency, low-cost writes the app sends on its own, such as analytics events. Defaults to
+   * true; a route's own `rateLimit` still applies either way.
+   */
+  defaultWriteRateLimit?: boolean;
 }
 
 /** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
@@ -247,6 +254,9 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     // Default-deny relying-party OAuth tokens: a no-op for first-party sessions and API keys,
     // and 403 for an OAuth token unless this route opted in via `oauthScopes`.
     router.use(oauthRouteGate({ oauthScopes: resolvedOptions.oauthScopes }));
+
+    // After every gate that can reject, so a refused request never spends the user's write budget.
+    if (resolvedOptions.defaultWriteRateLimit !== false) router.use(defaultWriteRateLimit);
 
     // Fire-and-forget analytics: ≤1 emit/user/UTC-day per Lambda instance (best-effort).
     // Gates on human JWT only; no-op when B4M_ANALYTICS_ENABLED is false or secrets unset.
