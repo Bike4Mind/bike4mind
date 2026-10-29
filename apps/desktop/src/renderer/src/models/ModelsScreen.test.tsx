@@ -223,6 +223,7 @@ interface Bridge {
 let bridge: Bridge;
 let pushPulls: (pulls: ModelPull[]) => void = () => {};
 let pushCuratedChanged: () => void = () => {};
+let pushInstalledChanged: () => void = () => {};
 const calls = {
   pull: vi.fn(),
   cancelPull: vi.fn(),
@@ -232,6 +233,7 @@ const calls = {
   getStatus: vi.fn(),
   getCuratedPull: vi.fn(),
   checkCurated: vi.fn(),
+  listCurated: vi.fn(),
   dismissPull: vi.fn(),
   checkCuratedList: vi.fn(),
 };
@@ -268,6 +270,7 @@ beforeEach(() => {
       },
       listPulls: async () => bridge.pulls,
       listCurated: async () => {
+        calls.listCurated();
         if (bridge.curatedFailures > 0) {
           bridge.curatedFailures -= 1;
           throw new Error('ipc failed');
@@ -294,7 +297,10 @@ beforeEach(() => {
         pushPulls = listener;
         return () => {};
       },
-      onInstalledChanged: () => () => {},
+      onInstalledChanged: (listener: () => void) => {
+        pushInstalledChanged = listener;
+        return () => {};
+      },
     },
   };
 });
@@ -683,10 +689,81 @@ describe('ModelsScreen curated', () => {
     });
     await pullFails(failedE4B(error));
     await click(q('models-curated-check-again-btn'));
+    expect(q('models-curated-error')?.textContent).toContain('Could not check this model');
     await click(q('models-pull-dismiss-btn'));
 
     expect(q('models-pull-list')).toBeNull();
     expect(q('models-curated-error')).toBeNull();
+  });
+
+  it('shows the check failure instead of the stored warning when the recheck IPC rejects', async () => {
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    calls.checkCurated.mockRejectedValueOnce(new Error('IPC unavailable'));
+    await pullFails(failedE4B(error));
+    expect(q('models-curated-error')?.textContent).toContain(error.message);
+
+    await click(q('models-curated-check-again-btn'));
+    expect(q('models-curated-error')?.textContent).toContain('Could not check this model');
+    expect(q('models-curated-error')?.textContent).not.toContain(error.message);
+    expect(q('models-curated-check-again-btn')).not.toBeNull();
+  });
+
+  it('keeps each row spinner while two checks are in flight', async () => {
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    const finish: Array<() => void> = [];
+    calls.checkCurated.mockImplementation(
+      () => new Promise(resolve => finish.push(() => resolve({ ok: false, error })))
+    );
+    bridge.pulls = [failedE4B(error)];
+    await mount(undefined, 'curated');
+    const buttons = all('models-curated-check-again-btn');
+    expect(buttons.length).toBeGreaterThan(1);
+    await click(buttons[0]);
+    await click(buttons[1]);
+    expect(all('models-curated-check-again-btn').every(button => button.hasAttribute('disabled'))).toBe(true);
+
+    await act(async () => finish[1]());
+    expect(all('models-curated-check-again-btn').some(button => button.hasAttribute('disabled'))).toBe(true);
+  });
+
+  it('reads the curated list again when the installed set changes, so a pulled Hugging Face build shows as installed', async () => {
+    await mount(undefined, 'curated');
+    const callsBefore = calls.listCurated.mock.calls.length;
+    const resolvedRef = `hf.co/${GSQ}:IQ2_XS_RESOLVED`;
+    bridge.curated = {
+      ...curatedList(),
+      entries: curatedList().entries.map(entry =>
+        entry.id === 'qwen3-8-27b-gsq'
+          ? {
+              ...entry,
+              builds: entry.builds.map(build => (build.id === 'iq2-xs' ? { ...build, ollamaRef: resolvedRef } : build)),
+            }
+          : entry
+      ),
+    };
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: resolvedRef,
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+          fit: null,
+        },
+      ],
+    };
+    expect(inside('models-curated-picks', 'models-build-installed-chip')).toHaveLength(0);
+    await act(async () => pushInstalledChanged());
+    await flush();
+
+    expect(calls.listCurated.mock.calls.length).toBeGreaterThan(callsBefore);
+    expect(inside('models-curated-picks', 'models-build-installed-chip')).toHaveLength(1);
+    expect(q('models-curated-loading')).toBeNull();
   });
 
   it('downloads nothing when the dialog is dismissed', async () => {

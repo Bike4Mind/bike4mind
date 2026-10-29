@@ -20,12 +20,13 @@ export function hardwareClass(hw: HardwareProfile): HardwareClass {
   return { memoryKind: 'cpu', memoryBytes: hw.totalMemoryBytes };
 }
 
-/** The largest tier of this machine's class that its memory reaches; null when the list has none. */
+/** The largest tier with picks of this machine's class that its memory reaches; null when the list has none. */
 export function curatedTier(tiers: readonly HubTier[], hw: HardwareProfile): HubTier | null {
   const { memoryKind, memoryBytes } = hardwareClass(hw);
   let best: HubTier | null = null;
   for (const tier of tiers)
     if (
+      tier.picks.length > 0 &&
       tier.memoryKind === memoryKind &&
       memoryBytes >= tier.minGiB * GIB * SOLD_SIZE_SLACK &&
       (!best || tier.minGiB > best.minGiB)

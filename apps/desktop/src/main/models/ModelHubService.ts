@@ -469,6 +469,8 @@ export class ModelHubService {
   readonly #checkBackoffMs: readonly number[];
   /** Curated pulls Ollama could not describe, by lowercased ref, with whether the tag was there before. */
   readonly #unverified = new Map<string, boolean | null>();
+  /** In-flight Check again runs by lowercased ref; one build can show in two rows, and two checks race to remove. */
+  readonly #checks = new Map<string, Promise<CuratedCheckResult>>();
   /** The hf.co ref each curated Hugging Face build was last pulled under, by entry and build id. */
   readonly #pulledRefs = new Map<string, string>();
   /** Installed models' layer shapes, keyed by name, modified time and size so a re-pulled tag is read again. */
@@ -600,14 +602,20 @@ export class ModelHubService {
     hadTag: boolean | null,
     signal: AbortSignal
   ): Promise<ModelHubError | null> {
-    const inspection = await this.#inspectPulled(ref, signal);
+    const found = await this.#inspectPulled(ref, signal);
+    // A 404 clears the warning only when the list agrees the model is gone; otherwise it stays unverified.
+    if (found === 'missing' && (await this.#hasTag(ref)) === false) {
+      this.#unverified.delete(ref.toLowerCase());
+      return null;
+    }
+    const inspection = found === 'missing' ? null : found;
     if (!inspection) {
       this.#unverified.set(ref.toLowerCase(), hadTag);
-      return hubError(
-        'unverified',
-        `Ollama could not describe ${ref} after downloading it, so Bike4Mind could not check it against the ` +
-          'reviewed build. It is still installed; remove it from Installed unless you trust it.'
-      );
+      const why = signal.aborted
+        ? `Download cancelled while Bike4Mind was checking ${ref}, so it was not compared with the reviewed build.`
+        : `Ollama could not describe ${ref} after downloading it, so Bike4Mind could not check it against the ` +
+          'reviewed build.';
+      return hubError('unverified', `${why} It is still installed; remove it from Installed unless you trust it.`);
     }
     this.#unverified.delete(ref.toLowerCase());
     if (installedReviewed(inspection, reviewed)) return null;
@@ -629,14 +637,18 @@ export class ModelHubService {
     return changed('Bike4Mind removed what Ollama downloaded.');
   }
 
-  /** Reads a just-pulled model, retrying a failed or slow read; null once the reads run out or `signal` aborts. */
-  async #inspectPulled(ref: string, signal: AbortSignal): Promise<ModelInspection | null> {
+  /**
+   * Reads a just-pulled model, retrying a failed or slow read; null once the reads run out or `signal` aborts, and
+   * 'missing' at once when Ollama no longer has it (removed in Installed while the check was pending).
+   */
+  async #inspectPulled(ref: string, signal: AbortSignal): Promise<ModelInspection | 'missing' | null> {
     const pauses = this.#checkBackoffMs;
     for (let attempt = 0; ; attempt++) {
       const started = Date.now();
       try {
         return await this.#deps.runtime.inspect(ref, { tags: false, signal, timeoutMs: CHECK_TIMEOUT_MS });
       } catch (error) {
+        if (error instanceof ModelNotFoundError) return 'missing';
         const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
         this.#deps.warn(
           `MODELS: could not describe ${ref} after its download (read ${attempt + 1} of ${pauses.length + 1}, ` +
@@ -653,6 +665,15 @@ export class ModelHubService {
     if (!picked) return { ok: false, error: hubError('not-found', 'That model is not on the list.') };
     const { build } = picked;
     const ref = libraryOf(build)?.ref ?? this.#hfRef(entryId, build);
+    const key = ref.toLowerCase();
+    const running = this.#checks.get(key);
+    if (running) return running;
+    const check = this.#recheck(build, ref).finally(() => this.#checks.delete(key));
+    this.#checks.set(key, check);
+    return check;
+  }
+
+  async #recheck(build: HubBuild, ref: string): Promise<CuratedCheckResult> {
     const hadTag = this.#unverified.get(ref.toLowerCase()) ?? null;
     const error = await this.#checkInstalled(build, ref, hadTag, new AbortController().signal);
     for (const [key, entry] of this.#pulls) {
@@ -662,6 +683,12 @@ export class ModelHubService {
     }
     this.#deps.onInstalledChanged();
     return error ? { ok: false, error } : { ok: true };
+  }
+
+  /** Whether `ref` was installed before this pull; after an unverified pull the list shows the tag Bike4Mind added. */
+  async #hadTagBefore(ref: string): Promise<boolean | null> {
+    const key = ref.toLowerCase();
+    return this.#unverified.has(key) ? (this.#unverified.get(key) ?? null) : this.#hasTag(ref);
   }
 
   /** Whether Ollama lists `ref`; null when the list cannot be read. */
@@ -927,7 +954,7 @@ export class ModelHubService {
     if (!prepared.ok) return prepared.listed ? this.#fail(key, entry, prepared.error) : refuse(prepared.error);
     const { ref } = prepared;
 
-    const hadTag = curated ? await this.#hasTag(ref) : null;
+    const hadTag = curated ? await this.#hadTagBefore(ref) : null;
     if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
     entry.view = { ...entry.view, ref, phase: 'downloading' };
     this.#push(true);

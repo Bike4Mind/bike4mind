@@ -169,7 +169,7 @@ function useCuratedPull(onRecheck: () => void) {
   // Only the latest Download click may open the dialog; an earlier, slower check is dropped.
   const latest = useRef(0);
 
-  const [checking, setChecking] = useState<string | null>(null);
+  const [checking, setChecking] = useState<ReadonlySet<string>>(new Set());
 
   const showError = (where: string, failure: ModelHubError, build: CuratedBuildView, installed = false) =>
     setError({
@@ -212,7 +212,7 @@ function useCuratedPull(onRecheck: () => void) {
   };
 
   const checkAgain = async (where: string, entry: CuratedEntryView, build: CuratedBuildView) => {
-    setChecking(where);
+    setChecking(current => new Set(current).add(where));
     try {
       await window.b4m.models.checkCurated(entry.id, build.id);
       // Main updates the failed pull on either outcome. Keeping a second copy here would restore
@@ -227,7 +227,11 @@ function useCuratedPull(onRecheck: () => void) {
         pullKey: pullKey(build.repo, build.pullBuildId),
       });
     } finally {
-      setChecking(null);
+      setChecking(current => {
+        const next = new Set(current);
+        next.delete(where);
+        return next;
+      });
     }
   };
 
@@ -258,18 +262,23 @@ function CuratedBuild({
   const { flow, installedNames, pulls, runtimeReady, onOpenInExplore } = context;
   const pull = pulls.find(candidate => candidate.key === pullKey(build.repo, build.pullBuildId));
   const failure = pull?.phase === 'failed' ? pull.error : null;
-  // Main owns completed download warnings, so revisiting this tab restores the warning and its recheck action.
-  const error: RowError | null = failure
-    ? {
-        where,
-        text: hubErrorText(failure),
-        repo: failure.kind === 'upstream-changed' && build.ollamaRef.startsWith('hf.co/') ? build.repo : null,
-        recheck: pull?.ref !== null && failure.kind === 'unverified',
-      }
-    : flow.error?.where === where &&
-        (!flow.error.pullKey || (pull?.key === flow.error.pullKey && pull.phase === 'failed'))
+  // The row's own failed recheck outranks the pull's stored warning; a pullKey ties it to that pull.
+  const own =
+    flow.error?.where === where &&
+    (!flow.error.pullKey || (pull?.key === flow.error.pullKey && pull.phase === 'failed'))
       ? flow.error
       : null;
+  // Main owns completed download warnings, so revisiting this tab restores the warning and its recheck action.
+  const error: RowError | null =
+    own ??
+    (failure
+      ? {
+          where,
+          text: hubErrorText(failure),
+          repo: failure.kind === 'upstream-changed' && build.ollamaRef.startsWith('hf.co/') ? build.repo : null,
+          recheck: pull?.ref !== null && failure.kind === 'unverified',
+        }
+      : null);
   const confirming = flow.confirming?.where === where ? flow.confirming : null;
   return (
     <>
@@ -294,7 +303,7 @@ function CuratedBuild({
                 size="sm"
                 variant="outlined"
                 color="danger"
-                loading={flow.checking === where}
+                loading={flow.checking.has(where)}
                 onClick={() => void flow.checkAgain(where, entry, build)}
                 data-testid="models-curated-check-again-btn"
               >
@@ -459,6 +468,13 @@ export function CuratedTab({
   const [attempt, setAttempt] = useState(0);
   const flow = useCuratedPull(onRecheck);
 
+  const installedNames = useMemo(
+    () => new Set(installed?.ok ? installed.models.map(model => model.name.toLowerCase()) : []),
+    [installed]
+  );
+  // A Hugging Face build's ollamaRef is only settled by the pull, so the list is read again once the installed set changes.
+  const installedKey = useMemo(() => [...installedNames].sort().join('\n'), [installedNames]);
+
   const runtimeReachable = status?.reachable;
   const runtimeVersion = status?.version;
   useEffect(() => {
@@ -472,15 +488,10 @@ export function CuratedTab({
     return () => {
       live = false;
     };
-  }, [attempt, runtimeReachable, runtimeVersion]);
+  }, [attempt, runtimeReachable, runtimeVersion, installedKey]);
 
   // The shown list stays up while a check runs; a newer one replaces it when main says so.
   useEffect(() => window.b4m.models.onCuratedChanged(() => setAttempt(n => n + 1)), []);
-
-  const installedNames = useMemo(
-    () => new Set(installed?.ok ? installed.models.map(model => model.name.toLowerCase()) : []),
-    [installed]
-  );
 
   if (loadFailed)
     return (

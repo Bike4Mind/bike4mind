@@ -10,6 +10,7 @@ on:
       - 'scripts/test_desktop_release_version.py'
       - 'scripts/desktop_affected.py'
       - 'scripts/test_desktop_affected.py'
+      - 'catalog/model-hub/**'
   push:
     branches: [main]
     paths:
@@ -19,6 +20,7 @@ on:
       - 'scripts/test_desktop_release_version.py'
       - 'scripts/desktop_affected.py'
       - 'scripts/test_desktop_affected.py'
+      - 'catalog/model-hub/**'
   workflow_dispatch:
 
 permissions:

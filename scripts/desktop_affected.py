@@ -141,6 +141,9 @@ def affected(base, head):
             return True
         if path.startswith(('scripts/desktop_', 'scripts/test_desktop_', '.github/workflows/desktop-release.')):
             return True
+        # The main process bundles the curated model list from here (loadCuratedManifest.ts).
+        if path.startswith('catalog/model-hub/'):
+            return True
         if path in ('pnpm-workspace.yaml', 'turbo.json', '.npmrc', 'vitest.shared.ts'):
             return True
         if path.startswith('patches/'):
