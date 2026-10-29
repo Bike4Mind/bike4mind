@@ -99,6 +99,13 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result.modifiedCount > 0;
   }
 
+  async makeDueNow(id: string, now: Date): Promise<void> {
+    await this.loopModel.updateOne(
+      { _id: id, status: 'live', $or: [{ nextRunAt: { $exists: false } }, { nextRunAt: { $gt: now } }] },
+      { $set: { nextRunAt: now } }
+    );
+  }
+
   async markErroredIfFailing(id: string, maxFailures: number): Promise<void> {
     await this.loopModel.updateOne(
       { _id: id, status: 'live', consecutiveFailures: { $gte: maxFailures } },

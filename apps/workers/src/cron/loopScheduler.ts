@@ -1,13 +1,20 @@
 import { Context } from 'aws-lambda';
 import { randomUUID } from 'crypto';
-import { ACTIVE_AGENT_EXECUTION_STATUSES, type ILoop } from '@bike4mind/common';
-import { adminSettingsRepository, agentExecutionRepository, connectDB, loopRepository } from '@bike4mind/database';
+import { ACTIVE_AGENT_EXECUTION_STATUSES, type ILoop, type IWorkItem } from '@bike4mind/common';
+import {
+  adminSettingsRepository,
+  agentExecutionRepository,
+  connectDB,
+  loopRepository,
+  workItemRepository,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { toCallerSafeError } from '@server/utils/loadAgentExecutionTrace';
+import { advancePatch, lastStageOf, makeDueIfReady } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
 import { buildLoopQuery, parseLoopMemory } from './loopMemory';
 
@@ -79,7 +86,12 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return;
   }
 
+  // The ticket this run worked, if any. Its fold is conditional on it still being in_progress under this
+  // run, so a run that blocked or closed its own ticket through loop_ticket_update is not overwritten.
+  const ticket = await workItemRepository.findByExecutionId(executionId);
+
   if (execution?.status === 'completed') {
+    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, advancePatch(loop, ticket));
     const answer = (execution.result as { answer?: unknown } | undefined)?.answer;
     const memory = parseLoopMemory(typeof answer === 'string' ? answer : '', loop.memory);
     await loopRepository.foldRun(loop.id, executionId, {
@@ -91,10 +103,13 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
       $inc: { runCount: 1 },
       $unset: { statusReason: '' },
     });
+    if (ticket) await makeDueIfReady(loop);
     return;
   }
 
   if (execution?.failureReason === 'insufficient_credits') {
+    // Not the ticket's fault: it goes back to open, and the loop pauses.
+    if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' });
     await loopRepository.foldRun(loop.id, executionId, {
       $set: { status: 'paused', statusReason: 'Out of credits', lastRunAt: execution.completedAt ?? now },
     });
@@ -108,15 +123,28 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
       : execution.status === 'failed'
         ? (toCallerSafeError(execution.error) ?? 'Run failed')
         : 'Run stalled';
+  if (ticket) {
+    await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'blocked', statusReason: reason });
+  }
   const folded = await loopRepository.foldRun(loop.id, executionId, {
     $set: { statusReason: reason, lastRunAt: execution?.completedAt ?? now },
     $inc: { consecutiveFailures: 1 },
   });
   // A separate conditional write, so an owner's pause landing mid-tick is never overwritten.
   if (folded) await loopRepository.markErroredIfFailing(loop.id, MAX_CONSECUTIVE_FAILURES);
+  if (ticket) await makeDueIfReady(loop);
+}
+
+/** Claims the loop's next ready ticket for this run; null means a plain goal run. */
+async function claimNextTicket(loop: ILoop): Promise<IWorkItem | null> {
+  const next = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
+  return next && workItemRepository.claimForRun(next.id);
 }
 
 async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<void> {
+  // ponytail: a crash between this claim and setExecution strands the ticket in_progress with no run;
+  // the owner moves it back by hand. Add a sweep if that is ever seen.
+  const ticket = await claimNextTicket(loop);
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
     result = await startAgentExecution(
@@ -124,21 +152,29 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
         userId: loop.userId,
         sessionId: loop.sessionId,
         questId: loop.sessionId,
-        query: buildLoopQuery(loop.goal, loop.memory),
+        query: buildLoopQuery(loop.goal, loop.memory, ticket ? { item: ticket, stages: loop.stages } : undefined),
         model: loop.model,
         connectionId: HEADLESS_CONNECTION_ID,
         apiKeyInfo: undefined,
         ...(loop.organizationId && { organizationId: loop.organizationId }),
         ...(loop.agentId && { agentId: loop.agentId }),
         enabledTools: loop.tools,
+        loopId: loop.id,
       },
       logger
     );
   } catch (error) {
     // Nothing was started, so the loop may retry next tick. Once an execution exists the lease is left
     // to run out instead, so a failed markDispatched doesn't free the loop for an immediate second run.
+    if (ticket) await workItemRepository.releaseClaim(ticket.id);
     await loopRepository.releaseLease(loop.id);
     throw error;
+  }
+
+  const executionId = result.ok || result.reason === 'dispatch_failed' ? result.executionId : undefined;
+  if (ticket) {
+    if (executionId) await workItemRepository.setExecution(ticket.id, executionId);
+    else await workItemRepository.releaseClaim(ticket.id);
   }
 
   if (result.ok) {

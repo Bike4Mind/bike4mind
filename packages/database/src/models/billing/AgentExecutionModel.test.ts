@@ -1500,6 +1500,11 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  it('persists loopId so a continuation re-offers the loop ticket tools', async () => {
+    const execution = await agentExecutionRepository.create({ ...makeBaseExecution(), loopId: 'loop-1' });
+    expect((await agentExecutionRepository.findById(execution.id))?.loopId).toBe('loop-1');
+  });
+
   describe('markFailed - failureReason', () => {
     it('writes failureReason at the top level, not into the error subdoc', async () => {
       const execution = await agentExecutionRepository.create(makeBaseExecution());

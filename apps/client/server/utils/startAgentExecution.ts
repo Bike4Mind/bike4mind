@@ -24,6 +24,7 @@ import {
   type AgentExecutionStatus,
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
+import { LOOP_TICKET_TOOL_NAMES } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import type { ApiKeyInfo } from '@server/cli/auth';
@@ -137,6 +138,8 @@ export type StartAgentExecutionInput = {
   thinking?: { enabled: boolean; budget_tokens?: number };
   enableMementos?: boolean;
   enableLattice?: boolean;
+  /** Set by the loop scheduler; the executor then offers the run the loop ticket tools. */
+  loopId?: string;
   /** Caller's per-request artifact intent. Absent means "no preference" (the admin
    * `EnableArtifacts` setting decides); only an explicit `false` opts out. */
   enableArtifacts?: boolean;
@@ -336,8 +339,9 @@ export async function startAgentExecution(
     // asked for still does. An interactive run ignores the dispatch payload and takes only
     // what the user chose to remember in this notebook, which is strictly better than
     // trusting a client-supplied tool list.
+    // A loop run's ticket tools are added by the executor, never named in `enabledTools`.
     approvedTools: isHeadlessConnection(input.connectionId)
-      ? (input.enabledTools ?? [])
+      ? [...(input.enabledTools ?? []), ...(input.loopId ? LOOP_TICKET_TOOL_NAMES : [])]
       : (remembered?.approvedTools ?? []),
     // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
     // stale interactive-session denial (deny is checked first in classifyToolPermission).
@@ -356,6 +360,7 @@ export async function startAgentExecution(
     thinking: input.thinking,
     enableMementos: input.enableMementos,
     enableLattice: input.enableLattice,
+    loopId: input.loopId,
     enableArtifacts: input.enableArtifacts,
     imageConfig: input.imageConfig,
     audioConfig: input.audioConfig,
