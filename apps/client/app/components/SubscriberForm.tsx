@@ -1,15 +1,35 @@
 import React, { useState } from 'react';
 import { Stack, Input, Button, Typography, Box, FormLabel } from '@mui/joy';
+import { useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { createSubscriber } from '@client/app/utils/subscriberAPICalls';
+import { solveTurnstileIfRequired } from '@client/app/hooks/data/auth';
 import { useCommonStyles } from '../hooks/useCommonStyles';
 import { useTheme } from '@mui/joy/styles';
 import { gray } from '@client/app/utils/themes/colors';
-import type { SubscriberSource } from '@bike4mind/common';
+import { TURNSTILE_ACTION_SUBSCRIBE, type SubscriberSource } from '@bike4mind/common';
 
 type SubscriberFormProps = {
   initialEmail?: string;
   source?: SubscriberSource;
 };
+
+const FALLBACK_ERROR = 'Something went wrong. Please try again.';
+
+// The API answers every refusal (challenge, rate limit, validation) with `error`; a failed challenge
+// never reaches the API and arrives as a plain Error carrying the message to show.
+function submitErrorMessage(err: unknown): string {
+  if (isAxiosError(err)) {
+    const data: unknown = err.response?.data;
+    if (data && typeof data === 'object') {
+      const { error, message } = data as { error?: unknown; message?: unknown };
+      if (typeof error === 'string' && error) return error;
+      if (typeof message === 'string' && message) return message;
+    }
+    return FALLBACK_ERROR;
+  }
+  return err instanceof Error && err.message ? err.message : FALLBACK_ERROR;
+}
 
 const SubscriberForm = ({ initialEmail = '', source }: SubscriberFormProps) => {
   const [formData, setFormData] = useState({
@@ -18,20 +38,26 @@ const SubscriberForm = ({ initialEmail = '', source }: SubscriberFormProps) => {
     email: initialEmail,
   });
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   const { inputStyles } = useCommonStyles();
   const theme = useTheme();
   const mode = theme.palette.mode;
+  const queryClient = useQueryClient();
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setIsSubmitting(true);
 
     try {
-      await createSubscriber({ ...formData, source });
+      const turnstileToken = await solveTurnstileIfRequired(queryClient, TURNSTILE_ACTION_SUBSCRIBE);
+      await createSubscriber({ ...formData, source, turnstileToken });
       setIsSubmitted(true);
-    } catch (err: any) {
-      setError(err?.response?.data?.message || 'Something went wrong. Please try again.');
+    } catch (err: unknown) {
+      setError(submitErrorMessage(err));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -100,6 +126,8 @@ const SubscriberForm = ({ initialEmail = '', source }: SubscriberFormProps) => {
           <Button
             type="submit"
             size="lg"
+            loading={isSubmitting}
+            data-testid="subscriber-form-submit-btn"
             sx={{
               width: { xs: '100%', sm: '220px' },
               height: '40px',
