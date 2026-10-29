@@ -4245,7 +4245,7 @@ export const settingsMap = {
     description:
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.' +
       ` Raising this grant above ${LARGE_SIGNUP_GRANT_CREDITS} credits is refused until Signup Grant Assessment Policy is enabled and the per-IP, per-network and burst-hold limits are set.` +
-      ' The policy is required here although it only scores staged grants, and it has no editor in this panel: a complete valid policy must be written to the database first, since a bare enabled flag is ignored. Without database access this limit cannot be lifted.',
+      ' The policy is required here although it only scores staged grants, and it has no editor in this panel: write a complete valid policy with PUT /api/settings/update first, since a bare enabled flag is ignored.',
     category: 'Users',
   }),
   noCardUnlockEnabled: makeBooleanSetting({
