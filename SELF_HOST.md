@@ -1052,14 +1052,14 @@ Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure l
 
 Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
 
-| Setup | `TRUSTED_PROXY_HOPS` |
-| --- | --- |
-| No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
-| Tailscale sidecar (Path A, including the Headscale variant) | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
-| Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
-| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
-| Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
-| A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
+| Setup                                                         | `TRUSTED_PROXY_HOPS`                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No proxy (direct `:3000`)                                     | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket                                                                                                                                                                                                   |
+| Tailscale sidecar (Path A, including the Headscale variant)   | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
+| Bundled Caddy (`compose.caddy.yaml`)                          | `1` - set for you                                                                                                                                                                                                                                                                                                                            |
+| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1`                                                                                                                                                                                                                                                                                                                                          |
+| Kubernetes chart via `kubectl port-forward`                   | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front                                                                                                                                                                   |
+| A CDN or load balancer in front of your proxy                 | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For`                                                                                                                                                                                                                                                                      |
 
 With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number stops the app from starting rather than guessing.
 
@@ -1318,7 +1318,7 @@ in `b4mContributions.infraResources`: their constructors are listed by name expr
 
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
-(HTTP Functions, web/router/WebSocket surfaces, topics and buses whose subscriptions are
+(HTTP Functions, web/router/WebSocket surfaces, CDN origin request policies, topics and buses whose subscriptions are
 covered, alarms, dashboards, outbound SES metric destinations, IAM policies, deploy-time invocations, network and WAF plumbing,
 and infrastructure contributed by private overlays). A constructor that is neither covered nor
 listed fails the guard.

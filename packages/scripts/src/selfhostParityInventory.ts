@@ -115,6 +115,7 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'sst.aws.Function with a url option', reason: 'HTTP API surface, not a background trigger.' },
   { shape: 'sst.aws.Nextjs', reason: 'Web app and Pages-API surface.' },
   { shape: 'sst.aws.Router', reason: 'CDN routing to the web surface; .route() adds no background work.' },
+  { shape: 'aws.cloudfront.OriginRequestPolicy', reason: 'CDN request-header forwarding, no background work.' },
   { shape: 'sst.aws.ApiGatewayWebSocket', reason: 'Interactive socket routes (.route()), request/response only.' },
   { shape: 'sst.aws.Bucket', reason: 'Storage only; its notify() triggers are inventoried as notification.' },
   { shape: 'sst.aws.Bus', reason: 'Bus only; subscribe()/subscribeQueue() are inventoried as event.' },
