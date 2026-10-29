@@ -1,10 +1,10 @@
 {
   "_doc": "Structural baselines for the CLI build. Used by test/e2e/baseline.test.ts to detect bundle bloat during refactors. Refresh with `pnpm --filter @bike4mind/cli build && node packages/cli/test/scripts/refresh-baseline.mjs` after intentional size changes.",
-  "_recordedAt": "2026-09-22",
-  "_recordedAfterCommit": "c6f073ea8",
+  "_recordedAt": "2026-10-29",
+  "_recordedAfterCommit": "f4232708d",
   "bundle": {
-    "totalBytes": 2967356,
-    "fileCount": 43,
+    "totalBytes": 3267058,
+    "fileCount": 48,
     "tolerance": {
       "_doc": "Test fails if growth exceeds totalGrowthFraction OR fileCount delta exceeds fileCountDelta. Pick numbers that catch a regression but absorb compiler/dependency drift.",
       "totalGrowthFraction": 0.1,
