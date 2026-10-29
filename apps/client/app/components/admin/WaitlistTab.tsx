@@ -108,6 +108,8 @@ const GenerateInviteDialog = ({ open, onClose, subscriber }: GenerateInviteDialo
 
   const resetAndClose = () => {
     onClose();
+    setStartingCredits(500);
+    setStartingStorage(1000);
     setInviteIssued(false);
     setError(null);
     setEmailBody('');
@@ -317,7 +319,7 @@ const WaitlistTab = () => {
   const totalPages = Math.ceil((subscribers.data?.meta?.total || 0) / itemsPerPage);
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this subscriber?')) {
+    if (window.confirm('Remove this person from the waitlist?')) {
       try {
         await deleteSubscriber(id);
         subscribers.refetch();
@@ -339,7 +341,7 @@ const WaitlistTab = () => {
   return (
     <Sheet sx={{ px: 2, py: 1 }}>
       <Stack spacing={2}>
-        {/* Waiting Subscribers Notification Banner */}
+        {/* Waitlist notification banner */}
         {!!waitingSubscribers.data?.count &&
           waitingSubscribers.data.count > 0 &&
           !hiddenNotifications.includes('waiting-subscribers') && (
@@ -524,6 +526,7 @@ const WaitlistTab = () => {
       </Stack>
 
       <GenerateInviteDialog
+        key={selectedSubscriber?.id}
         open={inviteModalOpen}
         onClose={() => setInviteModalOpen(false)}
         subscriber={selectedSubscriber}
