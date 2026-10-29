@@ -99,6 +99,8 @@ export async function undoHeldGrantRelease(
       row('already_reversed');
       continue;
     }
+    // Credits taken from the balance and not yet restored or covered by a ledger row.
+    let outstanding = 0;
     try {
       const user = await adapters.users.findById(entry.userId);
       if (!user || user.currentCredits < entry.credits) {
@@ -107,9 +109,10 @@ export async function undoHeldGrantRelease(
         continue;
       }
       // One atomic floored debit: a balance spent since the check above is never driven negative.
-      const debited = await adapters.users.decrementCreditsFloored(entry.userId, entry.credits);
-      if (debited < entry.credits) {
-        if (debited > 0) await adapters.users.incrementCredits(entry.userId, debited);
+      outstanding = await adapters.users.decrementCreditsFloored(entry.userId, entry.credits);
+      if (outstanding < entry.credits) {
+        if (outstanding > 0) await adapters.users.incrementCredits(entry.userId, outstanding);
+        outstanding = 0;
         await adapters.batches.unclaimReversal(batch.id, entry.userId);
         row('insufficient_balance');
         continue;
@@ -125,12 +128,21 @@ export async function undoHeldGrantRelease(
         });
       } catch (error) {
         await adapters.users.incrementCredits(entry.userId, entry.credits);
+        outstanding = 0;
         throw error;
       }
       row('reversed');
     } catch (error) {
-      await adapters.batches.unclaimReversal(batch.id, entry.userId);
-      console.warn(`[held-signup-grants] Reversal failed for user ${entry.userId}`, error);
+      // Unclaiming an uncompensated debit would let a retry debit the same grant twice.
+      if (outstanding > 0) {
+        console.error(
+          `[held-signup-grants] Reversal for user ${entry.userId} debited ${outstanding} credits with no ledger row; entry left claimed for manual repair`,
+          error
+        );
+      } else {
+        await adapters.batches.unclaimReversal(batch.id, entry.userId);
+        console.error(`[held-signup-grants] Reversal failed for user ${entry.userId}`, error);
+      }
       row('failed');
     }
   }
