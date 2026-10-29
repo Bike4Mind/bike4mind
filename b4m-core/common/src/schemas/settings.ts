@@ -3870,7 +3870,7 @@ export const settingsMap = {
       ChatModels.GEMINI_2_5_FLASH_LITE,
     ],
     description:
-      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line. Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. The Default API Model is always allowed so a free account can still chat. A model missing here, including a newly added one, is paid-only.',
+      'Model IDs free accounts may call across all modalities while the Free-Tier Model Gate is on, one per line. Media models are paid-only unless explicitly listed. Conversational voice uses the ID elevenlabs. A model missing here, including a newly added one and the Default API Model, is paid-only. A free account that calls the chat or agent-execution API without a model starts on the first text model listed here that it can use.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.FREE_TIER_MODELS.id,
     order: 2,
