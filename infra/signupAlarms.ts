@@ -1,7 +1,8 @@
 /**
  * Signup abuse alarms on the Next.js server log group: sign-in code sends (hourly ceiling from
  * SIGNUP_CODE_SEND_ALARM_PER_HOUR, unset: no hourly alarm; 5-minute burst ceiling from
- * SIGNUP_CODE_SEND_ALARM_PER_5MIN) and user API key creation (API_KEY_CREATE_ALARM_PER_5MIN).
+ * SIGNUP_CODE_SEND_ALARM_PER_5MIN), user API key creation (API_KEY_CREATE_ALARM_PER_5MIN), and a
+ * large signup grant released while a signup protection is still off.
  * See infra/signup-code-send-alarm.md.
  */
 
@@ -130,6 +131,38 @@ if (isMonitoredStage) {
     period: 300,
     statistic: 'Sum',
     threshold: apiKeyThreshold,
+    treatMissingData: 'notBreaching',
+    alarmActions: actions,
+    okActions: actions,
+    tags: {
+      Application: 'Signup',
+      Severity: 'High',
+    },
+  });
+
+  // Same string as SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE in b4m-core/common/src/signupGrant.ts.
+  new aws.cloudwatch.LogMetricFilter('signupGrantProtectionGapFilter', {
+    name: `${$app.name}-${$app.stage}-signup-grant-protection-gap`,
+    logGroupName: serverLogGroupName,
+    pattern: messageFilterPattern('signup-grant-protections-off'),
+    metricTransformation: {
+      name: 'SignupGrantProtectionGaps',
+      namespace: metricNamespace,
+      value: '1',
+      unit: 'Count',
+    },
+  });
+
+  new aws.cloudwatch.MetricAlarm('signupGrantProtectionGap', {
+    name: `${$app.name}-${$app.stage}-signup-grant-protection-gap`,
+    alarmDescription: 'A large signup grant was released while a signup protection setting is still off',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'SignupGrantProtectionGaps',
+    namespace: metricNamespace,
+    period: 300,
+    statistic: 'Sum',
+    threshold: 1,
     treatMissingData: 'notBreaching',
     alarmActions: actions,
     okActions: actions,
