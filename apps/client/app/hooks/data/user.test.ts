@@ -171,6 +171,7 @@ describe('useUpdateUser', () => {
 
     const invalidatedKeys = invalidateSpy.mock.calls.map(call => call[0]?.queryKey);
     expect(invalidatedKeys).toContainEqual(['admin', 'users', 'u1']);
+    expect(invalidatedKeys).toContainEqual(['admin', 'user-entitlements', 'u1']);
   });
 
   const fail = async (error: Error) => {
