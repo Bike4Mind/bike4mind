@@ -27,7 +27,9 @@ interface OtcWindow {
  * lock the owner out. The send caps that refuse for long are therefore keyed per (inbox, source IP):
  * one source can neither bomb an inbox nor spend the owner's allowance. The inbox-wide ceiling stops
  * a many-source bomb but has only a short window, so a lockout bought with it lasts at most one
- * window after the attacker stops paying. There is deliberately no inbox-wide daily refusal.
+ * window after the attacker stops paying. There is deliberately no inbox-wide daily refusal: past the
+ * inbox-wide daily and deployment-wide hourly budgets a request must pass a Turnstile challenge
+ * instead, which the owner can, and with Turnstile unconfigured those budgets only log.
  *
  * The wrong-guess budget is keyed per (address, source) for the same reason: no other source's
  * guesses can refuse the owner's verify. Guessing stays bounded across sources because every guess
@@ -55,6 +57,8 @@ export const OTC_LIMITS = {
     perEmailPerIp: { limit: 5, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerEmailPerIp' },
     perEmailPerIpDaily: { limit: 15, windowMs: DAY_MS, setting: 'otcLimitSendPerEmailPerIpDaily' },
     perEmail: { limit: 15, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerEmail' },
+    perEmailDailyChallenge: { limit: 20, windowMs: DAY_MS, setting: 'otcLimitSendPerEmailDaily' },
+    globalHourlyChallenge: { limit: 1000, windowMs: HOUR_MS, setting: 'otcLimitSendGlobalHourly' },
     perIpDistinctEmails: { limit: 15, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerIpDistinctEmails' },
     perIpTotal: { limit: 40, windowMs: 15 * MINUTE_MS, setting: 'otcLimitSendPerIpTotal' },
     perIpDaily: { limit: 200, windowMs: DAY_MS, setting: 'otcLimitSendPerIpDaily' },
@@ -177,6 +181,11 @@ export const OTC_SEND_EMAIL_BUDGETS: readonly OtcEmailBudget[] = [
   { bucket: 'send-email-ip', window: OTC_LIMITS.send.perEmailPerIp, subject: inboxFromSource },
   { bucket: 'send-email-ip-daily', window: OTC_LIMITS.send.perEmailPerIpDaily, subject: inboxFromSource },
   { bucket: 'send-email', window: OTC_LIMITS.send.perEmail, subject: inbox },
+];
+/** Past these a send needs a Turnstile challenge rather than a refusal; see OTC_LIMITS. */
+export const OTC_SEND_CHALLENGE_BUDGETS: readonly OtcEmailBudget[] = [
+  { bucket: 'send-email-daily-challenge', window: OTC_LIMITS.send.perEmailDailyChallenge, subject: inbox },
+  { bucket: 'send-global-hourly-challenge', window: OTC_LIMITS.send.globalHourlyChallenge, subject: () => 'all' },
 ];
 /** New accounts per email domain; see reserveOtcRegistrationDomainBudget. */
 export const OTC_REGISTER_DOMAIN_BUDGETS: readonly OtcEmailBudget[] = [

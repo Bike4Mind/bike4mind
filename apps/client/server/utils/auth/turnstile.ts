@@ -40,6 +40,29 @@ export async function getTurnstilePolicy(): Promise<TurnstilePolicy> {
   };
 }
 
+/**
+ * The policy for challenging only the sign-in code requests past a send budget: active when the
+ * secret and a site key are set but the toggle is off, since the toggle already challenges every request.
+ */
+export async function getTurnstileStepUpPolicy(): Promise<TurnstilePolicy> {
+  const secret = Config.TURNSTILE_SECRET_KEY;
+  if (!isTurnstileSecretConfigured(secret)) {
+    return { active: false, failClosed: false, siteKey: '', secret: '' };
+  }
+  const [enabled, failClosed, siteKey] = await Promise.all([
+    readSetting('turnstileEnabled'),
+    readSetting('turnstileFailClosed'),
+    readSetting('turnstileSiteKey'),
+  ]);
+  const trimmedKey = String(siteKey ?? '').trim();
+  return {
+    active: enabled !== true && trimmedKey !== '',
+    failClosed: failClosed === true,
+    siteKey: trimmedKey,
+    secret,
+  };
+}
+
 /** Hosts a token may be solved on: the app host plus any extra comma-separated TURNSTILE_ALLOWED_HOSTNAMES. */
 export function turnstileAllowedHostnames(): string[] {
   const hosts = (process.env.TURNSTILE_ALLOWED_HOSTNAMES ?? '')

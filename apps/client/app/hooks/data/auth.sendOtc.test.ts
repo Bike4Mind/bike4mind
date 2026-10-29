@@ -140,6 +140,25 @@ describe('useSendOTC challenge gate', () => {
     warn.mockRestore();
   });
 
+  it('solves the challenge the server asks for and retries once with its token', async () => {
+    const required = new AxiosError('Request failed with status code 403', 'ERR_BAD_REQUEST');
+    required.response = {
+      status: 403,
+      statusText: 'Forbidden',
+      headers: {},
+      config: {},
+      data: { error: 'Please complete the verification check.', code: 'challenge_required', siteKey: 'step-up' },
+    } as AxiosResponse;
+    postMock.mockRejectedValueOnce(required).mockResolvedValueOnce({ data: { pendingToken: 'pending' } });
+    solveMock.mockResolvedValueOnce('step-up-token');
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+
+    await expect(result.current.mutateAsync({ email: 'x@test.com' })).resolves.toEqual({ pendingToken: 'pending' });
+
+    expect(solveMock).toHaveBeenCalledExactlyOnceWith('step-up', 'otc-send');
+    expect(postMock.mock.calls.map(call => call[1].turnstileToken)).toEqual([undefined, 'step-up-token']);
+  });
+
   it('does not report a cancelled challenge or ask the user to refresh', async () => {
     getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
     solveMock.mockRejectedValue(new TurnstileCancelledError());

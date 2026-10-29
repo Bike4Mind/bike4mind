@@ -1,17 +1,22 @@
-import { pendingOtcTokenRepository } from '@bike4mind/database';
+import { pendingOtcTokenRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
   OTC_LIMITS,
+  OTC_SEND_CHALLENGE_BUDGETS,
   OTC_SEND_EMAIL_BUDGETS,
+  chargeOtcEmailBudget,
   ipSubject,
   otcCounterLimit,
   otcDistinctEmailsPerIpLimit,
   otcEmailBudgetRetryAfter,
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
-import { requireTurnstile } from '@server/middlewares/requireTurnstile';
+import { otcRecipientRefusal } from '@server/utils/otcRecipient';
+import { checkTurnstileToken, requireTurnstile } from '@server/middlewares/requireTurnstile';
+import { getTurnstileStepUpPolicy } from '@server/utils/auth/turnstile';
+import type { Request } from 'express';
 import { TURNSTILE_ACTION_OTC_SEND } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
@@ -49,6 +54,14 @@ const handler = baseApi({ auth: false })
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
 
+    const challenge = await challengePastBudget(req, normalizedEmail, ipBucket);
+    if (challenge) return res.status(challenge.status).json(challenge.body);
+
+    // A refused address gets the same response and budgets with nothing mailed, and an existing
+    // account is never refused, so neither the refusal nor the account's existence shows.
+    const refusal = await otcRecipientRefusal(normalizedEmail, req.logger);
+    const deliver = !refusal || (await userRepository.findByEmail(normalizedEmail)) !== null;
+
     // Atomic per-recipient cooldown (keyed on PendingOtcToken, written for every send, so it never reveals whether an account exists).
     // tryReserveSlot atomically claims a reservation slot for this email; if the
     // cooldown is still active, or a concurrent request already claimed it, it
@@ -79,6 +92,7 @@ const handler = baseApi({ auth: false })
       res.setHeader('Retry-After', String(budget.retryAfter));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
+    await chargeOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_CHALLENGE_BUDGETS);
 
     const result = await userService
       .sendOTC(
@@ -86,6 +100,10 @@ const handler = baseApi({ auth: false })
         {
           mailer: {
             sendOTCEmail: async (toEmail: string, code: string) => {
+              if (!deliver) {
+                req.logger.info('otc-code-suppressed', { reason: refusal });
+                return;
+              }
               const logoUrl = getLogoUrl();
               const emailBody = `
 <!DOCTYPE html>
@@ -155,5 +173,33 @@ const handler = baseApi({ auth: false })
       pendingToken: result.pendingToken,
     });
   });
+
+type ChallengeAnswer = { status: number; body: Record<string, string> };
+
+/**
+ * Past a challenge budget (OTC_SEND_CHALLENGE_BUDGETS) the send needs a Turnstile token, and a 403
+ * `challenge_required` names the site key to solve with. Null lets the send proceed, as it always
+ * does when no challenge can be offered: those budgets must never refuse on their own.
+ */
+async function challengePastBudget(req: Request, email: string, ip: string): Promise<ChallengeAnswer | null> {
+  if ((await otcEmailBudgetRetryAfter(email, ip, OTC_SEND_CHALLENGE_BUDGETS)) === undefined) return null;
+  const policy = await getTurnstileStepUpPolicy().catch((error: unknown) => {
+    req.logger.warn('turnstile-policy-unreadable', error);
+    return null;
+  });
+  if (!policy?.active) {
+    req.logger.warn('otc-send-challenge-budget-exceeded');
+    return null;
+  }
+  const token: unknown = req.body?.turnstileToken;
+  if (!token) {
+    return {
+      status: 403,
+      body: { error: 'Please complete the verification check.', code: 'challenge_required', siteKey: policy.siteKey },
+    };
+  }
+  const failure = await checkTurnstileToken(req, TURNSTILE_ACTION_OTC_SEND, policy, token);
+  return failure ? { status: failure.status, body: { error: failure.error, code: failure.code } } : null;
+}
 
 export default handler;

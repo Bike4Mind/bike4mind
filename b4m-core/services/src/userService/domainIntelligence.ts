@@ -103,6 +103,48 @@ async function lookupMx(domain: string, opts: DomainLookupOptions): Promise<{ ho
   return { hosts, flags: [...flags] };
 }
 
+type MailHostResolver = Pick<dns.Resolver, 'resolveMx' | 'resolve4' | 'resolve6'>;
+const NXDOMAIN = Symbol('nxdomain');
+
+/** The records, [] when the name has none of this type, NXDOMAIN, or undefined when the lookup failed. */
+async function resolveRecords<T>(lookup: () => Promise<T[]>): Promise<T[] | typeof NXDOMAIN | undefined> {
+  try {
+    return await lookup();
+  } catch (error) {
+    if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+    if (error.code === 'ENOTFOUND') return NXDOMAIN;
+    return error.code === 'ENODATA' ? [] : undefined;
+  }
+}
+
+/**
+ * Whether `domain` can receive mail. False only on a definitive answer: no such domain, a null MX,
+ * or no MX and no address records (RFC 5321 falls back to those). Undefined on a DNS error or timeout.
+ */
+export async function domainAcceptsMail(
+  domain: string,
+  opts: { timeoutMs: number; resolver?: MailHostResolver }
+): Promise<boolean | undefined> {
+  const resolver = opts.resolver ?? new dns.Resolver({ timeout: opts.timeoutMs, tries: 1 });
+  const answer = async (): Promise<boolean | undefined> => {
+    const mx = await resolveRecords(() => resolver.resolveMx(domain));
+    if (mx === undefined) return undefined;
+    if (mx === NXDOMAIN) return false;
+    if (mx.length) return mx.some(record => record.exchange.replace(/\.$/, '') !== '');
+    const addresses = await Promise.all([
+      resolveRecords(() => resolver.resolve4(domain)),
+      resolveRecords(() => resolver.resolve6(domain)),
+    ]);
+    if (addresses.some(records => Array.isArray(records) && records.length)) return true;
+    return addresses.includes(undefined) ? undefined : false;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>(resolve => {
+    timer = setTimeout(() => resolve(undefined), opts.timeoutMs);
+  });
+  return Promise.race([answer(), deadline]).finally(() => clearTimeout(timer));
+}
+
 /**
  * RDAP and MX for one registrable domain, in parallel under one shared budget; a lookup that misses
  * the deadline counts as failed without discarding the other. Never throws.

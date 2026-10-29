@@ -21,11 +21,19 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 }));
 const turnstileActions = vi.hoisted(() => [] as string[]);
 const turnstileGate = vi.hoisted(() => vi.fn((_req: unknown, _res: unknown, next: () => void) => next()));
+const mockCheckTurnstileToken = vi.hoisted(() => vi.fn());
 vi.mock('@server/middlewares/requireTurnstile', () => ({
   requireTurnstile: (action: string) => {
     turnstileActions.push(action);
     return turnstileGate;
   },
+  checkTurnstileToken: (...a: unknown[]) => mockCheckTurnstileToken(...a),
+}));
+const stepUpPolicy = vi.hoisted(() => ({ active: false, failClosed: false, siteKey: '', secret: '' }));
+vi.mock('@server/utils/auth/turnstile', () => ({ getTurnstileStepUpPolicy: async () => ({ ...stepUpPolicy }) }));
+const mockRecipientRefusal = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/otcRecipient', () => ({
+  otcRecipientRefusal: (...a: unknown[]) => mockRecipientRefusal(...a),
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
@@ -68,6 +76,7 @@ const cache = vi.hoisted(() => {
   };
 });
 const mockTryIncrement = vi.fn();
+const mockFindByEmail = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
   cacheRepository: {
@@ -76,6 +85,7 @@ vi.mock('@bike4mind/database', () => ({
     deleteByKey: async (key: string) => cache.counts.delete(key),
     decrementCounter: (key: string) => cache.decrement(key),
   },
+  userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a) },
   pendingOtcTokenRepository: {
     tryReserveSlot: (...a: any[]) => mockTryReserveSlot(...a),
     confirmReservation: (...a: any[]) => mockConfirmReservation(...a),
@@ -96,10 +106,13 @@ const EMAIL = 'someone@example.com';
 
 function makeReqRes(email: string = EMAIL, ip = '81.2.69.160') {
   const { req, res } = createMocks({ method: 'POST', headers: { 'x-real-ip': ip } });
-  return { req: Object.assign(req, { body: { email }, logger: { info: vi.fn() } }), res };
+  return { req: Object.assign(req, { body: { email }, logger: { info: vi.fn(), warn: vi.fn() } }), res };
 }
 
 const resetCache = () => {
+  mockRecipientRefusal.mockResolvedValue(undefined);
+  mockFindByEmail.mockResolvedValue(null);
+  Object.assign(stepUpPolicy, { active: false, siteKey: '', secret: '' });
   cache.counts.clear();
   cache.state.blindPeek = false;
   mockTryIncrement.mockImplementation(cache.tryIncrement);
@@ -482,5 +495,154 @@ describe('/api/otc/send', () => {
     await handler(req, res);
 
     expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', '123456');
+  });
+});
+
+describe('/api/otc/send recipient checks', () => {
+  const reservedAt = new Date('2026-01-01T00:00:00.000Z');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCache();
+    mockIsE2EEnabled.mockReturnValue(false);
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    mockConfirmReservation.mockResolvedValue(true);
+    mockSendOTC.mockImplementation(
+      async (
+        params: { email: string },
+        adapters: { mailer: { sendOTCEmail: (email: string, code: string) => Promise<void> } }
+      ) => {
+        await adapters.mailer.sendOTCEmail(params.email, '123456');
+        return { pendingToken: 'pending-token', nonce: 'real-nonce', otcHash: 'code-hash', code: '123456' };
+      }
+    );
+  });
+
+  async function send(email = EMAIL) {
+    const { req, res } = makeReqRes(email);
+    await handler(req, res);
+    return { req, res };
+  }
+
+  it('answers a refused address with no account exactly as a delivered one, without mailing', async () => {
+    const delivered = await send();
+    expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(mockFindByEmail).not.toHaveBeenCalled();
+
+    vi.mocked(EmailEvents.Send.publish).mockClear();
+    mockRecipientRefusal.mockResolvedValue('blocked-domain');
+    const refused = await send();
+
+    expect(EmailEvents.Send.publish).not.toHaveBeenCalled();
+    expect(refused.req.logger.info).toHaveBeenCalledWith('otc-code-suppressed', { reason: 'blocked-domain' });
+    expect(refused.res._getStatusCode()).toBe(delivered.res._getStatusCode());
+    expect(refused.res._getJSONData()).toEqual(delivered.res._getJSONData());
+    expect(mockConfirmReservation).toHaveBeenLastCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', undefined);
+  });
+
+  it('still mails an existing account on a refused domain', async () => {
+    mockRecipientRefusal.mockResolvedValue('no-mail-host');
+    mockFindByEmail.mockResolvedValue({ id: 'user-1' });
+
+    const { res } = await send();
+
+    expect(mockFindByEmail).toHaveBeenCalledWith(EMAIL);
+    expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('spends the per-email budgets for a refused address like any other send', async () => {
+    mockRecipientRefusal.mockResolvedValue('blocked-domain');
+    await send();
+    expect(cache.counts.get(`otc-limit:send-email:${otcEmailKey(EMAIL)}`)).toBe(1);
+  });
+});
+
+describe('/api/otc/send challenge budgets', () => {
+  const reservedAt = new Date('2026-01-01T00:00:00.000Z');
+  const dailyKey = `otc-limit:send-email-daily-challenge:${otcEmailKey(EMAIL)}`;
+  const globalKey = `otc-limit:send-global-hourly-challenge:${otcEmailKey('all')}`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCache();
+    mockIsE2EEnabled.mockReturnValue(false);
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    mockConfirmReservation.mockResolvedValue(true);
+    mockSendOTC.mockResolvedValue({ pendingToken: 'pending-token', nonce: 'real-nonce', otcHash: 'code-hash' });
+  });
+
+  async function send(turnstileToken?: string) {
+    const { req, res } = makeReqRes();
+    req.body.turnstileToken = turnstileToken;
+    await handler(req, res);
+    return { req, res };
+  }
+
+  it('charges both budgets once a code is dispatched, and not on a refused send', async () => {
+    await send();
+    expect(cache.counts.get(dailyKey)).toBe(1);
+    expect(cache.counts.get(globalKey)).toBe(1);
+
+    mockTryReserveSlot.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 10 });
+    await send();
+    expect(cache.counts.get(dailyKey)).toBe(1);
+  });
+
+  it.each([
+    ['inbox daily', () => cache.counts.set(dailyKey, OTC_LIMITS.send.perEmailDailyChallenge.limit)],
+    ['deployment hourly', () => cache.counts.set(globalKey, OTC_LIMITS.send.globalHourlyChallenge.limit)],
+  ])('asks for a challenge past the %s budget, naming the site key', async (_name, exhaust) => {
+    exhaust();
+    Object.assign(stepUpPolicy, { active: true, siteKey: 'site', secret: 'secret' });
+
+    const { res } = await send();
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ code: 'challenge_required', siteKey: 'site' });
+    expect(mockTryReserveSlot).not.toHaveBeenCalled();
+    expect(mockSendOTC).not.toHaveBeenCalled();
+  });
+
+  it('sends past the budget with a valid token, and refuses an invalid one', async () => {
+    cache.counts.set(dailyKey, OTC_LIMITS.send.perEmailDailyChallenge.limit);
+    Object.assign(stepUpPolicy, { active: true, siteKey: 'site', secret: 'secret' });
+
+    mockCheckTurnstileToken.mockResolvedValueOnce(null);
+    expect((await send('good-token')).res._getStatusCode()).toBe(200);
+    expect(mockCheckTurnstileToken).toHaveBeenCalledWith(
+      expect.anything(),
+      'otc-send',
+      expect.objectContaining({ siteKey: 'site' }),
+      'good-token'
+    );
+
+    mockCheckTurnstileToken.mockResolvedValueOnce({
+      code: 'challenge_failed',
+      status: 403,
+      error: 'Verification failed.',
+    });
+    const refused = await send('bad-token');
+    expect(refused.res._getStatusCode()).toBe(403);
+    expect(refused.res._getJSONData()).toMatchObject({ code: 'challenge_failed' });
+  });
+
+  it('never refuses past the budget when no challenge can be offered', async () => {
+    cache.counts.set(dailyKey, OTC_LIMITS.send.perEmailDailyChallenge.limit);
+    cache.counts.set(globalKey, OTC_LIMITS.send.globalHourlyChallenge.limit);
+
+    const { req, res } = await send();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSendOTC).toHaveBeenCalledTimes(1);
+    expect(req.logger.warn).toHaveBeenCalledWith('otc-send-challenge-budget-exceeded');
+  });
+
+  it('skips the challenge budgets under E2E', async () => {
+    mockIsE2EEnabled.mockReturnValue(true);
+    cache.counts.set(dailyKey, OTC_LIMITS.send.perEmailDailyChallenge.limit);
+    Object.assign(stepUpPolicy, { active: true, siteKey: 'site', secret: 'secret' });
+
+    expect((await send()).res._getStatusCode()).toBe(200);
   });
 });
