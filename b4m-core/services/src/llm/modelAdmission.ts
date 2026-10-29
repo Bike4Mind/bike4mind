@@ -84,13 +84,8 @@ export function isFreeTierExempt(user: Pick<ModelAdmissionInput['user'], 'isAdmi
 
 /**
  * Whether a free account may call the model, regardless of modality or catalog presence.
- * The catalog argument is retained for callers of this exported helper.
  */
-export function isFreeTierModel(
-  modelId: string,
-  _model: Pick<ModelInfo, 'type'> | undefined,
-  allowedModels: ReadonlySet<string>
-): boolean {
+export function isFreeTierModel(modelId: string, allowedModels: ReadonlySet<string>): boolean {
   return allowedModels.has(modelId);
 }
 
@@ -125,9 +120,9 @@ export function createModelAdmission({
       return [];
     }));
 
-  const requiresPaidPlan = async (modelId: string, model: ModelInfo | undefined): Promise<boolean> => {
+  const requiresPaidPlan = async (modelId: string): Promise<boolean> => {
     if (!freeTierAllowedModels || isFreeTierExempt(user)) return false;
-    if (isFreeTierModel(modelId, model, freeTierAllowedModels)) return false;
+    if (isFreeTierModel(modelId, freeTierAllowedModels)) return false;
     return !(await resolveEntitlements()).includes(PAID_PLAN_ENTITLEMENT_KEY);
   };
 
@@ -150,7 +145,7 @@ export function createModelAdmission({
         return new ForbiddenError(`Model "${modelId}" is not accessible and no fallback available`);
       }
     }
-    if (await requiresPaidPlan(modelId, model)) {
+    if (await requiresPaidPlan(modelId)) {
       if (entitlementReadFailed) {
         return new ServiceUnavailableError(`Could not verify your plan for model "${modelId}". Please try again.`);
       }

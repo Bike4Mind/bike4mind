@@ -266,8 +266,7 @@ describe('free-tier media admission', () => {
     async type => {
       const model = { ...image, id: `premium-${type}`, type } as ModelInfo;
       const allowedModels = new Set(['priced']);
-      expect(isFreeTierModel(model.id, model, allowedModels)).toBe(false);
-      expect(isFreeTierModel(model.id, undefined, allowedModels)).toBe(false);
+      expect(isFreeTierModel(model.id, allowedModels)).toBe(false);
       const admission = createModelAdmission({
         user: {},
         configs: [],
@@ -279,7 +278,7 @@ describe('free-tier media admission', () => {
       await expect(admission.assert(model.id)).rejects.toMatchObject({
         additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
       });
-      expect(isFreeTierModel(model.id, model, new Set([model.id]))).toBe(true);
+      expect(isFreeTierModel(model.id, new Set([model.id]))).toBe(true);
       await expect(
         createModelAdmission({
           user: {},
