@@ -390,7 +390,9 @@ describe('ShareModal - By Users tab', () => {
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>
-      expect(mocks.toast.error).toHaveBeenCalledWith('Too many invitations. Try again later. Shared 1 of 3 files.')
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        'Too many invitations. Try again later. Shared 1 of 3 files. Not shared: b.pdf, c.pdf'
+      )
     );
     expect(mocks.mutateAsync).toHaveBeenCalledTimes(2);
     expect(mocks.toast.warning).not.toHaveBeenCalled();

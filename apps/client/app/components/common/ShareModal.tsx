@@ -81,9 +81,12 @@ const showRateLimitedBulkFeedback = (
   message: string,
   successCount: number,
   totalCount: number,
-  itemType: string
+  itemType: string,
+  unsharedItems: string[]
 ): 'partial' | 'failure' => {
-  toast.error(`${message} Shared ${successCount} of ${totalCount} ${itemType}s.`);
+  // Name what is left: re-sharing the whole selection would charge the already-shared items again.
+  const unsharedPreview = unsharedItems.slice(0, 3).join(', ') + (unsharedItems.length > 3 ? '...' : '');
+  toast.error(`${message} Shared ${successCount} of ${totalCount} ${itemType}s. Not shared: ${unsharedPreview}`);
   return successCount > 0 ? 'partial' : 'failure';
 };
 
@@ -377,6 +380,15 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
             } catch (error) {
               if (isRateLimitError(error)) {
                 rateLimitMessage = getErrorMessage(error);
+                failedItems.push(
+                  ...items
+                    .slice(i)
+                    .map(rest =>
+                      isBulkSharingFiles
+                        ? (rest as IFabFileDocument).fileName
+                        : (rest as ISessionDocument).name || 'Untitled'
+                    )
+                );
                 break;
               }
               console.error(`Failed to share ${itemName}:`, error);
@@ -386,7 +398,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
           }
 
           const result = rateLimitMessage
-            ? showRateLimitedBulkFeedback(rateLimitMessage, successResults.length, items.length, itemType)
+            ? showRateLimitedBulkFeedback(rateLimitMessage, successResults.length, items.length, itemType, failedItems)
             : showBulkFeedback(successResults.length, failedItems, itemType, 'shared');
           if (result === 'failure') {
             setLoading(false);
