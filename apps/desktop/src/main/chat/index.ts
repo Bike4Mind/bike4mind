@@ -75,6 +75,7 @@ import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService, type ChatServiceDeps } from './ChatService';
+import { parseDeferredToolsSetting } from './deferredTools';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
@@ -167,16 +168,11 @@ const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
 
-/**
- * Deferred tool loading, off unless B4M_DESKTOP_DEFERRED_TOOLS=1. The start-set limit mirrors the
- * server's DeferredToolStartSetMaxTokens setting (default 100,000; 0 defers every optional tool).
- */
-const DEFERRED_TOOLS = (() => {
-  if (process.env.B4M_DESKTOP_DEFERRED_TOOLS !== '1') return undefined;
-  const raw = process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS?.trim();
-  const limit = raw ? Number(raw) : NaN;
-  return { startSetMaxTokens: Number.isFinite(limit) && limit >= 0 ? limit : 100_000 };
-})();
+/** Deferred tool loading, on unless B4M_DESKTOP_DEFERRED_TOOLS=0. */
+const DEFERRED_TOOLS = parseDeferredToolsSetting(
+  process.env.B4M_DESKTOP_DEFERRED_TOOLS,
+  process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS
+);
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
