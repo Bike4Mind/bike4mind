@@ -90,7 +90,13 @@ describe('Models curated IPC', () => {
       });
       return {
         updatedAt: '2026-10-27T00:00:00Z',
-        machine: { memoryKind: 'cpu', totalMemoryBytes: 16 * 1024 ** 3, gpuMemoryBytes: null, gpuName: null },
+        machine: {
+          memoryKind: 'cpu',
+          totalMemoryBytes: 16 * 1024 ** 3,
+          gpuMemoryBytes: null,
+          gpuName: null,
+          confidence: 'high',
+        },
         entries: [],
         picks: [],
       };
