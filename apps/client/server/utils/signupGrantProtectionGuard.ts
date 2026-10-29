@@ -31,4 +31,6 @@ export async function unsetProtectionsForSignupGrantWrite(
 export const signupGrantRefusalMessage = (key: SignupGrantGuardedKey, unset: SignupGrantProtectionKey[]) =>
   (SIGNUP_GRANT_PROTECTION_KEYS as readonly string[]).includes(key)
     ? `Refusing to turn off ${key} while a signup grant above ${LARGE_SIGNUP_GRANT_CREDITS} credits is live. Lower the grant to ${LARGE_SIGNUP_GRANT_CREDITS} or less first.`
-    : `Refusing to raise the signup grant above ${LARGE_SIGNUP_GRANT_CREDITS} credits while these settings are still off: ${unset.join(', ')}. Turn them on first, then raise the grant.`;
+    : key === 'stagedSignupGrantEnabled'
+      ? `Refusing to enable staged signup grants while the staged total is above ${LARGE_SIGNUP_GRANT_CREDITS} credits and these settings are still off: ${unset.join(', ')}. Turn them on first, then enable staging.`
+      : `Refusing to raise the signup grant above ${LARGE_SIGNUP_GRANT_CREDITS} credits while these settings are still off: ${unset.join(', ')}. Turn them on first, then raise the grant.`;
