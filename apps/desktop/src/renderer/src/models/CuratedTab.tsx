@@ -548,7 +548,7 @@ export function CuratedTab({
     <Stack spacing={1} data-testid="models-curated">
       <Typography level="body-xs" textColor="text.tertiary" data-testid="models-curated-machine">
         <span data-testid="models-curated-date">Curated list from {listDate(list.updatedAt)}.</span>{' '}
-        {machineText(list.machine)} Hover a badge for why.
+        {target.local ? `${machineText(list.machine)} Hover a badge for why.` : 'Fit is not rated for a saved server.'}
       </Typography>
       <Stack direction="row" spacing={1} alignItems="center">
         <Typography
@@ -579,10 +579,12 @@ export function CuratedTab({
             : `Downloads need ${target.name} to be reachable.`}
         </Alert>
       )}
-      <Section title="For this computer" testId="models-curated-picks">
+      <Section title={target.local ? 'For this computer' : 'Curated picks'} testId="models-curated-picks">
         {picks.length === 0 ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="models-curated-no-picks">
-            The list has no picks for this computer&apos;s memory yet. Every model below shows whether it fits.
+            {target.local
+              ? "The list has no picks for this computer's memory yet. Every model below shows whether it fits."
+              : 'The list has no picks yet. Every model is listed below.'}
           </Typography>
         ) : (
           picks.map(({ pick, entry, build }) => (

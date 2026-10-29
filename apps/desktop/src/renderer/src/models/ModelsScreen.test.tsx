@@ -1950,6 +1950,20 @@ describe('ModelsScreen servers', () => {
     expect(calls.pull).not.toHaveBeenCalled();
   });
 
+  it('titles the Curated picks neutrally and drops this-computer text and fit badges for a saved server', async () => {
+    await mount(undefined, 'curated');
+    await pickServer('local');
+    expect(q('models-curated-picks')?.textContent).toContain('For this computer');
+    expect(q('models-curated-machine')?.textContent).toContain('This computer has');
+    expect(all('models-fit-badge').length).toBeGreaterThan(0);
+
+    await pickServer('gpu');
+    expect(q('models-curated-picks')?.textContent).toContain('Curated picks');
+    expect(q('models-curated-picks')?.textContent).not.toContain('For this computer');
+    expect(q('models-curated-machine')?.textContent).not.toContain('This computer');
+    expect(all('models-fit-badge')).toHaveLength(0);
+  });
+
   it('hides the controls and re-checks the server when Settings sets it to Chat only', async () => {
     await mount();
     await pickServer('gpu');
