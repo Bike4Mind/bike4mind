@@ -1,11 +1,17 @@
 /**
  * Fit verdicts for `b4m models` and the MCP model tools: the shared size-only estimate (estimateFitFromSize in
- * @bike4mind/common, as Desktop rates Hugging Face builds) against this machine's hardware probe.
+ * @bike4mind/common) against this machine's hardware probe.
  */
 
-import { estimateFitFromSize, ollamaNumCtx, type HardwareProfile, type SizeFitLevel } from '@bike4mind/common';
-import { probeHardware } from '@bike4mind/local-models';
-import { formatBytes, type PullPlan } from './localModels.js';
+import {
+  estimateFitFromSize,
+  fitMarginBytes,
+  ollamaNumCtx,
+  type HardwareProfile,
+  type SizeFitLevel,
+} from '@bike4mind/common';
+import { probeHardware, type HubGgufBuild, type HubModelDetail } from '@bike4mind/local-models';
+import { formatBytes, largestProjectorBytes, type PullPlan } from './localModels.js';
 
 export type FitVerdict = SizeFitLevel | 'unknown';
 
@@ -83,22 +89,34 @@ function rateOnHardware(sizeBytes: number, hardware: HardwareProfile, trainedCon
   const need = `about ${formatBytes(fit.needBytes)} before context memory, at ${known ? '' : 'up to '}the ${contextLabel(context)} context the CLI requests`;
   const budget = `the ${formatBytes(fit.budgetBytes)} a model can use ${fit.cpuOnly ? 'in RAM' : 'in GPU memory'} here`;
   const rough = 'Rough estimate from the file size';
-  if (fit.level === 'too-large') return { verdict: fit.level, detail: `${rough}: ${need}, more than ${budget}.` };
+  const reserved = `with ${formatBytes(fitMarginBytes(hardware))} reserved headroom`;
+  if (fit.level === 'too-large')
+    return { verdict: fit.level, detail: `${rough}: ${need}; ${reserved}, this exceeds ${budget}.` };
   if (fit.level === 'tight') {
     return {
       verdict: fit.level,
       detail:
         fit.offloadBytes > 0
-          ? `${rough}: ${need}, more than ${budget}, so part of it runs from system RAM and replies are slower.`
+          ? `${rough}: ${need}; ${reserved}, this exceeds ${budget}, so part of it runs from system RAM and replies are slower.`
           : `${rough}: ${need}, close to ${budget}.`,
     };
   }
   return { verdict: fit.level, detail: `${rough}: ${need}, of ${budget}.` };
 }
 
+export function fitForHubBuild(build: HubGgufBuild, detail: HubModelDetail, reading: MachineReading): ModelFit {
+  // A known projector or shard must not disguise missing weight or projector sizes.
+  const sizesKnown =
+    build.sizeBytes > 0 &&
+    build.files.every(file => file.sizeBytes > 0) &&
+    detail.projectors.every(projector => projector.sizeBytes > 0);
+  const sizeBytes = sizesKnown ? build.sizeBytes + largestProjectorBytes(detail) : 0;
+  return rateDownload(sizeBytes, reading, detail.gguf?.contextLength ?? null);
+}
+
 /** The verdict for what a pull plan downloads, projector included. */
 export async function fitForPlan(plan: PullPlan, read: MachineReader): Promise<ModelFit> {
   const reading = await read(plan.target.runtime.baseUrl);
   if (plan.kind === 'ollama') return rateDownload(plan.manifest.sizeBytes, reading, null);
-  return rateDownload(plan.build.sizeBytes + plan.projectorBytes, reading, plan.detail.gguf?.contextLength ?? null);
+  return fitForHubBuild(plan.build, plan.detail, reading);
 }

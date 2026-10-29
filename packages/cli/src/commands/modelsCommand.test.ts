@@ -620,6 +620,31 @@ describe('models show', () => {
       expect(text).toMatch(/Q8_0\s+77\.0 GB\s+unknown\s/);
       expect(text).toContain('Fit is unknown. Ollama at http://gpu-box:11434 runs on another machine');
     });
+
+    it.each(['weights', 'projector', 'shard'] as const)(
+      'keeps an unknown %s size unknown in show and pull',
+      async missing => {
+        const weights = build('Q4_K_M', missing === 'weights' ? 0 : 491_400_032);
+        if (missing === 'shard') weights.files.push({ ...weights.files[0], path: 'other.gguf', sizeBytes: 0 });
+        const model = detail({
+          builds: [weights],
+          projectors: [
+            {
+              ...weights.files[0],
+              path: 'mmproj.gguf',
+              sizeBytes: missing === 'projector' ? 0 : 500_000_000,
+              quant: 'F16',
+            },
+          ],
+        });
+        const h = harness({ hub: fakeHub({ getModel: vi.fn().mockResolvedValue(model) }), answers: [true] });
+        await runModelsCommand('show', { _: [], repo: REPO, 'output-format': 'json' }, h.deps);
+        expect(JSON.parse(h.lines[0]).builds[0].fit.verdict).toBe('unknown');
+        await runModelsCommand('pull', { _: [], ref: REPO }, h.deps);
+        expect(h.lines).toContain('Fit:      unknown. The download size is unknown.');
+        expect(h.runtime.pull).toHaveBeenCalled();
+      }
+    );
   });
 
   it('explains how to get access to a gated repo', async () => {
@@ -948,7 +973,7 @@ describe('models pull fit check', () => {
     await expect(runModelsCommand('pull', { _: [], ref: `${REPO}:Q4_K_M` }, h.deps)).rejects.toThrow(
       `Nothing was downloaded: this build is rated too large for this machine. Pick a smaller quant from: b4m models show ${REPO}, or re-run with --force to download it anyway.`
     );
-    expect(h.lines.find(line => line.startsWith('Fit:'))).toMatch(/^Fit: {6}too large\. .*more than the 51\.5 GB/);
+    expect(h.lines.find(line => line.startsWith('Fit:'))).toMatch(/^Fit: {6}too large\. .*exceeds the 51\.5 GB/);
     expect(h.questions).toEqual([]);
     expect(h.runtime.pull).not.toHaveBeenCalled();
   });

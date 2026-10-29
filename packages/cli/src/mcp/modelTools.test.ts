@@ -422,6 +422,35 @@ describe('model tools', () => {
       expect(runtime.pull).toHaveBeenCalled();
     });
 
+    it.each<[string, ElicitResult]>([
+      ['declined approval', { action: 'decline' }],
+      ['cancelled approval', { action: 'cancel' }],
+      ['unticked download', { action: 'accept', content: { download: false, acceptLicense: true } }],
+      ['unaccepted license', { action: 'accept', content: { download: true, acceptLicense: false } }],
+    ])('force does not bypass %s', async (_label, answer) => {
+      const hub = fakeHub(detail({ builds: [build('Q4_K_M', 90_000_000_000)], licenses: ['gemma'] }));
+      const { call, runtime, prompts } = await setup({ hub, elicit: () => answer });
+      const { data } = await call('models_pull', { ref: REPO, force: true });
+      expect(prompts).toHaveLength(1);
+      expect(data.downloaded).toBe(false);
+      expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
+      expect(runtime.pull).not.toHaveBeenCalled();
+    });
+
+    it('keeps missing weight sizes unknown when a projector size is known', async () => {
+      const weights = build('Q4_K_M', 0);
+      const hub = fakeHub(
+        detail({
+          builds: [weights],
+          projectors: [{ ...weights.files[0], path: 'mmproj.gguf', sizeBytes: 500_000_000, quant: 'F16' }],
+        })
+      );
+      const { call, runtime } = await setup({ hub, elicit: accept });
+      const { data } = await call('models_pull', { ref: REPO });
+      expect(data.fit).toEqual({ verdict: 'unknown', detail: 'The download size is unknown.' });
+      expect(runtime.pull).toHaveBeenCalled();
+    });
+
     it('hands the terminal command --force when forced without elicitation', async () => {
       const { call } = await setup({ hub: big() });
       const { data } = await call('models_pull', { ref: REPO, force: true });

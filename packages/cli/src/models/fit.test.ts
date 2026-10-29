@@ -75,7 +75,8 @@ describe('rateDownload', () => {
   it('names a layer split into system RAM as tight', () => {
     const fit = rateDownload(30 * GIB, { hardware: rtx(24, 64) }, 8192);
     expect(fit.verdict).toBe('tight');
-    expect(fit.detail).toContain('at the 8K context the CLI requests, more than the 25.8 GB a model can use in GPU');
+    expect(fit.detail).toContain('at the 8K context the CLI requests; with 2.1 GB reserved headroom');
+    expect(fit.detail).toContain('this exceeds the 25.8 GB a model can use in GPU');
     expect(fit.detail).toContain('part of it runs from system RAM');
   });
 
@@ -89,5 +90,12 @@ describe('rateDownload', () => {
       verdict: 'unknown',
       detail: 'The download size is unknown.',
     });
+  });
+
+  it('explains that reserved headroom can exceed the budget even when the file and compute fit', () => {
+    const fit = rateDownload(9.5 * GIB, { hardware: cpu(14) }, 8192);
+    expect(fit.verdict).toBe('too-large');
+    expect(fit.detail).toContain('with 268 MB reserved headroom, this exceeds the 11.3 GB');
+    expect(fit.detail).not.toContain('more than');
   });
 });
