@@ -133,7 +133,7 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
 
   async goldRecord(userId: string): Promise<ArenaGoldRecord> {
     const [row] = await this.model.aggregate<ArenaGoldRecord>([
-      { $match: { userId, status: 'voted', isGold: true } },
+      { $match: { userId, status: 'voted', isGold: true, rejectReason: { $ne: 'too_fast' } } },
       {
         $group: {
           _id: null,
@@ -183,7 +183,7 @@ export class ArenaVoteRepository extends BaseRepository<IArenaVoteDocument> {
   /** Every rater with at least one voted gold answer. */
   goldRaters(): Promise<ArenaRaterSummary[]> {
     return this.model.aggregate<ArenaRaterSummary>([
-      { $match: { status: 'voted', isGold: true } },
+      { $match: { status: 'voted', isGold: true, rejectReason: { $ne: 'too_fast' } } },
       {
         $group: {
           _id: '$userId',

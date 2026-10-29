@@ -103,6 +103,13 @@ describe('arenaVoteRepository cap and quality reads', () => {
     expect(await repo.goldRecord('u1')).toEqual({ answered: 2, correct: 1 });
   });
 
+  it('keeps too-fast gold answers out of gold standing', async () => {
+    await castVote('u1', { isGold: true, goldCorrect: true });
+    await castVote('u1', { isGold: true, goldCorrect: true, rejectReason: 'too_fast' });
+    expect(await repo.goldRecord('u1')).toEqual({ answered: 1, correct: 1 });
+    expect(await repo.goldRaters()).toEqual([expect.objectContaining({ userId: 'u1', answered: 1, correct: 1 })]);
+  });
+
   it('keeps too-fast clicks and gold questions out of the routing data', async () => {
     await castVote('u1', { choice: 'b' });
     await castVote('u1', { rejectReason: 'too_fast' });

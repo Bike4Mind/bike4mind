@@ -11,6 +11,7 @@ const listQuerySchema = z.object({
 
 /** GET lists pairs (model ids and a gold flag, never the gold answer); POST imports a batch. */
 const handler = adminApi({
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
   adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
 })

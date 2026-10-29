@@ -8,6 +8,7 @@ const bodySchema = z.object({ active: z.boolean() });
 
 /** PATCH /api/admin/preference-arena/pairs/:id - retire or restore a pair. */
 const handler = adminApi({
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
   adminPermissions: { PATCH: 'settings:manage' },
 }).patch(async (req, res) => {
