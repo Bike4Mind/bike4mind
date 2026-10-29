@@ -67,7 +67,7 @@ export function PullDialog({
             </Typography>
             {server && (
               <Typography level="body-sm" data-testid="models-pull-dialog-server">
-                Free space on {server}: unknown. Keep Bike4Mind open until the download finishes.
+                Desktop cannot see how much free space {server} has. Keep Bike4Mind open until the download finishes.
               </Typography>
             )}
             <Typography level="body-sm" data-testid="models-pull-dialog-license">

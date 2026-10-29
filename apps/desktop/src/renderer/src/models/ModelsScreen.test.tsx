@@ -691,7 +691,7 @@ describe('ModelsScreen servers', () => {
     await openExplore();
     await click(q('models-explore-result-row'));
     await click(q('models-build-pull-btn'));
-    expect(q('models-pull-dialog-server')?.textContent).toContain('Free space on gpu box: unknown');
+    expect(q('models-pull-dialog-server')?.textContent).toContain('Desktop cannot see how much free space gpu box has');
     await click(q('models-pull-dialog-confirm-btn'));
     expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ repo: REPO, serverId: 'gpu' }));
   });

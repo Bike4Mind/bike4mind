@@ -56,12 +56,14 @@ export function useModelHub(serverId: string): ModelHubState {
       const failed = new Set(
         next.filter(pull => pull.phase === 'failed' || pull.phase === 'paused').map(pull => pull.key)
       );
-      const fresh = [...failed].some(key => !failedKeys.current.has(key));
+      const fresh = next.some(
+        pull => failed.has(pull.key) && pull.serverId === serverId && !failedKeys.current.has(pull.key)
+      );
       failedKeys.current = failed;
       // A failure is often the runtime stopping, so re-check it and let the status bar and Download buttons follow.
       if (fresh) void refresh();
     },
-    [refresh]
+    [refresh, serverId]
   );
 
   useEffect(() => {
