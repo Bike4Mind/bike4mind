@@ -13,14 +13,15 @@ function capped(text: string): string {
 // An Error, at any depth, keeps its String() form so request details attached to it are not dumped.
 function renderDiagnostic(value: unknown): string {
   if (typeof value !== 'object' || value === null || value instanceof Error) return String(value);
-  const seen = new WeakSet<object>();
+  // Only the current path, so an object shared by two branches is not mistaken for a cycle.
+  const ancestors: object[] = [];
   try {
-    const json = JSON.stringify(value, (_key, inner: unknown) => {
+    const json = JSON.stringify(value, function (this: unknown, _key, inner: unknown) {
       if (inner instanceof Error) return String(inner);
-      if (typeof inner === 'object' && inner !== null) {
-        if (seen.has(inner)) return '[Circular]';
-        seen.add(inner);
-      }
+      if (typeof inner !== 'object' || inner === null) return inner;
+      while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+      if (ancestors.includes(inner)) return '[Circular]';
+      ancestors.push(inner);
       return inner;
     });
     return json ?? String(value);

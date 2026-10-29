@@ -56,11 +56,14 @@ describe('headless Ollama diagnostics', () => {
     logger.warn('circular', circular);
     logger.error('failed:', failure);
     logger.error('nested', { cause: failure });
+    const shared = { id: 1 };
+    logger.warn('shared', { a: shared, b: shared });
 
     expect(stderr).toHaveBeenCalledWith('ending turn {"model":"local","toolsExecuted":["a","b"]} 3\n');
     expect(stderr).toHaveBeenCalledWith('circular {"model":"local","self":"[Circular]"}\n');
     expect(stderr).toHaveBeenCalledWith('failed: Error: connect ECONNREFUSED\n');
     expect(stderr).toHaveBeenCalledWith('nested {"cause":"Error: connect ECONNREFUSED"}\n');
+    expect(stderr).toHaveBeenCalledWith('shared {"a":{"id":1},"b":{"id":1}}\n');
   });
 
   it('caps each rendered argument and says how much was cut', () => {
