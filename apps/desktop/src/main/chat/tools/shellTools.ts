@@ -9,6 +9,7 @@ import { scanShell } from './shellScan';
 import {
   expectShellRun,
   gitRunsConfiguredProgram,
+  recordSessionTreeWrite,
   recordSessionWrite,
   sessionScriptRun,
   shellCommandRan,
@@ -432,6 +433,7 @@ export async function shellApproval(
 
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
+  for (const tree of scan.writtenTrees) await recordSessionTreeWrite(context, tree);
   const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => null);
   const gitProgram = gitRunsConfiguredProgram(scan.commands);
   const reasons = [

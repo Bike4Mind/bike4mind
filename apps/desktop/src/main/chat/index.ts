@@ -129,6 +129,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { devLog } from '../devlog/DevLogSink';
@@ -272,6 +273,8 @@ export interface RegisteredChat {
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
   spareWorktrees: SpareWorktrees;
+  /** Saved model servers, which the Models screen also pulls to and removes from. */
+  modelServers: ModelServerRegistry;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
 }
@@ -384,6 +387,7 @@ export function registerChat(
     approvalModes,
     REASONING_EFFORT
   );
+  keepSessionWritesIn(store);
   const access = new AccessStore(join(userData, 'tool-access.json'));
   const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
   // App-wide like approval-mode.json; see SidebarSectionStore.
@@ -1252,7 +1256,7 @@ export function registerChat(
     logger,
   });
 
-  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, localContext };
+  return { service, background, mcp, browser, pullRequests, claudeImport, spareWorktrees, modelServers, localContext };
 }
 
 export { ChatService } from './ChatService';

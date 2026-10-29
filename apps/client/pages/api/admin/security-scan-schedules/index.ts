@@ -16,16 +16,14 @@
 
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { securityScanScheduleRepository } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req: Request, res: Response) => {
   const stage = resolveStage();
 
   const [web, code, packages, secrets, cloud] = await Promise.all([

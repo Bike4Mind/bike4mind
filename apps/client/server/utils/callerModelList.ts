@@ -1,10 +1,12 @@
 import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import {
+  createModelAdmission,
   isFreeTierExempt,
   isFreeTierModel,
   isUnpricedTextModel,
   loadFreeTierAllowedModels,
+  loadModelConfigurations,
 } from '@bike4mind/services/llm/modelAdmission';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -91,10 +93,38 @@ async function withoutPaidOnlyModels(list: CallerModelList, user: IUserDocument 
   }
   if (!allowedModels) return list;
   if (await holdsPaidPlan(user)) return list;
-  const models = list.models.filter(model => isFreeTierModel(model.id, model, allowedModels));
+  const models = list.models.filter(model => isFreeTierModel(model.id, allowedModels));
   const offeredIds = new Set<string>(models.map(model => model.id));
   // An upgrade offer pointing at a paid-only model would only lead to a refusal.
   return { models, supersededModels: list.supersededModels.filter(entry => offeredIds.has(entry.replacementId)) };
+}
+
+/**
+ * The model for a request that names none: a free account whose default is paid-only starts on the first allowlisted
+ * text model (admin order) that admission accepts. Read failures propagate, as they do at call time.
+ */
+export async function resolveCallerDefaultModel(
+  defaultModel: string,
+  user: IUserDocument,
+  logger: { log: (message: string) => void }
+): Promise<string> {
+  if (isFreeTierExempt(user)) return defaultModel;
+  const allowedModels = await loadFreeTierAllowedModels(adminSettingsRepository);
+  if (!allowedModels || allowedModels.has(defaultModel)) return defaultModel;
+  const entitlements = await getUserEntitlements(toEntitlementUser(user));
+  if (entitlements.includes(PAID_PLAN_ENTITLEMENT_KEY)) return defaultModel;
+  const { models } = await getCachedCallerModelList(user.id, logger);
+  const admission = createModelAdmission({
+    user,
+    configs: await loadModelConfigurations(adminSettingsRepository),
+    getEntitlements: async () => entitlements,
+    models,
+    freeTierAllowedModels: allowedModels,
+  });
+  for (const id of allowedModels) {
+    if (models.some(model => model.id === id && model.type === 'text') && (await admission.admits(id))) return id;
+  }
+  return defaultModel;
 }
 
 export async function getCallerModelList(

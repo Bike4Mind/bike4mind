@@ -1,7 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
 import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '@server/services/gears/catalog';
@@ -34,9 +33,11 @@ const PutSchema = z.object({
     .optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const overrides = await gearOverrideRepository.byKey();
     const gears = GEAR_DEFAULTS.map(def => {
       const o = overrides.get(def.key);
@@ -67,7 +68,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.status(200).json({ gears });
   })
   .put(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const parsed = PutSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });

@@ -107,7 +107,7 @@ describe('POST /api/v1/video-generations', () => {
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, object: 'video_generation', state: 'pending' });
     expect(h.createVideoJob).toHaveBeenCalledWith(
       {
-        user: { id: 'jwt-user', organizationId: null },
+        user: { id: 'jwt-user', organizationId: null, adminRoleWithheld: false },
         source: 'studio',
         request: {
           model: 'gemini-omni-1.1-flash',
@@ -128,6 +128,7 @@ describe('POST /api/v1/video-generations', () => {
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', input_image_file_id: 'f1' });
     await handler(req, res);
     expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ mode: 'image_to_video', inputImageFileId: 'f1' });
+    expect(h.createVideoJob.mock.calls[0][0].user.adminRoleWithheld).toBe(true);
   });
 
   it('maps role-tagged inputs to the domain and infers image_to_video from a first_frame', async () => {
@@ -219,8 +220,8 @@ describe('POST /api/v1/video-generations', () => {
     const keys = h.createVideoJob.mock.calls.map(call => call[0].idempotencyKey);
     expect(keys).toEqual(['api:member-a:shared', 'api:member-b:shared']);
     expect(h.createVideoJob.mock.calls.map(call => call[0].user)).toEqual([
-      { id: 'member-a', organizationId: 'org-1' },
-      { id: 'member-b', organizationId: 'org-1' },
+      { id: 'member-a', organizationId: 'org-1', adminRoleWithheld: true },
+      { id: 'member-b', organizationId: 'org-1', adminRoleWithheld: true },
     ]);
   });
 
@@ -231,7 +232,11 @@ describe('POST /api/v1/video-generations', () => {
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
     await handler(req, res);
     expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), undefined);
-    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: 'billing-org' });
+    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+      id: 'user-1',
+      organizationId: 'billing-org',
+      adminRoleWithheld: true,
+    });
   });
 
   describe('organization_id (the account switcher)', () => {
@@ -257,7 +262,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: MEMBER_ORG });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: MEMBER_ORG });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: MEMBER_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it('rejects an org the caller does not belong to (403) before the domain', async () => {
@@ -271,7 +280,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: null });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: null,
+        adminRoleWithheld: true,
+      });
       expect(h.orgFindAccessibleById).not.toHaveBeenCalled();
     });
 
@@ -279,7 +292,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: HOME_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it.each(['', '   '])('rejects a blank organization_id %j (422) instead of billing personal', async orgId => {
@@ -317,7 +334,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post(base);
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: KEY_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it('bills the key org when the body names the same org', async () => {
@@ -325,7 +346,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post({ ...base, organization_id: KEY_ORG });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: KEY_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it.each([
@@ -366,7 +391,11 @@ describe('POST /api/v1/video-generations', () => {
         const { req, res } = post(base);
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+          id: 'user-1',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: true,
+        });
         expect(h.orgFindById).not.toHaveBeenCalled();
       });
 
@@ -375,7 +404,11 @@ describe('POST /api/v1/video-generations', () => {
         const { req, res } = post({ ...base, organization_id: HOME_ORG });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+          id: 'user-1',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: true,
+        });
       });
 
       it('keeps a session caller on the org the body names', async () => {
@@ -387,7 +420,11 @@ describe('POST /api/v1/video-generations', () => {
         });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'jwt-user', organizationId: HOME_ORG });
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+          id: 'jwt-user',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: false,
+        });
         expect(h.orgFindById).not.toHaveBeenCalled();
       });
     });
@@ -400,7 +437,11 @@ describe('POST /api/v1/video-generations', () => {
     h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
     await handler(req, res);
-    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+      id: 'user-1',
+      organizationId: null,
+      adminRoleWithheld: true,
+    });
   });
 
   it.each(['', 'x'.repeat(256), 'bad\u0001key'])('rejects Idempotency-Key %j with 422', async key => {

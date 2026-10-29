@@ -50,7 +50,7 @@ export const AdminLogTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const undo = async (entry: AuditEntry, { patch, redo }: AuditUndo) => {
     setUndoingId(entry.id);
     try {
-      // auditUndo only emits isBanned / isModerated / tags, all plain fields of the update body.
+      // auditUndo only emits isBanned / isModerated / tags (plus statusChangeReason), all fields of the update body.
       await update(patch as AdminUserUpdate);
     } catch {
       return; // useAdminUserUpdate already reported the failure.
