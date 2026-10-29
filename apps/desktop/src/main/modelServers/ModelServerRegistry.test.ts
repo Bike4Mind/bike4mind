@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '@bike4mind/local-models';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { ServerCredentialsError, ServerUnreachableError } from './errors';
-import { ModelServerRegistry } from './ModelServerRegistry';
+import type { ChatModelOption } from '@shared/chat';
+import type { ModelServerProbeResult } from '@shared/modelServers';
+import { ModelServerRegistry, PICKER_CHECK_WAIT_MS } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
 import type { ServerEndpoint } from './serverFetch';
 
@@ -32,7 +34,11 @@ type Handler = (path: string, credentials: Record<string, string> | null) => Res
 
 /** An Ollama that answers on every origin; `down` and `wantToken` change how it answers. */
 function fakeOllama(models = ['qwen2.5:0.5b']) {
-  const state = { down: new Set<string>(), wantToken: null as string | null };
+  const state = {
+    down: new Set<string>(),
+    wantToken: null as string | null,
+    versionGate: null as Promise<void> | null,
+  };
   const calls: { origin: string; path: string; credentials: Record<string, string> | null }[] = [];
   const handler: Handler = (path, credentials) => {
     if (state.wantToken && credentials?.authorization !== `Bearer ${state.wantToken}`)
@@ -51,12 +57,16 @@ function fakeOllama(models = ['qwen2.5:0.5b']) {
       const credentials = endpoint.credentialHeaders();
       calls.push({ origin: url.origin, path: url.pathname, credentials });
       if (state.down.has(url.origin)) throw new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+      if (url.pathname === '/api/version') await state.versionGate;
       return handler(url.pathname, credentials);
     };
   return { state, calls, fetchFor };
 }
 
-function registry(fake: ReturnType<typeof fakeOllama>, resolve: Record<string, string[]> = {}) {
+function registry(
+  fake: ReturnType<typeof fakeOllama>,
+  resolve: Record<string, string[]> | ((host: string) => Promise<string[]>) = {}
+) {
   const store = new ModelServerStore(cipher, memoryFile(), { debug: () => undefined, warn: () => undefined });
   const changed = vi.fn();
   const instance = new ModelServerRegistry({
@@ -65,7 +75,7 @@ function registry(fake: ReturnType<typeof fakeOllama>, resolve: Record<string, s
     changed,
     fetchFor: fake.fetchFor,
     localFetch: async () => json({ version: '0.12.0' }),
-    resolve: async host => resolve[host] ?? [],
+    resolve: typeof resolve === 'function' ? resolve : async host => resolve[host] ?? [],
   });
   return { registry: instance, store, changed };
 }
@@ -204,6 +214,118 @@ describe('ModelServerRegistry', () => {
     expect(model).toMatchObject({ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } });
     expect(model.unavailable).toMatch(/gpu box is unreachable/);
     expect((await servers.views())[1].health.state).toBe('unreachable');
+  });
+
+  it('lists an online server without waiting on a slow health check of it', async () => {
+    const fake = fakeOllama();
+    const { registry: servers } = registry(fake);
+    await servers.add({
+      address: 'http://127.0.0.2:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    let release: () => void = () => {};
+    fake.state.versionGate = new Promise(resolve => (release = resolve));
+    const checking = servers.check();
+    const listed = await Promise.race([
+      servers.models(),
+      new Promise(resolve => setTimeout(() => resolve('waited for the check'), 200)),
+    ]);
+    release();
+    await checking;
+    expect(listed).toMatchObject([{ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } }]);
+  });
+
+  it('gives up on a host name lookup that does not answer', async () => {
+    vi.useFakeTimers();
+    try {
+      const { registry: servers } = registry(fakeOllama(), () => new Promise(() => {}));
+      let probe: ModelServerProbeResult | null = null;
+      void servers.probe({ address: 'http://slow.example.test:11434', credential: none }).then(result => {
+        probe = result;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(probe).toMatchObject({ ok: false, error: expect.stringMatching(/Could not find slow\.example\.test/) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lists a server not checked yet without waiting on its first check', async () => {
+    const fake = fakeOllama();
+    const { registry: servers, store } = registry(fake, () => new Promise(() => {}));
+    await store.add(
+      {
+        name: 'gpu box',
+        kind: 'ollama',
+        transport: { type: 'http', baseUrl: 'http://gpu.example.test:11434' },
+        access: 'manage',
+      },
+      none
+    );
+    void servers.start();
+    const listed = await Promise.race([
+      servers.models(),
+      new Promise(resolve => setTimeout(() => resolve('waited for the check'), 200)),
+    ]);
+    servers.stop();
+    expect(listed).toEqual([expect.objectContaining({ name: 'qwen2.5:0.5b', server: expect.anything() })]);
+    expect((listed as ChatModelOption[])[0].unavailable).toBeUndefined();
+  });
+
+  describe('a server shown as down with a check running', () => {
+    async function downServer() {
+      const fake = fakeOllama();
+      const { registry: servers } = registry(fake);
+      await servers.add({
+        address: 'http://127.0.0.2:11434',
+        credential: none,
+        name: 'gpu box',
+        kind: 'ollama',
+        access: 'manage',
+      });
+      fake.state.down.add('http://127.0.0.2:11434');
+      await servers.check();
+      fake.state.down.clear();
+      let release: () => void = () => {};
+      fake.state.versionGate = new Promise(resolve => (release = resolve));
+      const checking = servers.check();
+      return { servers, release, checking };
+    }
+
+    it('lists it as soon as that check finds it back', async () => {
+      const { servers, release, checking } = await downServer();
+      const listing = servers.models();
+      setTimeout(release, 20);
+      const [model] = await listing;
+      await checking;
+      expect(model).toMatchObject({ name: 'qwen2.5:0.5b', server: { name: 'gpu box' } });
+      expect(model.unavailable).toBeUndefined();
+    });
+
+    it('lists its last models, disabled, when that check is slow', async () => {
+      const { servers, release, checking } = await downServer();
+      vi.useFakeTimers();
+      try {
+        let listed: ChatModelOption[] | null = null;
+        void servers.models().then(result => {
+          listed = result;
+        });
+        await vi.advanceTimersByTimeAsync(PICKER_CHECK_WAIT_MS);
+        expect(listed).toEqual([
+          expect.objectContaining({
+            name: 'qwen2.5:0.5b',
+            unavailable: expect.stringMatching(/gpu box is unreachable/),
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+        release();
+        await checking;
+      }
+    });
   });
 
   it('sends the saved credential only through its own server fetch', async () => {

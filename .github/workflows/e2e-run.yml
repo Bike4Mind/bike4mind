@@ -235,12 +235,12 @@ jobs:
           # dev/staging read E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper
           # below (same-account). Preview stacks live in a SEPARATE AWS account the
           # dev role can't `sst shell` into, so for pr<N> runs we inject the secret
-          # directly from this repo secret instead. It must match the preview-tier value
-          # the deployer seeds onto preview stages.
+          # per-stage from this seed secret instead. It must match what the deployer sets on
+          # each preview stage.
           # Empty for dev/staging: the suite prefers the env var over SST, so the preview
           # value must never reach a staging run.
           # E2E_CLEANUP_SECRET is the ONLY SST value the suite needs.
-          E2E_CLEANUP_SECRET: ${{ inputs.pr_number != '' && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
+          E2E_PREVIEW_SEED: ${{ inputs.pr_number != '' && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           # Only wire the credits webhook for suites that report credits (show_credits).
@@ -259,7 +259,8 @@ jobs:
           set -o pipefail
           [ -n "$PLAYWRIGHT_ARGS" ] && echo "Running: playwright test $PLAYWRIGHT_ARGS" || echo "Running full suite"
           if [ -n "$PR_NUMBER" ]; then
-            # Preview (cross-account): E2E_CLEANUP_SECRET is injected from the repo secret above.
+            # Preview (cross-account): E2E_CLEANUP_SECRET is derived from the seed above.
+            . .github/scripts/derive-preview-e2e-secret.sh "$SST_STAGE"
             # An unset secret means the suite cannot start at all. Report that as a labeled
             # skip rather than `exit 1`: a red job here is indistinguishable from a real test
             # failure, so a reviewer reads "e2e broke on this PR" when nothing ever ran. The
@@ -283,7 +284,12 @@ jobs:
         env:
           E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
           E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
-        run: python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
+          STAGE: ${{ steps.config.outputs.stage }}
+        # A preview run sent its derived value, not the staging secret, so scrub that one.
+        run: |
+          case "$STAGE" in pr[0-9]*) . .github/scripts/derive-preview-e2e-secret.sh "$STAGE" ;; esac
+          python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
 
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were

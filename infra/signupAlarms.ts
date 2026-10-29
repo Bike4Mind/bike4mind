@@ -31,6 +31,10 @@ const apiKeyThreshold = parseAlarmThreshold(
   API_KEY_CREATE_BURST_DEFAULT
 );
 const metricNamespace = `${$app.name}/${$app.stage}/Signup`;
+const reviewThreshold = parseAlarmThreshold(
+  'SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN',
+  process.env.SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN
+);
 
 if (isMonitoredStage) {
   if (!dlqAlarmTopic || !oobAlarmTopic) {
@@ -51,6 +55,38 @@ if (isMonitoredStage) {
   // Slack (dlqAlarmTopic) plus email (oobAlarmTopic). OK actions close each episode so the next
   // breach is a fresh ALARM transition and notifies again.
   const actions = [dlqAlarmTopic.arn, oobAlarmTopic.arn];
+
+  for (const band of ['full', 'reduced', 'review'] as const) {
+    new aws.cloudwatch.LogMetricFilter(`signupGrant${band}Filter`, {
+      name: `${$app.name}-${$app.stage}-signup-grant-${band}`,
+      logGroupName: serverLogGroupName,
+      pattern: messageFilterPattern(`signup-grant-assessed-${band}`),
+      metricTransformation: {
+        name: `SignupGrant_${band}`,
+        namespace: metricNamespace,
+        value: '1',
+        unit: 'Count',
+      },
+    });
+  }
+
+  if (reviewThreshold !== undefined) {
+    new aws.cloudwatch.MetricAlarm('signupGrantReviewBurst', {
+      name: `${$app.name}-${$app.stage}-signup-grant-review-burst`,
+      alarmDescription: 'Signup grants held for review per 5 minutes at or above the configured ceiling',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'SignupGrant_review',
+      namespace: metricNamespace,
+      period: 300,
+      statistic: 'Sum',
+      threshold: reviewThreshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
+      tags: { Application: 'Signup', Severity: 'High' },
+    });
+  }
 
   new aws.cloudwatch.LogMetricFilter('signupCodeSendsFilter', {
     name: `${$app.name}-${$app.stage}-signup-code-sends`,

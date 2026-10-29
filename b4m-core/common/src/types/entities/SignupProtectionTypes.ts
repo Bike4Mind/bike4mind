@@ -46,8 +46,41 @@ export type SignupProtectionRepository = {
   saveDomainIntel?: (intel: DomainIntel) => Promise<void>;
 };
 
+/** Per-UTC-day spend counter for free signup grants. `day` is 'YYYY-MM-DD'. */
+export type SignupGrantBudgetRepository = {
+  /**
+   * Adds `amount` to the day's spend only while it stays within `budget`, keyed by `transactionId`
+   * so a retried payout reserves once. Resolves the day's total after the reservation (`fresh` is
+   * false when `transactionId` already held one, so only the first holder may refund it), or null
+   * when the budget cannot cover it.
+   */
+  reserve: (
+    day: string,
+    transactionId: string,
+    amount: number,
+    budget: number
+  ) => Promise<{ spent: number; fresh: boolean } | null>;
+  /** Returns a reservation. A no-op when `transactionId` holds none, so it never double-refunds. */
+  refund: (day: string, transactionId: string, amount: number) => Promise<void>;
+  /** True only for the call that first sets the day's alert flag. */
+  markAlerted: (day: string, threshold: 50 | 100) => Promise<boolean>;
+  /** The day's spend; 0 when no row exists. */
+  getSpent: (day: string) => Promise<number>;
+};
+
+export type SignupGrantBudgetAlert = { day: string; threshold: 50 | 100; spent: number; budget: number };
+
+export type SignupGrantBudget = {
+  repository: SignupGrantBudgetRepository;
+  notify?: (alert: SignupGrantBudgetAlert) => Promise<void>;
+  /** Clock override for the budget's UTC day; tests only. */
+  now?: () => Date;
+};
+
 export type SignupProtection = {
   repository: SignupProtectionRepository;
   mode?: 'observe' | 'enforce';
   notifyHold?: (review: SignupDomainReview) => Promise<void>;
+  /** Daily payout budget for free signup grants; absent means no budget is enforced. */
+  grantBudget?: SignupGrantBudget;
 };

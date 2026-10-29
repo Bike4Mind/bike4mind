@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   LocalRuntimeError,
   ModelNotFoundError,
+  PullIdleTimeoutError,
   RuntimeConnectionError,
   RuntimeHttpError,
   RuntimeProtocolError,
@@ -562,7 +563,7 @@ describe('OllamaRuntime.pull', () => {
     expect(progress).toHaveLength(1);
   });
 
-  it('fails with LocalRuntimeError when the daemon goes silent past the idle timeout', async () => {
+  it('fails with PullIdleTimeoutError when the daemon goes silent past the idle timeout', async () => {
     server = await startFakeServer({
       'POST /api/pull': (_request, response) => {
         response.writeHead(200, { 'content-type': 'application/x-ndjson' });
@@ -574,8 +575,12 @@ describe('OllamaRuntime.pull', () => {
       idleTimeoutMs: 50,
       onProgress: update => progress.push(update),
     });
-    await expect(pull).rejects.toBeInstanceOf(LocalRuntimeError);
-    await expect(pull).rejects.toThrow('sent nothing for 50ms');
+    await expect(pull).rejects.toBeInstanceOf(PullIdleTimeoutError);
+    await expect(pull).rejects.toMatchObject({
+      ref: 'qwen3:8b',
+      idleTimeoutMs: 50,
+      message: expect.stringContaining('sent nothing for 50ms'),
+    });
     expect(progress).toHaveLength(1);
   });
 

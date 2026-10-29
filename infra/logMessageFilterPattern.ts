@@ -1,4 +1,8 @@
-/** Matches the JSON message field inside Lambda-prefixed logs, not caller-controlled metadata. */
+/**
+ * Matches the JSON message field inside Lambda-prefixed logs, not caller-controlled metadata.
+ * JSON selector syntax on purpose: CloudWatch Logs allows only five regex (%...%) metric
+ * filters per log group, and the Next.js server group already carries more signals than that.
+ */
 export function messageFilterPattern(message: string): string {
-  return `%\\x22message\\x22:\\x22${message}\\x22%`;
+  return `{ $.message = "${message}" }`;
 }

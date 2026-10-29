@@ -23,6 +23,7 @@ import {
   GitBranch,
   GitPullRequest,
   Globe,
+  HandCoins,
   Handshake,
   Hash,
   HeartPulse,
@@ -79,7 +80,7 @@ export enum AdminTab {
   Documentation = 9,
   WorldTime = 10,
   Analysts = 11,
-  Subscribers = 12,
+  Waitlist = 12,
   Subscriptions = 13,
   Organizations = 14,
   CreditAnalytics = 15,
@@ -135,7 +136,8 @@ export enum AdminTab {
   Dashboard = 67,
   SignupDomainHolds = 68,
   SignupRiskReview = 69,
-  PreferenceArena = 70,
+  HeldSignupGrants = 70,
+  PreferenceArena = 71,
 }
 
 /**
@@ -193,7 +195,8 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     items: [
       { Icon: Users, tab: AdminTab.Users, label: 'Users', testid: 'admin-users-tab-btn' },
       { Icon: Building2, tab: AdminTab.Organizations, label: 'Organizations', testid: 'admin-organizations-tab-btn' },
-      { Icon: Inbox, tab: AdminTab.Subscribers, label: 'Subscribers', badge: 'waitingSubscribers' },
+      { Icon: Inbox, tab: AdminTab.Waitlist, label: 'Waitlist', badge: 'waitingSubscribers' },
+      { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
       { Icon: UsersRound, tab: AdminTab.Team, label: 'Team' },
       { Icon: UserPlus, tab: AdminTab.RegistrationInvites, label: 'Invites', testid: 'admin-invite-center-tab-btn' },
       { Icon: MessageSquare, tab: AdminTab.Feedback, label: 'Feedback' },
@@ -206,6 +209,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Risk review',
         testid: 'admin-signup-risk-review-btn',
       },
+      { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },
@@ -217,7 +221,6 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
-      { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
     ],
   },
   {

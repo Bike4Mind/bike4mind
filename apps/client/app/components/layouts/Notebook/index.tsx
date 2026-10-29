@@ -26,6 +26,7 @@ import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.gener
 import { edgeToEdgePaths, isEdgeToEdgePath } from '@client/app/utils/premiumEdgeToEdge';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { routeHeading } from './routeHeading';
+import { useSignupGrantHeartbeat } from '@client/app/hooks/useSignupGrantHeartbeat';
 
 // Empty in the open-core build, where premiumRoutes is empty.
 const EDGE_TO_EDGE_PATHS = edgeToEdgePaths(premiumRoutes);
@@ -85,6 +86,7 @@ const pulseBorder = keyframes`
 `;
 
 const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }) => {
+  useSignupGrantHeartbeat();
   const openSideNav = useNotebookLayout(s => s.openSideNav);
   const isMobile = useIsMobile();
   const isImpersonating = useAccessToken(s => s.impersonating);

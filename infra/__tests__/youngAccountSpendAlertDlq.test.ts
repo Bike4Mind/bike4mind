@@ -9,7 +9,7 @@ const cronSource = readInfra('cron.ts');
 // Execute the actual declaration, bounded before the next cron, without loading the full SST app.
 const declaration = cronSource.slice(
   cronSource.indexOf('const youngAccountSpendAlert ='),
-  cronSource.indexOf('const secretRotationNotifierCron =')
+  cronSource.indexOf('// Signup Grant Held Release')
 );
 
 function output<T>(value: T) {
