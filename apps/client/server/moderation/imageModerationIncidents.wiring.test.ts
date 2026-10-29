@@ -14,6 +14,7 @@ const ALLOWED = new Set([
   'apps/client/pages/api/admin/moderation-incidents/index.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/verdict.ts',
   'apps/client/pages/api/admin/users/[userId]/compliance.ts',
+  'apps/client/pages/api/admin/users/[userId]/risk-flags.ts',
 ]);
 
 function sourceFiles(dir: string): string[] {
