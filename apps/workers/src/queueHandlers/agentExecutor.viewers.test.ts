@@ -84,6 +84,43 @@ describe('createWsSender with viewers', () => {
     expect(findViewers).toHaveBeenCalledTimes(1);
     await send('iteration_step', {});
     expect(findViewers).toHaveBeenCalledTimes(2);
+    await send('confidence_gate', {});
+    expect(findViewers).toHaveBeenCalledTimes(3);
+  });
+
+  it('posts to the owner before the viewer read settles, and shares one read per tick', async () => {
+    let settle: (ids: string[]) => void = () => {};
+    findViewers.mockReturnValueOnce(new Promise(resolve => (settle = resolve)));
+    const { createWsSender } = await import('./agentExecutor');
+    const send = createWsSender('conn-1', logger as never, 'exec1');
+    const first = send('iteration_step', {});
+    const second = send('iteration_step', {});
+    expect(targetsOf()).toEqual(['conn-1', 'conn-1']);
+    settle(['viewer-1']);
+    await Promise.all([first, second]);
+    expect(findViewers).toHaveBeenCalledTimes(1);
+    expect(targetsOf()).toEqual(['conn-1', 'conn-1', 'viewer-1', 'viewer-1']);
+  });
+
+  it('keeps the last viewer list when the read fails', async () => {
+    const { createWsSender } = await import('./agentExecutor');
+    const send = createWsSender('conn-1', logger as never, 'exec1');
+    await send('iteration_step', {});
+    findViewers.mockRejectedValueOnce(new Error('db down'));
+    postToConnection.mockClear();
+    await send('iteration_step', {});
+    expect(targetsOf()).toEqual(['conn-1', 'viewer-1', 'viewer-2']);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('never removes the owner connection as a viewer when it is gone', async () => {
+    postToConnection.mockImplementation(async (id: string) => {
+      if (id === 'conn-1') throw Object.assign(new Error('gone'), { $metadata: { httpStatusCode: 410 } });
+      return {};
+    });
+    const { createWsSender } = await import('./agentExecutor');
+    await createWsSender('conn-1', logger as never, 'exec1')('iteration_step', {});
+    expect(removeViewer).not.toHaveBeenCalled();
   });
 
   it('fans child frames out to the viewers of the root execution it was built with', async () => {

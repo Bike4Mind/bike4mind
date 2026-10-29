@@ -350,9 +350,10 @@ const sqsClient = new SQSClient({});
 // WebSocket streaming helpers
 // ---------------------------------------------------------------------------
 
-/** Viewer list cache lifetime (ms); these actions always re-read it so a new viewer catches the next step. */
+/** Viewer list cache lifetime (ms). Only these high-rate actions use the cache; every other frame
+ * (steps, status changes) re-reads the list so a new viewer never misses one. */
 const VIEWER_CACHE_MS = 2_000;
-const VIEWER_REFRESH_ACTIONS = new Set(['iteration_step', 'completed', 'failed', 'abort_acknowledged']);
+const VIEWER_CACHED_ACTIONS = new Set(['agent_text_delta', 'subagent_text_delta', 'progress', 'subagent_progress']);
 
 function isGoneError(err: unknown): boolean {
   const e = err as { name?: string; $metadata?: { httpStatusCode?: number } } | undefined;
@@ -378,7 +379,7 @@ export function createWsSender(connectionId: string, logger: Logger, viewerExecu
   // a headless run to a streaming one.
   const headless = isHeadlessConnection(connectionId);
   if (headless) {
-    logger.info('[WS] Headless execution: streaming disabled; poll GET /api/v1/agent-executions/{id}');
+    logger.info('[WS] Headless execution: streaming to viewers only; poll GET /api/v1/agent-executions/{id}');
     if (!viewerExecutionId) {
       // Same signature as the real sender, so a call site that starts passing a new
       // argument cannot silently type-check against a narrower no-op.
@@ -389,7 +390,7 @@ export function createWsSender(connectionId: string, logger: Logger, viewerExecu
   const wsEndpoint = Resource.websocket.managementEndpoint;
   const client = new ApiGatewayManagementApiClient({ endpoint: wsEndpoint });
 
-  const viewers: { ids: string[]; at: number } = { ids: [], at: 0 };
+  const viewers: { ids: string[]; at: number; refresh?: Promise<void> } = { ids: [], at: 0 };
   const post = async (target: string, action: string, data: Buffer) => {
     try {
       await client.send(new PostToConnectionCommand({ ConnectionId: target, Data: data }));
@@ -408,15 +409,25 @@ export function createWsSender(connectionId: string, logger: Logger, viewerExecu
 
   const viewerTargets = async (action: string): Promise<string[]> => {
     if (!viewerExecutionId) return [];
-    if (VIEWER_REFRESH_ACTIONS.has(action) || Date.now() - viewers.at > VIEWER_CACHE_MS) {
-      try {
-        viewers.ids = await agentExecutionRepository.findViewerConnectionIds(viewerExecutionId);
-      } catch (err) {
-        logger.warn('[WS] Failed to read viewers; keeping the last list', {
-          error: err instanceof Error ? err.message : String(err),
+    if (!VIEWER_CACHED_ACTIONS.has(action) || Date.now() - viewers.at > VIEWER_CACHE_MS) {
+      // Single-flight: frames emitted in the same tick share one read and keep their emit order.
+      viewers.refresh ??= agentExecutionRepository
+        .findViewerConnectionIds(viewerExecutionId)
+        .then(
+          ids => {
+            viewers.ids = ids;
+          },
+          err => {
+            logger.warn('[WS] Failed to read viewers; keeping the last list', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        )
+        .finally(() => {
+          viewers.at = Date.now();
+          viewers.refresh = undefined;
         });
-      }
-      viewers.at = Date.now();
+      await viewers.refresh;
     }
     // A tab viewing its own chat run already gets the frame as the owner connection.
     return viewers.ids.filter(id => id !== connectionId);
@@ -424,9 +435,10 @@ export function createWsSender(connectionId: string, logger: Logger, viewerExecu
 
   return async (action: string, payload: Record<string, unknown> = {}) => {
     const data = Buffer.from(JSON.stringify({ action, ...payload }));
+    // The owner's send starts before the viewer read, so its frames keep today's timing and order.
+    const ownerSend = headless ? undefined : post(connectionId, action, data);
     const targets = await viewerTargets(action);
-    if (!headless) targets.unshift(connectionId);
-    await Promise.all(targets.map(target => post(target, action, data)));
+    await Promise.all([ownerSend, ...targets.map(target => post(target, action, data))]);
   };
 }
 
