@@ -24,7 +24,10 @@ type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
 type SignupCounts = { ipSignups: number | null; prefixSignups: number | null; asnSignups: number | null };
 
 // Its own key, derived from the JWT secret, so no trace hash is ever computed under the signing key.
-const traceKey = () => createHmac('sha256', Config.JWT_SECRET).update('signup-trace/v1').digest();
+// Memoized lazily (Config is not read at import). Rotating JWT_SECRET orphans existing traces, so
+// the counts under-count until their 2-day TTL drops them.
+let cachedTraceKey: Buffer | undefined;
+const traceKey = () => (cachedTraceKey ??= createHmac('sha256', Config.JWT_SECRET).update('signup-trace/v1').digest());
 const traceHash = (value: string) => createHmac('sha256', traceKey()).update(value).digest('hex');
 
 /** The SignupTrace keys for an IP: exact address, plus the /24 for IPv4 (as recentDistinctSignups counts it). */
