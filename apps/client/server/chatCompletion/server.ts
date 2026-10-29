@@ -8,6 +8,7 @@ import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerWsCompletionRoutes } from './external/wsRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
+import { requireOriginVerify } from './originVerify';
 
 /**
  * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
@@ -104,6 +105,10 @@ export function createApp() {
 
   // Internal quest-processing surface (frontend Lambda -> WebSocket streaming).
   registerInternalRoutes(app, track);
+
+  // Only the CloudFront-routed paths are gated; /health and /process are reached directly (ALB
+  // health check, frontend Lambda via NAT).
+  app.use(['/api/ai/v1/completions', '/api/ai/v1/ws-completions', '/api/embed/chat'], requireOriginVerify);
 
   // External CLI/3rd-party completions endpoint (user-authenticated SSE stream). Registered on
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams

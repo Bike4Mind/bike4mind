@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import { readFileSync } from 'node:fs';
@@ -399,6 +399,50 @@ describe('checkModelCatalogWired', () => {
     setModelCatalogProvider(async () => []);
     expect(checkModelCatalogWired(logger)).toBe(true);
     expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatCompletion origin verification', () => {
+  const SECRET = 'origin-secret-value';
+  const GATED = ['/api/ai/v1/completions', '/api/ai/v1/ws-completions', '/api/embed/chat'];
+  const call = (path: string, headers: Record<string, string> = {}) =>
+    fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: '{}',
+    });
+
+  beforeEach(() => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', SECRET);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each(GATED)('returns 403 on %s without the header', async path => {
+    expect((await call(path)).status).toBe(403);
+  });
+
+  it.each(GATED)('returns 403 on %s with a wrong or empty header', async path => {
+    expect((await call(path, { 'x-b4m-origin-verify': 'wrong-secret-value!' })).status).toBe(403);
+    expect((await call(path, { 'x-b4m-origin-verify': '' })).status).toBe(403);
+  });
+
+  it.each(GATED)('lets %s through to its handler with the right header', async path => {
+    const res = await call(path, { 'x-b4m-origin-verify': SECRET });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('leaves /health and /process to their own checks', async () => {
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+    expect((await post(VALID_BODY, { authorization: AUTH })).status).toBe(202);
+  });
+
+  it('does not gate when ORIGIN_VERIFY_SECRET is unset', async () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    expect((await call('/api/ai/v1/completions')).status).not.toBe(403);
   });
 });
 
