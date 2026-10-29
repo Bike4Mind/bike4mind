@@ -203,6 +203,32 @@ describe('signup grant daily budget', () => {
     expect((await User.findById(second.id))?.signupGrant?.stage).toBe('pending_email');
   });
 
+  it.each(['card_verified', 'subscription'] as const)(
+    'keeps a budget-held tranche unpaid when the %s validator refuses',
+    async reason => {
+      config.signupGrantDailyBudget = '12';
+      const first = await createUser(true, 0);
+      const held = await createUser(true, 1);
+      await userService.releaseSignupTranche(first.id, adapters);
+      expect(await userService.releaseSignupTranche(held.id, adapters)).toMatchObject({ withheld: true });
+
+      const validator = vi.fn(async () => false);
+      expect(
+        await userService.unlockSignupGrant(held.id, reason, {
+          ...adapters,
+          validators: { [reason]: validator },
+        })
+      ).toMatchObject({ creditsGranted: 0 });
+
+      expect(validator).toHaveBeenCalled();
+      expect(await creditsOf(held.id)).toBe(0);
+      expect(await CreditTransaction.countDocuments({ ownerId: held.id })).toBe(0);
+      expect((await User.findById(held.id))?.signupGrantHeldReason).toBe('budget_exhausted');
+      expect((await User.findById(held.id))?.signupGrant?.stage).toBe('pending_email');
+      expect(await spentToday()).toBe(12);
+    }
+  );
+
   it('holds an unlock that exceeds the remaining budget without touching the paid tranche', async () => {
     config.signupGrantDailyBudget = '20';
     const user = await createUser(true, 0);

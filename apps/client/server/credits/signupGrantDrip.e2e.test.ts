@@ -79,6 +79,8 @@ beforeEach(async () => {
   config.signupGrantDailyBudget = '0';
   config.signupGrantActivityDailyCredits = '1000';
   config.signupGrantActivityMaxCredits = '9000';
+  config.verifiedUnlockCredits = '9000';
+  delete config.signupGrantRiskPolicy;
   notify.mockClear();
   clock = new Date();
 });
@@ -109,6 +111,28 @@ const dripRows = (userId: string) =>
   CreditTransaction.find({ ownerId: userId, transactionId: /^unlock-grant:activity:/ }).lean();
 
 describe('signup activity drip', () => {
+  it.each([0, 1500])('never drips the risk-withheld tranche with an unlock pool of %i', async unlockCredits => {
+    config.verifiedUnlockCredits = String(unlockCredits);
+    config.signupGrantRiskPolicy = JSON.stringify({
+      enabled: true,
+      version: 'reduced-tranche',
+      rules: [{ signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 2, missing: 'review', missingWeight: 0 }],
+      reducedAt: 1,
+      reviewAt: 3,
+      reducedFraction: 0.5,
+    });
+    const user = await createUser();
+    await User.updateOne({ _id: user.id }, { 'signupMeta.isDatacenter': true });
+    expect(await userService.releaseSignupTranche(user.id, adapters)).toMatchObject({ creditsGranted: 500 });
+
+    const paid: number[] = [];
+    for (let n = 0; n < 3; n++) paid.push((await drip(user.id, n)).creditsGranted);
+
+    expect(paid).toEqual(unlockCredits === 0 ? [0, 0, 0] : [1000, 500, 0]);
+    expect(await creditsOf(user.id)).toBe(500 + unlockCredits);
+    expect((await User.findById(user.id))?.signupGrant?.creditsReleased).toBe(500 + unlockCredits);
+  });
+
   it('releases 1000 a day for 9 days after the 1000 tranche and stops at the full 10000', async () => {
     const user = await createSignupStageUser();
     expect(await creditsOf(user.id)).toBe(1000);

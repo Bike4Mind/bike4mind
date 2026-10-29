@@ -8,7 +8,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import type { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
-import { createSignupRiskCollector } from '@server/auth/signupNetworkLimits';
+import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 
 export const heldGrantBatches = signupGrantReleaseRepository;
 
@@ -24,7 +24,10 @@ export function buildHeldGrantAdapters(logger: Logger): userService.HeldGrantAda
       },
       reason: 'Held signup grant released',
       logger,
-      collectRiskSignals: createSignupRiskCollector(undefined),
+      collectRiskSignals: createSignupGrantRiskCollector(),
+      emitRiskBand: async band => {
+        logger.info(`signup-grant-assessed-${band}`);
+      },
     },
     clearPending: id => userRepository.clearPendingFreeCreditGrant(id),
   };

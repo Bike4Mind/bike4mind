@@ -129,7 +129,10 @@ async function releaseStage(
           const { day, dailyCredits, maxCredits } = evidence.drip;
           const dripped = grant.dripCredits ?? 0;
           if (grant.lastDripDay === day || !Number.isSafeInteger(dripped) || dripped < 0) return noGrant();
-          dripAmount = Math.max(0, Math.min(dailyCredits, maxCredits - dripped, maximum - grant.creditsReleased));
+          dripAmount = Math.max(
+            0,
+            Math.min(dailyCredits, maxCredits - dripped, grant.unlockCredits - dripped, maximum - grant.creditsReleased)
+          );
           target = grant.creditsReleased + dripAmount;
         } else {
           target = evidence === true || 'unlockedOrgId' in evidence ? maximum : evidence.cumulativeCredits;
@@ -165,7 +168,7 @@ async function releaseStage(
           // A retried transaction re-reserves as a no-op, so an earlier attempt's fresh draw is still ours.
           if (dripDay && reservation.outcome === 'reserved' && !reservations.some(held => held.fresh)) return noGrant();
           if (reservation.outcome === 'exhausted') {
-            // The tranche stays pending (and tagged) until a card or subscription unlock pays it; nothing retries it on a schedule.
+            // The tranche stays pending and tagged for the held-release job or a card/subscription unlock.
             if (expected === 'pending_email') {
               await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
               await db.users.update({
@@ -222,15 +225,16 @@ async function releaseStage(
       await audit?.({ userId, credits: amount, creditTransactionId });
       return { creditsGranted: amount, currentCredits: balance, assessedBand };
     });
+    const { assessedBand, ...grantResult } = result;
     if (result.creditsGranted === 0) await releaseReservations();
-    if (result.assessedBand && adapters.emitRiskBand) {
+    if (assessedBand && adapters.emitRiskBand) {
       try {
-        await adapters.emitRiskBand(result.assessedBand);
+        await adapters.emitRiskBand(assessedBand);
       } catch {
         console.warn('[signup-risk] Band telemetry failed after grant commit');
       }
     }
-    return { creditsGranted: result.creditsGranted, currentCredits: result.currentCredits };
+    return grantResult;
   } catch (error) {
     // The counter sits outside the payout transaction, so an aborted payout must hand its draw back.
     // A duplicate ledger row means a concurrent release paid under this id: its draw stays spent.
@@ -271,7 +275,7 @@ export const unlockSignupGrant = (
   const unlock = () =>
     releaseStage(userId, 'signup', reason, async user => (user.emailVerified ? validator(user) : false), adapters);
   if (reason !== 'card_verified' && reason !== 'subscription') return unlock();
-  return unlockWithHeldTranche(userId, adapters, unlock);
+  return unlockWithHeldTranche(userId, adapters, validator, unlock);
 };
 
 /**
@@ -281,13 +285,20 @@ export const unlockSignupGrant = (
 async function unlockWithHeldTranche(
   userId: string,
   adapters: GrantAdapters,
+  validate: SignupGrantValidator,
   unlock: () => Promise<GrantFreeCreditsResult>
 ): Promise<GrantFreeCreditsResult> {
   const { users } = adapters.db;
   const user = await users.findById(userId);
   if (user?.signupGrant?.stage !== 'pending_email' || user.signupGrantHeldReason !== 'budget_exhausted')
     return unlock();
-  const tranche = await releaseSignupTranche(userId, { ...adapters, bypassBudget: true });
+  const tranche = await releaseStage(
+    userId,
+    'pending_email',
+    undefined,
+    async current => (current.emailVerified ? validate(current) : false),
+    { ...adapters, bypassBudget: true }
+  );
   const afterTranche = await users.findById(userId);
   if (afterTranche?.signupGrant?.stage === 'pending_email') return tranche;
   if (afterTranche?.signupGrantHeldReason) await users.update({ id: userId, signupGrantHeldReason: null });
@@ -323,7 +334,7 @@ export async function dripSignupGrant(
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || user.signupGrant.lastDripDay === day) return noGrant();
   // Existence only, and bounded: holders that are blocked, AI-revoked or held before `day` are ignored
-  // so one abandoned hold cannot stall every drip. Nothing retries a hold, so only today's holds count.
+  // so one abandoned hold cannot stall every drip. Older holds are retried by the held-release job.
   const heldTranche = await adapters.db.users.findOne({
     signupGrantHeldReason: 'budget_exhausted',
     'signupGrant.stage': 'pending_email',
