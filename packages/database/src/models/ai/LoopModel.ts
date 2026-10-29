@@ -84,11 +84,11 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   async foldRun(
     id: string,
     executionId: string,
-    update: { $set?: Record<string, unknown>; $inc?: Record<string, number> }
+    update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
   ): Promise<boolean> {
     const result = await this.loopModel.updateOne(
       { _id: id, activeExecutionId: executionId },
-      { ...update, $unset: { activeExecutionId: '' } }
+      { ...update, $unset: { ...update.$unset, activeExecutionId: '' } }
     );
     return result.modifiedCount > 0;
   }

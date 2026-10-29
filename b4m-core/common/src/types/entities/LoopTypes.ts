@@ -79,6 +79,6 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   foldRun(
     id: string,
     executionId: string,
-    update: { $set?: Record<string, unknown>; $inc?: Record<string, number> }
+    update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
   ): Promise<boolean>;
 }
