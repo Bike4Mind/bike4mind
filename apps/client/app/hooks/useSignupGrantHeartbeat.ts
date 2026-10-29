@@ -5,12 +5,12 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 
+// Cadence must stay within the server's MIN_GAP_MS / MAX_CREDIT_MS in server/credits/recordActiveSession.ts.
 export const HEARTBEAT_INTERVAL_MS = 60_000;
 export const HEARTBEAT_BACKOFF_MS = 5 * 60_000;
 export const HEARTBEAT_IDLE_MS = 5 * 60_000;
 const LEADER_KEY = 'b4m-signup-heartbeat-leader';
 const LEADER_TTL_MS = 90_000;
-// Cadence must stay within the server's MIN_GAP_MS / MAX_CREDIT_MS in server/credits/recordActiveSession.ts.
 const INPUT_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'scroll', 'wheel', 'touchstart'] as const;
 
 interface HeartbeatResponse {
