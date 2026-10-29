@@ -48,8 +48,8 @@ describe('evaluateFailedSignIns', () => {
     expect(evaluateFailedSignIns([...old, ...Array.from({ length: 10 }, () => success(HOUR))], NOW)).toBeNull();
   });
   it('counts an attempt exactly at the window start', () => {
-    const entries = failed(threshold, RISK_RULE_CONFIG.failedSignIns.windowHours * HOUR);
-    entries[0] = { ...entries[0], at: ago(RISK_RULE_CONFIG.failedSignIns.windowHours * HOUR) };
+    const at = ago(RISK_RULE_CONFIG.failedSignIns.windowHours * HOUR);
+    const entries = failed(threshold).map(e => ({ ...e, at }));
     expect(evaluateFailedSignIns(entries, NOW)?.id).toBe('failed_sign_ins');
   });
   it('handles an empty list', () => {
@@ -117,7 +117,7 @@ describe('evaluateCreditSpike', () => {
     expect(evaluateCreditSpike(series(1, 30, 500), NOW)).toBeNull();
   });
   it('does not fire when recent spend is below the floor', () => {
-    expect(evaluateCreditSpike(series(1.5, 30, 20), NOW)).toBeNull();
+    expect(evaluateCreditSpike(series(5, 30, 20), NOW)).toBeNull();
   });
   it('handles an empty series', () => {
     expect(evaluateCreditSpike([], NOW)).toBeNull();
