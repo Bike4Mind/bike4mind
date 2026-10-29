@@ -24,7 +24,7 @@ import {
 import { adminFocus } from '../shared/adminStyles';
 import { AnomalyBanner } from './AnomalyBanner';
 import { SignupActivityPanel } from '../Signups/SignupActivityPanel';
-import { useSignupVerdicts } from '../Signups/useSignupTimeseries';
+import { useSignupTimeseries, useSignupVerdicts } from '../Signups/useSignupTimeseries';
 import ComplianceModal from './ComplianceModal';
 import CreateUserModal, { useCreateUserModal } from './CreateUserModal';
 import { exportUsersCsv } from './exportUsersCsv';
@@ -123,16 +123,20 @@ const UsersTab: React.FC = () => {
   const rows = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data]);
   const totalUsers = usersQuery.data?.totalUsers ?? 0;
   const rowIds = useMemo(() => rows.map(row => row.id), [rows]);
-  const verdictsQuery = useSignupVerdicts(signupRange, rowIds);
+  // Same query key as the chart panel's, so this shares its fetch rather than making another.
+  const chartQuery = useSignupTimeseries(signupRange);
+  const verdictsQuery = useSignupVerdicts(signupRange, chartQuery.data?.until, rowIds);
   const verdicts = verdictsQuery.data?.verdicts;
+  // Until the chart loads, the verdicts query is disabled; it then counts as loading too.
+  const verdictsLoading = rowIds.length > 0 && !verdictsQuery.isError && !chartQuery.isError && !verdicts;
   const columns = useMemo(
     () =>
       usersColumns({
         now: new Date(),
         maxSpend: Math.max(0, ...rows.map(row => row.spend30d ?? 0)),
-        verdict: { range: signupRange, verdicts },
+        verdict: { range: signupRange, verdicts, loading: verdictsLoading },
       }),
-    [rows, signupRange, verdicts]
+    [rows, signupRange, verdicts, verdictsLoading]
   );
 
   // A selection made under one filter must not ride into a bulk run under another.
@@ -277,6 +281,28 @@ const UsersTab: React.FC = () => {
             }}
           />
           <UsersToolbar params={params} search={search} onSearchChange={setSearch} onChange={setParams} />
+          {verdictsQuery.isError && (
+            <Alert
+              color="warning"
+              data-testid="admin-users-verdicts-error"
+              endDecorator={
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  onClick={() => {
+                    // A chart open for over a day is past what the verdicts route accepts; reload both.
+                    chartQuery.refetch();
+                    verdictsQuery.refetch();
+                  }}
+                  data-testid="admin-users-verdicts-retry-btn"
+                >
+                  Retry
+                </Button>
+              }
+            >
+              Could not load signup verdicts. The rest of the list is unaffected.
+            </Alert>
+          )}
           {params.groupBy && groupsQuery.data?.groupsTruncated && (
             <Alert color="warning" data-testid="admin-users-groups-truncated">
               Too many accounts match to group them all. Narrow the filters to see every domain.

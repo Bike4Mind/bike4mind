@@ -120,11 +120,7 @@ function rangeSince(range: SignupTimeseriesRange, tzOffsetMinutes: number, now: 
   return new Date(truncate(now, unit, tzOffsetMinutes) - (buckets - 1) * size);
 }
 
-/**
- * Every signup in [since, now) classified as one cohort. The chart and the Users table's Verdict column
- * both go through here, so an account gets the same verdict in both for the same range.
- */
-async function classifyCohort(since: Date, now: Date) {
+async function computeCohort(since: Date, now: Date) {
   const [hourlyCounts, { candidates, truncated, keysTruncated }] = await Promise.all([
     // UTC hours, independent of the viewer's offset, so the spike signal is the same for every viewer.
     countByBucket(new Date(since.getTime() - SPIKE_BASELINE_HOURS * HOUR_MS), now, 'hour', 0),
@@ -133,9 +129,37 @@ async function classifyCohort(since: Date, now: Date) {
   return { candidates, signalsById: classifySignups(candidates, now, hourlyCounts), truncated, keysTruncated };
 }
 
+// ms. Verdict requests pass the chart's own `until`, so on a warm instance one classification serves the
+// chart and every page of the list classified against it.
+const COHORT_CACHE_TTL_MS = 60_000;
+const COHORT_CACHE_MAX_ENTRIES = 4;
+const cohortCache = new Map<string, { cachedAt: number; result: ReturnType<typeof computeCohort> }>();
+
+/** Tests reuse one fixed `now` across different data, so they clear the cache between cases. */
+export const clearCohortCache = () => cohortCache.clear();
+
+/**
+ * Every signup in [since, now) classified as one cohort. The chart and the Users table's Verdict column
+ * both go through here, so an account gets the same verdict in both for the same range and instant.
+ */
+function classifyCohort(since: Date, now: Date) {
+  const key = `${since.getTime()}:${now.getTime()}`;
+  const cached = cohortCache.get(key);
+  if (cached && Date.now() - cached.cachedAt < COHORT_CACHE_TTL_MS) return cached.result;
+  const result = computeCohort(since, now);
+  result.catch(() => cohortCache.delete(key));
+  cohortCache.set(key, { cachedAt: Date.now(), result });
+  for (const oldest of cohortCache.keys()) {
+    if (cohortCache.size <= COHORT_CACHE_MAX_ENTRIES) break;
+    cohortCache.delete(oldest);
+  }
+  return result;
+}
+
 /**
  * The chart's verdict for each of `userIds` under `range`; null for an account outside the range, past
- * the classification scan cap, or not found.
+ * the classification scan cap, or not found. Pass the chart's `until` as `now` so both classify the same
+ * cohort at the same instant; dormancy and the range start both move with `now`.
  */
 export async function getSignupVerdicts(
   {

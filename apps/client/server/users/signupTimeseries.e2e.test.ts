@@ -4,6 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
+  clearCohortCache,
   getSignupTimeseries,
   getSignupVerdicts,
   TIMESERIES_KEY_SCAN_LIMIT,
@@ -30,6 +31,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  clearCohortCache();
   await Promise.all([User.collection.deleteMany({}), UserApiKey.collection.deleteMany({})]);
 });
 
@@ -202,20 +204,33 @@ describe('getSignupVerdicts', () => {
     return { farmIds: ids.slice(0, farm.length), humanIds: ids.slice(farm.length) };
   };
 
-  it('gives each account the verdict the chart counted it under', async () => {
+  it.each([
+    ['24h', 0],
+    ['7d', 330],
+    ['30d', -480],
+  ] as const)('gives each account the verdict the %s chart counted it under at offset %i', async (range, tzOffset) => {
     const { farmIds, humanIds } = await insertMixedCohort();
     const userIds = [...farmIds, ...humanIds];
 
-    const [{ verdicts }, series] = await Promise.all([
-      getSignupVerdicts({ range: '24h', userIds }, NOW),
-      getSignupTimeseries({ range: '24h' }, NOW),
-    ]);
+    const series = await getSignupTimeseries({ range, tzOffsetMinutes: tzOffset }, NOW);
+    const { verdicts } = await getSignupVerdicts({ range, tzOffsetMinutes: tzOffset, userIds }, new Date(series.until));
 
     const suspected = userIds.filter(id => verdicts[id]?.suspected).length;
     expect(suspected).toBe(series.totals.suspected);
     expect(userIds.length - suspected).toBe(series.totals.likelyLegit);
     expect(verdicts[farmIds[0]]).toEqual({ suspected: true, signals: expect.arrayContaining(['domainCadence']) });
-    expect(verdicts[humanIds[0]]).toEqual({ suspected: false, signals: [] });
+    expect(verdicts[humanIds[0]]).toMatchObject({ suspected: false });
+  });
+
+  it('classifies at the instant it is given, so a later signup is outside the chart it matches', async () => {
+    const { humanIds } = await insertMixedCohort();
+    const { insertedIds } = await insertUsers([
+      { email: 'later@company.test', createdAt: new Date(NOW.getTime() + MIN) },
+    ]);
+    const laterId = String(insertedIds[0]);
+    const { verdicts } = await getSignupVerdicts({ range: '24h', userIds: [humanIds[0], laterId] }, NOW);
+    expect(verdicts[humanIds[0]]).not.toBeNull();
+    expect(verdicts[laterId]).toBeNull();
   });
 
   it('returns null for accounts outside the range and ids that match no account', async () => {

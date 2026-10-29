@@ -21,18 +21,22 @@ export function useSignupTimeseries(range: SignupTimeseriesRange) {
   });
 }
 
-/** The chart's verdict for each listed account, under the range the chart is showing. */
-export function useSignupVerdicts(range: SignupTimeseriesRange, userIds: readonly string[]) {
+/**
+ * The chart's verdict for each listed account. `asOf` is the loaded chart's `until`, so the verdicts
+ * classify the same cohort at the same instant and refresh only when the chart does.
+ */
+export function useSignupVerdicts(range: SignupTimeseriesRange, asOf: string | undefined, userIds: readonly string[]) {
   return useQuery({
-    queryKey: ['users', 'signup-verdicts', range, userIds] as const,
+    queryKey: ['users', 'signup-verdicts', range, asOf, userIds] as const,
     queryFn: async () =>
       (
         await api.get<SignupVerdicts>('/api/admin/users/signup-verdicts', {
-          params: { range, tzOffset: -new Date().getTimezoneOffset(), ids: userIds.join(',') },
+          params: { range, asOf, tzOffset: -new Date().getTimezoneOffset(), ids: userIds.join(',') },
         })
       ).data,
-    enabled: userIds.length > 0,
-    staleTime: 60000,
+    enabled: !!asOf && userIds.length > 0,
+    // Fixed by asOf, so a result never goes stale on its own.
+    staleTime: Infinity,
   });
 }
 

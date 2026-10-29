@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /**
  * The suspected-signup signals and the signup time-series response, shared by the classifier
  * (server/users/signupClassifier.ts), the endpoint (pages/api/admin/signup-timeseries.ts) and the
@@ -116,6 +118,19 @@ export type SignupVerdicts = { verdicts: Record<string, SignupVerdict | null> };
 
 /** Most ids one verdict request may carry: the largest Users page. */
 export const SIGNUP_VERDICTS_MAX_IDS = 100;
+
+/**
+ * The viewer's offset in minutes east of UTC, shared by the chart and verdict routes: the range starts
+ * at the viewer's local hour or midnight, so both must agree on it.
+ */
+export const signupTzOffsetSchema = z.coerce
+  .number()
+  .int()
+  .min(-14 * 60)
+  .max(14 * 60)
+  .default(0);
+
+export const SIGNUP_TZ_OFFSET_MESSAGE = 'tzOffset must be a whole number of minutes between -840 and 840.';
 
 export const emptySignalCounts = (): SignupSignalCounts =>
   Object.fromEntries(SIGNUP_SIGNALS.map(signal => [signal, 0])) as SignupSignalCounts;

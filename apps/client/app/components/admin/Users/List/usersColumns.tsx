@@ -1,4 +1,4 @@
-import { Box, Stack, Typography } from '@mui/joy';
+import { Box, Skeleton, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   NEW_ACCOUNT_WINDOW_MS,
   RISK_BAND,
@@ -13,6 +13,7 @@ import {
   type SignupVerdicts,
 } from '@client/app/utils/signupSignals';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import { adminFocus } from '../../shared/adminStyles';
 import { InitialsAvatar } from '../../shared/InitialsAvatar';
 import { InlineBar } from '../../shared/InlineBar';
 import { StatusChip } from '../../shared/StatusChip';
@@ -78,8 +79,9 @@ export function signupVerdictDisplay(
 
 export type UsersVerdictColumn = {
   range: SignupTimeseriesRange;
-  /** Undefined while loading or after a failed fetch; the column then shows a dash. */
+  /** Undefined while loading or after a failed fetch (the tab shows an alert for that). */
   verdicts?: SignupVerdicts['verdicts'];
+  loading?: boolean;
 };
 
 const Dash = () => (
@@ -231,13 +233,32 @@ export function usersColumns({
       label: 'Verdict',
       width: '7rem',
       render: row => {
+        if (verdict.loading) {
+          return (
+            <Skeleton
+              variant="rectangular"
+              width={64}
+              height={22}
+              sx={{ borderRadius: 'md' }}
+              data-testid={`admin-users-verdict-loading-${row.id}`}
+            />
+          );
+        }
         const shown = signupVerdictDisplay(verdict.verdicts?.[row.id], verdict.range);
-        return shown ? (
-          <Box component="span" title={shown.title}>
-            <StatusChip tone={shown.tone} label={shown.label} data-testid={`admin-users-verdict-${row.id}`} />
-          </Box>
-        ) : (
-          <Dash />
+        if (!shown) return <Dash />;
+        return (
+          <Tooltip title={shown.title} placement="top" enterTouchDelay={0}>
+            {/* Focusable so keyboard and touch users can reach the reasons, not just mouse hover. */}
+            <Box
+              component="span"
+              tabIndex={0}
+              aria-label={`${shown.label}. ${shown.title}`}
+              onClick={event => event.stopPropagation()}
+              sx={{ display: 'inline-flex', borderRadius: 'md', ...adminFocus }}
+            >
+              <StatusChip tone={shown.tone} label={shown.label} data-testid={`admin-users-verdict-${row.id}`} />
+            </Box>
+          </Tooltip>
         );
       },
     },

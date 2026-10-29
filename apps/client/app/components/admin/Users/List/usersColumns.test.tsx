@@ -37,8 +37,8 @@ describe('signupVerdictDisplay', () => {
 
 describe('Verdict column', () => {
   const row = { id: 'u1' } as AdminUsersListRow;
-  const renderVerdict = (verdicts?: Parameters<typeof usersColumns>[0]['verdict']['verdicts']) => {
-    const column = usersColumns({ now: new Date(), maxSpend: 0, verdict: { range: '7d', verdicts } }).find(
+  const renderVerdict = (verdicts?: Parameters<typeof usersColumns>[0]['verdict']['verdicts'], loading = false) => {
+    const column = usersColumns({ now: new Date(), maxSpend: 0, verdict: { range: '7d', verdicts, loading } }).find(
       candidate => candidate.id === 'verdict'
     );
     render(<>{column?.render(row)}</>, { wrapper: Wrapper });
@@ -48,10 +48,16 @@ describe('Verdict column', () => {
     renderVerdict({ u1: { suspected: true, signals: ['wafBotSignal'] } });
     const chip = screen.getByTestId('admin-users-verdict-u1');
     expect(chip.textContent).toBe('Suspected');
-    expect(chip.closest('[title]')?.getAttribute('title')).toBe('Signup chart, last 7 days: Bot traffic.');
+    const reachable = chip.closest('[tabindex="0"]');
+    expect(reachable?.getAttribute('aria-label')).toBe('Suspected. Signup chart, last 7 days: Bot traffic.');
   });
 
-  it('falls back to a dash while loading or after a failed fetch', () => {
+  it('shows a skeleton while the verdicts load', () => {
+    renderVerdict(undefined, true);
+    expect(screen.getByTestId('admin-users-verdict-loading-u1')).toBeTruthy();
+  });
+
+  it('falls back to a dash when there is no verdict to show', () => {
     renderVerdict(undefined);
     expect(screen.queryByTestId('admin-users-verdict-u1')).toBeNull();
     expect(screen.getByLabelText('None')).toBeTruthy();
