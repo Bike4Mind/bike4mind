@@ -73,7 +73,8 @@ export const signupGrantReleaseRepository = {
   /** Held grants in creation order (ObjectId order); `afterId` is the previous page's last id. */
   async listHeld(input: { reason?: HeldSignupGrantReason; afterId?: string; limit: number; payableOnly?: boolean }) {
     const users = await User.find({
-      signupGrantHeldReason: input.reason ?? 'budget_exhausted',
+      // $type repeats the user_signupGrantHeldReason partial filter; without it the planner cannot pick that index.
+      signupGrantHeldReason: { $eq: input.reason ?? 'budget_exhausted', $type: 'string' },
       tags: PENDING_FREE_CREDITS_TAG,
       // Mirrors accountBlockReasons/isAiAccessRevoked: unpayable accounts must not eat the cron's scan window.
       ...(input.payableOnly
