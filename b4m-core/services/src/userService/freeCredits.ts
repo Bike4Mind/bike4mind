@@ -50,6 +50,8 @@ export type ReleasePendingFreeCreditsResult = {
   released: boolean;
   /** True when the release stopped because the daily signup grant budget was spent. */
   budgetExhausted?: boolean;
+  /** True when the grant threw; the tag is kept for a retry. */
+  failed?: boolean;
   creditsGranted: number;
   /** Balance after the grant; null when nothing was granted. */
   currentCredits: number | null;
@@ -184,6 +186,6 @@ export const releasePendingFreeCredits = async (
       `Free credit grant failed for user ${user.id}; keeping ${PENDING_FREE_CREDITS_TAG} for retry`,
       error
     );
-    return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
+    return { released: false, failed: true, creditsGranted: 0, currentCredits: null, patch: {} };
   }
 };

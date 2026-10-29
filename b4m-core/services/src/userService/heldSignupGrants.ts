@@ -50,6 +50,7 @@ async function releaseHeldGrant(
       { id: userId, tags: [...user.tags], pendingCreditGrant: user.pendingCreditGrant ?? null },
       { ...adapters.grant, bypassBudget }
     );
+    if (result.failed) return none('failed');
     if (!result.released) return none('withheld', !!result.budgetExhausted);
     // Blocked accounts were kept held above; a zero payout here is final (already paid, or the inbox's
     // grant went to another account), so the hold is dropped rather than left to clog the cron queue.
