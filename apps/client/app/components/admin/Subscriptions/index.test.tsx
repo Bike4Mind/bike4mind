@@ -197,9 +197,12 @@ describe('AdminSubscriptions', () => {
       ];
       renderTab();
       const unsynced = await screen.findByTestId('admin-subscriptions-mrr-s1');
-      expect(unsynced.textContent).toBe('\u2014');
-      expect(within(unsynced).getByTitle('No billed amount from Stripe yet')).toBeTruthy();
-      expect(within(screen.getByTestId('admin-subscriptions-mrr-s4')).getByLabelText('None')).toBeTruthy();
+      expect(unsynced.textContent).toBe('No amount');
+      expect(within(unsynced).getByTitle('Stripe has no fixed amount for this price yet')).toBeTruthy();
+      expect(within(unsynced).getByTestId('admin-subscriptions-mrr-unpriced-s1')).toBeTruthy();
+      const canceled = screen.getByTestId('admin-subscriptions-mrr-s4');
+      expect(within(canceled).getByLabelText('None')).toBeTruthy();
+      expect(within(canceled).queryByText('No amount')).toBeNull();
     });
 
     it('shows a row billed in another currency in that currency', async () => {
@@ -214,7 +217,17 @@ describe('AdminSubscriptions', () => {
       renderTab();
       const tiles = await screen.findByLabelText('Subscription totals for the current filters');
       expect(await within(tiles).findByText('$12.3K')).toBeTruthy();
-      expect(within(tiles).getByText('Not in total: 2 with no amount yet, 1 in another currency')).toBeTruthy();
+      expect(within(tiles).getByText('Not in total: 2 with no billed amount, 1 in another currency')).toBeTruthy();
+    });
+
+    it('renders against a summary that predates the MRR fields', async () => {
+      const legacy = { total: SUMMARY.total, views: SUMMARY.views, searchTruncated: false };
+      apiGet.mockImplementation(async (url: string) => ({ data: url === SUMMARY_PATH ? legacy : listResponse() }));
+      renderTab();
+      const tiles = await screen.findByLabelText('Subscription totals for the current filters');
+      expect(await within(tiles).findByText('Past due')).toBeTruthy();
+      expect(within(tiles).queryByText(/MRR at risk/)).toBeNull();
+      expect(within(tiles).queryByText(/Not in total/)).toBeNull();
     });
 
     it('shows the past due amount as MRR at risk', async () => {

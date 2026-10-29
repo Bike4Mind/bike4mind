@@ -205,12 +205,12 @@ Build new admin pages from these, in `apps/client/app/components/admin/shared/`.
 
 Every money value goes through `formatMoney` in `shared/formatMoney.ts`, so these rules live in one function.
 
-- Amounts are stored and sent in minor units with Stripe's lowercase currency code. `formatMoney(minorUnits, currency)` displays them with `Intl.NumberFormat('en-US', { style: 'currency', currency })`: "$1,234.56", and "CA$19.00" for another currency.
-- Only a `StatTile` value goes compact (`{ compact: true }`): "$12.3K" from 10,000 major units up.
+- Amounts are stored and sent in minor units with Stripe's lowercase currency code. `formatMoney(minorUnits, currency)` displays them with `Intl.NumberFormat('en-US', { style: 'currency', currency })`, using Stripe's minor-unit exponent for the currency (2 by default; 0 for JPY and the other zero-decimal currencies; 3 for KWD, BHD, JOD, OMR, TND), not the digits Intl would show: "$1,234.56", and "CA$19.00" for another currency.
+- Only a `StatTile` value goes compact (`{ compact: true }`): "$12.3K" from 10,000 major units up, with no trailing zero on round values ("$10K").
 - Table cells are right-aligned and tabular (a `numeric` column), with the currency named once in the column header: "MRR (USD)".
 - Negative money is "-$12.00" (refunds), never in parentheses.
 - Credits are integers with a thousands separator and never carry a currency symbol. A credits value next to a money value is labeled "credits".
-- A value that is not revenue (a comp) or not known yet is an `inkMuted` dash, never "$0.00" and never a list price read from the plan catalog.
+- A value that is not revenue (a comp) or not known yet is an `inkMuted` dash, never "$0.00" and never a list price read from the plan catalog. A row that should have an amount but Stripe sends none shows a neutral "No amount" chip instead, so it differs from a row that is not counted.
 
 ## 7. Accessibility, keyboard and states
 

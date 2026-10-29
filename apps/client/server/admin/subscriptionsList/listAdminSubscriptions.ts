@@ -196,7 +196,7 @@ export async function toAdminSubscriptionRows(
     ownerId: doc.ownerId,
     owner: owners.get(`${doc.ownerType}:${doc.ownerId}`) ?? null,
     plan: planOf(doc.priceId, catalog),
-    billedInterval: billedIntervalOf(doc.interval, doc.intervalCount),
+    billedInterval: doc.source === 'admin_grant' ? null : billedIntervalOf(doc.interval, doc.intervalCount),
     status: doc.status,
     source: doc.source ?? 'stripe',
     quantity: doc.quantity,
