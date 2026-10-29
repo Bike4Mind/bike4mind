@@ -29,6 +29,11 @@ import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSetti
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import {
+  isSignupGrantKey,
+  signupGrantRefusalMessage,
+  unsetProtectionsForGrantIncrease,
+} from '@server/utils/signupGrantProtectionGuard';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
@@ -90,6 +95,19 @@ const handler = baseApi().put(
         details: { attemptedAction: 'settings.admin_settings.updated', value: false },
       });
       throw new BadRequestError('enforceCredits is always on for hosted deployments.');
+    }
+
+    if (isSignupGrantKey(key)) {
+      const unset = await unsetProtectionsForGrantIncrease(key, value);
+      if (unset) {
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.admin_settings.denied',
+          target: { kind: 'settings', id: key, displayName: key },
+          summary: `blocked raising ${key} while signup protections are off`,
+          details: { attemptedAction: 'settings.admin_settings.updated', value, unset },
+        });
+        throw new BadRequestError(signupGrantRefusalMessage(unset));
+      }
     }
 
     // The schema accepts any strings so a bad stored entry cannot blank the list on read; the write is
