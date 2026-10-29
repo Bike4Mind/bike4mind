@@ -286,7 +286,8 @@ export function useAgentExecutionSubscriptions(): void {
     if (readyState !== ReadyState.OPEN) return;
     const { executions } = useAgentExecutionStore.getState();
     for (const [executionId, execution] of Object.entries(executions)) {
-      if (!isActiveStatus(execution.status)) continue;
+      // A viewed run is re-subscribed by its own `AgentRunViewer`.
+      if (!isActiveStatus(execution.status) || isViewed(executionId)) continue;
       reconnectRef.current(execution.sessionId, executionId);
     }
   }, [readyState]);
@@ -524,7 +525,8 @@ export function useAgentExecutionSubscriptions(): void {
         if (msg.requestId) subscribeRequests.delete(msg.requestId);
         if (subscribedId) {
           gapResubscribes.delete(subscribedId);
-          if (isViewed(subscribedId)) store().setViewed(subscribedId, msg.found ? 'found' : 'not_found');
+          const viewed = store().viewedExecutionIds[subscribedId];
+          if (viewed && viewed !== 'closed') store().setViewed(subscribedId, msg.found ? 'found' : 'not_found');
         }
         const reconnectSequence = store().consumeReconnectRequest(
           msg.requestId,
@@ -878,12 +880,16 @@ export function useAgentExecutionDispatch() {
     };
 
     const unsubscribe = (executionId: string) => {
-      if (!isViewed(executionId)) return;
+      const viewed = useAgentExecutionStore.getState().viewedExecutionIds[executionId];
+      if (!viewed || viewed === 'closed') return;
       sendJsonMessage({ action: 'agent_execute', command: 'unsubscribe', executionId } as unknown as Parameters<
         typeof sendJsonMessage
       >[0]);
-      // Dropping the entry also keeps the socket-up sweep from re-asking for it.
-      useAgentExecutionStore.getState().clear(executionId);
+      // Frames already in flight (and a late snapshot) would otherwise re-create the entry as a
+      // run this tab "owns", which the socket-up sweep would then `reconnect` and take over.
+      const { clear, setViewed } = useAgentExecutionStore.getState();
+      clear(executionId);
+      setViewed(executionId, 'closed');
     };
 
     return {

@@ -125,8 +125,9 @@ function isSameStep(a: IterationStep, b: IterationStep): boolean {
   );
 }
 
-/** Lifecycle of a `subscribe` from this tab: awaiting the snapshot, watching, or refused/missing. */
-export type ViewedExecutionState = 'pending' | 'found' | 'not_found';
+/** Lifecycle of a `subscribe` from this tab: awaiting the snapshot, watching, refused/missing, or
+ * closed (a tombstone: frames still in flight for it are dropped instead of re-creating the run). */
+export type ViewedExecutionState = 'pending' | 'found' | 'not_found' | 'closed';
 
 export interface PendingPermission {
   toolName: string;
@@ -382,6 +383,7 @@ function withExecution<T extends ParentExecution>(
   executionId: string,
   mutate: (exec: T) => T
 ): Record<string, ParentExecution> {
+  if (state.viewedExecutionIds[executionId] === 'closed') return state.executions;
   const existing = (state.executions[executionId] as T | undefined) ?? (emptyExecution(executionId) as T);
   const next = mutate(existing);
   next.lastEventAt = Date.now();

@@ -1267,4 +1267,14 @@ describe('useAgentExecutionStore - viewed executions', () => {
     store.clear('e2');
     expect(useAgentExecutionStore.getState().viewedExecutionIds).toEqual({});
   });
+
+  it('a closed run ignores writes until it is viewed again', () => {
+    const store = useAgentExecutionStore.getState();
+    store.setViewed('e1', 'closed');
+    store.appendTextDelta('e1', 0, 'late');
+    expect(useAgentExecutionStore.getState().executions.e1).toBeUndefined();
+    store.setViewed('e1', 'pending');
+    store.appendTextDelta('e1', 0, 'live');
+    expect(useAgentExecutionStore.getState().executions.e1).toBeDefined();
+  });
 });

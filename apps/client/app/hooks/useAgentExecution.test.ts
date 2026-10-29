@@ -1292,7 +1292,7 @@ describe('useAgentExecutionDispatch -- watching a run by id (subscribe)', () => 
     expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('not_found');
   });
 
-  it('re-subscribes a viewed run on socket-up instead of taking it over', async () => {
+  it('leaves a viewed run out of the socket-up sweep (its AgentRunViewer re-subscribes)', async () => {
     mountDispatch().subscribe('run-1');
     mountSubscriptions();
     await snapshot(sent()[0].requestId, []);
@@ -1301,7 +1301,7 @@ describe('useAgentExecutionDispatch -- watching a run by id (subscribe)', () => 
     ws.readyState = 1; // OPEN
     mountSubscriptions();
 
-    expect(sent().map(m => m.command)).toEqual(['subscribe']);
+    expect(sent()).toEqual([]);
   });
 
   it('renders each step once when the live stream overlaps the snapshot', async () => {
@@ -1372,6 +1372,28 @@ describe('useAgentExecutionDispatch -- watching a run by id (subscribe)', () => 
 
     expect(sent()).toEqual([{ action: 'agent_execute', command: 'unsubscribe', executionId: 'run-1' }]);
     expect(useAgentExecutionStore.getState().executions['run-1']).toBeUndefined();
-    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBeUndefined();
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('closed');
+  });
+
+  it('drops frames that arrive after unsubscribe, so the run is never taken over on socket-up', async () => {
+    mountSubscriptions();
+    const dispatch = mountDispatch();
+    dispatch.subscribe('run-1');
+    const firstRequest = sent()[0].requestId;
+    dispatch.unsubscribe('run-1');
+    ws.sendJsonMessage.mockClear();
+
+    await handlers['agent_text_delta']({ action: 'agent_text_delta', executionId: 'run-1', iteration: 0, delta: 'x' });
+    await snapshot(firstRequest, [step(0, 1)]);
+    expect(useAgentExecutionStore.getState().executions['run-1']).toBeUndefined();
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('closed');
+
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+    expect(sent()).toEqual([]);
+
+    dispatch.subscribe('run-1');
+    expect(sent().map(m => m.command)).toEqual(['subscribe']);
+    expect(useAgentExecutionStore.getState().viewedExecutionIds['run-1']).toBe('pending');
   });
 });
