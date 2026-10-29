@@ -4,11 +4,12 @@ import {
   CREDIT_TRANSACTION_KIND,
   CreditHolderType,
   signedCredits,
-  type AdminLedgerKind,
+  transactionTypesForKind,
+  type AdminLedgerFilter,
   type AdminLedgerRow,
   type CreditTransactionType,
 } from '@bike4mind/common';
-import { creditTransactionRepository, userRepository } from '@bike4mind/database';
+import { creditTransactionRepository, userRepository, type LedgerPageFilter } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import type { Logger } from '@bike4mind/observability';
 
@@ -37,6 +38,20 @@ export function decodeLedgerCursor(raw: string): LedgerCursor {
   const parsed = cursorPayloadSchema.safeParse(payload);
   if (!parsed.success) throw invalid();
   return { createdAt: new Date(parsed.data.c), id: parsed.data.i };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const utcDayStart = (day: string): Date => new Date(`${day}T00:00:00Z`);
+
+/** The repository query for a ledger filter. Dates are whole UTC days, `to` included. */
+export function ledgerPageFilter({ kind, model, source, from, to }: AdminLedgerFilter): LedgerPageFilter {
+  return {
+    types: kind ? transactionTypesForKind(kind) : undefined,
+    model,
+    source,
+    createdFrom: from ? utcDayStart(from) : undefined,
+    createdBefore: to ? new Date(utcDayStart(to).getTime() + DAY_MS) : undefined,
+  };
 }
 
 type LedgerDocument = Awaited<ReturnType<typeof creditTransactionRepository.findLedgerPage>>[number];
@@ -74,9 +89,9 @@ async function loadLookups(documents: LedgerDocument[]): Promise<Lookups> {
 }
 
 type BuildRowsOptions = {
-  /** The active kind filter; filtered pages are not contiguous, so no running balance is derived. */
-  kind: AdminLedgerKind | undefined;
-  /** Balance right after the first document; required when `kind` is undefined. */
+  /** Whether the documents are a contiguous run of the ledger (see isContiguousLedgerFilter). */
+  contiguous: boolean;
+  /** Balance right after the first document; a running balance is derived only when it is set. */
   balanceAfterFirst?: number;
   /** Where a derived balance that disagrees with an adjustment's recorded one is reported. */
   userId?: string;
@@ -86,10 +101,10 @@ type BuildRowsOptions = {
 /** Maps ledger documents to the wire rows (see adminLedgerRowSchema). */
 export async function buildLedgerRows(
   documents: LedgerDocument[],
-  { kind: filterKind, balanceAfterFirst, userId, logger }: BuildRowsOptions
+  { contiguous, balanceAfterFirst, userId, logger }: BuildRowsOptions
 ): Promise<AdminLedgerRow[]> {
   const lookups = await loadLookups(documents);
-  let runningBalance = filterKind === undefined ? balanceAfterFirst : undefined;
+  let runningBalance = contiguous ? balanceAfterFirst : undefined;
 
   return documents.map(doc => {
     const record = doc as unknown as Record<string, unknown>;
@@ -130,6 +145,8 @@ export async function buildLedgerRows(
       source: asString(record.source),
       apiKeyId,
       apiKeyPrefix: apiKeyId ? lookups.apiKeyPrefixes.get(apiKeyId) : undefined,
+      requestId: asString(metadata.requestId),
+      questId: asString(record.questId),
       inputTokens: asNumber(record.inputTokens),
       outputTokens: asNumber(record.outputTokens),
       description: asString(record.description),
@@ -142,16 +159,17 @@ export async function buildLedgerRows(
 }
 
 /**
- * Balance right after the first row of a page. The first page starts at the current balance; a later
- * page subtracts what every newer row moved it by, in one aggregation.
+ * Balance right after the first row of a page. A page that starts at the newest row starts at the
+ * current balance; any other (a later page, or any page under an end date) subtracts what every
+ * newer row moved it by, in one aggregation.
  */
 export async function balanceAfterFirstRow(
   userId: string,
   currentBalance: number,
   first: LedgerDocument,
-  isFirstPage: boolean
+  startsAtNewest: boolean
 ): Promise<number> {
-  if (isFirstPage) return currentBalance;
+  if (startsAtNewest) return currentBalance;
   const newerNet = await creditTransactionRepository.sumSignedCreditsNewerThan(userId, CreditHolderType.User, {
     createdAt: first.createdAt,
     id: first.id,
