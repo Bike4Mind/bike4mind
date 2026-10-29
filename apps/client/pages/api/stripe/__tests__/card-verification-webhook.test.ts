@@ -31,6 +31,7 @@ const call = async () => {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('CARD_VERIFICATION_WEBHOOK_SECRET', 'whsec_synthetic');
   mocks.find.mockResolvedValue({
     verificationId: 'synthetic-verification',
     userId: 'synthetic-user',
@@ -43,6 +44,11 @@ beforeEach(() => {
   });
 });
 describe('signed verification webhook', () => {
+  it('refuses an unconfigured dedicated endpoint secret', async () => {
+    vi.stubEnv('CARD_VERIFICATION_WEBHOOK_SECRET', '');
+    expect((await call()).statusCode).toBe(503);
+    expect(mocks.construct).not.toHaveBeenCalled();
+  });
   it('rejects invalid signatures even on local development', async () => {
     mocks.construct.mockImplementation(() => {
       throw new Error('invalid');
@@ -55,7 +61,7 @@ describe('signed verification webhook', () => {
     expect(mocks.construct).toHaveBeenCalledWith(
       Buffer.from('synthetic-body'),
       'synthetic-signature',
-      'synthetic-secret'
+      'whsec_synthetic'
     );
     expect(mocks.finish).toHaveBeenCalledWith('synthetic-verification', 'synthetic-user');
   });

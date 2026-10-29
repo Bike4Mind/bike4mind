@@ -106,6 +106,7 @@ export async function cardVerificationRuntime(): Promise<CardVerificationDepende
     challenge.active &&
     identityKey.length >= 32 &&
     !!defense &&
+    !!process.env.CARD_VERIFICATION_WEBHOOK_SECRET?.startsWith('whsec_') &&
     process.env.CARD_VERIFICATION_RECOVERY_ENABLED === 'true';
   const policy = {
     enabled: !!ready,
@@ -212,6 +213,19 @@ export async function cardVerificationRuntime(): Promise<CardVerificationDepende
   };
 }
 
+function cleanupRuntime(): CardVerificationDependencies {
+  return {
+    stripe,
+    policy: async () => ({
+      enabled: false,
+      cardUnlockCredits: 0,
+      identityKey: '',
+      environment: Config.STAGE,
+      livemode: isProduction(),
+    }),
+  };
+}
+
 export async function finishCardVerification(verificationId: string, userId: string, remove = false) {
   const lease = randomUUID();
   const key = `card-verification:completion:${verificationId}`;
@@ -219,21 +233,24 @@ export async function finishCardVerification(verificationId: string, userId: str
     throw new ServiceUnavailableError('Verification is being processed. Try again shortly.');
   try {
     if (remove) {
-      await removeVerificationCard(verificationId, userId, {
-        stripe,
-        policy: async () => ({
-          enabled: false,
-          cardUnlockCredits: 0,
-          identityKey: '',
-          environment: Config.STAGE,
-          livemode: isProduction(),
-        }),
-      });
+      await removeVerificationCard(verificationId, userId, cleanupRuntime());
       return 'removed' as const;
+    }
+    const existing = await CardVerification.findOne({
+      verificationId,
+      userId,
+      environment: Config.STAGE,
+      livemode: isProduction(),
+    }).lean();
+    if (existing?.state === 'granted' || existing?.state === 'refused') {
+      if (!existing.saveCard || existing.state === 'refused')
+        await removeVerificationCard(verificationId, userId, cleanupRuntime());
+      if (existing.state === 'granted') await notifyVerification(verificationId, userId);
+      return existing.state === 'granted' ? ('already_granted' as const) : ('refused' as const);
     }
     const runtime = await cardVerificationRuntime();
     const outcome = await completeCardVerification(verificationId, userId, runtime);
-    if (outcome === 'granted') logger.info('card-verification-granted');
+    if (outcome === 'granted') logger.info('card-verification-granted', { entry: existing?.entry ?? 'billing' });
     if (outcome === 'granted' || outcome === 'already_granted') await notifyVerification(verificationId, userId);
     return outcome;
   } finally {
@@ -264,7 +281,7 @@ export async function reconcileCardVerifications() {
     livemode: isProduction(),
     $or: [
       { state: 'verified' },
-      { state: 'pending', createdAt: { $gte: new Date(Date.now() - 23 * 3600000) } },
+      { state: 'pending' },
       { state: 'refused', paymentMethodId: { $exists: true }, detached: false },
       { state: 'granted', $or: [{ notifiedAt: null }, { saveCard: false, detached: false }] },
     ],
@@ -277,9 +294,20 @@ export async function reconcileCardVerifications() {
     try {
       if (row.state === 'refused') await finishCardVerification(row.verificationId, row.userId, true);
       else if (!row.setupIntentId) {
+        if (!row.createdAt || row.createdAt.getTime() < Date.now() - 23 * 3600000) {
+          await CardVerification.updateOne(
+            { verificationId: row.verificationId, state: 'pending' },
+            { $set: { state: 'refused' } }
+          );
+          continue;
+        }
         const { resumeCardVerificationSetup } = await import('./cardVerificationLifecycle');
         await resumeCardVerificationSetup(row.verificationId, row.userId, await cardVerificationRuntime());
-      } else await finishCardVerification(row.verificationId, row.userId);
+      } else {
+        if (row.state === 'verified' && !row.saveCard)
+          await finishCardVerification(row.verificationId, row.userId, true);
+        await finishCardVerification(row.verificationId, row.userId);
+      }
     } catch {
       failures += 1;
     }

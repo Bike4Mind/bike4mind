@@ -11,11 +11,18 @@ const mocks = vi.hoisted(() => ({
   account: vi.fn(),
   retrieve: vi.fn(),
   cancel: vi.fn(),
+  lease: vi.fn(),
+  release: vi.fn(),
+  remove: vi.fn(),
 }));
 vi.mock('@bike4mind/database', async () => ({
   mongoose: (await import('mongoose')).default,
   adminSettingsRepository: { findBySettingName: mocks.setting },
-  cacheRepository: { tryIncrementWithinLimitFixedWindow: mocks.limit },
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: mocks.limit,
+    tryAcquireLease: mocks.lease,
+    releaseLease: mocks.release,
+  },
   creditTransactionRepository: {},
   userRepository: {},
 }));
@@ -32,6 +39,11 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: { accounts: { retrieve: mocks.account }, setupIntents: { retrieve: mocks.retrieve, cancel: mocks.cancel } },
 }));
 import { CardVerificationFailure, cardVerificationRuntime } from './cardVerificationRuntime';
+import { finishCardVerification } from './cardVerificationRuntime';
+vi.mock('./cardVerificationLifecycle', async importOriginal => ({
+  ...(await importOriginal<typeof import('./cardVerificationLifecycle')>()),
+  removeVerificationCard: mocks.remove,
+}));
 import { CardVerification } from './cardVerificationModel';
 
 const defense = {
@@ -55,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('CARD_VERIFICATION_IDENTITY_KEY', 'synthetic-key-'.repeat(4));
   vi.stubEnv('CARD_VERIFICATION_RECOVERY_ENABLED', 'true');
+  vi.stubEnv('CARD_VERIFICATION_WEBHOOK_SECRET', 'whsec_synthetic');
   vi.stubEnv('CARD_VERIFICATION_DEFENSE_POLICY', JSON.stringify(defense));
   mocks.setting.mockImplementation(async (key: string) => ({
     settingValue: key === 'cardUnlockEnabled' ? 'true' : '17',
@@ -63,6 +76,7 @@ beforeEach(() => {
   mocks.account.mockResolvedValue({ id: 'acct_synthetic' });
   mocks.limit.mockResolvedValue({ success: true });
   mocks.verify.mockResolvedValue({ ok: true });
+  mocks.lease.mockResolvedValue(true);
   vi.spyOn(CardVerificationFailure, 'countDocuments').mockResolvedValue(0);
   vi.spyOn(CardVerification.collection, 'listIndexes').mockReturnValue({
     toArray: async () => [{ unique: true, key: { verificationId: 1 } }],
@@ -74,6 +88,20 @@ beforeEach(() => {
 const context = { userId: 'synthetic-user', ip: '192.0.2.1', asn: '64512', turnstileToken: 'synthetic-token' };
 
 describe('mandatory verification defenses', () => {
+  it('cleans up a committed default-detach grant even with the offer disabled', async () => {
+    vi.spyOn(CardVerification, 'findOne').mockReturnValue({
+      lean: async () => ({
+        state: 'granted',
+        saveCard: false,
+        notifiedAt: new Date(),
+      }),
+    } as never);
+    mocks.setting.mockRejectedValue(new Error('policy unavailable'));
+    expect(await finishCardVerification('synthetic-verification', 'synthetic-user')).toBe('already_granted');
+    expect(mocks.remove).toHaveBeenCalledWith('synthetic-verification', 'synthetic-user', expect.any(Object));
+    expect(mocks.setting).not.toHaveBeenCalled();
+    expect(mocks.release).toHaveBeenCalled();
+  });
   it('fails closed without private policy or active challenge', async () => {
     vi.stubEnv('CARD_VERIFICATION_DEFENSE_POLICY', '');
     expect(await (await cardVerificationRuntime()).policy()).toMatchObject({ enabled: false });

@@ -6,8 +6,8 @@ import { CardVerification } from '@server/billing/cardVerificationModel';
 import { cardVerificationRuntime, finishCardVerification } from '@server/billing/cardVerificationRuntime';
 
 const handler = baseApi({ auth: false }).post(async (req, res) => {
-  const secret = Config.STRIPE_WEBHOOK_SECRET;
-  if (!secret || secret === 'not-configured') return res.status(503).json({ error: 'Webhook unavailable' });
+  const secret = process.env.CARD_VERIFICATION_WEBHOOK_SECRET;
+  if (!secret?.startsWith('whsec_')) return res.status(503).json({ error: 'Webhook unavailable' });
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of req) {

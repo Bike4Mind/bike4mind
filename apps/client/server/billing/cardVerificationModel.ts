@@ -44,6 +44,7 @@ const schema = new mongoose.Schema<CardVerificationRecord>(
 
 schema.index({ verificationId: 1 }, { unique: true });
 schema.index({ userId: 1, state: 1 });
+schema.index({ environment: 1, livemode: 1, state: 1, updatedAt: 1 });
 schema.index({ setupIntentId: 1 }, { unique: true, partialFilterExpression: { setupIntentId: { $type: 'string' } } });
 
 export const CardVerification =
