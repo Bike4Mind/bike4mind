@@ -96,6 +96,29 @@ Unsaved edits are kept when you switch tabs. If you try to leave the page with u
 
 Old links of the form `/admin?userId=<userId>` redirect to the user's profile page. An unknown or malformed user id shows **User not found**; any other loading error shows a retry button.
 
+## Internal notes and profile tags
+
+On a user's profile, **Overview > Internal notes** stores plain-text support context.
+Reading requires `support:read`; adding, editing, and deleting require
+`users:moderate`. Full administrators have both permissions. Notes show their
+original author and time, and **View history** shows attributed revisions.
+Deletion hides a note while retaining its history; the Undo notification restores
+it. Legacy inline notes remain visible but read-only. Impersonated sessions cannot
+write notes.
+
+In **Access > Tags > Edit**, add or remove free-form tags with suggestions from
+existing tags. Saving requires `settings:manage`. Tags are limited to 100 distinct
+values of 1 to 64 characters. Role and product-access grants use their dedicated
+actions and cannot be changed through the free-form tag editor. Successful saves
+refresh the user list and tag filters. Activity and Admin log record note actions
+without note bodies, and tag actions with before/after values.
+
+If the notes card is missing, check the signed-in administrator's `support:read`
+permission. Use **Reload notes** or **Reload history** after a read failure. A stale
+note version or tag snapshot is rejected: reload the profile and reapply the change
+to the current state. If a tag is too long or duplicates another tag, correct it
+before saving.
+
 ## Filtering
 
 Click **Filter** to add a filter chip. Each chip shows its current value; click it to change the value, or remove it. **Clear filters** removes them all.

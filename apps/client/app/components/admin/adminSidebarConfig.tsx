@@ -143,7 +143,7 @@ export enum AdminTab {
 export type SidebarGate = 'userMigration' | 'liveOpsTriage';
 
 /** Special-cased end decorators (e.g. the waiting-subscribers badge). */
-export type SidebarBadge = 'waitingSubscribers';
+export type SidebarBadge = 'waitingSubscribers' | 'newSubscriptions';
 
 export type SidebarItem = {
   /** A lucide stroke icon; the sidebar renders it at 16 px with a 2 px stroke. */
@@ -213,7 +213,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     label: 'Money',
     items: [
       { Icon: Coins, tab: AdminTab.CreditAnalytics, label: 'Credits' },
-      { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions' },
+      { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
       { Icon: Megaphone, tab: AdminTab.EmailMarketing, label: 'Email marketing' },
     ],

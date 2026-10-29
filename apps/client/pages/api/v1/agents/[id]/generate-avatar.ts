@@ -13,31 +13,34 @@ import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1Ag
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
-import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { type ContractRequest, nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 
 const handler = nextRouteForContract(generateAgentAvatarContract, {
   rateLimit: perUserRateLimit(AUTHORING_RATE_LIMIT_BUCKET),
-}).post(async (req, res) => {
-  assertAiAccessAllowed(req.user);
-  const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
-  // Refuses an over-quota user before paying for generation; the exact byte check runs inside.
-  await checkStorageLimit(req.user, 0);
+}).post(
+  withRequestCompletionQuota(async (req: ContractRequest<typeof generateAgentAvatarContract>, res) => {
+    assertAiAccessAllowed(req.user);
+    const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
+    // Refuses an over-quota user before paying for generation; the exact byte check runs inside.
+    await checkStorageLimit(req.user, 0);
 
-  try {
-    const { portraitUrl, generationPrompt } = await generateAgentAvatar(
-      agent,
-      req.user,
-      req.validated.image_model,
-      req.logger
-    );
-    return res.json({ portrait_url: portraitUrl, generation_prompt: generationPrompt });
-  } catch (error) {
-    logImageGenerationFailure(imageLogger, 'Error generating agent avatar:', error, {
-      agentId: agent.id,
-      userId: req.user.id,
-    });
-    throw toV1AuthoringError(error);
-  }
-});
+    try {
+      const { portraitUrl, generationPrompt } = await generateAgentAvatar(
+        agent,
+        req.user,
+        req.validated.image_model,
+        req.logger
+      );
+      return res.json({ portrait_url: portraitUrl, generation_prompt: generationPrompt });
+    } catch (error) {
+      logImageGenerationFailure(imageLogger, 'Error generating agent avatar:', error, {
+        agentId: agent.id,
+        userId: req.user.id,
+      });
+      throw toV1AuthoringError(error);
+    }
+  })
+);
 
 export default handler;

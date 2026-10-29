@@ -13,10 +13,12 @@ export interface TabConfig {
   label: string;
 }
 
-export interface ExcludedOrgs {
-  millionOnMars: boolean;
-  unknown: boolean;
-  personal: boolean;
+/** The User Activity grid's "Exclude" checkboxes. */
+export interface UserActivityExclusions {
+  /** Rows whose counter log carries no organization. */
+  noOrg: boolean;
+  /** Admin, system and synthetic accounts, and emails on the internal staff domains. */
+  staff: boolean;
 }
 
 export interface DateFilters {
@@ -32,7 +34,7 @@ export interface UserActivityFilters {
 export interface AnalyticsState {
   activeSubTab: AnalyticsSubTab;
   selectedOrganizations: string[];
-  excludedOrgs: ExcludedOrgs;
+  exclusions: UserActivityExclusions;
   dateFilters: DateFilters;
   userActivityFilters: UserActivityFilters;
   metadataFilters: MetadataFilter[];
@@ -41,7 +43,7 @@ export interface AnalyticsState {
   showUserActivityAdvancedFilters: boolean;
   setActiveSubTab: (tab: AnalyticsSubTab) => void;
   setSelectedOrganizations: (orgs: string[]) => void;
-  toggleExcludedOrg: (key: keyof ExcludedOrgs) => void;
+  toggleExclusion: (key: keyof UserActivityExclusions) => void;
   setDateFilters: (filters: DateFilters) => void;
   setUserActivityFilters: (filters: Partial<UserActivityFilters>) => void;
   setMetadataFilters: (filters: MetadataFilter[]) => void;

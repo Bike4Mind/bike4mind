@@ -56,8 +56,8 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
     dateFilters,
     selectedOrganizations,
     setSelectedOrganizations,
-    excludedOrgs,
-    toggleExcludedOrg,
+    exclusions,
+    toggleExclusion,
     userActivityFilters,
     metadataFilters,
     page,
@@ -120,7 +120,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
       const request = buildUserActivityRequest({
         dateFilters,
         selectedOrganizations,
-        excludedOrgs,
+        exclusions,
         userActivityFilters,
         metadataFilters,
       });
@@ -164,7 +164,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
     } finally {
       setIsExporting(false);
     }
-  }, [dateFilters, excludedOrgs, selectedOrganizations, userActivityFilters, metadataFilters, exportToCSV]);
+  }, [dateFilters, exclusions, selectedOrganizations, userActivityFilters, metadataFilters, exportToCSV]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -250,33 +250,27 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
                   </Dropdown>
                 </FormControl>
 
-                {/* Exclude Organizations */}
                 <Box sx={{ minWidth: { xs: 0, sm: 300 }, width: { xs: '100%', sm: 'auto' } }}>
                   <Typography level="title-sm" sx={{ fontWeight: 500, mb: 0.5 }}>
-                    Exclude Organizations
+                    Accounts
                   </Typography>
                   <Box sx={{ display: 'flex', alignItems: 'center', minHeight: 2.5 }}>
                     <Stack direction={'row'} gap={2} flexWrap="wrap" alignItems="center">
+                      {/* A specific org selection already leaves out users without an org. */}
                       <Checkbox
-                        checked={excludedOrgs.millionOnMars}
-                        onChange={() => toggleExcludedOrg('millionOnMars')}
+                        checked={exclusions.noOrg}
+                        onChange={() => toggleExclusion('noOrg')}
                         disabled={!isAllSelected}
-                        label="Million On Mars"
+                        label="Exclude users without an org"
                         size="sm"
+                        data-testid="user-activity-exclude-no-org-checkbox"
                       />
                       <Checkbox
-                        checked={excludedOrgs.unknown}
-                        onChange={() => toggleExcludedOrg('unknown')}
-                        disabled={!isAllSelected}
-                        label="Unknown"
+                        checked={exclusions.staff}
+                        onChange={() => toggleExclusion('staff')}
+                        label="Exclude staff and test accounts"
                         size="sm"
-                      />
-                      <Checkbox
-                        checked={excludedOrgs.personal}
-                        onChange={() => toggleExcludedOrg('personal')}
-                        disabled={!isAllSelected}
-                        label="Personal"
-                        size="sm"
+                        data-testid="user-activity-exclude-staff-checkbox"
                       />
                     </Stack>
                   </Box>

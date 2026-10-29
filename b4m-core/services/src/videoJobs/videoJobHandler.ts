@@ -3,6 +3,7 @@ import {
   estimateVideoCostUsd,
   getVideoModelCapabilities,
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
+  retiredVideoModelMessage,
   validateAgainstCapabilities,
   videoFileExtension,
   videoInputRef,
@@ -136,6 +137,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
     job: VideoJob,
     context: GenerationJobStepContext
   ): Promise<PreparedSubmit | VideoStepResult> => {
+    // A job queued before its model was retired fails here rather than spending a submit the provider refuses.
+    const retired = retiredVideoModelMessage(job.payload.request.model);
+    if (retired) return fail('provider_error', retired);
     const provider = providerFor(job);
     const ctx = await contextFor(job, context);
     if (!ctx) return noApiKey(job);

@@ -6,7 +6,7 @@ import {
   type SignupTimeseriesBucket,
   type SignupTimeseriesRange,
 } from '@client/app/utils/signupSignals';
-import { classifySignups, type SignupCandidate } from './signupClassifier';
+import { classifySignups, SPIKE_BASELINE_HOURS, type SignupCandidate } from './signupClassifier';
 
 /** Newest signups classified per request; older ones in range are counted but left unclassified. */
 export const TIMESERIES_SCAN_LIMIT = 20000;
@@ -69,7 +69,7 @@ async function countByBucket(since: Date, until: Date, unit: 'hour' | 'day', tzO
 async function loadCandidates(since: Date, until: Date) {
   const [users, keys] = await Promise.all([
     User.find({ createdAt: { $gte: since, $lt: until } })
-      .select('_id email createdAt lastActiveAt signupMeta.isDatacenter signupMeta.wafBotSignal')
+      .select('_id email createdAt lastActiveAt signupMeta.ip signupMeta.isDatacenter signupMeta.wafBotSignal')
       .hint({ createdAt: 1 })
       .sort({ createdAt: -1 })
       .limit(TIMESERIES_SCAN_LIMIT + 1)
@@ -122,11 +122,13 @@ export async function getSignupTimeseries(
   const since = new Date(lastStart - (bucketCount - 1) * size);
   const historySince = new Date(since.getTime() - baselineBuckets * size);
 
-  const [counts, { candidates, truncated, keysTruncated }] = await Promise.all([
+  const [counts, hourlyCounts, { candidates, truncated, keysTruncated }] = await Promise.all([
     countByBucket(historySince, now, unit, tzOffsetMinutes),
+    // UTC hours, independent of the viewer's offset, so the spike signal is the same for every viewer.
+    countByBucket(new Date(since.getTime() - SPIKE_BASELINE_HOURS * HOUR_MS), now, 'hour', 0),
     loadCandidates(since, now),
   ]);
-  const signalsById = classifySignups(candidates, now);
+  const signalsById = classifySignups(candidates, now, hourlyCounts);
 
   const buckets: SignupTimeseriesBucket[] = Array.from({ length: bucketCount }, (_, i) => {
     const start = since.getTime() + i * size;

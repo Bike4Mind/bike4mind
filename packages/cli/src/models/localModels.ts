@@ -10,9 +10,14 @@ import {
   HuggingFaceHub,
   ModelNotFoundError,
   OllamaRuntime,
+  curatedBuildForRef,
   detectRuntimes,
+  findHubBuild,
+  hubBuildTag,
   isAbliteratedModel,
   isHubRepoId,
+  ollamaModelKey,
+  isPermissiveEntry,
   type DetectedRuntime,
   type HubGgufBuild,
   type HubModelDetail,
@@ -21,6 +26,7 @@ import {
   type LocalRuntime,
   type OllamaRefIssue,
 } from '@bike4mind/local-models';
+import type { HubManifest } from '@bike4mind/common';
 import { withDefaultOllamaPort } from '../utils/ollamaHost.js';
 import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import {
@@ -69,6 +75,8 @@ export interface ModelSourceDeps {
   resolveRuntime: () => Promise<RuntimeTarget>;
   /** Aborted on Ctrl-C. */
   signal: AbortSignal;
+  /** The bundled Curated list; a pull of one of its refs also honors the license the list records for it. */
+  curated?: () => HubManifest;
 }
 
 export type PullTarget = { kind: 'hub'; repo: string; tag: string | null } | { kind: 'ollama'; name: string };
@@ -78,6 +86,16 @@ export interface LicenseInfo {
   link: string;
   restricted: boolean;
   plural?: boolean;
+  /** The base model's license when the Curated list records it as not permissive. */
+  base?: string;
+  /** The Curated list's license for the model when it records that as not permissive but the source reads permissive. */
+  listed?: string;
+}
+
+/** The licenses to accept, by name; `label` stays the source's own, which the pre-download recheck compares. */
+export function licenseName(license: LicenseInfo): string {
+  const own = license.listed ?? license.label;
+  return license.base ? `${own} and base model ${license.base}` : own;
 }
 
 export interface HubPullPlan {
@@ -269,15 +287,14 @@ export function parsePullTarget(input: string): PullTarget {
   return { kind: 'hub', repo: path, tag };
 }
 
-/** Matches the tag against each build's planned ref, then its quant label; no tag or `latest` means Q4_K_M. */
+/** The build the tag names, as `findHubBuild` resolves it; no tag or `latest` means Q4_K_M. */
 export function pickBuild(builds: HubGgufBuild[], tag: string | null): HubGgufBuild | undefined {
   // Ollama tags an untagged hf.co pull `latest`, so users copy that form back.
-  const wanted = (tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT).toUpperCase();
-  return (
-    builds.find(build => build.ollamaRef?.slice(build.ollamaRef.lastIndexOf(':') + 1).toUpperCase() === wanted) ??
-    builds.find(build => build.quant === wanted)
-  );
+  return findHubBuild(builds, tag && tag.toLowerCase() !== 'latest' ? tag : DEFAULT_QUANT);
 }
+
+/** The tag `pickBuild` resolves back to `build`. */
+export const buildTag = hubBuildTag;
 
 export async function resolveRuntimeTarget(
   hosts: { flag?: string; env?: string; config?: string },
@@ -322,7 +339,7 @@ export async function listInstalled(
   return models.map(model => ({
     ...model,
     loaded: loadedNames.has(model.name),
-    default: model.name === defaultModel,
+    default: !!defaultModel && sameModelName(model.name, defaultModel),
   }));
 }
 
@@ -331,6 +348,20 @@ export function normalizeModelName(name: string): string {
   return withoutLibrary.lastIndexOf(':') > withoutLibrary.lastIndexOf('/')
     ? withoutLibrary
     : `${withoutLibrary}:latest`;
+}
+
+/** Whether two names are one model, counting hf.co and huggingface.co as the same Hugging Face repo. */
+export function sameModelName(a: string, b: string): boolean {
+  return ollamaModelKey(normalizeModelName(a)) === ollamaModelKey(normalizeModelName(b));
+}
+
+export function findInstalledModel<T extends { name: string }>(models: T[], name: string): T | undefined {
+  const wanted = name.replace(/^library\//i, '');
+  return (
+    models.find(model => model.name === name || model.name === wanted) ??
+    models.find(model => model.name === `${wanted}:latest`) ??
+    models.find(model => sameModelName(model.name, name))
+  );
 }
 
 export function requireRemovable(target: RuntimeTarget): void {
@@ -378,6 +409,8 @@ function changedSinceReview(subject: string, what: string): Error {
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((entry, index) => entry === b[index]);
 
+const sameEntries = (a: string[], b: string[]) => sameList([...a].sort(), [...b].sort());
+
 /**
  * Re-reads the manifest after the user approved it, because Ollama then pulls by tag and a tag can move.
  * Refuses when the license texts or layers differ from the ones shown.
@@ -401,9 +434,15 @@ export async function requireUnchangedLicenses(
   shown: { label: string; link: string },
   signal: AbortSignal
 ): Promise<void> {
-  const currentDetail = await hub.getModel(detail.id, { signal });
+  const currentDetail = await hub.getModel(detail.id, { signal, refresh: true });
   const now = licenseFor(currentDetail, hub.endpoint);
-  if (!sameList(currentDetail.licenses, detail.licenses) || now.label !== shown.label || now.link !== shown.link) {
+  // The Hub may list the same ids in another order; the label is rebuilt in the order the user saw.
+  const reviewed = licenseFor({ ...currentDetail, licenses: detail.licenses }, hub.endpoint);
+  if (
+    !sameEntries(currentDetail.licenses, detail.licenses) ||
+    reviewed.label !== shown.label ||
+    reviewed.link !== shown.link
+  ) {
     throw changedSinceReview(clean(detail.id), `its license is now ${now.label}`);
   }
 }
@@ -418,7 +457,26 @@ async function planOllamaPull(name: string, deps: ModelSourceDeps): Promise<Olla
     target,
     name,
     manifest,
-    license: { label: clean(license.title), link: page, restricted: !license.permissive },
+    license: withCuratedLicense(
+      { label: clean(license.title), link: page, restricted: !license.permissive },
+      name,
+      deps
+    ),
+  };
+}
+
+/** A curated ref is restricted when the list records its own or its base model's license as not permissive. */
+function withCuratedLicense<T extends LicenseInfo>(license: T, ref: string, deps: ModelSourceDeps): T {
+  const curated = deps.curated && curatedBuildForRef(deps.curated(), ref);
+  if (!curated) return license;
+  const { entry } = curated;
+  const base = entry.license.base.class === 'permissive' ? undefined : clean(entry.license.base.id);
+  const listed = !license.restricted && entry.license.class !== 'permissive' ? clean(entry.license.id) : undefined;
+  return {
+    ...license,
+    restricted: license.restricted || !isPermissiveEntry(entry),
+    ...(base && { base, plural: true }),
+    ...(listed && { listed }),
   };
 }
 
@@ -436,21 +494,25 @@ export async function planPull(
   if (parsed.kind === 'ollama') return planOllamaPull(parsed.name, deps);
 
   const hub = deps.hub();
-  const detail = await hub.getModel(parsed.repo, { signal: deps.signal });
+  let detail = await hub.getModel(parsed.repo, { signal: deps.signal });
+  // A cached refusal can outlive an access grant in a long-lived MCP session.
+  if (detail.gated && detail.canDownload !== true) {
+    detail = await hub.getModel(parsed.repo, { signal: deps.signal, refresh: true });
+  }
   const id = clean(detail.id);
   if (detail.gated && detail.canDownload !== true) throw new Error(gatedMessage(id, hub.endpoint));
 
   const build = pickBuild(detail.builds, parsed.tag);
   if (!build) {
-    const quants = [...new Set(detail.builds.map(entry => entry.quant).filter(Boolean))].map(clean);
+    const tags = detail.builds.map(entry => clean(buildTag(entry)));
     throw new Error(
-      quants.length === 0
+      tags.length === 0
         ? `${id} has no GGUF builds.`
-        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${quants.join(', ')} (${pullCommand} ${id}:<QUANT>)`
+        : `${id} has no ${clean(parsed.tag ?? DEFAULT_QUANT)} build. Pick one of: ${tags.join(', ')} (${pullCommand} ${id}:<BUILD>)`
     );
   }
   if (build.ollamaRefIssue && UNPULLABLE.has(build.ollamaRefIssue)) {
-    throw new Error(`Ollama cannot pull ${id} ${clean(build.quant)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
+    throw new Error(`Ollama cannot pull ${id} ${clean(build.label)}: ${REF_ISSUES[build.ollamaRefIssue]}.`);
   }
 
   const target = await requirePullable(deps);
@@ -461,7 +523,7 @@ export async function planPull(
     detail,
     build,
     id,
-    license: licenseFor(detail, hub.endpoint),
+    license: withCuratedLicense(licenseFor(detail, hub.endpoint), `hf.co/${detail.id}:${build.quant}`, deps),
     projectorBytes: Math.max(0, ...detail.projectors.map(entry => entry.sizeBytes)),
   };
 }

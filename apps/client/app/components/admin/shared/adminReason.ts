@@ -30,6 +30,11 @@ export const ADMIN_REASON_PRESETS = {
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
+  compChange: ['Pilot or trial ended', 'Granted in error', 'Customer request', 'Account cleanup'],
+  creditRateChange: ['Plan change', 'Goodwill adjustment', 'Billing correction', 'Customer request'],
+  subscriptionRemove: ['Duplicate record', 'Comp no longer needed', 'Test or internal record', 'Billing correction'],
+  seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
+  paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
   signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
 } as const satisfies Record<string, readonly string[]>;
 

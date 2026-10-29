@@ -4,6 +4,14 @@
 
 This directory contains the core business logic services for the B4M application. Each service is organized into its own module and follows specific patterns for consistency and maintainability.
 
+## Internal user notes migration
+
+`userService.adminUpdateUser` no longer accepts `userNotes`. Existing inline notes
+remain read-only; remove that field from service calls. In the web application,
+use the JWT-only `/api/admin/users/<userId>/notes` routes for versioned note
+creation and edits. Reads require `support:read`, writes require `users:moderate`,
+and impersonated sessions cannot write notes. These routes are not API-key endpoints.
+
 ## Workspace session settings migration
 
 `IChatCompletionServiceOptions` and the adapters for `forkSession`, `snipSession`,

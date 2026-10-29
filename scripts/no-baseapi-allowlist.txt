@@ -40,6 +40,8 @@ apps/client/pages/api/agent-quest/manifest.ts           # Public agent-quest man
 apps/client/pages/api/agent-quest/__tests__/manifest.test.ts # Test file for the handler above (script greps by path, not export)
 
 # Slack — authenticated via HMAC-SHA256 signature (Slack signing secret)
+apps/client/pages/api/admin/users/[userId]/notes.ts # adminApi wraps baseApi with JWT-only auth and method-specific admin permissions
+apps/client/pages/api/admin/users/[userId]/tags.ts # adminApi wraps baseApi with JWT-only auth and settings:manage permission
 apps/client/pages/api/slack/commands.ts                 # verifySlackRequest() HMAC check
 apps/client/pages/api/slack/interactive.ts              # verifySlackRequest() HMAC check
 apps/client/pages/api/slack/__tests__/interactive.confirm.test.ts # Test file for the handler above (script greps by path, not export)

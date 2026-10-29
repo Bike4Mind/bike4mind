@@ -3,7 +3,7 @@ import {
   HUGGING_FACE_SSH_KEYS_URL,
   HuggingFaceHub,
   isAbliteratedModel,
-  type InstalledModel,
+  loadCuratedManifest,
   type PullOptions,
 } from '@bike4mind/local-models';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -19,12 +19,14 @@ import {
   CancelledError,
   NO_LICENSE,
   abortable,
+  buildTag,
   clean,
   formatBytes,
   hiddenAbliteratedMessage,
   hubAccessMessage,
+  licenseName,
   listInstalled,
-  normalizeModelName,
+  findInstalledModel,
   planPull,
   rankSearchHits,
   removeInstalled,
@@ -33,8 +35,10 @@ import {
   requireUnchangedManifest,
   resolveRuntimeTarget,
   runtimeLabel,
+  sameModelName,
   shortDigest,
   type HubClient,
+  type LicenseInfo,
   type ModelSourceDeps,
   type PullPlan,
   type RuntimeTarget,
@@ -79,6 +83,8 @@ const removeShape = {
   name: z.string().trim().min(1).max(300).describe('The installed model name, as models_list shows it'),
 };
 
+const baseLicense = (license: LicenseInfo) => (license.base ? [license.base] : []);
+
 /** What the user must see before approving a pull. */
 function pullSummary(plan: PullPlan) {
   const runtime = runtimeLabel(plan.target);
@@ -91,8 +97,8 @@ function pullSummary(plan: PullPlan) {
       size: formatBytes(plan.manifest.sizeBytes),
       revision: null,
       digest: shortDigest(plan.manifest.digest),
-      licenses: [license.label],
-      license: { label: license.label, link: license.link, permissive: !license.restricted },
+      licenses: [license.label, ...baseLicense(license)],
+      license: { label: licenseName(license), link: license.link, permissive: !license.restricted },
       acknowledgementRequired: license.restricted,
       runtime,
     };
@@ -101,7 +107,7 @@ function pullSummary(plan: PullPlan) {
   return {
     source: 'huggingface' as const,
     model: plan.id,
-    quant: clean(build.quant),
+    label: clean(build.label),
     files: build.files.map(file => ({ path: clean(file.path), sizeBytes: file.sizeBytes })),
     sizeBytes: build.sizeBytes,
     size: formatBytes(build.sizeBytes),
@@ -110,8 +116,8 @@ function pullSummary(plan: PullPlan) {
       visionProjectorUpTo: formatBytes(plan.projectorBytes),
     }),
     revision: clean(detail.revision),
-    licenses: detail.licenses.map(clean),
-    license: { label: license.label, link: license.link, permissive: !license.restricted },
+    licenses: [...detail.licenses.map(clean), ...baseLicense(license)],
+    license: { label: licenseName(license), link: license.link, permissive: !license.restricted },
     acknowledgementRequired: license.restricted,
     gated: detail.gated,
     runtime,
@@ -145,7 +151,7 @@ function licenseSentence(summary: PullSummary): string {
 
 function pullMessage(summary: PullSummary): string {
   return [
-    `Download ${summary.model}${'quant' in summary ? ` ${summary.quant}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
+    `Download ${summary.model}${'label' in summary ? ` ${summary.label}` : ''} (${sizeText(summary)}) to ${summary.runtime}?`,
     ...('files' in summary ? [`File: ${summary.files.map(file => file.path).join(', ')}`] : []),
     ...(summary.revision ? [`Revision: ${summary.revision}`] : []),
     ...('digest' in summary ? [`Digest: ${summary.digest}`] : []),
@@ -190,9 +196,7 @@ function terminalCommand(target: RuntimeTarget, subcommand: 'pull' | 'rm', subje
 /** The ref `b4m models pull` resolves to the same build. */
 function pullRef(plan: PullPlan): string {
   if (plan.kind === 'ollama') return plan.name;
-  const ref = plan.build.ollamaRef;
-  const tag = ref ? ref.slice(ref.lastIndexOf(':') + 1) : plan.build.quant;
-  return `${plan.detail.id}:${tag}`;
+  return `${plan.detail.id}:${buildTag(plan.build)}`;
 }
 
 function pullProgress(extra: Extra): PullOptions['onProgress'] {
@@ -217,14 +221,6 @@ function pullProgress(extra: Extra): PullOptions['onProgress'] {
   };
 }
 
-function findInstalled(models: InstalledModel[], name: string): InstalledModel | undefined {
-  const wanted = name.replace(/^library\//i, '');
-  return (
-    models.find(model => model.name === name || model.name === wanted) ??
-    models.find(model => model.name === `${wanted}:latest`)
-  );
-}
-
 export function localModelToolsDeps(configStore: ConfigStore | undefined): ModelToolsDeps {
   let hub: HubClient | undefined;
   return {
@@ -233,6 +229,7 @@ export function localModelToolsDeps(configStore: ConfigStore | undefined): Model
     resolveRuntime: async () =>
       resolveRuntimeTarget({ env: process.env.B4M_OLLAMA_HOST, config: (await configStore?.load())?.ollamaHost }),
     defaultModel: async () => (await configStore?.load())?.defaultModel,
+    curated: () => loadCuratedManifest(message => console.error(message)),
   };
 }
 
@@ -398,7 +395,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
       run(async () => {
         const target: RuntimeTarget = await abortable(deps.resolveRuntime(), extra.signal);
         requireRemovable(target);
-        const model = findInstalled(await abortable(target.runtime.list(), extra.signal), args.name);
+        const model = findInstalledModel(await abortable(target.runtime.list(), extra.signal), args.name);
         if (!model)
           return errorResult(`No model named ${clean(args.name)} on ${runtimeLabel(target)}. See models_list.`);
         const summary = {
@@ -441,7 +438,7 @@ export function registerModelTools(server: McpServer, deps: ModelToolsDeps): voi
 
         await removeInstalled(target, model.name, extra.signal);
         const defaultModel = await deps.defaultModel();
-        const wasDefault = !!defaultModel && normalizeModelName(defaultModel) === normalizeModelName(model.name);
+        const wasDefault = !!defaultModel && sameModelName(defaultModel, model.name);
         return toResult({ status: 'removed', removed: true, ...summary, wasDefault });
       })
   );

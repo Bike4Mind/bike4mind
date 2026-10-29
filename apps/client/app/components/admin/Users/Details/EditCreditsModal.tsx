@@ -13,6 +13,14 @@ import {
   Box,
 } from '@mui/joy';
 import React, { useState, useEffect } from 'react';
+import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
+import {
+  ADMIN_REASON_PRESETS,
+  type AdminReasonDraft,
+  EMPTY_ADMIN_REASON,
+  composeAdminReason,
+  isAdminReasonComplete,
+} from '@client/app/components/admin/shared/adminReason';
 
 interface EditCreditsModalProps {
   open: boolean;
@@ -34,19 +42,23 @@ const EditCreditsModal: React.FC<EditCreditsModalProps> = ({
   currentCreditsPerCycle,
 }) => {
   const [creditsPerCycle, setCreditsPerCycle] = useState<number>(currentCreditsPerCycle);
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
   const updateCredits = useUpdateSubscriptionCredits();
 
   useEffect(() => {
     setCreditsPerCycle(currentCreditsPerCycle);
   }, [currentCreditsPerCycle, open]);
 
+  const isFormValid = creditsPerCycle > 0 && isAdminReasonComplete(reason);
+
   const handleSubmit = async () => {
-    if (creditsPerCycle <= 0) return;
+    if (!isFormValid) return;
 
     await updateCredits.mutateAsync({
       userId,
       subscriptionId,
       creditsPerCycle,
+      reason: composeAdminReason(reason),
     });
 
     handleClose();
@@ -54,10 +66,9 @@ const EditCreditsModal: React.FC<EditCreditsModalProps> = ({
 
   const handleClose = () => {
     setCreditsPerCycle(currentCreditsPerCycle);
+    setReason(EMPTY_ADMIN_REASON);
     onClose();
   };
-
-  const isFormValid = creditsPerCycle > 0;
 
   return (
     <Modal open={open} onClose={handleClose}>
@@ -98,7 +109,7 @@ const EditCreditsModal: React.FC<EditCreditsModalProps> = ({
             </Typography>
           </FormControl>
 
-          {isFormValid && creditsPerCycle !== currentCreditsPerCycle && (
+          {creditsPerCycle > 0 && creditsPerCycle !== currentCreditsPerCycle && (
             <Box sx={{ p: 2, backgroundColor: 'background.level1', borderRadius: 'md' }}>
               <Typography level="body-sm" color="primary" sx={{ fontWeight: 'bold' }}>
                 {currentCreditsPerCycle.toLocaleString()} → {creditsPerCycle.toLocaleString()} credits per cycle
@@ -108,6 +119,13 @@ const EditCreditsModal: React.FC<EditCreditsModalProps> = ({
               </Typography>
             </Box>
           )}
+
+          <ReasonPicker
+            presets={ADMIN_REASON_PRESETS.creditRateChange}
+            value={reason}
+            onChange={setReason}
+            data-testid="credits-reason-input"
+          />
 
           <Divider />
 

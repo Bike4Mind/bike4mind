@@ -1,5 +1,5 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
@@ -34,12 +34,6 @@ interface ChannelInfo {
   latestMessageTs: string | null;
   warning: string | null;
 }
-
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
 
 const FETCH_TIMEOUT = 15000; // 15 seconds
 
@@ -166,9 +160,7 @@ async function estimateMessageCount(
   }
 }
 
-const handler = baseApi().post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(async (req, res) => {
   const result = RequestSchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');

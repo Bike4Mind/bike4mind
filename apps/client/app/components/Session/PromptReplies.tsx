@@ -179,7 +179,8 @@ export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
-    const codeContent = String(children).replace(/\n$/, '');
+    // An empty fence has no children at all.
+    const codeContent = String(children ?? '').replace(/\n$/, '');
     const lineCount = codeContent.split('\n').length;
     const inline =
       node?.position?.start.line === node?.position?.end.line &&

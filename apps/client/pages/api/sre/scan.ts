@@ -12,11 +12,11 @@
  */
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { classifyForScan } from '@bike4mind/database/infra';
 import { SreAgentConfigSchema, resolveFullConfig } from '@bike4mind/common';
@@ -76,13 +76,11 @@ const GITHUB_PAGE_SIZE = 100;
 // 50s < 60s Lambda timeout - ensures the finally block has time to run before SIGKILL
 const SCAN_MUTEX_TTL_MS = 50_000;
 
-const handler = baseApi()
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } })
   .use(csrfProtection())
   .use(rateLimit({ limit: 3, windowMs: 60_000 }))
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
       const { repoSlug } = ScanRequestSchema.parse(req.body);
       const startTime = Date.now();
       const logger = new Logger({ metadata: { component: 'sre-scan', userId: req.user.id } });

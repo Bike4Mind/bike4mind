@@ -1,4 +1,5 @@
 export * from './ApiKeyAlertModel';
+export * from './AdminUserNoteModel';
 export * from './ApiKeyModel';
 export * from './ApiKeyUsageLogModel';
 export * from './AuthEventModel';
