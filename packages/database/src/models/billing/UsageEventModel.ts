@@ -207,6 +207,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
   async creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>> {
     if (userIds.length === 0) return {};
+    // Lifetime spend on purpose; the {userId, createdAt} index serves it for a bounded id list.
     const rows = await this.model.aggregate<{ _id: string; credits: number }>([
       { $match: { userId: { $in: userIds } } },
       {
