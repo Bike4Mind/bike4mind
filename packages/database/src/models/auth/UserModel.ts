@@ -19,6 +19,8 @@ import {
   MFA_LOCKOUT_DURATION_MS,
   MFA_ATTEMPT_RESET_WINDOW_MS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  Collection,
+  PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
@@ -658,7 +660,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     userId: string,
     options: { page: number; limit: number; search: string; type?: CollectionType },
     deps: { findSessionIdsByUserId: (userId: string) => Promise<string[]> }
-  ) {
+  ): Promise<PaginatedResponse<Collection>> {
     const { page, limit, search, type } = options;
 
     const { pipeline, facetStages } = await buildCollectionSearchPipeline(
