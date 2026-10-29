@@ -5,6 +5,7 @@ import {
   createThinkMarkerEscaper,
   IMessage,
   isBedrockRegionProfileId,
+  isToolChangeMessage,
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
@@ -40,6 +41,7 @@ import {
 } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
 import { ensureToolPairingIntegrity } from '../toolPairingUtils';
+import { TOOL_CHANGES_BETA } from '../toolChanges';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
 
 enum ClaudeChunkTypes {
@@ -888,12 +890,18 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Filter and validate messages to ensure content is valid
     // Bedrock/Anthropic rejects "text content blocks must contain non-whitespace text"
     const sanitizedMessages = messages
-      .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content !== null && m.content !== undefined)
+      .filter(
+        m =>
+          isToolChangeMessage(m) ||
+          ((m.role === 'user' || m.role === 'assistant') && m.content !== null && m.content !== undefined)
+      )
       // Unlike the other backends this one forwards IMessage objects into the request body largely
       // as-is, so control-only fields have to be dropped here rather than left to the invariant that
       // nothing sets them on a user/assistant message.
       .map(({ requiresTool: _requiresTool, ...m }) => m)
       .map(m => {
+        // tool_addition/tool_removal blocks go out verbatim, in place, as on the direct API.
+        if (isToolChangeMessage(m)) return m;
         // Handle string content - check for empty/whitespace-only
         if (typeof m.content === 'string') {
           const trimmed = m.content.trim();
@@ -952,7 +960,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // needs a block boundary to attach to. The joined string below is still what the
     // non-caching path sends.
     const systemBlocks = messages
-      .filter(m => m.role === 'system' && m.content)
+      .filter(m => m.role === 'system' && m.content && !isToolChangeMessage(m))
       .map(m => ({ text: systemContentToText(m.content), cache: m.cache === true }))
       // A block array carrying no text flattens to '', which would otherwise
       // contribute a blank line to the joined prompt. Trim-checked because
@@ -984,6 +992,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       max_tokens: maxTokens,
       messages: filteredMessages,
     };
+    // Bedrock takes Anthropic betas in the body rather than as a header.
+    if (filteredMessages.some(m => isToolChangeMessage(m))) {
+      body.anthropic_beta = [TOOL_CHANGES_BETA];
+    }
 
     // A `cache: true` system message declares a breakpoint part-way down the stack (the
     // deployment-wide shareable prefix - see markShareablePrefixBoundary in @bike4mind/services).
