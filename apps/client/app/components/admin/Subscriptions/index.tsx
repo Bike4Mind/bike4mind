@@ -96,15 +96,14 @@ function SubscriptionRowActions({ row, onOpen }: { row: AdminSubscriptionRow; on
 
 // A failed query has no value to wait for, so it reads as unavailable rather than loading forever.
 const tileValue = (value: number | string | undefined, isError = false) => {
-  if (value !== undefined) return value;
   if (isError) return '\u2014';
+  if (value !== undefined) return value;
   return <Skeleton variant="text" level="h3" width="3ch" data-testid="admin-stat-skeleton" />;
 };
 
 const AdminSubscriptions: React.FC = () => {
   useSubscriptionsTabUrlSync();
   const [params, setParams] = useSubscriptionsParams();
-  const newSince = useSubscriptionsSeenOnOpen();
   const openRow = useOpenSubscriptionRow();
   const setAdminTab = useAdminModal(state => state.setActiveTab);
   const [exporting, setExporting] = useState(false);
@@ -124,6 +123,9 @@ const AdminSubscriptions: React.FC = () => {
 
   const filter = toAdminSubscriptionsFilter(params);
   const listQuery = useAdminSubscriptionsList(params);
+  const newSince = useSubscriptionsSeenOnOpen(
+    listQuery.isSuccess && listQuery.isFetchedAfterMount && !listQuery.isPlaceholderData
+  );
   const summaryQuery = useAdminSubscriptionsSummary(filter);
   // Another cancel filter would be overwritten, so the tile only counts when none (or this one) is set.
   const cancelingCountable = filter.cancel === undefined || filter.cancel === 'scheduled';
@@ -131,7 +133,15 @@ const AdminSubscriptions: React.FC = () => {
     { ...filter, cancel: 'scheduled' },
     { enabled: cancelingCountable }
   );
-  const viewCounts = useSubscriptionsViewCounts();
+  const viewCountsQuery = useSubscriptionsViewCounts();
+  const viewCounts = viewCountsQuery.data;
+  const summariesFailed =
+    summaryQuery.isError || (cancelingCountable && cancelingQuery.isError) || viewCountsQuery.isError;
+  const retrySummaries = () => {
+    void summaryQuery.refetch();
+    if (cancelingCountable) void cancelingQuery.refetch();
+    viewCountsQuery.refetch();
+  };
 
   const rows = useMemo(() => listQuery.data?.subscriptions ?? [], [listQuery.data]);
   const total = listQuery.data?.total;
@@ -211,7 +221,7 @@ const AdminSubscriptions: React.FC = () => {
         description="Try removing a filter, or search by an exact Stripe ID."
         action={
           <Button variant="outlined" onClick={clearFilters} data-testid="admin-subscriptions-empty-clear-btn">
-            Clear filters
+            {searching ? 'Clear search and filters' : 'Clear filters'}
           </Button>
         }
       />
@@ -246,19 +256,39 @@ const AdminSubscriptions: React.FC = () => {
         }
       />
 
+      {summariesFailed && (
+        <Alert
+          color="warning"
+          data-testid="admin-subscriptions-summary-error"
+          endDecorator={
+            <Button
+              size="sm"
+              variant="plain"
+              onClick={retrySummaries}
+              data-testid="admin-subscriptions-summary-retry-btn"
+            >
+              Retry totals
+            </Button>
+          }
+        >
+          Could not load subscription totals. Retry to refresh the totals and view counts.
+        </Alert>
+      )}
       <StatStrip aria-label="Subscription totals for the current filters">
         <StatTile label="Paying" value={tileValue(summary?.views.paying, summaryQuery.isError)} />
         <StatTile
           label="MRR"
           help={<MrrDefinitionHelp />}
           value={tileValue(mrr && formatMoney(mrr.amount, mrr.currency, { compact: true }), summaryQuery.isError)}
-          comparison={mrr && mrrExclusionNote(mrr)}
+          comparison={!summaryQuery.isError && mrr && mrrExclusionNote(mrr)}
         />
         <StatTile
           label="Past due"
           value={tileValue(pastDue, summaryQuery.isError)}
           valueColor={pastDue ? 'admin.status.warn.foreground' : undefined}
-          comparison={pastDue && summary?.pastDueMrr ? atRiskNote(summary.pastDueMrr) : undefined}
+          comparison={
+            !summaryQuery.isError && pastDue && summary?.pastDueMrr ? atRiskNote(summary.pastDueMrr) : undefined
+          }
         />
         <StatTile
           label="Canceling"

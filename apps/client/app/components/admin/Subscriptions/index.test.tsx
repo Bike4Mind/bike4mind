@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
+import { Blob as NodeBlob } from 'node:buffer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   AdminSubscriptionRow,
@@ -14,14 +15,19 @@ vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAd
 
 const apiGet = vi.hoisted(() => vi.fn());
 const openRow = vi.hoisted(() => vi.fn());
+const downloadData = vi.hoisted(() => vi.fn());
+const notifications = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+vi.mock('@client/app/utils/download', () => ({ downloadData }));
+vi.mock('sonner', () => ({ toast: notifications }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
 vi.mock('./useOpenSubscriptionRow', () => ({ useOpenSubscriptionRow: () => openRow }));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
-import { useSubscriptionsLastSeen } from './subscriptionsLastSeen';
+import { NEWEST_PAID_SUBSCRIPTION_QUERY, useSubscriptionsLastSeen } from './subscriptionsLastSeen';
 import { DEFAULT_SUBSCRIPTIONS_PARAMS } from './subscriptionsTabSearch';
 import { useSubscriptionsTab } from './useSubscriptionsTabParams';
 import AdminSubscriptions from './index';
+import { adminSubscriptionsListQuery, adminSubscriptionsQueryKey } from './useAdminSubscriptionsList';
 
 const theme = extendTheme({ ...getThemeConfig() });
 
@@ -90,8 +96,7 @@ const listResponse = (): AdminSubscriptionsListResponse => ({
   searchTruncated: false,
 });
 
-const renderTab = () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const renderTab = (client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) => {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>
       <CssVarsProvider theme={theme}>{children}</CssVarsProvider>
@@ -101,12 +106,19 @@ const renderTab = () => {
 };
 
 const listParams = () =>
-  apiGet.mock.calls.filter(([url]) => url === LIST_PATH).map(([, config]) => (config as { params: unknown }).params);
+  apiGet.mock.calls
+    .filter(
+      ([url, config]) => url === LIST_PATH && (config as { params: unknown }).params !== NEWEST_PAID_SUBSCRIPTION_QUERY
+    )
+    .map(([, config]) => (config as { params: unknown }).params);
 const lastListParams = () => listParams().at(-1);
 
 beforeEach(() => {
   apiGet.mockReset();
   openRow.mockReset();
+  downloadData.mockReset();
+  notifications.warning.mockReset();
+  notifications.error.mockReset();
   window.localStorage.clear();
   listRows = [row(), compedRow];
   apiGet.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
@@ -346,6 +358,21 @@ describe('AdminSubscriptions', () => {
       expect(screen.getByTestId('admin-subscriptions-empty-pricing-btn')).toBeTruthy();
     });
 
+    it('names and clears both search and filters when search returns nothing', async () => {
+      renderTab();
+      await screen.findByText('No paying subscriptions yet');
+      fireEvent.change(screen.getByTestId('admin-subscriptions-search-input'), {
+        target: { value: 'missing@example.com' },
+      });
+      const clear = await screen.findByTestId('admin-subscriptions-empty-clear-btn');
+      expect(clear).toHaveTextContent('Clear search and filters');
+      fireEvent.click(clear);
+      await waitFor(() =>
+        expect(lastListParams()).toEqual({ page: 1, limit: 25, sortField: 'createdAt', sortOrder: 'desc' })
+      );
+      expect(screen.getByTestId('admin-subscriptions-search-input')).toHaveValue('');
+    });
+
     it('offers to clear filters that match nothing', async () => {
       act(() => fakeAdminRouter.reset({ tab: 'subscriptions', subsInterval: 'yearly', subsPage: 1 }));
       renderTab();
@@ -355,4 +382,126 @@ describe('AdminSubscriptions', () => {
       expect(fakeAdminRouter.search.subsInterval).toBeUndefined();
     });
   });
+});
+
+describe('subscription summary failures', () => {
+  it('reports failed totals while preserving the list and retries all summary queries', async () => {
+    let failed = true;
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === SUMMARY_PATH) {
+        if (failed) throw new Error('summary unavailable');
+        return { data: SUMMARY };
+      }
+      return { data: listResponse() };
+    });
+    renderTab();
+    expect(await screen.findByTestId('admin-subscriptions-row-s1')).toBeTruthy();
+    expect(await screen.findByTestId('admin-subscriptions-summary-error')).toBeTruthy();
+    expect(screen.queryAllByTestId('admin-stat-skeleton')).toHaveLength(0);
+    failed = false;
+    fireEvent.click(screen.getByTestId('admin-subscriptions-summary-retry-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-subscriptions-summary-error')).toBeNull());
+    expect(screen.getByText('$12.3K')).toBeTruthy();
+  });
+
+  it('hides cached money totals after their refresh fails', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(
+      [...adminSubscriptionsQueryKey, 'summary', { status: ['active', 'past_due'], source: 'stripe' }],
+      SUMMARY,
+      { updatedAt: 0 }
+    );
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === SUMMARY_PATH) throw new Error('summary unavailable');
+      return { data: listResponse() };
+    });
+    renderTab(client);
+    await screen.findByTestId('admin-subscriptions-summary-error');
+    await waitFor(() => expect(screen.queryByText('$12.3K')).toBeNull());
+    expect(screen.queryByText('$19.00 MRR at risk')).toBeNull();
+    expect(screen.queryByText('Not in total: 2 with no billed amount, 1 in another currency')).toBeNull();
+  });
+
+  it('reports global view-count failure even when the current filtered totals succeed', async () => {
+    let failed = true;
+    apiGet.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === SUMMARY_PATH) {
+        if (failed && Object.keys(config?.params ?? {}).length === 0) throw new Error('counts unavailable');
+        return { data: SUMMARY };
+      }
+      return { data: listResponse() };
+    });
+    renderTab();
+    expect(await screen.findByText('$12.3K')).toBeTruthy();
+    expect(await screen.findByTestId('admin-subscriptions-summary-error')).toBeTruthy();
+    failed = false;
+    fireEvent.click(screen.getByTestId('admin-subscriptions-summary-retry-btn'));
+    await waitFor(() => expect(screen.queryByTestId('admin-subscriptions-summary-error')).toBeNull());
+  });
+
+  it('does not acknowledge unread subscriptions when the list fails', async () => {
+    act(() => useSubscriptionsLastSeen.setState({ lastSeen: '2026-09-01T00:00:00.000Z' }));
+    apiGet.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === SUMMARY_PATH) return { data: SUMMARY };
+      if (config?.params?.status) throw new Error('list unavailable');
+      return { data: listResponse() };
+    });
+    renderTab();
+    expect(await screen.findByText('Could not load subscriptions.')).toBeTruthy();
+    expect(useSubscriptionsLastSeen.getState().lastSeen).toBe('2026-09-01T00:00:00.000Z');
+  });
+});
+
+describe('subscription CSV export', () => {
+  it('downloads the filtered export and warns about both server truncation markers', async () => {
+    const blob = new NodeBlob(['id\nsub_1\n# Truncated at 10000 rows\n# Search matched more than 500 accounts\n']);
+    apiGet.mockImplementation(async (url: string) => {
+      if (url.endsWith('/export'))
+        return { data: blob, headers: { 'content-disposition': 'attachment; filename="filtered.csv"' } };
+      return { data: url === SUMMARY_PATH ? SUMMARY : listResponse() };
+    });
+    renderTab();
+    await screen.findByTestId('admin-subscriptions-row-s1');
+    fireEvent.click(screen.getByTestId('admin-subscriptions-export-btn'));
+    await waitFor(() => expect(downloadData).toHaveBeenCalledWith(blob, 'filtered.csv', 'text/csv;charset=utf-8;'));
+    expect(apiGet).toHaveBeenCalledWith(`${LIST_PATH}/export`, {
+      params: { status: ['active', 'past_due'], source: 'stripe' },
+      responseType: 'blob',
+    });
+    expect(notifications.warning).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports an export failure and leaves the button available for retry', async () => {
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    apiGet.mockImplementation(async (url: string) => {
+      if (url.endsWith('/export')) throw new Error('export unavailable');
+      return { data: url === SUMMARY_PATH ? SUMMARY : listResponse() };
+    });
+    renderTab();
+    await screen.findByTestId('admin-subscriptions-row-s1');
+    const button = screen.getByTestId('admin-subscriptions-export-btn');
+    fireEvent.click(button);
+    await waitFor(() => expect(notifications.error).toHaveBeenCalledWith('Failed to download the subscriptions CSV.'));
+    expect(button).not.toBeDisabled();
+    expect(downloadData).not.toHaveBeenCalled();
+    diagnostic.mockRestore();
+  });
+});
+
+it('does not acknowledge newer rows from a cached list when this visit refresh fails', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const previous = '2026-09-01T00:00:00.000Z';
+  act(() => useSubscriptionsLastSeen.setState({ lastSeen: previous }));
+  client.setQueryData(
+    [...adminSubscriptionsQueryKey, 'list', adminSubscriptionsListQuery(DEFAULT_SUBSCRIPTIONS_PARAMS)],
+    listResponse()
+  );
+  apiGet.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
+    if (url === SUMMARY_PATH) return { data: SUMMARY };
+    if (config?.params?.status) throw new Error('mount refresh unavailable');
+    return { data: listResponse() };
+  });
+  renderTab(client);
+  expect(await screen.findByText('Could not load subscriptions.')).toBeTruthy();
+  expect(useSubscriptionsLastSeen.getState().lastSeen).toBe(previous);
 });

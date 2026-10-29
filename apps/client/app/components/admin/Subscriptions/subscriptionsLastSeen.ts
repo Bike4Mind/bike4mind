@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 import { api } from '@client/app/contexts/ApiContext';
 import type { AdminSubscriptionsListResponse } from '@client/app/utils/adminSubscriptionsFilter';
 import { adminSubscriptionsQueryKey } from './useAdminSubscriptionsList';
 
-/** When this browser last opened the Subscriptions tab, as an ISO string. Per browser on purpose. */
+/** Newest Stripe row acknowledged by this browser, as an ISO string. Per browser on purpose. */
 export const SUBSCRIPTIONS_LAST_SEEN_KEY = 'admin-subscriptions-last-seen';
 export const NEW_SUBSCRIPTIONS_POLL_MS = 5 * 60_000;
 
@@ -17,6 +17,15 @@ export const NEWEST_PAID_SUBSCRIPTION_QUERY = {
   sortField: 'createdAt',
   sortOrder: 'desc',
 } as const;
+
+const newestPaidQueryKey = [...adminSubscriptionsQueryKey, 'newest-paid'] as const;
+
+const fetchNewestPaid = async (): Promise<string | null> => {
+  const { data } = await api.get<AdminSubscriptionsListResponse>('/api/admin/subscriptions', {
+    params: NEWEST_PAID_SUBSCRIPTION_QUERY,
+  });
+  return data.subscriptions[0]?.createdAt ?? null;
+};
 
 const parseLastSeen = (value: string | null): string | null =>
   value && Number.isFinite(Date.parse(value)) ? value : null;
@@ -38,12 +47,17 @@ const writeStoredLastSeen = (value: string) => {
   }
 };
 
-export const useSubscriptionsLastSeen = create<{ lastSeen: string | null; markSeen: (at?: Date) => void }>()(set => ({
+export const useSubscriptionsLastSeen = create<{ lastSeen: string | null; markSeen: (at: Date) => void }>()(set => ({
   lastSeen: readStoredLastSeen(),
-  markSeen: (at = new Date()) => {
-    const lastSeen = at.toISOString();
-    writeStoredLastSeen(lastSeen);
-    set({ lastSeen });
+  markSeen: at => {
+    set(state => {
+      const stored = readStoredLastSeen();
+      const lastSeen = [at.toISOString(), state.lastSeen, stored]
+        .filter((value): value is string => value !== null)
+        .reduce((latest, value) => (Date.parse(value) > Date.parse(latest) ? value : latest));
+      if (stored !== lastSeen) writeStoredLastSeen(lastSeen);
+      return state.lastSeen === lastSeen ? state : { lastSeen };
+    });
   },
 }));
 
@@ -60,13 +74,8 @@ export function useNewSubscriptionsDot(enabled: boolean): boolean {
   const markSeen = useSubscriptionsLastSeen(state => state.markSeen);
 
   const newest = useQuery({
-    queryKey: [...adminSubscriptionsQueryKey, 'newest-paid'],
-    queryFn: async () => {
-      const { data } = await api.get<AdminSubscriptionsListResponse>('/api/admin/subscriptions', {
-        params: NEWEST_PAID_SUBSCRIPTION_QUERY,
-      });
-      return data.subscriptions[0]?.createdAt ?? null;
-    },
+    queryKey: newestPaidQueryKey,
+    queryFn: fetchNewestPaid,
     enabled,
     refetchInterval: NEW_SUBSCRIPTIONS_POLL_MS,
     staleTime: NEW_SUBSCRIPTIONS_POLL_MS,
@@ -81,8 +90,10 @@ export function useNewSubscriptionsDot(enabled: boolean): boolean {
   useEffect(() => {
     if (!enabled) return;
     const onStorage = (event: StorageEvent) => {
-      if (event.key === SUBSCRIPTIONS_LAST_SEEN_KEY)
-        useSubscriptionsLastSeen.setState({ lastSeen: parseLastSeen(event.newValue) });
+      if (event.key !== SUBSCRIPTIONS_LAST_SEEN_KEY) return;
+      const incoming = parseLastSeen(event.newValue);
+      if (incoming) useSubscriptionsLastSeen.getState().markSeen(new Date(incoming));
+      else useSubscriptionsLastSeen.setState({ lastSeen: null });
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
@@ -91,14 +102,37 @@ export function useNewSubscriptionsDot(enabled: boolean): boolean {
   return isNewSince(newest.data, lastSeen);
 }
 
-/**
- * For the Subscriptions tab: returns the last-seen time from before this visit (rows started after it
- * get a New chip), and stores now, which clears the sidebar dot.
- */
-export function useSubscriptionsSeenOnOpen(): string | null {
+/** Capture the visit's server watermark, acknowledging it only after the list loads successfully. */
+export function useSubscriptionsSeenOnOpen(listLoaded: boolean): string | null {
   const [previous] = useState(() => useSubscriptionsLastSeen.getState().lastSeen);
+  const [watermark, setWatermark] = useState<string | null>();
+  const marked = useRef(false);
+  const queryClient = useQueryClient();
+
   useEffect(() => {
-    useSubscriptionsLastSeen.getState().markSeen();
-  }, []);
+    let mounted = true;
+    const captureWatermark = async () => {
+      try {
+        const newest = await queryClient.fetchQuery({
+          queryKey: newestPaidQueryKey,
+          queryFn: fetchNewestPaid,
+          staleTime: 0,
+        });
+        if (mounted) setWatermark(newest);
+      } catch (error) {
+        console.error('Could not capture the subscriptions visit watermark:', error);
+      }
+    };
+    void captureWatermark();
+    return () => {
+      mounted = false;
+    };
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (!listLoaded || watermark === undefined || marked.current) return;
+    marked.current = true;
+    useSubscriptionsLastSeen.getState().markSeen(new Date(watermark ?? 0));
+  }, [listLoaded, watermark]);
   return previous;
 }

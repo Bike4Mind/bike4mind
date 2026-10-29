@@ -333,10 +333,10 @@ To make this possible, `RevenueSnapshot` (6.4) also stores per day:
 
 Money > Subscriptions shows a dot when Stripe-sourced subscriptions started after this browser last opened the tab.
 
-- Last-seen is a localStorage timestamp, so it is per browser, not per admin account.
+- Last-seen is the newest Stripe row timestamp observed at the start of a successful list visit, stored in localStorage per browser, not per admin account. It never uses the browser clock or moves backwards.
 - The first visit sets the baseline and shows no dot.
 - The count refreshes every 5 minutes while the admin sidebar is mounted and the browser tab is focused. The query sets `refetchInterval` only, so react-query's default `refetchIntervalInBackground: false` pauses polling in a background tab.
-- Opening the tab clears the dot and marks the rows started since the previous visit with a New chip.
+- Opening the tab captures a fresh server watermark. Once the list loads successfully, that watermark clears the dot; a failed list read keeps the previous watermark. Rows started since the previous successful visit get a New chip. Rows arriving after the captured watermark stay new, including while the tab is open. If the watermark request fails, unread state is preserved; reopening the tab retries that snapshot.
 - Known limit: an org comp that converts to paid keeps the comp's `createdAt`, so the dot and the New chip miss it. The Slack new-paid post still fires.
 
 ---
@@ -451,6 +451,8 @@ Content: plan, interval, amount, seats for org subscriptions, the owner's ID, an
 
 Redelivery: plan and cancel posts are gated by the stored-row diff, and ended is gated by the prior status. An exact redelivery of a new-subscription or first-failure event can post twice.
 
+Delivery is best-effort. Posts run after the row commits and before invoice cleanup; Slack failures are logged and swallowed so they do not retry billing writes. A failed post, or an interruption between the row write and the post, can lose a plan, cancel or ended notification because a redelivery finds the new row state. There is no durable notification outbox.
+
 Out-of-order updates: a canceled row overwritten by a stale live update and then canceled again posts Subscription ended twice.
 
 The existing refund and dispute posts (Liveops channel) show the owner ID and admin link instead of names or emails. The earlier new-subscription post that included the customer email is removed.
@@ -503,10 +505,10 @@ Ordered by value. Each item ships on its own behind the existing admin gate. Lab
 | 2 ([#6013](https://github.com/Bike4Mind/bike4mind/issues/6013)) | **Close reason/audit gaps on existing money routes**: reason required on credits-per-cycle, remove, seats, revoke, convert-to-paid; block "remove" on live Stripe-billed rows; new reason preset sets. The existing Organizations-tab modals get the minimum change needed to send a reason; their redesign belongs to [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772) | S | - |
 | 3 ([#6014](https://github.com/Bike4Mind/bike4mind/issues/6014)) | **Admin subscriptions list API**: `GET /api/admin/subscriptions` + `summary` + `export`, server filters, org subscriptions included, indexes. **Shipped.** | M | - |
 | 4 ([#6015](https://github.com/Bike4Mind/bike4mind/issues/6015)) | **Subscriptions list page on the shared toolkit**: views, FilterBar, DataTable server mode, StatStrip (counts only), status tone map, money formatter, CSV export. **Partly shipped.** Remaining: saved custom views, Group by, bulk Export selected, Open in Stripe, the Mismatched view and anomaly banner (with [#6021](https://github.com/Bike4Mind/bike4mind/issues/6021)), and the detail page link (with [#6016](https://github.com/Bike4Mind/bike4mind/issues/6016)) | M | 3 |
-| 4b | **Additions shipped with [#6015](https://github.com/Bike4Mind/bike4mind/issues/6015)**: Slack notifications (6.6) and the sidebar indicator (5.8), and the Canceling and Churned (30 days) views (`cancel` filter, 6.5) | S | 3 |
+| 4b | **Additional scope implemented in [PR #6099](https://github.com/Bike4Mind/bike4mind/pull/6099)**, beyond the list-page scope of #6015: Slack notifications (6.6) and the sidebar indicator (5.8), and the Canceling and Churned (30 days) views (`cancel` filter, 6.5) | S | 3 |
 | 5 ([#6016](https://github.com/Bike4Mind/bike4mind/issues/6016)) | **Subscription detail page (Mongo-only)**: header, Overview (Plan, Credits, Owner, Seats), Admin log, comp actions moved to ActionDialog (grant, extend, end, edit credits per cycle, remove); profile and org cards link here; delete legacy `UserSubscriptionStatus` and `EditCreditsModal`. The Organizations-tab modals (`AdjustSeatsModal`, revoke) stay with [#5772](https://github.com/Bike4Mind/bike4mind/issues/5772) | L | 2, 3 |
 | 6 ([#6017](https://github.com/Bike4Mind/bike4mind/issues/6017)) | **Mirror price and cancel fields on Subscription** (6.1), plus a read-only backfill script | M | - |
-| 7 ([#6018](https://github.com/Bike4Mind/bike4mind/issues/6018)) | **MRR in the list**: MRR column and tile, Past due amount, MRR definition popover, shared `formatMoney` and the DESIGN_GUIDE money rule, MRR in the CSV export. **Shipped.** The Canceling view shipped with 4b via `cancel=scheduled`; it moves to the mirrored cancel fields once their backfill has run | S | 4, 6 |
+| 7 ([#6018](https://github.com/Bike4Mind/bike4mind/issues/6018)) | **MRR in the list**: MRR column and tile, Past due amount, MRR definition popover, shared `formatMoney` and the DESIGN_GUIDE money rule, MRR in the CSV export. **Shipped.** The Canceling view is implemented with 4b via `cancel=scheduled`; it moves to the mirrored cancel fields once their backfill has run | S | 4, 6 |
 | 8 ([#6019](https://github.com/Bike4Mind/bike4mind/issues/6019)) | **Detail: live Stripe read**: Payment card, Invoices tab with credits-granted join, Lifetime paid | M | 5 |
 | 9 ([#6020](https://github.com/Bike4Mind/bike4mind/issues/6020)) | **BillingEvent store and Timeline tab** (6.2) | M | 5 |
 | 10 ([#6021](https://github.com/Bike4Mind/bike4mind/issues/6021)) | **Reconciliation cron, Mismatched view, AnomalyBanner, Sync from Stripe** (6.3); replaces Reconcile seats | M | 4, 6 |

@@ -310,6 +310,42 @@ describe('postNewPaidSubscriptionToSlack', () => {
     expect(message).toContain('*Seats:* 4');
   });
 
+  it.each([
+    ['month', 3, '$20.00/3mo'],
+    ['year', 2, '$20.00/2yr'],
+  ] as const)(
+    'keeps the billed %s interval count of %i in new and changed plan posts',
+    async (interval, intervalCount, amount) => {
+      mocks.findByStripeSubscriptionId.mockResolvedValue(row({ priceId: 'price_pro' }));
+      const subscription = stripeSub({}, 'price_pro');
+      const recurring = subscription.items.data[0].price.recurring;
+      if (!recurring) throw new Error('Expected a recurring price fixture');
+      subscription.items.data[0].price.recurring = {
+        ...recurring,
+        interval,
+        interval_count: intervalCount,
+      };
+
+      await postNewPaidSubscriptionToSlack(
+        { amount_paid: 2000, currency: 'usd' },
+        { id: 'sub_1', items: subscription.items }
+      );
+      await postSubscriptionChangesToSlack(row(), subscription);
+
+      expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(2);
+      for (const [message] of mocks.postMessageToSlack.mock.calls) {
+        expect(message).toContain(`*Amount:* ${amount}`);
+      }
+
+      subscription.items.data[0].price.unit_amount = null;
+      await postNewPaidSubscriptionToSlack(
+        { amount_paid: 2000, currency: 'usd' },
+        { id: 'sub_1', items: subscription.items }
+      );
+      expect(mocks.postMessageToSlack.mock.lastCall?.[0]).toContain(`*Amount:* ${amount}`);
+    }
+  );
+
   it('falls back to the amount paid for a price with no unit amount', async () => {
     mocks.findByStripeSubscriptionId.mockResolvedValue(row());
     const items = stripeSub().items;

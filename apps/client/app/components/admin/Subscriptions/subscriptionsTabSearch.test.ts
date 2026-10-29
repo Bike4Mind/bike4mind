@@ -72,3 +72,17 @@ describe('subscriptions tab search', () => {
     });
   });
 });
+
+it.each([
+  [1, 1],
+  [100_000, 100_000],
+  [100_001, 1],
+  [Number.MAX_SAFE_INTEGER, 1],
+  [-1, 1],
+  [1.5, 1],
+  ['100001', 1],
+])('keeps subscription page %s inside the API contract', (input, expected) => {
+  const parsed = parseAdminSearch({ tab: 'subscriptions', subsPage: input });
+  expect(subscriptionsViewFromSearch(parsed)?.page).toBe(expected);
+  expect(subscriptionsViewToSearch({ ...DEFAULT_SUBSCRIPTIONS_PARAMS, page: Number(input) }).subsPage).toBe(expected);
+});

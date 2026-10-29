@@ -126,12 +126,10 @@ describe('useNewSubscriptionsDot', () => {
     const dot = renderHook(() => useNewSubscriptionsDot(true), { wrapper: wrapper() });
     await waitFor(() => expect(dot.result.current).toBe(true));
 
-    const opened = renderHook(() => useSubscriptionsSeenOnOpen());
+    const opened = renderHook(() => useSubscriptionsSeenOnOpen(true), { wrapper: wrapper() });
     expect(opened.result.current).toBe(SEEN);
     await waitFor(() => expect(dot.result.current).toBe(false));
-    expect(Date.parse(window.localStorage.getItem(SUBSCRIPTIONS_LAST_SEEN_KEY) ?? '')).toBeGreaterThan(
-      Date.parse(SEEN)
-    );
+    expect(readStoredLastSeen()).toBe('2026-10-02T00:00:00.000Z');
   });
 
   it('keeps working in memory when localStorage throws', async () => {
@@ -148,7 +146,93 @@ describe('useNewSubscriptionsDot', () => {
     await waitFor(() => expect(useSubscriptionsLastSeen.getState().lastSeen).not.toBeNull());
     expect(result.current).toBe(false);
 
-    const opened = renderHook(() => useSubscriptionsSeenOnOpen());
+    const opened = renderHook(() => useSubscriptionsSeenOnOpen(true), { wrapper: wrapper() });
     expect(opened.result.current).not.toBeNull();
   });
+});
+
+describe('subscription visit watermark', () => {
+  it.each(['2020-01-01T00:00:00Z', '2030-01-01T00:00:00Z'])(
+    'uses the server row timestamp with the browser clock at %s',
+    async clock => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(clock));
+      act(() => useSubscriptionsLastSeen.setState({ lastSeen: SEEN }));
+      apiGet.mockResolvedValue(newest('2026-10-02T00:00:00.000Z'));
+      const { result } = renderHook(() => useSubscriptionsSeenOnOpen(true), { wrapper: wrapper() });
+      await waitFor(() => expect(readStoredLastSeen()).toBe('2026-10-02T00:00:00.000Z'));
+      expect(result.current).toBe(SEEN);
+    }
+  );
+
+  it('preserves unread rows until the list loads and never consumes later arrivals', async () => {
+    const client = createClient();
+    act(() => useSubscriptionsLastSeen.setState({ lastSeen: SEEN }));
+    apiGet.mockResolvedValue(newest('2026-10-02T00:00:00.000Z'));
+    const visit = renderHook(({ loaded }) => useSubscriptionsSeenOnOpen(loaded), {
+      initialProps: { loaded: false },
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(apiGet).toHaveBeenCalled());
+    expect(useSubscriptionsLastSeen.getState().lastSeen).toBe(SEEN);
+    visit.rerender({ loaded: true });
+    await waitFor(() => expect(readStoredLastSeen()).toBe('2026-10-02T00:00:00.000Z'));
+
+    apiGet.mockResolvedValue(newest('2026-10-03T00:00:00.000Z'));
+    const dot = renderHook(() => useNewSubscriptionsDot(true), { wrapper: wrapper(client) });
+    await act(() => client.refetchQueries());
+    await waitFor(() => expect(dot.result.current).toBe(true));
+    expect(readStoredLastSeen()).toBe('2026-10-02T00:00:00.000Z');
+    expect(visit.result.current).toBe(SEEN);
+  });
+
+  it('does not regress another tab newer watermark', async () => {
+    act(() => useSubscriptionsLastSeen.setState({ lastSeen: '2026-10-04T00:00:00.000Z' }));
+    apiGet.mockResolvedValue(newest('2026-10-02T00:00:00.000Z'));
+    renderHook(() => useSubscriptionsSeenOnOpen(true), { wrapper: wrapper() });
+    await act(async () => {
+      await apiGet.mock.results[0]?.value;
+    });
+    expect(useSubscriptionsLastSeen.getState().lastSeen).toBe('2026-10-04T00:00:00.000Z');
+  });
+
+  it('keeps the previous watermark when the newest-row request fails', async () => {
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    act(() => useSubscriptionsLastSeen.setState({ lastSeen: SEEN }));
+    apiGet.mockRejectedValue(new Error('offline'));
+    renderHook(() => useSubscriptionsSeenOnOpen(true), { wrapper: wrapper() });
+    await waitFor(() => expect(diagnostic).toHaveBeenCalled());
+    expect(useSubscriptionsLastSeen.getState().lastSeen).toBe(SEEN);
+  });
+});
+
+it('keeps the newer stored watermark when another tab writes from stale memory', () => {
+  const newer = '2026-10-04T00:00:00.000Z';
+  window.localStorage.setItem(SUBSCRIPTIONS_LAST_SEEN_KEY, newer);
+  act(() => {
+    useSubscriptionsLastSeen.setState({ lastSeen: SEEN });
+    useSubscriptionsLastSeen.getState().markSeen(new Date('2026-10-02T00:00:00.000Z'));
+  });
+  expect(useSubscriptionsLastSeen.getState().lastSeen).toBe(newer);
+  expect(readStoredLastSeen()).toBe(newer);
+});
+
+it('ignores an older storage event without relighting acknowledged rows', async () => {
+  const newer = '2026-10-04T00:00:00.000Z';
+  act(() => useSubscriptionsLastSeen.setState({ lastSeen: newer }));
+  apiGet.mockResolvedValue(newest('2026-10-03T00:00:00.000Z'));
+  const dot = renderHook(() => useNewSubscriptionsDot(true), { wrapper: wrapper() });
+  await act(async () => {
+    await apiGet.mock.results[0]?.value;
+  });
+  act(() => {
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: SUBSCRIPTIONS_LAST_SEEN_KEY,
+        newValue: '2026-10-02T00:00:00.000Z',
+      })
+    );
+  });
+  expect(useSubscriptionsLastSeen.getState().lastSeen).toBe(newer);
+  expect(dot.result.current).toBe(false);
 });

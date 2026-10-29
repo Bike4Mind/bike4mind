@@ -42,6 +42,7 @@ export function useAdminSubscriptionsList(params: SubscriptionsListParams) {
     queryFn: async () => (await api.get<AdminSubscriptionsListResponse>(LIST_PATH, { params: query })).data,
     placeholderData: keepPreviousData,
     staleTime: LIST_STALE_MS,
+    refetchOnMount: 'always',
   });
 }
 
@@ -59,11 +60,21 @@ export function useAdminSubscriptionsSummary(filter: AdminSubscriptionsFilter, {
  * Counts for the view tabs, over every subscription like the users list's tabs. Canceling has no
  * summary view yet, so it is the total of a summary filtered to scheduled cancels.
  */
-export function useSubscriptionsViewCounts(): SubscriptionsViewCounts | undefined {
+export function useSubscriptionsViewCounts() {
   const all = useAdminSubscriptionsSummary({});
   const canceling = useAdminSubscriptionsSummary({ cancel: 'scheduled' });
-  if (!all.data || !canceling.data) return undefined;
-  return { ...all.data.views, all: all.data.total, canceling: canceling.data.total };
+  const data: SubscriptionsViewCounts | undefined =
+    all.data && canceling.data && !all.isError && !canceling.isError
+      ? { ...all.data.views, all: all.data.total, canceling: canceling.data.total }
+      : undefined;
+  return {
+    data,
+    isError: all.isError || canceling.isError,
+    refetch: () => {
+      void all.refetch();
+      void canceling.refetch();
+    },
+  };
 }
 
 // Must match the trailing lines written by pages/api/admin/subscriptions/export.ts.

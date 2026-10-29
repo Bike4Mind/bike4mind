@@ -32,6 +32,7 @@ export type BillingInterval = 'day' | 'week' | 'month' | 'year';
 
 export interface LifecycleRecurringPrice extends LifecycleMoney {
   interval?: BillingInterval;
+  intervalCount?: number;
 }
 
 const END_REASON_LABELS = {
@@ -92,7 +93,11 @@ function formatMoney({ amountMinor, currency }: LifecycleMoney): string {
 }
 
 function formatRecurring(price: LifecycleRecurringPrice): string {
-  return `${formatMoney(price)}${price.interval ? INTERVAL_SUFFIXES[price.interval] : ''}`;
+  const amount = formatMoney(price);
+  if (!price.interval) return amount;
+  const suffix = INTERVAL_SUFFIXES[price.interval];
+  const intervalCount = price.intervalCount ?? 1;
+  return `${amount}${intervalCount > 1 ? `/${intervalCount}${suffix.slice(1)}` : suffix}`;
 }
 
 function planLabel({ plan, interval }: LifecyclePlan): string {
@@ -199,12 +204,19 @@ function billingInterval(interval: string | undefined): BillingInterval | undefi
   return interval && Object.hasOwn(INTERVAL_SUFFIXES, interval) ? (interval as BillingInterval) : undefined;
 }
 
+function billingSchedule(price: Stripe.Price | undefined): Pick<LifecycleRecurringPrice, 'interval' | 'intervalCount'> {
+  return {
+    interval: billingInterval(price?.recurring?.interval),
+    ...(price?.recurring && price.recurring.interval_count > 1 && { intervalCount: price.recurring.interval_count }),
+  };
+}
+
 function recurringPrice(price: Stripe.Price | undefined, quantity: number): LifecycleRecurringPrice | null {
   if (!price || price.unit_amount == null) return null;
   return {
     amountMinor: price.unit_amount * quantity,
     currency: price.currency,
-    interval: billingInterval(price.recurring?.interval),
+    ...billingSchedule(price),
   };
 }
 
@@ -257,7 +269,7 @@ export async function postNewPaidSubscriptionToSlack(
       kind: 'new_paid',
       owner: lifecycleOwner(row),
       plan: planDetails(row.priceId),
-      price: price ?? { ...paid, interval: billingInterval(item?.price.recurring?.interval) },
+      price: price ?? { ...paid, ...billingSchedule(item?.price) },
       firstCharge: differs ? paid : null,
       quantity,
     });

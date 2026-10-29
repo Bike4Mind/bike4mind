@@ -3,6 +3,7 @@ import {
   ADMIN_SUBSCRIPTIONS_LIST_MAX,
   ADMIN_SUBSCRIPTIONS_PAGE_SIZES,
   ADMIN_SUBSCRIPTIONS_SORT_FIELDS,
+  AdminSubscriptionsQuerySchema,
   SUBSCRIPTION_CANCEL_FILTERS,
   SUBSCRIPTION_INTERVAL_FILTERS,
   SUBSCRIPTION_OWNER_TYPE_FILTERS,
@@ -115,8 +116,15 @@ const VIEW_PARAMS: readonly string[] = SUBSCRIPTIONS_TAB_PARAMS;
 
 // A view param that fails to parse still asked for a view. Keeping the default page stops
 // `validateSearch` from reducing `?subsSort=bogus` to a bare visit that restores the saved view.
+const parseBoundedPage = (value: unknown): number | undefined => {
+  const page = parsePage(value);
+  if (page === undefined) return undefined;
+  const parsed = AdminSubscriptionsQuerySchema.shape.page.safeParse(page);
+  return parsed.success ? parsed.data : undefined;
+};
+
 const parseSubscriptionsPage = (value: unknown, search: Record<string, unknown> = {}): number | undefined =>
-  parsePage(value) ??
+  parseBoundedPage(value) ??
   (search[ADMIN_TAB_PARAM] === ADMIN_SUBSCRIPTIONS_TAB_SLUG && VIEW_PARAMS.some(key => search[key] !== undefined)
     ? DEFAULT_SUBSCRIPTIONS_PARAMS.page
     : undefined);
@@ -164,7 +172,7 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<SubscriptionsL
  */
 export function subscriptionsViewFromSearch(search: Record<string, unknown>): SubscriptionsListView | undefined {
   const parsed = {
-    page: parsePage(search[SUBSCRIPTIONS_PAGE_PARAM]),
+    page: parseBoundedPage(search[SUBSCRIPTIONS_PAGE_PARAM]),
     limit: parseLimit(search[SUBSCRIPTIONS_LIMIT_PARAM]),
     sortField: SUBSCRIPTIONS_SEARCH_PARSERS.subsSort(search[SUBSCRIPTIONS_SORT_PARAM]),
     sortOrder: SUBSCRIPTIONS_SEARCH_PARSERS.subsOrder(search[SUBSCRIPTIONS_ORDER_PARAM]),
@@ -188,7 +196,7 @@ export function subscriptionsViewFromSearch(search: Record<string, unknown>): Su
 export function subscriptionsViewToSearch(view: SubscriptionsListView): SubscriptionsSearch {
   const unlessDefault = <T>(value: T, isDefault: boolean): T | undefined => (isDefault ? undefined : value);
   return {
-    subsPage: parsePage(view.page) ?? DEFAULT_SUBSCRIPTIONS_PARAMS.page,
+    subsPage: parseBoundedPage(view.page) ?? DEFAULT_SUBSCRIPTIONS_PARAMS.page,
     subsLimit: unlessDefault(parseLimit(view.limit), view.limit === DEFAULT_SUBSCRIPTIONS_PARAMS.limit),
     subsSort: unlessDefault(view.sortField, view.sortField === DEFAULT_SUBSCRIPTIONS_PARAMS.sortField),
     subsOrder: unlessDefault(view.sortOrder, view.sortOrder === DEFAULT_SUBSCRIPTIONS_PARAMS.sortOrder),
