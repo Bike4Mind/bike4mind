@@ -246,7 +246,7 @@ const AdminSubscriptions: React.FC = () => {
           label="Past due"
           value={tileValue(pastDue)}
           valueColor={pastDue ? 'admin.status.warn.foreground' : undefined}
-          comparison={pastDue && summary ? atRiskNote(summary.pastDueMrr) : undefined}
+          comparison={pastDue && summary?.pastDueMrr ? atRiskNote(summary.pastDueMrr) : undefined}
         />
         <StatTile
           label="Canceling"
@@ -291,7 +291,7 @@ const AdminSubscriptions: React.FC = () => {
           onPageChange: page => setParams({ page }),
           onPageSizeChange: limit => setParams({ limit, page: 1 }),
         }}
-        minWidth="64rem"
+        minWidth="62rem"
         maxHeight="none"
       />
     </Stack>

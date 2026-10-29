@@ -427,6 +427,7 @@ describe('MRR', () => {
     expect(intervalOf.sub_yearly).toEqual({ interval: 'year', intervalCount: 1 });
     expect(intervalOf.sub_monthly).toEqual({ interval: 'month', intervalCount: 1 });
     expect(intervalOf.sub_unsynced).toBeNull();
+    expect(intervalOf.admin_grant_c).toBeNull();
   });
 });
 

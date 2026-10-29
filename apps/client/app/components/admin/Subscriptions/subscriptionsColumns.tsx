@@ -131,7 +131,13 @@ function Mrr({ row }: { row: AdminSubscriptionRow }) {
   return (
     <Box component="span" data-testid={`admin-subscriptions-mrr-${row.id}`}>
       {mrr === null ? (
-        <Dash title={countsTowardMrr(row) ? 'No billed amount from Stripe yet' : undefined} />
+        countsTowardMrr(row) ? (
+          <Box component="span" title="Stripe has no fixed amount for this price yet" sx={{ display: 'inline-flex' }}>
+            <StatusChip tone="neutral" label="No amount" data-testid={`admin-subscriptions-mrr-unpriced-${row.id}`} />
+          </Box>
+        ) : (
+          <Dash />
+        )
       ) : (
         <Typography
           component="span"
@@ -179,13 +185,13 @@ export function subscriptionsColumns({
     {
       id: 'customer',
       label: 'Customer',
-      width: '14rem',
+      width: '12rem',
       render: row => <Customer row={row} />,
     },
     {
       id: 'plan',
       label: 'Plan',
-      width: '9rem',
+      width: '7.5rem',
       render: row => {
         const interval = planIntervalLabel(row);
         return (
@@ -218,7 +224,7 @@ export function subscriptionsColumns({
     {
       id: 'status',
       label: 'Status',
-      width: '11rem',
+      width: '8.5rem',
       render: row => {
         const status = subscriptionStatusDisplay(row);
         return (
@@ -244,35 +250,35 @@ export function subscriptionsColumns({
       id: 'mrr',
       label: `MRR (${MRR_CURRENCY.toUpperCase()})`,
       numeric: true,
-      width: '8rem',
+      width: '5.5rem',
       render: row => <Mrr row={row} />,
     },
     {
       id: 'seats',
       label: 'Seats',
       numeric: true,
-      width: '8rem',
+      width: '6.5rem',
       render: row => <Seats row={row} />,
     },
     {
       id: 'renews',
       label: 'Renews',
       sortable: true,
-      width: '8rem',
+      width: '6rem',
       render: row => <Renews row={row} now={now} />,
     },
     {
       id: 'credits',
       label: 'Credits / cycle',
       numeric: true,
-      width: '8.5rem',
+      width: '7rem',
       render: row => <CreditsPerCycle row={row} />,
     },
     {
       id: 'started',
       label: 'Started',
       sortable: true,
-      width: '8rem',
+      width: '7.5rem',
       render: row => (
         <Stack direction="row" alignItems="center" gap={0.75}>
           <Muted title={formatUtc(row.createdAt)}>{formatRelativeDay(row.createdAt, now)}</Muted>
