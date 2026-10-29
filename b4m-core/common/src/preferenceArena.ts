@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { NoCardUnlockReason } from './noCardUnlock';
 import type { SignupGrant, SignupGrantUnlockReason } from './signupGrant';
 
 /**
@@ -13,13 +14,12 @@ export type ArenaChoice = (typeof ARENA_CHOICES)[number];
 export const ARENA_PAIR_SOURCES = ['synthetic', 'opt_in'] as const;
 export type ArenaPairSource = (typeof ARENA_PAIR_SOURCES)[number];
 
-/** Only these unlocks prove a human behind the account; activity, org-invite and admin unlocks do not. */
-export const ARENA_VERIFIED_UNLOCK_REASONS: readonly SignupGrantUnlockReason[] = [
-  'card_verified',
-  'phone_verified',
-  'github_verified',
-  'work_email_verified',
-];
+/**
+ * Signup-grant unlocks that prove a human behind the account; activity, org-invite and admin unlocks
+ * do not. GitHub and work-email proof comes from the no-card unlock's ledger row instead, which never
+ * stamps the signup grant (see `grantNoCardUnlock` in services/userService/noCardUnlock.ts).
+ */
+export const ARENA_VERIFIED_UNLOCK_REASONS: readonly SignupGrantUnlockReason[] = ['card_verified', 'phone_verified'];
 
 export type ArenaIneligibleReason = 'disabled' | 'unverified' | 'blocked';
 
@@ -110,11 +110,14 @@ export interface ArenaEligibilityFields {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   signupGrant?: Pick<SignupGrant, 'stage' | 'unlockedBy'> | null;
+  /** No-card unlocks this user holds a ledger row for. */
+  noCardUnlocks?: readonly NoCardUnlockReason[];
 }
 
 /** Account-block checks (ban, dispute, suspension) are the caller's, via `accountBlockReasons`. */
 export function isArenaVerifiedUser(user: ArenaEligibilityFields): boolean {
   if (!user.emailVerified || user.isSynthetic || user.deletedAt) return false;
+  if ((user.noCardUnlocks?.length ?? 0) > 0) return true;
   const grant = user.signupGrant;
   return grant?.stage === 'unlocked' && !!grant.unlockedBy && ARENA_VERIFIED_UNLOCK_REASONS.includes(grant.unlockedBy);
 }

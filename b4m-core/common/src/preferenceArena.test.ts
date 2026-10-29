@@ -74,11 +74,28 @@ describe('resolvePreferenceArenaSettings', () => {
 describe('isArenaVerifiedUser', () => {
   const verified = {
     emailVerified: true,
-    signupGrant: { stage: 'unlocked' as const, unlockedBy: 'github_verified' as const },
+    signupGrant: { stage: 'unlocked' as const, unlockedBy: 'card_verified' as const },
   };
 
-  it('accepts a verified user unlocked by a human-proving method', () => {
+  it('accepts a signup grant unlocked by card or phone', () => {
     expect(isArenaVerifiedUser(verified)).toBe(true);
+    expect(isArenaVerifiedUser({ ...verified, signupGrant: { stage: 'unlocked', unlockedBy: 'phone_verified' } })).toBe(
+      true
+    );
+  });
+
+  it('accepts a GitHub or work-email no-card unlock even though the grant was never stamped', () => {
+    for (const reason of ['github_verified', 'work_email_verified'] as const) {
+      expect(isArenaVerifiedUser({ emailVerified: true, noCardUnlocks: [reason] })).toBe(true);
+    }
+    expect(isArenaVerifiedUser({ emailVerified: true, noCardUnlocks: [] })).toBe(false);
+  });
+
+  it('applies the account checks to a no-card unlock too', () => {
+    const unlocked = { emailVerified: true, noCardUnlocks: ['github_verified' as const] };
+    expect(isArenaVerifiedUser({ ...unlocked, emailVerified: false })).toBe(false);
+    expect(isArenaVerifiedUser({ ...unlocked, isSynthetic: true })).toBe(false);
+    expect(isArenaVerifiedUser({ ...unlocked, deletedAt: new Date() })).toBe(false);
   });
 
   it('rejects unverified email, synthetic, deleted and missing grants', () => {
@@ -90,7 +107,7 @@ describe('isArenaVerifiedUser', () => {
 
   it('rejects a grant that is not unlocked or was unlocked by a non-proving method', () => {
     expect(isArenaVerifiedUser({ ...verified, signupGrant: { stage: 'locked' as never } })).toBe(false);
-    for (const unlockedBy of ['admin', 'activity', 'org_invite'] as const) {
+    for (const unlockedBy of ['admin', 'activity', 'org_invite', 'github_verified', 'work_email_verified'] as const) {
       expect(isArenaVerifiedUser({ ...verified, signupGrant: { stage: 'unlocked', unlockedBy } })).toBe(false);
     }
   });

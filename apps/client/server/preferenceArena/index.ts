@@ -1,4 +1,10 @@
-import { type PreferenceArenaSettings, resolvePreferenceArenaSettings } from '@bike4mind/common';
+import {
+  NO_CARD_UNLOCK_REASONS,
+  noCardUnlockTransactionId,
+  type NoCardUnlockReason,
+  type PreferenceArenaSettings,
+  resolvePreferenceArenaSettings,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   arenaPairRepository,
@@ -36,10 +42,24 @@ export async function loadArenaSettings(): Promise<PreferenceArenaSettings> {
   return resolvePreferenceArenaSettings(settings);
 }
 
-async function loadArenaUser(userId: string): Promise<ArenaUser | null> {
-  return User.findById(userId)
-    .select('emailVerified isSynthetic deletedAt signupGrant isBanned disputePending moderation.status')
-    .lean<ArenaUser>();
+/** The no-card unlock proves GitHub or work email only through its ledger row; it never stamps signupGrant. */
+async function loadNoCardUnlocks(userId: string): Promise<NoCardUnlockReason[]> {
+  const rows = await Promise.all(
+    NO_CARD_UNLOCK_REASONS.map(reason =>
+      creditTransactionRepository.findOne({ transactionId: noCardUnlockTransactionId(reason, userId) })
+    )
+  );
+  return NO_CARD_UNLOCK_REASONS.filter((_, index) => rows[index] !== null);
+}
+
+export async function loadArenaUser(userId: string): Promise<ArenaUser | null> {
+  const [user, noCardUnlocks] = await Promise.all([
+    User.findById(userId)
+      .select('emailVerified isSynthetic deletedAt signupGrant isBanned disputePending moderation.status')
+      .lean<ArenaUser>(),
+    loadNoCardUnlocks(userId),
+  ]);
+  return user && { ...user, noCardUnlocks };
 }
 
 export function getArenaService(logger: Pick<Logger, 'error'>) {
