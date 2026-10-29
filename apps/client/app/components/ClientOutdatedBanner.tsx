@@ -19,7 +19,7 @@ export const ClientOutdatedBanner = () => {
     <Box
       role="status"
       data-testid="client-outdated-banner"
-      sx={{
+      sx={theme => ({
         position: 'fixed',
         top: 12,
         left: '50%',
@@ -33,16 +33,17 @@ export const ClientOutdatedBanner = () => {
         px: 1.5,
         minHeight: 40,
         borderRadius: '12px',
-        border: '1px solid rgba(11, 107, 203, 0.6)',
-        bgcolor: 'rgba(11, 107, 203, 0.16)',
+        border: '1px solid rgba(var(--joy-palette-primary-mainChannel) / 0.6)',
+        bgcolor: 'rgba(var(--joy-palette-primary-mainChannel) / 0.16)',
         backdropFilter: 'blur(16px)',
-        color: '#fff',
+        color: 'text.primary',
+        [theme.getColorSchemeSelector('dark')]: { color: 'common.white' },
         fontSize: 'sm',
-      }}
+      })}
     >
       <RefreshRounded sx={{ fontSize: 16, color: 'inherit', mr: 0.5 }} />
       <Box component="span" sx={{ flexGrow: 1, fontWeight: 'lg' }}>
-        A new version available
+        New version available
       </Box>
       <Button
         size="sm"
