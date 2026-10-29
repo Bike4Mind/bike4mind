@@ -55,6 +55,8 @@ export const FUNDING_SOURCE_BY_LOT_SOURCE: Record<CreditLotSource, UsageFundingS
 
 export interface FundingLotLike extends CreditLotLike {
   source: CreditLotSource;
+  fundingSource?: UsageFundingSource;
+  settledAt?: Date;
 }
 
 /**
@@ -64,6 +66,10 @@ export interface FundingLotLike extends CreditLotLike {
  * slice falls in. Whatever the lots cannot cover (consumption beyond every lot, e.g. a user
  * in debt, or a balance the lots under-count) is `unknown`. Lots must be sorted ascending by
  * expiresAt, as for assignConsumptionFIFO.
+ *
+ * A lot settled by the sweep's stale run is fully consumed (the sweep debited its remainder),
+ * so it is left out: otherwise a later refund would reopen it and attribute new spend to
+ * credits that already expired, which the sweep itself never does.
  */
 export function attributeChargeToFundingSources(
   lots: FundingLotLike[],
@@ -72,15 +78,16 @@ export function attributeChargeToFundingSources(
 ): IUsageFundingBreakdown {
   const breakdown: IUsageFundingBreakdown = { granted: 0, purchased: 0, subscription: 0, unknown: 0 };
   const charged = Math.max(0, chargedCredits);
-  const consumption = computeConsumption(lots, currentCredits);
+  const liveLots = lots.filter(lot => !lot.settledAt);
+  const consumption = computeConsumption(liveLots, currentCredits);
   const sliceStart = Math.max(0, consumption - charged);
 
   let lotStart = 0;
   let attributed = 0;
-  for (const lot of lots) {
+  for (const lot of liveLots) {
     const lotEnd = lotStart + lot.amount;
     const overlap = Math.max(0, Math.min(lotEnd, consumption) - Math.max(lotStart, sliceStart));
-    breakdown[FUNDING_SOURCE_BY_LOT_SOURCE[lot.source]] += overlap;
+    breakdown[lot.fundingSource ?? FUNDING_SOURCE_BY_LOT_SOURCE[lot.source]] += overlap;
     attributed += overlap;
     lotStart = lotEnd;
   }

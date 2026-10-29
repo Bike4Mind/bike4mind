@@ -267,7 +267,10 @@ export interface IFundingCohortCost {
   /** Each row's costUsd split by its fundingBreakdown shares. */
   costUsd: Record<UsageFundingSource, number>;
   credits: Record<UsageFundingSource, number>;
-  /** Provider cost on rows without a fundingBreakdown: zero-credit calls and rows written before stamping. */
+  /**
+   * Provider cost on rows without a fundingBreakdown: zero-credit calls, rows written before
+   * stamping, and rows whose funding lookup failed.
+   */
   unattributedCostUsd: number;
 }
 

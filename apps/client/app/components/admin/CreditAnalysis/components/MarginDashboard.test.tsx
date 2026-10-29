@@ -343,4 +343,17 @@ describe('MarginDashboard funding cohort section', () => {
     renderDashboard();
     expect(await screen.findByTestId('margin-funding-cohort-share-2026-07-06')).toHaveTextContent('-');
   });
+
+  it('shows its own error and keeps the other sections when the cohort view fails', async () => {
+    const respond = mockGet.getMockImplementation()!;
+    mockGet.mockImplementation((url: string) =>
+      url.includes('view=funding-cohort')
+        ? Promise.reject({ response: { data: { error: 'aggregation timed out' } } })
+        : respond(url)
+    );
+    renderDashboard();
+    expect(await screen.findByTestId('margin-funding-cohort-error')).toHaveTextContent('aggregation timed out');
+    expect(screen.getByTestId('margin-invoice-enter-2026-06-openai')).toBeEnabled();
+    expect(screen.queryByTestId('margin-error')).not.toBeInTheDocument();
+  });
 });

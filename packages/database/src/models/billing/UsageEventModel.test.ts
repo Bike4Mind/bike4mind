@@ -5,6 +5,7 @@ import { createMongoServer } from '../../__test__/createMongoServer';
 import { UsageEvent, UsageEventRepository, usageEventRepository } from './UsageEventModel';
 import { CreditLot } from './CreditLotModel';
 import { User } from '../auth/UserModel';
+import { Organization } from '../infra/admin/OrganizationModel';
 import { CreditHolderType, IUsageEventInput } from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
@@ -1002,6 +1003,41 @@ describe('UsageEventRepository funding stamp', () => {
     const doc = await record({ userId: user.id, ownerId: user.id, creditsCharged: 50 });
 
     expect(doc!.fundingBreakdown).toEqual({ granted: 30, purchased: 20, subscription: 0, unknown: 0 });
+  });
+
+  it("reads an organization holder's own balance", async () => {
+    const org = await Organization.create({
+      name: 'Funding org',
+      userId: 'owner',
+      users: [],
+      groups: [],
+      currentCredits: 480,
+    });
+    const lot = (source: 'promo' | 'pack', amount: number, expiresInDays: number) =>
+      CreditLot.create({
+        ownerId: org.id,
+        ownerType: CreditHolderType.Organization,
+        source,
+        amount,
+        expiresAt: new Date(Date.now() + expiresInDays * DAY_MS),
+      });
+    await lot('pack', 500, 365);
+    await lot('promo', 100, 90);
+
+    const doc = await record({ ownerId: org.id, ownerType: CreditHolderType.Organization, creditsCharged: 50 });
+
+    expect(doc!.fundingBreakdown).toEqual({ granted: 30, purchased: 20, subscription: 0, unknown: 0 });
+    await Organization.deleteMany({});
+  });
+
+  it('leaves the row unstamped when the holder record is gone', async () => {
+    const goneUserId = new mongoose.Types.ObjectId().toString();
+    await createLot(goneUserId, 'pack', 500, 365);
+
+    const doc = await record({ userId: goneUserId, ownerId: goneUserId, creditsCharged: 50 });
+
+    expect(doc).not.toBeNull();
+    expect(doc!.fundingBreakdown).toBeUndefined();
   });
 
   it('marks the charge unknown when the holder has no lots', async () => {

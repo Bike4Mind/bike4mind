@@ -15,16 +15,26 @@ export type LoadCreditHolderFundingSnapshot = (
   ownerType: CreditHolderType
 ) => Promise<CreditHolderFundingSnapshot>;
 
-async function findHolderBalance(ownerId: string, ownerType: CreditHolderType): Promise<number> {
+async function findHolder(ownerId: string, ownerType: CreditHolderType) {
   const projection = { currentCredits: 1 };
   switch (ownerType) {
     case CreditHolderType.Organization:
-      return (await Organization.findById(ownerId, projection).lean())?.currentCredits ?? 0;
+      return Organization.findById(ownerId, projection).lean();
     case CreditHolderType.Agent:
-      return (await Agent.findById(ownerId, projection).lean())?.currentCredits ?? 0;
+      return Agent.findById(ownerId, projection).lean();
     case CreditHolderType.User:
-      return (await User.findById(ownerId, projection).lean())?.currentCredits ?? 0;
+      return User.findById(ownerId, projection).lean();
   }
+}
+
+// A missing holder must not read as a zero balance: that would mark every lot consumed and
+// stamp the charge against the latest-expiring lot. Throwing leaves the row unstamped.
+async function findHolderBalance(ownerId: string, ownerType: CreditHolderType): Promise<number> {
+  const holder = await findHolder(ownerId, ownerType);
+  if (!holder) {
+    throw new Error(`Credit holder ${ownerType} ${ownerId} not found`);
+  }
+  return holder.currentCredits ?? 0;
 }
 
 export const loadCreditHolderFundingSnapshot: LoadCreditHolderFundingSnapshot = async (ownerId, ownerType) => {

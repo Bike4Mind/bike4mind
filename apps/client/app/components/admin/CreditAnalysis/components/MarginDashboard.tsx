@@ -102,6 +102,7 @@ export const MarginDashboard: React.FC = () => {
   const [byProvider, setByProvider] = useState<MarginResponse<IProviderMonthCogs> | null>(null);
   const [settlement, setSettlement] = useState<MarginResponse<ISettlementBreakdown> | null>(null);
   const [fundingCohort, setFundingCohort] = useState<MarginResponse<IFundingCohortCost> | null>(null);
+  const [fundingCohortError, setFundingCohortError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<IProviderInvoice[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -115,30 +116,44 @@ export const MarginDashboard: React.FC = () => {
   const [entryError, setEntryError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Fetched apart from the other views: its aggregation joins users, and a failure there must
+  // not blank the margin sections that loaded fine.
+  const fetchFundingCohort = useCallback(async () => {
+    setFundingCohortError(null);
+    try {
+      const res = await api.get<MarginResponse<IFundingCohortCost>>(
+        '/api/admin/usage-margin?view=funding-cohort&days=30'
+      );
+      setFundingCohort(res.data);
+    } catch (err) {
+      setFundingCohortError(apiErrorMessage(err, 'Failed to load cost by funding source'));
+    }
+  }, []);
+
   const fetchAll = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    const fundingCohortRequest = fetchFundingCohort();
     try {
-      const [modelDayRes, userRes, providerRes, settlementRes, fundingCohortRes, invoicesRes] = await Promise.all([
+      const [modelDayRes, userRes, providerRes, settlementRes, invoicesRes] = await Promise.all([
         api.get<MarginResponse<IModelDayMargin>>('/api/admin/usage-margin?view=model-day&days=30'),
         api.get<MarginResponse<NamedUserMargin>>('/api/admin/usage-margin?view=user&days=30'),
         api.get<MarginResponse<IProviderMonthCogs>>('/api/admin/usage-margin?view=provider-month'),
         api.get<MarginResponse<ISettlementBreakdown>>('/api/admin/usage-margin?view=settlement&days=30'),
-        api.get<MarginResponse<IFundingCohortCost>>('/api/admin/usage-margin?view=funding-cohort&days=30'),
         api.get<{ invoices: IProviderInvoice[] }>('/api/admin/provider-invoices'),
       ]);
       setModelDay(modelDayRes.data);
       setByUser(userRes.data);
       setByProvider(providerRes.data);
       setSettlement(settlementRes.data);
-      setFundingCohort(fundingCohortRes.data);
       setInvoices(invoicesRes.data.invoices);
     } catch (err) {
       setError((err as Error)?.message || 'Failed to load margin data');
     } finally {
+      await fundingCohortRequest;
       setIsLoading(false);
     }
-  }, []);
+  }, [fetchFundingCohort]);
 
   useEffect(() => {
     fetchAll();
@@ -478,8 +493,14 @@ export const MarginDashboard: React.FC = () => {
             </Typography>
             <Typography level="body-xs" sx={{ mb: 1 }} color="neutral">
               Provider cost split by what funded the credits, grouped by the week each spender signed up. Unattributed
-              is cost on zero-credit calls and on calls recorded before funding was stamped.
+              is cost on zero-credit calls, on calls recorded before funding was stamped, and on calls whose funding
+              lookup failed; granted share leaves it out.
             </Typography>
+            {fundingCohortError && (
+              <Alert color="danger" size="sm" sx={{ mb: 1 }} data-testid="margin-funding-cohort-error">
+                {fundingCohortError}
+              </Alert>
+            )}
             <Sheet sx={{ overflow: 'auto' }}>
               <Table size="sm" data-testid="margin-funding-cohort-table">
                 <thead>

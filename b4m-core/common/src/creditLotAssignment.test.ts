@@ -126,6 +126,32 @@ describe('creditService - creditLotAssignment', () => {
       });
     });
 
+    it("uses a lot's funding override over its source", () => {
+      // An admin-comped subscription: a subscription lot nobody paid for.
+      const lots = [{ amount: 100, source: 'subscription' as const, fundingSource: 'granted' as const }];
+      expect(attributeChargeToFundingSources(lots, 60, 40)).toEqual({
+        granted: 40,
+        purchased: 0,
+        subscription: 0,
+        unknown: 0,
+      });
+    });
+
+    it('leaves out lots the sweep settled, so a refund cannot reopen expired credits', () => {
+      // Promo 100 expired and was settled (its remainder debited); pack 500 holds a balance of 530
+      // after a refund. Without the skip, consumption 70 would land the charge in the expired promo.
+      const lots = [
+        { amount: 100, source: 'promo' as const, settledAt: new Date('2026-10-01T00:00:00Z') },
+        { amount: 500, source: 'pack' as const },
+      ];
+      expect(attributeChargeToFundingSources(lots, 480, 20)).toEqual({
+        granted: 0,
+        purchased: 20,
+        subscription: 0,
+        unknown: 0,
+      });
+    });
+
     it('returns an empty breakdown for a non-positive charge', () => {
       const lots = [{ amount: 100, source: 'promo' as const }];
       expect(attributeChargeToFundingSources(lots, 50, -5)).toEqual({

@@ -186,8 +186,10 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
   /**
    * Attribute the charge to the holder's credit lots as they stand now. Callers record after the
    * debit, so the charge is already in the holder's consumption; a chat turn records before its
-   * final reconcile, so its slice can sit up to the unused reservation late. A lookup failure
-   * leaves the row unstamped rather than losing it.
+   * final reconcile, so its slice can sit up to the unused reservation late, and events recorded
+   * in parallel for one holder read the same snapshot and claim the same slice. Both skew toward
+   * later-expiring lots only near a lot boundary. A lookup failure leaves the row unstamped
+   * rather than losing it.
    */
   private async resolveFundingBreakdown(event: IUsageEventInput): Promise<IUsageFundingBreakdown | undefined> {
     if (!this.loadFundingSnapshot || event.creditsCharged <= 0) {

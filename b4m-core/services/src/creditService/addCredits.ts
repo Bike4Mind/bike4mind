@@ -7,6 +7,7 @@ import {
   PurchaseTransaction,
   ReceivedCreditTransaction,
   SubscriptionCreditTransaction,
+  UsageFundingSource,
 } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -39,6 +40,11 @@ export interface AddCreditsAdapters {
    * further operation there raises a transient NoSuchTransaction the driver would retry.
    */
   duplicateTransactionId?: 'return' | 'throw';
+  /**
+   * Stamped on the grant's CreditLot when its type would misstate the funding, e.g. 'granted'
+   * for an admin-comped subscription. See ICreditLot.fundingSource.
+   */
+  lotFundingSource?: UsageFundingSource;
 }
 
 /**
@@ -59,7 +65,7 @@ export type AddCreditsParameters = z.infer<typeof AddCreditsSchema>;
  */
 export async function addCreditsWithLedgerRow(
   parameters: AddCreditsParameters,
-  { db, creditHolderMethods, duplicateTransactionId = 'return' }: AddCreditsAdapters
+  { db, creditHolderMethods, duplicateTransactionId = 'return', lotFundingSource }: AddCreditsAdapters
 ): Promise<CreditLedgerWrite> {
   const params = secureParameters(parameters, AddCreditsSchema);
   const { ownerId, ownerType, credits, type, description, metadata } = params;
@@ -148,6 +154,7 @@ export async function addCreditsWithLedgerRow(
         amount: Math.abs(credits),
         grantType: type,
         stripeRef: 'stripePaymentIntentId' in params ? params.stripePaymentIntentId : undefined,
+        fundingSource: lotFundingSource,
       },
       { db: { creditLots: db.creditLots } }
     );
