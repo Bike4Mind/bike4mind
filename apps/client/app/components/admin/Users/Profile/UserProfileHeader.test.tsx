@@ -109,16 +109,6 @@ describe('UserProfileHeader', () => {
     }
   );
 
-  it('the More menu opens the profile editor through onEditProfile, not onAction', async () => {
-    const { onAction, onEditProfile } = renderHeader();
-
-    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
-    fireEvent.click(await screen.findByTestId('user-profile-menu-editProfile-item'));
-
-    expect(onEditProfile).toHaveBeenCalledTimes(1);
-    expect(onAction).not.toHaveBeenCalled();
-  });
-
   it('the More menu opens the compliance record through onCompliance, not onAction', async () => {
     const { onAction, onCompliance } = renderHeader();
 
@@ -127,6 +117,17 @@ describe('UserProfileHeader', () => {
 
     expect(onCompliance).toHaveBeenCalledTimes(1);
     expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it('the More menu opens the profile editor through onEditProfile, not onAction', async () => {
+    const { onAction, onEditProfile, onCompliance } = renderHeader();
+
+    fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+    fireEvent.click(await screen.findByTestId('user-profile-menu-editProfile-item'));
+
+    expect(onEditProfile).toHaveBeenCalledTimes(1);
+    expect(onAction).not.toHaveBeenCalled();
+    expect(onCompliance).not.toHaveBeenCalled();
   });
 
   it('turns the restrict item into Lift restriction for a restricted account', async () => {

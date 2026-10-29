@@ -12,6 +12,7 @@ import {
   type AdminUserProfile,
 } from './userProfileModel';
 
+// `editProfile` and `compliance` open page-level modals rather than a profile action dialog.
 type MenuEntry = { action: ProfileAction | 'editProfile' | 'compliance'; label: string; danger?: boolean } | 'divider';
 
 const menuEntries = (user: AdminUserProfile): MenuEntry[] => [
@@ -128,11 +129,13 @@ export const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
                   <MenuItem
                     key={entry.action}
                     color={entry.danger ? 'danger' : 'neutral'}
-                    onClick={() => {
-                      if (entry.action === 'editProfile') onEditProfile();
-                      else if (entry.action === 'compliance') onCompliance();
-                      else onAction(entry.action);
-                    }}
+                    onClick={() =>
+                      entry.action === 'editProfile'
+                        ? onEditProfile()
+                        : entry.action === 'compliance'
+                          ? onCompliance()
+                          : onAction(entry.action)
+                    }
                     data-testid={`user-profile-menu-${entry.action}-item`}
                   >
                     {entry.label}

@@ -30,13 +30,13 @@ vi.mock('../BulkAbuseResponseModal', () => ({
   ),
 }));
 vi.mock('./actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks.update }));
-vi.mock('../../AdminProfileModal', () => ({
-  useAdminProfileModal: (select: (state: { setUserId: (id: string) => void }) => unknown) =>
-    select({ setUserId: mocks.setEditProfileUserId }),
-}));
 vi.mock('../ComplianceModal', () => ({
   useComplianceModal: (select: (state: { setUserId: (id: string) => void }) => unknown) =>
     select({ setUserId: mocks.setComplianceUserId }),
+}));
+vi.mock('../../AdminProfileModal', () => ({
+  useAdminProfileModal: (select: (state: { setUserId: (id: string) => void }) => unknown) =>
+    select({ setUserId: mocks.setEditProfileUserId }),
 }));
 vi.mock('../Details/GrantSubscriptionModal', () => ({
   default: ({ onClose }: { onClose: () => void }) => (
@@ -237,16 +237,6 @@ describe('UserProfileView', () => {
       expect(await screen.findByTestId(dialogId)).toBeInTheDocument();
     });
 
-    it('the Edit profile item opens the profile editor for this user', async () => {
-      const user = buildProfile();
-      setup(user);
-
-      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
-      fireEvent.click(await screen.findByTestId('user-profile-menu-editProfile-item'));
-
-      expect(mocks.setEditProfileUserId).toHaveBeenCalledWith(user.id);
-    });
-
     it('the Compliance record item opens the compliance modal for this user', async () => {
       const user = buildProfile();
       setup(user);
@@ -255,6 +245,16 @@ describe('UserProfileView', () => {
       fireEvent.click(await screen.findByTestId('user-profile-menu-compliance-item'));
 
       expect(mocks.setComplianceUserId).toHaveBeenCalledWith(user.id);
+    });
+
+    it('the Edit profile item opens the profile editor for this user', async () => {
+      const user = buildProfile();
+      setup(user);
+
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      fireEvent.click(await screen.findByTestId('user-profile-menu-editProfile-item'));
+
+      expect(mocks.setEditProfileUserId).toHaveBeenCalledWith(user.id);
     });
 
     it('opens a dialog requested by the overview tab', () => {

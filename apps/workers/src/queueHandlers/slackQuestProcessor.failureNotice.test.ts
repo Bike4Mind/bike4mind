@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import type { VideoToolConfig } from '@bike4mind/services/llm/tools';
+import { TooManyRequestsError } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 // Exercises the Slack quest handler's delivery and video resolver wiring. The chat processor and external
 // dependencies are stubbed; the handler's control flow and Slack delivery-target wrapper run unchanged.
@@ -279,5 +281,47 @@ describe('slackQuestProcessor failure notice', () => {
     await expect(handler(makeEvent())).rejects.toThrow(processError.message);
 
     expect(mockUpdateMessage).not.toHaveBeenCalled();
+  });
+
+  describe('when billing refuses the turn with the free-tier daily cap', () => {
+    const capError = new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+      errorCode: 'daily_free_limit_reached',
+      retryAfter: 3600,
+    });
+
+    it('consumes the event, still posts the failure notice, and logs at warn', async () => {
+      const warnSpy = vi.spyOn(Logger.prototype, 'warn');
+      const errorSpy = vi.spyOn(Logger.prototype, 'error');
+      mockProcess.mockRejectedValueOnce(capError);
+      questDoc = { slackNotification, type: 'error', reply: capError.message };
+
+      await expect(handler(makeEvent())).resolves.toBeUndefined();
+
+      expect(mockUpdateMessage).toHaveBeenCalledTimes(1);
+      expect(mockUpdateMessage.mock.calls[0][0].text).toContain(capError.message);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('refused by billing'),
+        expect.objectContaining({ questId: QUEST_ID })
+      );
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Chat processing failed'), expect.anything());
+    });
+
+    it('resolves even when the Slack notice cannot be delivered', async () => {
+      mockProcess.mockRejectedValueOnce(capError);
+      mockUpdateMessage.mockRejectedValue(new Error('slack down'));
+
+      await expect(handler(makeEvent())).resolves.toBeUndefined();
+    });
+
+    it('still logs a generic failure at error and rethrows it', async () => {
+      const errorSpy = vi.spyOn(Logger.prototype, 'error');
+
+      await expect(handler(makeEvent())).rejects.toThrow(processError.message);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Chat processing failed'),
+        expect.objectContaining({ questId: QUEST_ID })
+      );
+    });
   });
 });

@@ -1,12 +1,15 @@
 export type {
   AttentionGroup,
   FetchLike,
+  InspectOptions,
   InstalledModel,
   LoadedModel,
   LocalRuntime,
   ModelArch,
   ModelCapabilities,
+  ModelContents,
   ModelInspection,
+  OllamaRegistryLayers,
   OpenAICompatibleProduct,
   PullOptions,
   PullProgress,
@@ -38,6 +41,45 @@ export {
   RuntimeUnsupportedError,
 } from './errors';
 export { isAbliteratedModel } from './abliterated';
+export {
+  curatedBuildForRef,
+  curatedLibrary,
+  curatedListing,
+  curatedOllamaBlocked,
+  curatedParamsLabel,
+  curatedPicks,
+  curatedPins,
+  curatedSource,
+  isCuratedListable,
+  isCuratedPullable,
+  isPermissiveEntry,
+  loadCuratedManifest,
+  type CuratedListing,
+  type CuratedSource,
+  type CuratedTierPick,
+} from './curated';
+export {
+  CURATED_KEY_ROLES,
+  CURATED_MAX_MANIFEST_BYTES,
+  CURATED_MAX_SEQUENCE,
+  CURATED_MAX_SIGNATURE_BYTES,
+  CURATED_SIGNATURE_DOMAIN,
+  curatedKeyFromSeed,
+  curatedKeyId,
+  curatedPublicKey,
+  curatedSignedMessage,
+  parseCuratedKey,
+  parseCuratedSignatureFile,
+  signCurated,
+  verifyCurated,
+  type CuratedKey,
+  type CuratedKeyRole,
+  type CuratedSignatureEntry,
+  type CuratedSignatureFile,
+  type CuratedVerifyFailure,
+  type CuratedVerifyResult,
+} from './curatedSignature';
+export { BodyTooLargeError, DEFAULT_REQUEST_TIMEOUT_MS, readCapped } from './http';
 export { archFromModelInfo, tensorStatsFromTensors } from './arch';
 export {
   DEFAULT_GGUF_MAX_ARRAY_LENGTH,
@@ -62,12 +104,17 @@ export {
   type ReadGgufOptions,
 } from './gguf';
 export { DEFAULT_OLLAMA_URL, DEFAULT_PULL_IDLE_TIMEOUT_MS, OllamaRuntime, type OllamaRuntimeOptions } from './ollama';
+export { DEFAULT_OLLAMA_REGISTRY, ollamaLibraryLayers, type OllamaLibraryLayersOptions } from './ollamaRegistry';
 export { OpenAICompatibleRuntime, type OpenAICompatibleRuntimeOptions } from './openaiCompatible';
 export {
   DEFAULT_HUGGING_FACE_ENDPOINT,
   HuggingFaceHub,
   MAX_HUB_SEARCH_LIMIT,
   OLLAMA_HUGGING_FACE_HOST,
+  OLLAMA_SIGNED_HUGGING_FACE_HOST,
+  ollamaModelKey,
+  ollamaPullRef,
+  ollamaRefAliases,
   HUGGING_FACE_SSH_KEYS_URL,
   MAX_VERIFY_TAGS,
   findHubBuild,

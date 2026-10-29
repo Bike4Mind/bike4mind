@@ -2,13 +2,23 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type {
-  HubDetailResult,
-  HubModelView,
-  HubSearchResult,
-  InstalledModelsResult,
-  ModelPull,
-  ModelRuntimeStatus,
+import {
+  pullKey,
+  type CuratedBuildView,
+  type CuratedEntryView,
+  type CuratedList,
+  type CuratedPullResult,
+  type HubBuildView,
+  type HubDetailResult,
+  type HubModelView,
+  type HubSearchResult,
+  type InstalledModelsResult,
+  type ModelFit,
+  type ModelHubError,
+  type ModelPull,
+  type ModelPullResult,
+  type ModelRuntimeStatus,
+  type HfTokenStatus,
 } from '@shared/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -66,12 +76,140 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
         label: 'Q4_K_M',
         sizeBytes: 491_400_032,
         ollamaRef: `hf.co/${REPO}:Q4_K_M`,
+        installedNames: [`hf.co/${REPO}:q4_k_m`.toLowerCase(), `huggingface.co/${REPO}:q4_k_m`.toLowerCase()],
         blockedReason: null,
+        fit: null,
       },
     ],
     projectorBytes: null,
     needsAccess: false,
+    hubAccess: 'no-token',
     ...extra,
+  };
+}
+
+const FITS: ModelFit = {
+  level: 'fits',
+  basis: 'arch',
+  context: 16384,
+  detail: 'Fits in memory at the 16K context chat will use: about 7.4 GiB of the 46.5 GiB a model can use here.',
+};
+const TOO_LARGE: ModelFit = {
+  level: 'too-large',
+  basis: 'arch',
+  context: 16384,
+  detail: 'Needs about 50 GiB at the 16K context chat will use, more than the 46.5 GiB a model can use here.',
+};
+
+const GSQ = 'ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF';
+const E4B_REF = 'gemma4:e4b-it-qat';
+
+function curatedBuild(extra: Partial<CuratedBuildView> & Pick<CuratedBuildView, 'id'>): CuratedBuildView {
+  return {
+    repo: GSQ,
+    pullBuildId: `Qwen3.8-27B-GSQ-RCO-${extra.id.toUpperCase().replace('-', '_')}`,
+    quant: extra.id.toUpperCase().replace('-', '_'),
+    sizeBytes: 9_353_988_000,
+    ollamaRef: `hf.co/${GSQ}:${extra.id.toUpperCase().replace('-', '_')}`,
+    fit: FITS,
+    blockedReason: null,
+    ...extra,
+  };
+}
+
+function curatedEntry(extra: Partial<CuratedEntryView> & Pick<CuratedEntryView, 'id' | 'builds'>): CuratedEntryView {
+  return {
+    name: extra.id,
+    why: 'On the list for its size.',
+    params: '27B',
+    licenseName: 'apache-2.0',
+    licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
+    licenseKind: 'permissive',
+    thinking: true,
+    vision: true,
+    code: false,
+    tools: true,
+    toolUse: { rating: 'unrated', note: null },
+    sourceUrl: `https://huggingface.co/${GSQ}`,
+    sourceName: 'Hugging Face',
+    ...extra,
+  };
+}
+
+const E4B = curatedBuild({
+  id: 'qat-q4-0',
+  repo: E4B_REF,
+  pullBuildId: 'qat-q4-0',
+  quant: 'Q4_0',
+  sizeBytes: 6_146_501_801,
+  ollamaRef: E4B_REF,
+});
+
+/** A CPU-only list whose Best pick will not fit, so Recommended sits on the Fast pick. */
+function curatedList(): CuratedList {
+  return {
+    updatedAt: '2026-10-27T00:00:00Z',
+    source: { origin: 'bundled', sequence: 1, check: 'off', checkedAt: null, stale: false },
+    machine: { memoryKind: 'cpu', totalMemoryBytes: 62 * 1024 ** 3, gpuMemoryBytes: null, gpuName: null },
+    picks: [
+      { slot: 'best', entryId: 'qwen3-8-27b-gsq', buildId: 'iq3-s', recommended: false },
+      { slot: 'fast', entryId: 'gemma-4-e4b', buildId: 'qat-q4-0', recommended: true },
+      { slot: 'light', entryId: 'qwen3-8-27b-gsq', buildId: 'iq2-xs', recommended: false },
+    ],
+    entries: [
+      curatedEntry({
+        id: 'gemma-4-e4b',
+        name: 'Gemma 4 E4B',
+        params: '8B',
+        sourceUrl: 'https://ollama.com/library/gemma4',
+        sourceName: 'Ollama',
+        builds: [E4B],
+      }),
+      curatedEntry({
+        id: 'qwen3-8-27b-gsq',
+        name: 'Qwen3.8 27B GSQ',
+        builds: [curatedBuild({ id: 'iq2-xs' }), curatedBuild({ id: 'iq3-s', fit: TOO_LARGE })],
+      }),
+      curatedEntry({
+        id: 'qwen3-8-27b',
+        name: 'Qwen3.8 27B',
+        sourceUrl: 'https://ollama.com/library/qwen3.8',
+        sourceName: 'Ollama',
+        builds: [
+          curatedBuild({
+            id: 'q4-k-m',
+            repo: 'qwen3.8:27b',
+            pullBuildId: 'q4-k-m',
+            ollamaRef: 'qwen3.8:27b',
+            blockedReason: 'Needs Ollama 0.32.12 or newer',
+          }),
+        ],
+      }),
+    ],
+  };
+}
+
+/** What main hands back for the Gemma 4 E4B library build once its layers still match. */
+function libraryPull(fit: ModelFit = FITS): CuratedPullResult {
+  const build: HubBuildView = {
+    id: 'qat-q4-0',
+    label: 'Q4_0',
+    sizeBytes: E4B.sizeBytes,
+    ollamaRef: E4B_REF,
+    installedNames: [E4B_REF.toLowerCase()],
+    blockedReason: null,
+    fit,
+  };
+  return {
+    ok: true,
+    model: view({
+      id: E4B_REF,
+      url: `https://ollama.com/library/${E4B_REF}`,
+      revision: 'd'.repeat(64),
+      licenseHost: 'ollama.com',
+      builds: [build],
+    }),
+    build,
   };
 }
 
@@ -81,10 +219,17 @@ interface Bridge {
   search: HubSearchResult;
   detail: HubDetailResult;
   pulls: ModelPull[];
+  curated: CuratedList;
+  curatedFailures: number;
+  curatedPull: CuratedPullResult;
+  token: HfTokenStatus;
 }
 
 let bridge: Bridge;
+let pushToken: ((status: HfTokenStatus) => void) | null = null;
 let pushPulls: (pulls: ModelPull[]) => void = () => {};
+let pushInstalledChanged: () => void = () => {};
+let pushCuratedChanged: () => void = () => {};
 const calls = {
   pull: vi.fn(),
   cancelPull: vi.fn(),
@@ -92,19 +237,42 @@ const calls = {
   search: vi.fn(),
   getDetail: vi.fn(),
   getStatus: vi.fn(),
+  getCuratedPull: vi.fn(),
+  checkCurated: vi.fn(),
+  listCurated: vi.fn(),
+  dismissPull: vi.fn(),
+  getHfToken: vi.fn(),
+  setHfToken: vi.fn(),
+  clearHfToken: vi.fn(),
+  checkCuratedList: vi.fn(),
 };
 
 beforeEach(() => {
+  pushToken = null;
   bridge = {
     status: RUNNING,
     installed: { ok: true, models: [] },
     search: { ok: true, models: [card(REPO)], nextCursor: null },
     detail: { ok: true, model: view() },
     pulls: [],
+    curated: curatedList(),
+    curatedFailures: 0,
+    curatedPull: libraryPull(),
+    token: { set: false, persisted: true },
   };
   for (const fn of Object.values(calls)) fn.mockReset();
+  window.localStorage.clear();
+  calls.getHfToken.mockImplementation(async () => bridge.token);
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.remove.mockResolvedValue({ ok: true });
+  calls.setHfToken.mockImplementation(async () => {
+    bridge.token = { ...bridge.token, set: true };
+    return { ok: true, status: bridge.token };
+  });
+  calls.clearHfToken.mockImplementation(async () => {
+    bridge.token = { ...bridge.token, set: false };
+    return { ok: true, status: bridge.token };
+  });
   (window as unknown as { b4m: unknown }).b4m = {
     shell: { openExternal: vi.fn() },
     models: {
@@ -122,15 +290,47 @@ beforeEach(() => {
         return bridge.detail;
       },
       listPulls: async () => bridge.pulls,
+      listCurated: async () => {
+        calls.listCurated();
+        if (bridge.curatedFailures > 0) {
+          bridge.curatedFailures -= 1;
+          throw new Error('ipc failed');
+        }
+        return bridge.curated;
+      },
+      getCuratedPull: async (entryId: string, buildId: string) => {
+        calls.getCuratedPull(entryId, buildId);
+        return bridge.curatedPull;
+      },
+      checkCurated: calls.checkCurated,
+      checkCuratedList: async () => {
+        calls.checkCuratedList();
+      },
+      onCuratedChanged: (listener: () => void) => {
+        pushCuratedChanged = listener;
+        return () => {};
+      },
       pull: calls.pull,
       cancelPull: calls.cancelPull,
-      dismissPull: vi.fn(),
+      dismissPull: calls.dismissPull,
       remove: calls.remove,
+      getHfToken: calls.getHfToken,
+      setHfToken: calls.setHfToken,
+      clearHfToken: calls.clearHfToken,
       onPullsChanged: (listener: (pulls: ModelPull[]) => void) => {
         pushPulls = listener;
         return () => {};
       },
-      onInstalledChanged: () => () => {},
+      onHfTokenChanged: (listener: (status: HfTokenStatus) => void) => {
+        pushToken = listener;
+        return () => {
+          pushToken = null;
+        };
+      },
+      onInstalledChanged: (listener: () => void) => {
+        pushInstalledChanged = listener;
+        return () => {};
+      },
     },
   };
 });
@@ -147,7 +347,7 @@ afterEach(() => {
 
 const flush = () => act(async () => new Promise(resolve => setTimeout(resolve, 0)));
 
-async function mount(inUse?: ModelsInUse) {
+async function mount(inUse?: ModelsInUse, tab: 'curated' | 'installed' = 'installed') {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -161,7 +361,7 @@ async function mount(inUse?: ModelsInUse) {
   await flush();
   await flush();
   // The screen remembers its tab across visits, and so across tests.
-  await click(q('models-installed-tab'));
+  await click(q(`models-${tab}-tab`));
 }
 
 const q = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
@@ -175,6 +375,617 @@ const click = async (element: HTMLElement | null) => {
 
 async function openExplore() {
   await click(q('models-explore-tab'));
+}
+
+const inside = (sectionId: string, testId: string) => [
+  ...(q(sectionId)?.querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`) ?? []),
+];
+const pickButton = (slot: string) =>
+  q('models-curated-picks')?.querySelector<HTMLElement>(
+    `[data-slot="${slot}"] [data-testid="models-build-pull-btn"]`
+  ) ?? null;
+const entryButton = (entryId: string, buildId: string) =>
+  q('models-curated-all')?.querySelector<HTMLElement>(
+    `[data-entry="${entryId}"] [data-testid="models-build-pull-btn"][data-build="${buildId}"]`
+  ) ?? null;
+
+describe('ModelsScreen curated', () => {
+  it('opens on Curated on the first visit', async () => {
+    // The remembered tab is module state, so a fresh module graph stands for a fresh app start.
+    vi.resetModules();
+    const [{ act: freshAct }, { createRoot: freshRoot }, { CssVarsProvider: Provider }, theme, screen] =
+      await Promise.all([
+        import('react'),
+        import('react-dom/client'),
+        import('@mui/joy/styles'),
+        import('../theme'),
+        import('./ModelsScreen'),
+      ]);
+    const fresh = document.createElement('div');
+    document.body.appendChild(fresh);
+    const freshMount = freshRoot(fresh);
+    await freshAct(async () => {
+      freshMount.render(
+        <Provider theme={theme.desktopTheme}>
+          <screen.ModelsScreen onClose={() => {}} />
+        </Provider>
+      );
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(q('models-curated-tab')?.getAttribute('aria-selected')).toBe('true');
+    freshAct(() => freshMount.unmount());
+    fresh.remove();
+  });
+
+  it('says the bundled list is shown and offers no Check now when this build cannot check', async () => {
+    await mount(undefined, 'curated');
+    expect(q('curated-header-status')?.textContent).toBe('Bundled with this app.');
+    expect(q('curated-check-now-btn')).toBeNull();
+  });
+
+  it('shows where an updated list came from, runs Check now, and re-lists when main reports a change', async () => {
+    const checkedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    bridge.curated = {
+      ...curatedList(),
+      source: { origin: 'updated', sequence: 3, check: 'up-to-date', checkedAt, stale: false },
+    };
+    await mount(undefined, 'curated');
+    expect(q('curated-header-status')?.textContent).toBe('Updated online. Checked 2 h ago.');
+
+    await click(q('curated-check-now-btn'));
+    expect(calls.checkCuratedList).toHaveBeenCalledTimes(1);
+
+    bridge.curated = {
+      ...curatedList(),
+      updatedAt: '2026-01-02T00:00:00Z',
+      source: { origin: 'updated', sequence: 4, check: 'failed', checkedAt, stale: true },
+    };
+    act(() => pushCuratedChanged());
+    await flush();
+    expect(q('models-curated-date')?.textContent).toBe('Curated list from January 2, 2026.');
+    expect(q('curated-header-status')?.textContent).toBe(
+      'Updated online. Could not check for updates. This list may be out of date.'
+    );
+    expect(q('curated-header-status')?.dataset.check).toBe('failed');
+  });
+
+  it("shows the list's date, then this computer's picks by role, with Recommended on one", async () => {
+    await mount(undefined, 'curated');
+    expect(q('models-curated-date')?.textContent).toBe('Curated list from October 27, 2026.');
+    expect(q('models-curated-machine')?.textContent).toContain('no GPU memory was detected');
+
+    const picks = inside('models-curated-picks', 'models-curated-pick');
+    expect(picks.map(pick => [pick.dataset.slot, pick.dataset.entry, pick.dataset.build])).toEqual([
+      ['best', 'qwen3-8-27b-gsq', 'iq3-s'],
+      ['fast', 'gemma-4-e4b', 'qat-q4-0'],
+      ['light', 'qwen3-8-27b-gsq', 'iq2-xs'],
+    ]);
+    expect(inside('models-curated-picks', 'models-curated-slot-chip').map(chip => chip.textContent)).toEqual([
+      'Best',
+      'Fast',
+      'Light',
+    ]);
+    const recommended = inside('models-curated-picks', 'models-curated-recommended-chip');
+    expect(recommended).toHaveLength(1);
+    expect(recommended[0].closest<HTMLElement>('[data-testid="models-curated-pick"]')?.dataset.slot).toBe('fast');
+    expect(picks.every(pick => pick.querySelector('[data-testid="models-curated-vision-chip"]'))).toBe(true);
+    expect(
+      picks.map(pick => pick.querySelector<HTMLElement>('[data-testid="models-fit-badge"]')?.dataset.level)
+    ).toEqual(['too-large', 'fits', 'fits']);
+  });
+
+  it('lists every model with its source, Vision badge and a fit badge per build', async () => {
+    await mount(undefined, 'curated');
+    const entries = inside('models-curated-all', 'models-curated-entry');
+    expect(entries.map(entry => entry.dataset.entry)).toEqual(['gemma-4-e4b', 'qwen3-8-27b-gsq', 'qwen3-8-27b']);
+    expect(inside('models-curated-all', 'models-curated-vision-chip')).toHaveLength(3);
+    expect(
+      inside('models-curated-all', 'models-curated-source-link').map(link => [
+        link.textContent,
+        link.getAttribute('href'),
+      ])
+    ).toEqual([
+      ['Ollama', 'https://ollama.com/library/gemma4'],
+      ['Hugging Face', `https://huggingface.co/${GSQ}`],
+      ['Ollama', 'https://ollama.com/library/qwen3.8'],
+    ]);
+    expect(inside('models-curated-all', 'models-fit-badge').map(badge => badge.textContent)).toEqual([
+      'Fits',
+      'Fits',
+      'Will not fit',
+      'Fits',
+    ]);
+    expect(inside('models-curated-all', 'models-curated-quant-hint')).toHaveLength(1);
+  });
+
+  it('keeps a build that needs a newer Ollama on the list, with Download off and the reason shown', async () => {
+    await mount(undefined, 'curated');
+    const row = q('models-curated-all')?.querySelector<HTMLElement>(
+      '[data-entry="qwen3-8-27b"] [data-testid="models-build-row"]'
+    );
+    expect(row?.querySelector('[data-testid="models-build-blocked-reason"]')?.textContent).toBe(
+      'Needs Ollama 0.32.12 or newer'
+    );
+    expect(row?.querySelector('[data-testid="models-build-pull-btn"]')).toBeNull();
+  });
+
+  it('says when the list has no picks for this computer, and still lists every model', async () => {
+    bridge.curated.picks = [];
+    await mount(undefined, 'curated');
+    expect(q('models-curated-no-picks')).not.toBeNull();
+    expect(inside('models-curated-picks', 'models-curated-pick')).toHaveLength(0);
+    expect(inside('models-curated-all', 'models-curated-entry')).toHaveLength(3);
+  });
+
+  it('labels a restricted license', async () => {
+    bridge.curated.entries[0] = { ...bridge.curated.entries[0], licenseName: 'other', licenseKind: 'restricted' };
+    await mount(undefined, 'curated');
+    const chip = inside('models-curated-all', 'models-curated-license-chip')[0];
+    expect(chip?.textContent).toBe('Restricted license: other');
+    expect(chip?.dataset.kind).toBe('restricted');
+  });
+
+  it('says when the list could not load, and loads it on retry', async () => {
+    bridge.curatedFailures = 1;
+    await mount(undefined, 'curated');
+    expect(q('models-curated-load-error')?.textContent).toContain('Could not load the curated list.');
+    expect(q('models-curated-loading')).toBeNull();
+
+    await click(q('models-curated-retry-btn'));
+    expect(q('models-curated-load-error')).toBeNull();
+    expect(all('models-curated-entry')).toHaveLength(3);
+  });
+
+  it.each([
+    [{ tools: true, toolUse: { rating: 'unrated' as const, note: null } }, 'Tools', 'has not rated'],
+    [{ tools: true, toolUse: { rating: 'strong' as const, note: 'Chains calls well.' } }, 'Tools: strong', 'Chains'],
+    [{ tools: false, toolUse: { rating: 'unrated' as const, note: null } }, 'No tools', 'sends it none'],
+  ])('shows tool support and its rating: %j', async (change, label, tooltip) => {
+    bridge.curated.entries[0] = { ...bridge.curated.entries[0], ...change };
+    await mount(undefined, 'curated');
+    const chip = q('models-curated-tools-chip');
+    expect(chip?.textContent).toBe(label);
+    // A closed describeChild tooltip leaves its text in the chip's title.
+    expect(chip?.getAttribute('title')).toContain(tooltip);
+  });
+
+  it('marks a build installed only when Ollama lists its exact name', async () => {
+    const installed = (name: string) => ({
+      name,
+      sizeBytes: 1,
+      quantization: null,
+      family: null,
+      parameterSize: null,
+      modifiedAt: null,
+      capabilities,
+      loaded: false,
+      fit: null,
+    });
+    bridge.installed = {
+      ok: true,
+      models: [installed(E4B_REF), installed(`hf.co/${GSQ.toLowerCase()}:IQ2_XS`), installed('qwen3.8:latest')],
+    };
+    await mount(undefined, 'curated');
+    const rows = inside('models-curated-all', 'models-build-row');
+    expect(rows.map(row => row.querySelector('[data-testid="models-build-installed-chip"]') !== null)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it('checks a library pick before the dialog, then pulls the reviewed tag', async () => {
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    expect(calls.getCuratedPull).toHaveBeenCalledWith('gemma-4-e4b', 'qat-q4-0');
+    expect(q('models-pull-dialog-fit')?.textContent).toContain(FITS.detail);
+    expect(q('models-pull-dialog-fit-checkbox')).toBeNull();
+
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(calls.pull).toHaveBeenCalledWith({
+      repo: E4B_REF,
+      buildId: 'qat-q4-0',
+      revision: 'd'.repeat(64),
+      sizeBytes: E4B.sizeBytes,
+      acceptLicense: false,
+      confirmAccess: false,
+      curated: { entryId: 'gemma-4-e4b', buildId: 'qat-q4-0' },
+    });
+  });
+
+  /** Main's entry for an E4B pull that failed; `ref` is null when it failed before downloading. */
+  const failedE4B = (error: ModelHubError, ref: string | null = E4B_REF): ModelPull => ({
+    key: pullKey(E4B_REF, E4B.id),
+    repo: E4B_REF,
+    buildId: E4B.id,
+    label: E4B.quant,
+    ref,
+    phase: 'failed',
+    completedBytes: ref ? E4B.sizeBytes : 0,
+    totalBytes: ref ? E4B.sizeBytes : null,
+    expectedBytes: E4B.sizeBytes,
+    error,
+  });
+
+  /** Confirms the fast pick's download; main lists `failed` and resolves the pull as a listed failure. */
+  async function pullFails(failed: ModelPull) {
+    calls.pull.mockImplementationOnce(async () => {
+      bridge.pulls = [failed];
+      pushPulls(bridge.pulls);
+      return { ok: false, listed: true, error: failed.error };
+    });
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    await click(q('models-pull-dialog-confirm-btn'));
+  }
+
+  it('offers Check again when Ollama could not describe a finished download, and clears the alert once it passes', async () => {
+    const unverified = {
+      kind: 'unverified' as const,
+      message: `Ollama could not describe ${E4B_REF} after downloading it.`,
+    };
+    const still = { kind: 'unverified' as const, message: 'Still no answer.' };
+    calls.checkCurated.mockImplementationOnce(async () => {
+      bridge.pulls = [failedE4B(still)];
+      pushPulls(bridge.pulls);
+      return { ok: false, error: still };
+    });
+    calls.checkCurated.mockImplementationOnce(async () => {
+      bridge.pulls = [];
+      pushPulls([]);
+      return { ok: true };
+    });
+    await pullFails(failedE4B(unverified));
+    expect(q('models-curated-error')?.textContent).toContain('could not describe');
+    expect(q('models-curated-explore-btn')).toBeNull();
+
+    await click(q('models-curated-check-again-btn'));
+    expect(calls.checkCurated).toHaveBeenCalledWith('gemma-4-e4b', 'qat-q4-0');
+    expect(q('models-curated-error')?.textContent).toContain('Still no answer.');
+    expect(q('models-curated-check-again-btn')).not.toBeNull();
+
+    await click(q('models-curated-check-again-btn'));
+    expect(q('models-curated-error')).toBeNull();
+  });
+
+  it('offers no Check again for a pull refused before anything downloaded', async () => {
+    await pullFails(
+      failedE4B(
+        { kind: 'unverified', message: 'Hugging Face could not confirm Ollama would get this exact file.' },
+        null
+      )
+    );
+    expect(q('models-curated-error')?.textContent).toContain('could not confirm');
+    expect(q('models-curated-check-again-btn')).toBeNull();
+  });
+
+  it('clears the warning of a failed curated download when it is dismissed', async () => {
+    const failed = failedE4B({
+      kind: 'unverified',
+      message: `Ollama could not describe ${E4B_REF} after downloading it.`,
+    });
+    calls.dismissPull.mockImplementationOnce(() => {
+      bridge.pulls = [];
+      pushPulls([]);
+    });
+    await pullFails(failed);
+    expect(q('models-curated-error')).not.toBeNull();
+
+    await click(q('models-pull-dismiss-btn'));
+    expect(calls.dismissPull).toHaveBeenCalledWith(failed.key);
+    expect(q('models-pull-list')).toBeNull();
+    expect(q('models-curated-error')).toBeNull();
+  });
+
+  it.each([false, true])('keeps a failed recheck dismissed (finishes after dismissal: %s)', async afterDismiss => {
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    let finish: (() => void) | undefined;
+    calls.checkCurated.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          finish = () => {
+            if (bridge.pulls.length > 0) {
+              bridge.pulls = [failedE4B(error)];
+              pushPulls(bridge.pulls);
+            }
+            resolve({ ok: false, error });
+          };
+        })
+    );
+    calls.dismissPull.mockImplementationOnce(() => {
+      bridge.pulls = [];
+      pushPulls([]);
+    });
+    await pullFails(failedE4B(error));
+    await click(q('models-curated-check-again-btn'));
+    if (!afterDismiss) await act(async () => finish?.());
+
+    await click(q('models-pull-dismiss-btn'));
+    if (afterDismiss) await act(async () => finish?.());
+    await flush();
+
+    expect(q('models-pull-list')).toBeNull();
+    expect(q('models-curated-error')).toBeNull();
+    expect(q('models-curated-check-again-btn')).toBeNull();
+  });
+
+  it('clears a recheck IPC failure when its pull is dismissed', async () => {
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    calls.checkCurated.mockRejectedValueOnce(new Error('IPC unavailable'));
+    calls.dismissPull.mockImplementationOnce(() => {
+      bridge.pulls = [];
+      pushPulls([]);
+    });
+    await pullFails(failedE4B(error));
+    await click(q('models-curated-check-again-btn'));
+    expect(q('models-curated-error')?.textContent).toContain('Could not check this model');
+    await click(q('models-pull-dismiss-btn'));
+
+    expect(q('models-pull-list')).toBeNull();
+    expect(q('models-curated-error')).toBeNull();
+  });
+
+  it('shows the check failure instead of the stored warning when the recheck IPC rejects', async () => {
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    calls.checkCurated.mockRejectedValueOnce(new Error('IPC unavailable'));
+    await pullFails(failedE4B(error));
+    expect(q('models-curated-error')?.textContent).toContain(error.message);
+
+    await click(q('models-curated-check-again-btn'));
+    expect(q('models-curated-error')?.textContent).toContain('Could not check this model');
+    expect(q('models-curated-error')?.textContent).not.toContain(error.message);
+    expect(q('models-curated-check-again-btn')).not.toBeNull();
+  });
+
+  it('keeps each row spinner while two checks are in flight', async () => {
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    const finish: Array<() => void> = [];
+    calls.checkCurated.mockImplementation(
+      () => new Promise(resolve => finish.push(() => resolve({ ok: false, error })))
+    );
+    bridge.pulls = [failedE4B(error)];
+    await mount(undefined, 'curated');
+    const buttons = all('models-curated-check-again-btn');
+    expect(buttons.length).toBeGreaterThan(1);
+    await click(buttons[0]);
+    await click(buttons[1]);
+    expect(all('models-curated-check-again-btn').every(button => button.hasAttribute('disabled'))).toBe(true);
+
+    await act(async () => finish[1]());
+    expect(all('models-curated-check-again-btn').some(button => button.hasAttribute('disabled'))).toBe(true);
+  });
+
+  it('reads the curated list again when the installed set changes, so a pulled Hugging Face build shows as installed', async () => {
+    await mount(undefined, 'curated');
+    const callsBefore = calls.listCurated.mock.calls.length;
+    const resolvedRef = `hf.co/${GSQ}:IQ2_XS_RESOLVED`;
+    bridge.curated = {
+      ...curatedList(),
+      entries: curatedList().entries.map(entry =>
+        entry.id === 'qwen3-8-27b-gsq'
+          ? {
+              ...entry,
+              builds: entry.builds.map(build => (build.id === 'iq2-xs' ? { ...build, ollamaRef: resolvedRef } : build)),
+            }
+          : entry
+      ),
+    };
+    bridge.installed = {
+      ok: true,
+      models: [
+        {
+          name: resolvedRef,
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities,
+          loaded: false,
+          fit: null,
+        },
+      ],
+    };
+    expect(inside('models-curated-picks', 'models-build-installed-chip')).toHaveLength(0);
+    await act(async () => pushInstalledChanged());
+    await flush();
+
+    expect(calls.listCurated.mock.calls.length).toBeGreaterThan(callsBefore);
+    expect(inside('models-curated-picks', 'models-build-installed-chip')).toHaveLength(1);
+    expect(q('models-curated-loading')).toBeNull();
+  });
+
+  it('downloads nothing when the dialog is dismissed', async () => {
+    await mount(undefined, 'curated');
+    await click(entryButton('gemma-4-e4b', 'qat-q4-0'));
+    expect(q('models-pull-dialog')).not.toBeNull();
+    await click(q('models-pull-dialog-cancel-btn'));
+    expect(q('models-pull-dialog')).toBeNull();
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it('restores a post-pull warning and Check again after leaving the tab and screen', async () => {
+    let finish: ((result: ModelPullResult) => void) | undefined;
+    calls.pull.mockImplementationOnce(
+      () =>
+        new Promise<ModelPullResult>(resolve => {
+          finish = resolve;
+        })
+    );
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    await click(q('models-pull-dialog-confirm-btn'));
+    await click(q('models-installed-tab'));
+    const error = { kind: 'unverified' as const, message: 'Still installed; could not verify the reviewed build.' };
+    bridge.pulls = [
+      {
+        key: pullKey(E4B_REF, E4B.id),
+        repo: E4B_REF,
+        buildId: E4B.id,
+        label: E4B.quant,
+        ref: E4B_REF,
+        phase: 'failed',
+        completedBytes: E4B.sizeBytes,
+        totalBytes: E4B.sizeBytes,
+        expectedBytes: E4B.sizeBytes,
+        error,
+      },
+    ];
+    await act(async () => {
+      pushPulls(bridge.pulls);
+      finish?.({ ok: false, error, listed: true });
+    });
+    expect(q('models-pull-status')?.textContent).toBe(error.message);
+    act(() => root?.unmount());
+    root = null;
+    host?.remove();
+    await mount(undefined, 'curated');
+    expect(q('models-pull-status')?.textContent).toBe(error.message);
+    expect(q('models-curated-check-again-btn')).not.toBeNull();
+    calls.checkCurated.mockImplementationOnce(async () => {
+      bridge.pulls = [];
+      pushPulls([]);
+      return { ok: true };
+    });
+    await click(q('models-curated-check-again-btn'));
+    expect(calls.checkCurated).toHaveBeenCalledWith('gemma-4-e4b', E4B.id);
+    expect(q('models-pull-list')).toBeNull();
+    expect(q('models-curated-error')).toBeNull();
+  });
+
+  it('shows the progress of a curated pull on its pick and its list row', async () => {
+    bridge.pulls = [
+      {
+        key: `${E4B_REF}#qat-q4-0`,
+        repo: E4B_REF,
+        buildId: 'qat-q4-0',
+        label: 'Q4_0',
+        ref: E4B_REF,
+        phase: 'downloading',
+        completedBytes: 1_000_000_000,
+        totalBytes: E4B.sizeBytes,
+        expectedBytes: E4B.sizeBytes,
+        error: null,
+      },
+    ];
+    await mount(undefined, 'curated');
+    expect(inside('models-curated-picks', 'models-build-progress')).toHaveLength(1);
+    expect(inside('models-curated-all', 'models-build-progress')).toHaveLength(1);
+  });
+
+  it('needs an explicit override to download a build that will not fit', async () => {
+    bridge.curatedPull = libraryPull(TOO_LARGE);
+    await mount(undefined, 'curated');
+    await click(pickButton('best'));
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
+    await click(q('models-pull-dialog-fit-checkbox'));
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
+    await click(q('models-pull-dialog-cancel-btn'));
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Hugging Face pick whose file changed since review, and offers Explore', async () => {
+    bridge.curatedPull = {
+      ok: false,
+      error: { kind: 'upstream-changed', message: 'This file changed on Hugging Face since Bike4Mind reviewed it.' },
+    };
+    bridge.detail = { ok: true, model: view({ id: GSQ }) };
+    await mount(undefined, 'curated');
+    await click(pickButton('best'));
+    expect(inside('models-curated-picks', 'models-curated-error')[0]?.textContent).toContain('changed on Hugging Face');
+    expect(inside('models-curated-all', 'models-curated-error')).toHaveLength(0);
+    expect(q('models-pull-dialog')).toBeNull();
+
+    await click(q('models-curated-explore-btn'));
+    expect(q('models-explore-tab')?.getAttribute('aria-selected')).toBe('true');
+    expect(calls.search).toHaveBeenCalledWith({ query: GSQ });
+    expect(q('models-detail')?.dataset.repo).toBe(GSQ);
+  });
+
+  it.each([
+    [
+      'a library build that changed',
+      { kind: 'upstream-changed' as const, message: `${E4B_REF} changed at its source since Bike4Mind reviewed it.` },
+    ],
+    ['a revision-only change', { kind: 'changed' as const, message: 'Click Download again.' }],
+    ['an outage', { kind: 'hub-unreachable' as const, message: 'Hugging Face is unreachable.' }],
+  ])('offers no Explore shortcut for %s', async (_label, error) => {
+    bridge.curatedPull = { ok: false, error };
+    await mount(undefined, 'curated');
+    await click(entryButton('gemma-4-e4b', 'qat-q4-0'));
+    expect(q('models-curated-error')?.textContent).toContain(error.message);
+    expect(q('models-curated-explore-btn')).toBeNull();
+  });
+
+  it('clears the spinner and says so when the check itself fails', async () => {
+    const models = (window as unknown as { b4m: { models: Record<string, unknown> } }).b4m.models;
+    models.getCuratedPull = async () => {
+      throw new Error('ipc torn down');
+    };
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    expect(q('models-curated-error')?.textContent).toContain('Try again');
+    expect(pickButton('fast')?.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('opens the dialog only for the latest Download click', async () => {
+    const pending: Array<(result: CuratedPullResult) => void> = [];
+    const models = (window as unknown as { b4m: { models: Record<string, unknown> } }).b4m.models;
+    models.getCuratedPull = () => new Promise<CuratedPullResult>(resolve => pending.push(resolve));
+    await mount(undefined, 'curated');
+    await click(pickButton('fast'));
+    await click(pickButton('best'));
+
+    await act(async () => pending[1](libraryPull(TOO_LARGE)));
+    await act(async () => pending[0](libraryPull(FITS)));
+    await flush();
+    expect(all('models-pull-dialog')).toHaveLength(1);
+    expect(q('models-pull-dialog-fit-checkbox')).not.toBeNull();
+  });
+
+  it('opens a fresh dialog, with nothing ticked, for each build', async () => {
+    bridge.curatedPull = libraryPull(TOO_LARGE);
+    await mount(undefined, 'curated');
+    await click(pickButton('best'));
+    await click(q('models-pull-dialog-fit-checkbox'));
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
+
+    // The other build's response replaces the open dialog, which must not keep the tick.
+    await click(pickButton('light'));
+    expect(all('models-pull-dialog')).toHaveLength(1);
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('refreshes availability when Ollama starts and surfaces a failed refresh until retry', async () => {
+    bridge.status = DOWN;
+    bridge.curated.entries[0].builds = [{ ...E4B, blockedReason: 'Ollama did not report its version' }];
+    await mount(undefined, 'curated');
+    expect(pickButton('fast')).toBeNull();
+    bridge.status = RUNNING;
+    bridge.curated = curatedList();
+    bridge.curatedFailures = 1;
+    await click(q('models-runtime-retry-btn'));
+    expect(q('models-curated-load-error')).not.toBeNull();
+    await click(q('models-curated-retry-btn'));
+    expect(pickButton('fast')?.hasAttribute('disabled')).toBe(false);
+    expect(q('models-build-blocked-reason')?.textContent).not.toContain('did not report');
+  });
+
+  it('says downloads need Ollama when it is not running', async () => {
+    bridge.status = DOWN;
+    await mount(undefined, 'curated');
+    expect(q('models-curated-runtime-down')).not.toBeNull();
+    expect(all('models-build-pull-btn').every(button => button.hasAttribute('disabled'))).toBe(true);
+  });
+});
+
+function type(input: HTMLInputElement, value: string) {
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 }
 
 describe('ModelsScreen installed', () => {
@@ -199,6 +1010,7 @@ describe('ModelsScreen installed', () => {
           modifiedAt: null,
           capabilities,
           loaded: true,
+          fit: FITS,
         },
       ],
     };
@@ -206,6 +1018,8 @@ describe('ModelsScreen installed', () => {
     expect(all('models-installed-row').map(row => row.dataset.name)).toEqual(['qwen2.5:0.5b']);
     expect(q('models-installed-loaded-chip')).not.toBeNull();
     expect(q('models-installed-row')?.textContent).toContain('Q4_K_M');
+    expect(q('models-fit-badge')?.dataset.level).toBe('fits');
+    expect(q('models-fit-badge')?.textContent).toBe('Fits');
 
     await click(q('models-installed-remove-btn'));
     expect(q('models-remove-dialog')).not.toBeNull();
@@ -231,6 +1045,7 @@ describe('ModelsScreen installed', () => {
           modifiedAt: null,
           capabilities,
           loaded: false,
+          fit: null,
         },
       ],
     };
@@ -272,6 +1087,7 @@ describe('ModelsScreen installed', () => {
             modifiedAt: null,
             capabilities,
             loaded: false,
+            fit: null,
           },
         ],
       };
@@ -325,6 +1141,32 @@ describe('ModelsScreen installed', () => {
 });
 
 describe('ModelsScreen explore', () => {
+  it.each([`hf.co/${REPO}:Q4_K_M`, `huggingface.co/${REPO}:Q4_K_M`])(
+    'shows a build installed as %s as installed',
+    async name => {
+      bridge.installed = {
+        ok: true,
+        models: [
+          {
+            name,
+            sizeBytes: 397_000_000,
+            quantization: 'Q4_K_M',
+            family: 'qwen2',
+            parameterSize: '494M',
+            modifiedAt: null,
+            capabilities,
+            loaded: false,
+            fit: null,
+          },
+        ],
+      };
+      await mount();
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      expect(q('models-build-installed-chip')).not.toBeNull();
+    }
+  );
+
   it('hides abliterated results until the toggle is on, then labels them', async () => {
     bridge.search = {
       ok: true,
@@ -343,7 +1185,34 @@ describe('ModelsScreen explore', () => {
     expect(all('models-explore-result-row')).toHaveLength(1);
   });
 
+  it('remembers the abliterated toggle across restarts, and keeps it off by default', async () => {
+    bridge.search = {
+      ok: true,
+      models: [card(REPO), card('someone/Qwen2.5-7B-abliterated-GGUF', { abliterated: true })],
+      nextCursor: null,
+    };
+    await mount();
+    await openExplore();
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBeNull();
+    expect(all('models-explore-result-row')).toHaveLength(1);
+    await click(q('models-explore-abliterated-switch'));
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBe('1');
+    await click(q('models-explore-abliterated-switch'));
+
+    act(() => root?.unmount());
+    host?.remove();
+    // Turned on in an earlier run; this run's module state never saw it.
+    window.localStorage.setItem('b4m.models.showAbliterated', '1');
+    await mount();
+    await openExplore();
+    expect(all('models-explore-result-row')).toHaveLength(2);
+    expect((q('models-explore-abliterated-switch') as HTMLInputElement).checked).toBe(true);
+    await click(q('models-explore-abliterated-switch'));
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBe('0');
+  });
+
   it('shows the license before the download button and asks before pulling', async () => {
+    bridge.detail = { ok: true, model: view({ builds: [{ ...view().builds[0], fit: FITS }] }) };
     await mount();
     await openExplore();
     await click(q('models-explore-result-row'));
@@ -356,6 +1225,7 @@ describe('ModelsScreen explore', () => {
       license && button && license.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(detail?.textContent).toContain('491 MB');
+    expect(q('models-build-row')?.querySelector('[data-testid="models-fit-badge"]')?.textContent).toBe('Fits');
 
     await click(button);
     expect(q('models-pull-dialog-size')?.textContent).toContain('491 MB download');
@@ -440,9 +1310,41 @@ describe('ModelsScreen explore', () => {
     await openExplore();
     await click(q('models-explore-result-row'));
     expect(q('models-access-steps')?.textContent).toContain('Request access');
+    expect(q('models-access-step-token')?.textContent).toContain('Add a token from that account');
     expect(q('models-access-keys-link')?.getAttribute('href')).toBe('https://huggingface.co/settings/keys');
+    expect(q('models-access-steps')?.textContent).toContain('Ollama downloads with this key, not with your token.');
     expect(q('models-build-blocked-reason')?.textContent).toContain('Needs access');
     expect(q('models-build-pull-btn')).toBeNull();
+  });
+
+  it('drops the request-access step once the token can read the repo, and still asks about the Ollama key', async () => {
+    bridge.token = { set: true, persisted: true };
+    bridge.detail = { ok: true, model: view({ gated: 'auto', needsAccess: true, hubAccess: 'granted' }) };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-access-step-account')?.textContent).toBe('Your Hugging Face token can read it.');
+    expect(q('models-access-step-token')).toBeNull();
+    expect(q('models-access-repo-link')).toBeNull();
+
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
+    expect(document.body.textContent).toContain(
+      "I added Ollama's public key to the Hugging Face account that has access."
+    );
+    await click(q('models-pull-dialog-access-checkbox'));
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ confirmAccess: true }));
+  });
+
+  it('says when the saved token cannot read a gated repo yet', async () => {
+    bridge.token = { set: true, persisted: true };
+    bridge.detail = { ok: true, model: view({ gated: 'manual', needsAccess: true, hubAccess: 'denied' }) };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-access-step-token')?.textContent).toContain('Your saved token cannot read it yet');
+    expect(q('models-access-repo-link')).not.toBeNull();
   });
 
   it('shows progress for a pull in flight and cancels it', async () => {
@@ -450,7 +1352,7 @@ describe('ModelsScreen explore', () => {
     act(() =>
       pushPulls([
         {
-          key: `${REPO}#qwen2.5-0.5b-instruct-q4_k_m`,
+          key: pullKey(REPO, 'qwen2.5-0.5b-instruct-q4_k_m'),
           repo: REPO,
           buildId: 'qwen2.5-0.5b-instruct-q4_k_m',
           label: 'Q4_K_M',
@@ -465,7 +1367,7 @@ describe('ModelsScreen explore', () => {
     );
     expect(q('models-pull-status')?.textContent).toContain('(50%)');
     await click(q('models-pull-cancel-btn'));
-    expect(calls.cancelPull).toHaveBeenCalledWith(`${REPO}#qwen2.5-0.5b-instruct-q4_k_m`);
+    expect(calls.cancelPull).toHaveBeenCalledWith(pullKey(REPO, 'qwen2.5-0.5b-instruct-q4_k_m'));
 
     await openExplore();
     await click(q('models-explore-result-row'));
@@ -548,6 +1450,68 @@ describe('ModelsScreen explore', () => {
     expect(q('models-explore-error')?.textContent).toContain(text);
   });
 
+  it('adds a token through Hugging Face, shows a rejected one, then reloads search and the open repo', async () => {
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+    expect(q('models-hf-token-status')?.textContent).toContain('not set');
+
+    await click(q('models-hf-token-edit-btn'));
+    expect(q('models-hf-token-dialog')).not.toBeNull();
+    expect(q('models-hf-token-ollama-note')?.textContent).toContain('never sees this token');
+    expect(q('models-hf-token-no-keychain')).toBeNull();
+    const input = q('models-hf-token-input') as HTMLInputElement;
+    expect(input.type).toBe('password');
+    type(input, 'hf_wrong');
+    calls.setHfToken.mockResolvedValueOnce({
+      ok: false,
+      error: { kind: 'token-rejected', message: 'Hugging Face did not accept this token.' },
+    });
+    await click(q('models-hf-token-save-btn'));
+    expect(calls.setHfToken).toHaveBeenLastCalledWith('hf_wrong');
+    expect(q('models-hf-token-error')?.textContent).toBe('Hugging Face did not accept this token.');
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+
+    const searches = calls.search.mock.calls.length;
+    const reads = calls.getDetail.mock.calls.length;
+    await click(q('models-hf-token-save-btn'));
+    expect(q('models-hf-token-dialog')).toBeNull();
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+    expect(q('models-hf-token-status')?.textContent).toBe('Hugging Face token: saved.');
+    expect(calls.search.mock.calls.length).toBe(searches + 1);
+    expect(calls.getDetail.mock.calls.length).toBe(reads + 1);
+
+    await click(q('models-hf-token-remove-btn'));
+    expect(calls.clearHfToken).toHaveBeenCalledTimes(1);
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+    expect(calls.search.mock.calls.length).toBe(searches + 2);
+  });
+
+  it('keeps the token shown as set and says so when removing it fails', async () => {
+    bridge.token = { set: true, persisted: true };
+    calls.clearHfToken.mockResolvedValueOnce({
+      ok: false,
+      error: { kind: 'failed', message: 'Could not remove the token. Try again.', retryAfterMs: null },
+    });
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-remove-btn'));
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+    expect(q('models-hf-token-remove-error')?.textContent).toBe('Could not remove the token. Try again.');
+  });
+
+  it('says a token lasts only until quit without a keychain', async () => {
+    bridge.token = { set: false, persisted: false };
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-edit-btn'));
+    expect(q('models-hf-token-no-keychain')?.textContent).toContain('kept only until you quit');
+    type(q('models-hf-token-input') as HTMLInputElement, 'hf_session');
+    await click(q('models-hf-token-save-btn'));
+    expect(q('models-hf-token-status')?.textContent).toBe('Hugging Face token: saved until you quit (no keychain).');
+  });
+
   it('says when nothing matches', async () => {
     bridge.search = { ok: true, models: [], nextCursor: null };
     await mount();
@@ -561,5 +1525,80 @@ describe('ModelsScreen explore', () => {
     await click(q('models-explore-search-btn'));
     expect(calls.search).toHaveBeenLastCalledWith({ query: 'nothing-here' });
     expect(q('models-explore-empty')?.textContent).toBe('No GGUF models match "nothing-here".');
+  });
+});
+
+describe('Hugging Face token transport failures', () => {
+  it('shows a failed status read and lets the user retry', async () => {
+    await mount();
+    calls.getHfToken.mockRejectedValueOnce(new Error('IPC failed'));
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    const error = q('models-hf-token-read-error');
+    expect(error?.textContent).toContain('Could not read');
+    const searches = calls.search.mock.calls.length;
+    const details = calls.getDetail.mock.calls.length;
+    await click(error?.querySelector('button') ?? null);
+    expect(calls.search).toHaveBeenCalledTimes(searches + 1);
+    expect(calls.getDetail.mock.calls.length).toBeGreaterThan(details);
+    expect(q('models-hf-token-read-error')).toBeNull();
+    expect(q('models-hf-token')).not.toBeNull();
+  });
+
+  it('keeps a pending save open and shows rejected IPC as a visible error', async () => {
+    let rejectSave: (error: Error) => void = () => {};
+    calls.setHfToken.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        })
+    );
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-edit-btn'));
+    type(q('models-hf-token-input') as HTMLInputElement, 'hf_pending_token');
+    await click(q('models-hf-token-save-btn'));
+    expect((q('models-hf-token-cancel-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect((q('models-hf-token-input') as HTMLInputElement).disabled).toBe(true);
+    await click(q('models-hf-token-cancel-btn'));
+    expect(q('models-hf-token-dialog')).not.toBeNull();
+    await act(async () => {
+      rejectSave(new Error('IPC failed'));
+    });
+    expect(q('models-hf-token-error')?.textContent).toContain('Could not save');
+    expect((q('models-hf-token-cancel-btn') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('shows a rejected removal and keeps the saved state', async () => {
+    bridge.token = { set: true, persisted: true };
+    calls.clearHfToken.mockRejectedValueOnce(new Error('IPC failed'));
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-remove-btn'));
+    expect(q('models-hf-token-remove-error')?.textContent).toContain('Could not remove');
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+  });
+});
+
+describe('Hugging Face token changes across windows', () => {
+  it('refreshes cached private results and details on a token event and unsubscribes on exit', async () => {
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    const searches = calls.search.mock.calls.length;
+    const details = calls.getDetail.mock.calls.length;
+    bridge.search = { ok: true, models: [], nextCursor: null };
+    bridge.detail = { ok: false, error: { kind: 'not-found', message: 'No public repo.' } };
+    await act(async () => {
+      pushToken?.({ set: false, persisted: true });
+    });
+    await flush();
+    expect(calls.search).toHaveBeenCalledTimes(searches + 1);
+    expect(calls.getDetail).toHaveBeenCalledTimes(details + 1);
+    expect(q('models-explore-result-row')).toBeNull();
+    expect(q('models-detail-error')?.textContent).toContain('No public repo.');
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+    await click(q('models-installed-tab'));
+    expect(pushToken).toBeNull();
   });
 });
