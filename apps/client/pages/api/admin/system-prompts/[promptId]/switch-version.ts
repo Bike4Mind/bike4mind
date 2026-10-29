@@ -1,5 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { systemPromptRepository } from '@bike4mind/database';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 
@@ -66,6 +67,22 @@ const handler = adminApi({
       req.user?.name || 'Admin',
       codeDefaultContent
     );
+    if (!updated) {
+      return res.status(404).json({
+        error: 'Version not found',
+        message: `Version ${targetVersion} not found in history`,
+      });
+    }
+
+    const previousVersion = prompt.activeVersion ?? prompt.version ?? 1;
+    if (previousVersion !== targetVersion) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.system_prompt.version_switched',
+        target: { kind: 'settings', id: promptId, displayName: prompt.name },
+        summary: `switched system prompt ${promptId} to ${targetVersion === 0 ? 'code default' : `version ${targetVersion}`}`,
+        changes: [{ field: 'activeVersion', before: previousVersion, after: targetVersion }],
+      });
+    }
 
     return res.status(200).json({
       success: true,

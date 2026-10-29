@@ -23,7 +23,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 import { useSendOTC } from './auth';
-import { TurnstileError } from '@client/app/utils/turnstile';
+import { TurnstileCancelledError, TurnstileError } from '@client/app/utils/turnstile';
 
 const wrapper = ({ children }: { children: React.ReactNode }) => {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
@@ -138,5 +138,15 @@ describe('useSendOTC challenge gate', () => {
     });
     await vi.waitFor(() => expect(warn).toHaveBeenCalled());
     warn.mockRestore();
+  });
+
+  it('does not report a cancelled challenge or ask the user to refresh', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new TurnstileCancelledError());
+    const { result } = renderHook(() => useSendOTC(), { wrapper });
+    const rejection = await result.current.mutateAsync({ email: 'x@test.com' }).catch(e => e);
+    expect(rejection.message).toContain('cancelled');
+    expect(rejection.message).not.toContain('refresh');
+    expect(postMock).not.toHaveBeenCalled();
   });
 });

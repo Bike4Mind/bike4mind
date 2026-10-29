@@ -1,6 +1,13 @@
 import { isPlaceholderValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { WebClient, WebClientEvent, KnownBlock, Block, ChatPostEphemeralArguments } from '@slack/web-api';
+import {
+  WebClient,
+  WebClientEvent,
+  KnownBlock,
+  Block,
+  ChatPostEphemeralArguments,
+  MessageAttachment,
+} from '@slack/web-api';
 import { getSlackDeps, getSlackDb } from './di/registry';
 
 /**
@@ -164,8 +171,8 @@ export interface SlackSearchResult {
     text: string;
     permalink: string;
     no_reactions: boolean;
-    blocks?: Array<any>;
-    attachments?: Array<any>;
+    blocks?: (KnownBlock | Block)[];
+    attachments?: MessageAttachment[];
   }>;
 }
 
@@ -1395,7 +1402,7 @@ export class SlackClient {
    * @param outputs - Optional outputs from the step
    * @deprecated Use functionCompleteSuccess for new Workflow Steps API
    */
-  async workflowStepCompleted(workflowStepExecuteId: string, outputs?: Record<string, any>): Promise<void> {
+  async workflowStepCompleted(workflowStepExecuteId: string, outputs?: Record<string, unknown>): Promise<void> {
     this.logger.info('Reporting workflow step completion', { workflowStepExecuteId });
 
     try {

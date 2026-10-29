@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { COMPLETION_SOURCES } from '../types/analytics';
 import { CREDIT_ADD_TRANSACTION_TYPES, type CreditTransactionType } from '../types/entities/CreditTransactionTypes';
 
 /**
@@ -55,13 +56,42 @@ export const ADMIN_LEDGER_PAGE_SIZE = 50;
 /** Hard cap on one CSV export; the UI states it next to the export button. */
 export const ADMIN_LEDGER_EXPORT_MAX_ROWS = 10_000;
 
-export const adminLedgerQuerySchema = z.object({
+const ledgerFilterShape = {
   kind: z.enum(ADMIN_LEDGER_KINDS).optional(),
-  /** Opaque cursor from the previous page's `nextCursor`. */
-  cursor: z.string().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-});
+  /** Exact model id as stored on the transaction. */
+  model: z.string().trim().min(1).max(200).optional(),
+  source: z.enum(COMPLETION_SOURCES).optional(),
+  /** First UTC day included, YYYY-MM-DD. */
+  from: z.iso.date().optional(),
+  /** Last UTC day included, YYYY-MM-DD. */
+  to: z.iso.date().optional(),
+};
+
+// ISO dates compare correctly as strings.
+const fromNotAfterTo = (filter: { from?: string; to?: string }) =>
+  !filter.from || !filter.to || filter.from <= filter.to;
+const RANGE_ORDER_ISSUE = { message: 'The start date must not be after the end date', path: ['from'] };
+
+/** The ledger filter shared by the page route and the CSV export, so an export follows the view. */
+export const adminLedgerFilterSchema = z.object(ledgerFilterShape).refine(fromNotAfterTo, RANGE_ORDER_ISSUE);
+export type AdminLedgerFilter = z.infer<typeof adminLedgerFilterSchema>;
+
+export const adminLedgerQuerySchema = z
+  .object({
+    ...ledgerFilterShape,
+    /** Opaque cursor from the previous page's `nextCursor`. */
+    cursor: z.string().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .refine(fromNotAfterTo, RANGE_ORDER_ISSUE);
 export type AdminLedgerQuery = z.infer<typeof adminLedgerQuerySchema>;
+
+/**
+ * Whether a filter keeps the ledger contiguous, so a running balance can be derived. A date range only
+ * trims the ends; kind, model and source drop rows from the middle.
+ */
+export const isContiguousLedgerFilter = (filter: AdminLedgerFilter): boolean =>
+  !filter.kind && !filter.model && !filter.source;
 
 export const adminLedgerRowSchema = z.object({
   id: z.string(),
@@ -71,14 +101,18 @@ export const adminLedgerRowSchema = z.object({
   /** Signed: positive adds credits, negative spends or removes them. */
   credits: z.number(),
   /**
-   * Balance right after this row. Present on the unfiltered view (rebuilt back from the current
-   * balance) and on admin adjustments (recorded at write time); absent otherwise.
+   * Balance right after this row. Present on a contiguous view (see isContiguousLedgerFilter; rebuilt
+   * back from the current balance) and on admin adjustments (recorded at write time); absent otherwise.
    */
   balanceAfter: z.number().optional(),
   model: z.string().optional(),
   source: z.string().optional(),
   apiKeyId: z.string().optional(),
   apiKeyPrefix: z.string().optional(),
+  /** The usage event's request id, stamped on completion API rows. */
+  requestId: z.string().optional(),
+  /** The chat message (quest) a web usage row paid for. */
+  questId: z.string().optional(),
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
   description: z.string().optional(),
@@ -98,6 +132,19 @@ export const adminLedgerPageSchema = z.object({
 });
 export type AdminLedgerPage = z.infer<typeof adminLedgerPageSchema>;
 
+/**
+ * AI spend of one model or source over the trailing 7, 30 and 90 UTC days including today: the same
+ * windows as the tail of `daily`, so a breakdown and the by-day chart total the same.
+ */
+export const adminSpendBucketSchema = z.object({
+  /** The model or source; null when the transaction did not record one. */
+  key: z.string().nullable(),
+  last7d: z.number(),
+  last30d: z.number(),
+  last90d: z.number(),
+});
+export type AdminSpendBucket = z.infer<typeof adminSpendBucketSchema>;
+
 /** GET /api/admin/users/[userId]/credit-summary. Spend counts AI usage rows (kinds usage and api). */
 export const adminCreditSummarySchema = z.object({
   balance: z.number(),
@@ -106,6 +153,10 @@ export const adminCreditSummarySchema = z.object({
   lastTopUp: z.object({ at: z.string(), credits: z.number(), type: z.enum(['purchase', 'subscription']) }).nullable(),
   /** One entry per UTC day, oldest first, zero-filled, covering the last 90 days including today. */
   daily: z.array(z.object({ date: z.string(), credits: z.number() })),
+  /** Every model with spend in the last 90 days, largest 90-day spend first. */
+  byModel: z.array(adminSpendBucketSchema),
+  /** Every source with spend in the last 90 days, largest 90-day spend first. */
+  bySource: z.array(adminSpendBucketSchema),
 });
 export type AdminCreditSummary = z.infer<typeof adminCreditSummarySchema>;
 

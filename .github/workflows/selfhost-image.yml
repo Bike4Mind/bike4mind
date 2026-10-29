@@ -17,6 +17,7 @@ on:
     paths:
       # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
       - 'apps/**'
+      - 'catalog/**'
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
@@ -45,6 +46,7 @@ on:
     paths:
       # The Dockerfile copies all of apps/ and turbo-builds every app but the client too.
       - 'apps/**'
+      - 'catalog/**'
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'

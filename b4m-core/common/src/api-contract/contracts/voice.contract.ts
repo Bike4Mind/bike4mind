@@ -138,6 +138,13 @@ export const createVoiceSessionContract = defineEndpoint({
         'is tagged `errorCode: "insufficient_credits"`.',
       schema: InsufficientCreditsErrorSchema,
     },
+    429: {
+      description:
+        'Rate limit exceeded, or the account used up its tokens-per-minute allowance ' +
+        '(`errorCode: "token_rate_limit_exceeded"`; `Retry-After` says when the window drains).',
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
     502: {
       description: 'ElevenLabs failed to provision the conversation; any reserved credits are refunded.',
       schema: ApiErrorSchema,

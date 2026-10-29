@@ -10,6 +10,12 @@ on:
       - 'scripts/test_desktop_release_version.py'
       - 'scripts/desktop_affected.py'
       - 'scripts/test_desktop_affected.py'
+      - 'catalog/model-hub/**'
+      - 'b4m-core/local-models/**'
+      - 'b4m-core/common/src/schemas/modelHub.ts'
+      - 'packages/scripts/src/curatedCatalog/checkDesktopBuild.ts'
+      - 'packages/scripts/src/curatedCatalog/devKey.ts'
+      - 'packages/scripts/src/curatedCatalog/cli.ts'
   push:
     branches: [main]
     paths:
@@ -19,6 +25,12 @@ on:
       - 'scripts/test_desktop_release_version.py'
       - 'scripts/desktop_affected.py'
       - 'scripts/test_desktop_affected.py'
+      - 'catalog/model-hub/**'
+      - 'b4m-core/local-models/**'
+      - 'b4m-core/common/src/schemas/modelHub.ts'
+      - 'packages/scripts/src/curatedCatalog/checkDesktopBuild.ts'
+      - 'packages/scripts/src/curatedCatalog/devKey.ts'
+      - 'packages/scripts/src/curatedCatalog/cli.ts'
   workflow_dispatch:
 
 permissions:
@@ -105,6 +117,9 @@ jobs:
       DESKTOP_VERSION: ${{ needs.version.outputs.version }}
       B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
       B4M_UPDATE_FEED_URL: ${{ needs.version.outputs.feed }}
+      B4M_CURATED_MANIFEST_URL: ${{ vars.B4M_CURATED_MANIFEST_URL }}
+      # The URL curated:publish serves the list at; curated:check-build fails a build that baked any other.
+      CURATED_PUBLIC_URL: ${{ vars.CURATED_PUBLIC_URL }}
       VITEST_MAX_WORKERS: '2'
     steps:
       - uses: actions/checkout@v6
@@ -147,6 +162,7 @@ jobs:
           else
             pnpm build
           fi
+          pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL"
           if [ "$PLATFORM" = mac ]; then
             for key in CSC_LINK CSC_KEY_PASSWORD CSC_KEYCHAIN CSC_NAME; do
               if [ -n "${!key:-}" ]; then echo "Certificate credentials are not allowed in ad-hoc packaging: $key"; exit 1; fi
@@ -173,6 +189,7 @@ jobs:
             if [ -z "${!key}" ]; then echo "Missing signing credential: $key"; exit 1; fi
           done
           pnpm build
+          pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL"
           pnpm exec electron-builder --mac dmg zip "--$ARCH" --publish never -c.publish.provider=generic "-c.publish.url=$B4M_UPDATE_FEED_URL" -c.forceCodeSigning=true -c.mac.notarize=true "-c.extraMetadata.version=$DESKTOP_VERSION"
           app_dir=release/mac
           if [ "$ARCH" = arm64 ]; then app_dir=release/mac-arm64; fi

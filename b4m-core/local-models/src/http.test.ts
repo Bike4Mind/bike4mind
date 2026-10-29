@@ -1,8 +1,9 @@
 import { inspect } from 'node:util';
+import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { detectRuntimes } from './detect';
 import { LocalRuntimeError, RuntimeConnectionError, RuntimeHttpError } from './errors';
-import { send } from './http';
+import { BodyTooLargeError, readCapped, send } from './http';
 import { OllamaRuntime } from './ollama';
 import { OpenAICompatibleRuntime } from './openaiCompatible';
 import { json, startFakeServer, type FakeServer } from './__test__/fakeServer';
@@ -56,6 +57,40 @@ function expectNoSecret(error: unknown): void {
   expect((error as Error).cause).toBeUndefined();
   expect(inspect(error, { depth: 10 })).not.toContain(SECRET);
 }
+
+describe('readCapped', () => {
+  const stream = (...chunks: number[]) =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const size of chunks) controller.enqueue(new Uint8Array(size).fill(7));
+          controller.close();
+        },
+      })
+    );
+
+  it('returns the bytes up to the cap', async () => {
+    expect(await readCapped(stream(3, 4), 7)).toEqual(new Uint8Array(7).fill(7));
+    expect(await readCapped(new Response(null), 7)).toEqual(new Uint8Array(0));
+  });
+
+  it('rejects a declared length over the cap without reading, and a streamed body once it passes the cap', async () => {
+    const declared = new Response('ab', { headers: { 'content-length': '99' } });
+    await expect(readCapped(declared, 10)).rejects.toBeInstanceOf(BodyTooLargeError);
+    await expect(readCapped(stream(5, 6), 10)).rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+
+  it('counts decoded bytes of a gzip body', async () => {
+    server = await startFakeServer({
+      'GET /big': (_req, res) => {
+        res.writeHead(200, { 'content-encoding': 'gzip', 'content-type': 'application/json' });
+        res.end(gzipSync(Buffer.alloc(64 * 1024, 32)));
+      },
+    });
+    const response = await fetch(`${server.baseUrl}/big`);
+    await expect(readCapped(response, 32 * 1024)).rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+});
 
 describe('header values fetch would reject', () => {
   it.each(badKeys)('keep the API key out of errors (char %i)', async (_code, apiKey) => {

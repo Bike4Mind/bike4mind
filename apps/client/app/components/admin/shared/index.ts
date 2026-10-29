@@ -1,6 +1,7 @@
 export * from './AdminPageHeader';
 export * from './EntityHeader';
 export * from './StatStrip';
+export * from './formatMoney';
 export * from './SectionCard';
 export * from './StatusChip';
 export * from './DataTable';

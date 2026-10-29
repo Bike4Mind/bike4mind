@@ -1,6 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { agentOpsSettingsRepository } from '@bike4mind/database';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/utils';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
@@ -14,9 +15,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     throw new BadRequestError('Invalid version number');
   }
 
+  // addMetaPromptVersion also bumps currentVersionNumber, so it can point at an inactive version.
+  const previousVersion = (await agentOpsSettingsRepository.getActiveMetaPrompt())?.versionNumber;
+  let updatedSettings;
   try {
-    const updatedSettings = await agentOpsSettingsRepository.activateMetaPromptVersion(versionNumber);
-    res.json(updatedSettings);
+    updatedSettings = await agentOpsSettingsRepository.activateMetaPromptVersion(versionNumber);
   } catch (error) {
     if (error instanceof Error) {
       if (error.message.includes('not found')) {
@@ -25,6 +28,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
     throw error;
   }
+
+  if (previousVersion !== versionNumber) {
+    await recordAdminActionFromRequest(req, {
+      action: 'settings.agent_ops.version_activated',
+      target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+      summary: `activated Agent Ops meta-prompt version ${versionNumber}`,
+      changes: [{ field: 'activeVersion', before: previousVersion ?? null, after: versionNumber }],
+      details: { version: versionNumber },
+    });
+  }
+  res.json(updatedSettings);
 });
 
 export default handler;
