@@ -1005,6 +1005,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     freeCreditClaimEmail: { type: String },
     signupGrantAssessment: { type: Schema.Types.Mixed, default: undefined },
     signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
+    // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
+    signupGrantHeldAt: { type: Date },
     signupGrant: {
       type: new Schema(
         {

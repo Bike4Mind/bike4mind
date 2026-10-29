@@ -327,6 +327,8 @@ export interface IUser extends ICreditHolder {
   signupGrantAssessment?: SignupGrantAssessment;
   /** Why free credits are being withheld; cleared when they are paid. */
   signupGrantHeldReason?: 'budget_exhausted' | 'risk_review' | null;
+  /** When the signup tranche was last held for an exhausted daily budget. */
+  signupGrantHeldAt?: Date | null;
   level: UserLevelType;
   isBanned: boolean;
   isModerated: boolean;

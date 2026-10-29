@@ -158,12 +158,17 @@ async function releaseStage(
           reservations.push(reservation);
           // A same-day drip that did not make the draw fresh belongs to a concurrent attempt that may
           // still refund it; paying on that reservation could pay unmetered.
-          if (dripDay && reservation.outcome === 'reserved' && !reservation.fresh) return noGrant();
+          // A retried transaction re-reserves as a no-op, so an earlier attempt's fresh draw is still ours.
+          if (dripDay && reservation.outcome === 'reserved' && !reservations.some(held => held.fresh)) return noGrant();
           if (reservation.outcome === 'exhausted') {
             // The tranche stays pending (and tagged) until a card or subscription unlock pays it; nothing retries it on a schedule.
             if (expected === 'pending_email') {
               await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
-              await db.users.update({ id: userId, signupGrantHeldReason: 'budget_exhausted' });
+              await db.users.update({
+                id: userId,
+                signupGrantHeldReason: 'budget_exhausted',
+                signupGrantHeldAt: db.signupProtection?.grantBudget?.now?.() ?? new Date(),
+              });
             }
             return { ...noGrant(), withheld: true };
           }
@@ -299,9 +304,8 @@ export async function dripSignupGrant(
   if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || user.signupGrant.lastDripDay === day) return noGrant();
-  // Existence only, and bounded: holders that are blocked, AI-revoked or untouched since before `day`
-  // are ignored so one abandoned hold cannot stall every drip. The schema has no held timestamp, so
-  // updatedAt (the hold itself writes it) stands in; a hold older than the day is treated as stale.
+  // Existence only, and bounded: holders that are blocked, AI-revoked or held before `day` are ignored
+  // so one abandoned hold cannot stall every drip. Nothing retries a hold, so only today's holds count.
   const heldTranche = await adapters.db.users.findOne({
     signupGrantHeldReason: 'budget_exhausted',
     'signupGrant.stage': 'pending_email',
@@ -310,7 +314,7 @@ export async function dripSignupGrant(
     disputePending: { $ne: true },
     'moderation.status': { $ne: 'suspended' },
     deletedAt: { $exists: false },
-    updatedAt: { $gte: new Date(`${day}T00:00:00.000Z`) },
+    signupGrantHeldAt: { $gte: new Date(`${day}T00:00:00.000Z`) },
   });
   if (heldTranche) return { ...noGrant(), withheld: true };
   return releaseStage(

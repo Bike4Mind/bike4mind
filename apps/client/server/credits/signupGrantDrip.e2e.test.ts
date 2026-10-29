@@ -188,9 +188,6 @@ describe('signup activity drip', () => {
     await userService.releaseSignupTranche((await createUser(2)).id, adapters);
     const held = await createUser(1);
     expect(await userService.releaseSignupTranche(held.id, adapters)).toMatchObject({ withheld: true });
-    const heldOn = async (n: number) =>
-      User.collection.updateOne({ _id: held._id }, { $set: { updatedAt: new Date(`${day(n)}T09:00:00Z`) } });
-    await heldOn(0);
     expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
     expect(await dripRows(dripper.id)).toHaveLength(0);
 
@@ -209,12 +206,14 @@ describe('signup activity drip', () => {
       { _id: held._id },
       { $set: { signupGrantHeldReason: 'budget_exhausted', 'signupGrant.stage': 'pending_email' } }
     );
-    const setUpdatedAt = (d: string) =>
-      User.collection.updateOne({ _id: held._id }, { $set: { updatedAt: new Date(`${d}T09:00:00Z`) } });
-    await setUpdatedAt(day(0));
+    const setHeldAt = (d: string) =>
+      User.collection.updateOne({ _id: held._id }, { $set: { signupGrantHeldAt: new Date(`${d}T09:00:00Z`) } });
+    await setHeldAt(day(0));
     expect(await drip(dripper.id, 0)).toMatchObject({ creditsGranted: 0, withheld: true });
+    // Any later write to the held account (a login, a settings save) must not make an old hold current again.
+    await User.collection.updateOne({ _id: held._id }, { $set: { updatedAt: new Date(`${day(1)}T10:00:00Z`) } });
     expect(await drip(dripper.id, 1)).toMatchObject({ creditsGranted: 1000 });
-    await setUpdatedAt(day(2));
+    await setHeldAt(day(2));
     expect(await drip(dripper.id, 2)).toMatchObject({ creditsGranted: 0, withheld: true });
     for (const [n, flag] of [
       [2, { isBanned: true }],
@@ -222,7 +221,7 @@ describe('signup activity drip', () => {
     ] as const) {
       await User.collection.updateOne(
         { _id: held._id },
-        { $set: { ...flag, updatedAt: new Date(`${day(n)}T09:00:00Z`) } }
+        { $set: { ...flag, signupGrantHeldAt: new Date(`${day(n)}T09:00:00Z`) } }
       );
       expect(await drip(dripper.id, n)).toMatchObject({ creditsGranted: 1000 });
       await User.collection.updateOne({ _id: held._id }, { $unset: { isBanned: '', isModerated: '' } });
@@ -233,11 +232,23 @@ describe('signup activity drip', () => {
     const user = await createSignupStageUser();
     config.signupGrantDailyBudget = '5000';
     clock = new Date(`${day(0)}T09:00:00Z`);
-    const repository = adapters.signupProtection.grantBudget.repository;
+    const repository = signupProtection.grantBudget.repository;
     vi.spyOn(repository, 'reserve').mockResolvedValueOnce({ spent: 1000, fresh: false });
     expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 0 });
     expect(await dripRows(user.id)).toHaveLength(0);
     expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 1000 });
+  });
+
+  it('still pays when the payout transaction retries after its own fresh draw', async () => {
+    const user = await createSignupStageUser();
+    config.signupGrantDailyBudget = '5000';
+    clock = new Date(`${day(0)}T09:00:00Z`);
+    vi.spyOn(userRepository, 'claimFreeCreditGrant').mockRejectedValueOnce(
+      Object.assign(new Error('write conflict'), { errorLabels: ['TransientTransactionError'] })
+    );
+    expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 1000 });
+    expect(await dripRows(user.id)).toHaveLength(1);
+    expect(await spentToday()).toBe(1000);
   });
 
   it('skips accounts with a pending tranche or no staged grant', async () => {

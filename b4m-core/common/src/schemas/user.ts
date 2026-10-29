@@ -169,6 +169,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   pendingCreditGrant: true,
   signupGrant: true,
   signupGrantHeldReason: true,
+  signupGrantHeldAt: true,
   level: true,
   isBanned: true,
   isModerated: true,
