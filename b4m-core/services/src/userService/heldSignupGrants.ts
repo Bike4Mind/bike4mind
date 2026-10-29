@@ -25,7 +25,7 @@ export type HeldReleaseBatchRepository = {
 };
 
 export type HeldGrantAdapters = {
-  grant: FreeCreditAdapters & { logger: { error: (message: string, ...args: unknown[]) => void } };
+  grant: FreeCreditAdapters & { logger: { error: (message: string, ...args: unknown[]) => void; warn: (message: string, ...args: unknown[]) => void } };
   /** Strips PENDING_FREE_CREDITS_TAG and pendingCreditGrant once a release has paid. */
   clearPending: (userId: string) => Promise<unknown>;
 };
@@ -93,7 +93,7 @@ export async function revokeHeldGrantRelease(
       decrementCreditsIfCovered: (userId: string, credits: number) => Promise<boolean>;
     };
     creditTransactions: ICreditTransactionRepository;
-    logger: { error: (message: string, ...args: unknown[]) => void };
+    logger: { error: (message: string, ...args: unknown[]) => void; warn: (message: string, ...args: unknown[]) => void };
   }
 ) {
   const batch = await adapters.batches.findBatch(input.batchId);
