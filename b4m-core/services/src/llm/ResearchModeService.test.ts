@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getLlmByModel } from '@bike4mind/llm-adapters';
-import { estimateStreamedOutputTokens, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, estimateStreamedOutputTokens, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionOptions } from '@bike4mind/llm-adapters';
 import { ResearchModeService, researchConfigTimeoutMs } from './ResearchModeService';
 import { researchModeUsages } from './ChatCompletionProcess';
@@ -337,6 +337,39 @@ describe('ResearchModeService timeout', () => {
       ['a', false, 'Timeout after 220 seconds'],
       ['b', true, undefined],
     ]);
+  });
+
+  it('sizes the timeout on the max_tokens a thinking request really sends', async () => {
+    const thinkingModel = {
+      id: ChatModels.CLAUDE_4_6_SONNET_BEDROCK,
+      name: 'Thinking',
+      backend: 'bedrock',
+      type: 'text',
+      can_think: true,
+      thinkingStyle: 'legacy',
+      max_tokens: 64_000,
+    } as unknown as ModelInfo;
+    let signal: AbortSignal | undefined;
+    const complete = vi.fn(async (_model, _messages, options: ICompletionOptions) => {
+      signal = options.abortSignal;
+      await waitForAbort(options.abortSignal!);
+    });
+    useBackend(complete);
+    const service = new ResearchModeService({}, [thinkingModel], logger);
+    const mode = {
+      enabled: true,
+      configurations: [{ id: 'a', enabled: true, model: thinkingModel.id, parameters: { maxTokens: 4000 } }],
+    };
+
+    const pending = service.processResearchMode(mode, [], { thinking: { enabled: true } } as any, onStream);
+    // The adapter raises 4000 to the 16000 default budget + 1000, so the limit is 120s + 17000 / 40.
+    await vi.advanceTimersByTimeAsync(220_000);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(325_000);
+    const results = await pending;
+
+    expect(signal?.aborted).toBe(true);
+    expect(results[0]).toMatchObject({ success: false, error: 'Timeout after 545 seconds' });
   });
 
   it('reports a Stop before the timeout as cancelled, without draining', async () => {

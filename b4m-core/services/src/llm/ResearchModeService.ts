@@ -7,6 +7,7 @@ import {
   type ThinkingVisibility,
 } from '@bike4mind/common';
 import { type ICompletionOptions, getLlmByModel, resolveOutputMaxTokens } from '@bike4mind/llm-adapters';
+import { sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import { Logger } from '@bike4mind/observability';
 import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -189,7 +190,10 @@ export class ResearchModeService {
         abortSignal: configAbort.signal,
       };
 
-      const timeoutMs = researchConfigTimeoutMs(options.maxTokens);
+      // Sized on what the adapter really sends (raised for thinking), the same ceiling the credit hold uses.
+      const timeoutMs = researchConfigTimeoutMs(
+        options.maxTokens && sentMaxTokensFor(modelInfo, options.thinking, options.maxTokens)
+      );
       // Settles the race promptly on a Stop or timeout even if the adapter ignores the signal. The
       // race subscribes to it, so a rejection after the race has settled is handled, not unhandled.
       const stopped = new Promise<never>((_, reject) => {
