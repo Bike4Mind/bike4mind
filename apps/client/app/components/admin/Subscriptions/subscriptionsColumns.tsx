@@ -1,8 +1,14 @@
 import { Box, Stack, Typography } from '@mui/joy';
 import { Building2 } from 'lucide-react';
-import type { AdminSubscriptionRow, AdminSubscriptionsSortField } from '@client/app/utils/adminSubscriptionsFilter';
+import {
+  MRR_CURRENCY,
+  countsTowardMrr,
+  type AdminSubscriptionRow,
+  type AdminSubscriptionsSortField,
+} from '@client/app/utils/adminSubscriptionsFilter';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import type { DataColumn } from '../shared/DataTable';
+import { formatMoney } from '../shared/formatMoney';
 import { InitialsAvatar } from '../shared/InitialsAvatar';
 import { InlineBar } from '../shared/InlineBar';
 import { StatusChip } from '../shared/StatusChip';
@@ -33,8 +39,8 @@ export function formatRelativeDay(value: string, now: Date): string {
 /** The exact time for a hover title, in UTC. */
 export const formatUtc = (value: string) => `${new Date(value).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
-const Dash = () => (
-  <Typography component="span" sx={{ color: 'admin.inkMuted' }} aria-label="None">
+const Dash = ({ title }: { title?: string }) => (
+  <Typography component="span" sx={{ color: 'admin.inkMuted' }} aria-label={title ?? 'None'} title={title}>
     {'\u2014'}
   </Typography>
 );
@@ -119,6 +125,28 @@ function Seats({ row }: { row: AdminSubscriptionRow }) {
   );
 }
 
+// Comps are not revenue: they never show an amount, whatever the row carries.
+function Mrr({ row }: { row: AdminSubscriptionRow }) {
+  const mrr = isCompedRow(row) ? null : row.mrr;
+  const otherCurrency = mrr !== null && mrr.currency !== MRR_CURRENCY;
+  return (
+    <Box component="span" data-testid={`admin-subscriptions-mrr-${row.id}`}>
+      {mrr === null ? (
+        <Dash title={countsTowardMrr(row) ? 'No billed amount from Stripe yet' : undefined} />
+      ) : (
+        <Typography
+          component="span"
+          level="body-sm"
+          title={otherCurrency ? `Billed in ${mrr.currency.toUpperCase()}, not in the MRR total` : undefined}
+          sx={{ color: otherCurrency ? 'admin.inkMuted' : 'admin.ink', whiteSpace: 'nowrap' }}
+        >
+          {formatMoney(mrr.amount, mrr.currency)}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 function Renews({ row, now }: { row: AdminSubscriptionRow; now: Date }) {
   const when = formatRelativeDay(row.periodEndsAt, now);
   const title = formatUtc(row.periodEndsAt);
@@ -198,6 +226,13 @@ export function subscriptionsColumns({
           </Stack>
         );
       },
+    },
+    {
+      id: 'mrr',
+      label: `MRR (${MRR_CURRENCY.toUpperCase()})`,
+      numeric: true,
+      width: '8rem',
+      render: row => <Mrr row={row} />,
     },
     {
       id: 'seats',

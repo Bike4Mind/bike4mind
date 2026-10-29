@@ -1,9 +1,11 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { moneyFractionDigits, toMajorUnits } from '@client/app/components/admin/shared/formatMoney';
 import {
   ADMIN_SUBSCRIPTIONS_EXPORT_MAX_ROWS,
   ADMIN_SUBSCRIPTIONS_LIST_MAX,
   AdminSubscriptionsFilterSchema,
+  type AdminSubscriptionMrr,
   type AdminSubscriptionRow,
 } from '@client/app/utils/adminSubscriptionsFilter';
 import { escapeCsvCell } from '@client/app/utils/csv';
@@ -34,6 +36,8 @@ const CSV_HEADER = [
   'Price id',
   'Status',
   'Source',
+  'MRR',
+  'MRR currency',
   'Quantity',
   'Seats',
   'Members',
@@ -47,6 +51,10 @@ const CSV_HEADER = [
 // A number is not a formula, so numeric cells stay raw (escaping would turn -412 into '-412).
 const numberCell = (value: number | null | undefined): string =>
   value === null || value === undefined ? '' : String(value);
+
+// Major units at the currency's precision ("19.00"), so a spreadsheet sums the column as money.
+const moneyCell = (mrr: AdminSubscriptionMrr | null): string =>
+  mrr ? toMajorUnits(mrr.amount, mrr.currency).toFixed(moneyFractionDigits(mrr.currency)) : '';
 
 const toCsvLine = (row: AdminSubscriptionRow): string => {
   const owner = row.owner;
@@ -63,6 +71,8 @@ const toCsvLine = (row: AdminSubscriptionRow): string => {
     escapeCsvCell(row.plan.priceId ?? ''),
     escapeCsvCell(row.status),
     escapeCsvCell(row.source),
+    moneyCell(row.mrr),
+    escapeCsvCell(row.mrr?.currency.toUpperCase() ?? ''),
     numberCell(row.quantity),
     numberCell(organization?.seats),
     numberCell(organization?.memberCount),

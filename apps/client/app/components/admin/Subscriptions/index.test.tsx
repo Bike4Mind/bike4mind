@@ -41,11 +41,12 @@ const row = (overrides: Partial<AdminSubscriptionRow> = {}): AdminSubscriptionRo
     email: 'ada@example.com',
     stripeCustomerId: 'cus_1',
   },
-  plan: { priceId: 'price_pro', name: 'Pro', interval: 'monthly' },
+  plan: { priceId: 'price_pro', name: 'Professional', interval: 'monthly' },
   status: 'active',
   source: 'stripe',
   quantity: 1,
   customCreditsPerCycle: null,
+  mrr: { amount: 1900, currency: 'usd' },
   periodStartsAt: '2026-10-01T00:00:00.000Z',
   periodEndsAt: '2026-11-01T00:00:00.000Z',
   canceledAt: null,
@@ -66,11 +67,14 @@ const compedRow = row({
     stripeCustomerId: null,
   },
   source: 'admin_grant',
+  mrr: null,
 });
 
 const SUMMARY: AdminSubscriptionsSummary = {
   total: 3,
   views: { paying: 2, pastDue: 1, comped: 1, churned: 0 },
+  mrr: { currency: 'usd', amount: 1_234_567, unpriced: 2, otherCurrency: 1 },
+  pastDueMrr: { currency: 'usd', amount: 1900, unpriced: 0, otherCurrency: 0 },
   searchTruncated: false,
 };
 
@@ -142,6 +146,65 @@ describe('AdminSubscriptions', () => {
     expect(screen.queryByTestId('admin-subscriptions-comped-s1')).toBeNull();
   });
 
+  describe('MRR', () => {
+    it('shows the monthly amount under a header naming the currency', async () => {
+      renderTab();
+      expect((await screen.findByTestId('admin-subscriptions-mrr-s1')).textContent).toBe('$19.00');
+      expect(screen.getByText('MRR (USD)')).toBeTruthy();
+    });
+
+    it('shows comps a dash, never a number, even when the row carries an amount', async () => {
+      listRows = [compedRow, row({ id: 's3', ownerId: 'u3', source: 'admin_grant' })];
+      renderTab();
+      for (const id of ['s2', 's3']) {
+        const cell = await screen.findByTestId(`admin-subscriptions-mrr-${id}`);
+        expect(cell.textContent).toBe('\u2014');
+        expect(within(cell).getByLabelText('None')).toBeTruthy();
+      }
+    });
+
+    it('marks a paying row with no mirrored amount as not synced, and a canceled one as none', async () => {
+      listRows = [
+        row({ mrr: null }),
+        row({ id: 's4', status: 'canceled', canceledAt: '2026-10-02T00:00:00.000Z', mrr: null }),
+      ];
+      renderTab();
+      const unsynced = await screen.findByTestId('admin-subscriptions-mrr-s1');
+      expect(unsynced.textContent).toBe('\u2014');
+      expect(within(unsynced).getByTitle('No billed amount from Stripe yet')).toBeTruthy();
+      expect(within(screen.getByTestId('admin-subscriptions-mrr-s4')).getByLabelText('None')).toBeTruthy();
+    });
+
+    it('shows a row billed in another currency in that currency', async () => {
+      listRows = [row({ mrr: { amount: 1800, currency: 'cad' } })];
+      renderTab();
+      const cell = await screen.findByTestId('admin-subscriptions-mrr-s1');
+      expect(cell.textContent).toBe('CA$18.00');
+      expect(within(cell).getByTitle('Billed in CAD, not in the MRR total')).toBeTruthy();
+    });
+
+    it('puts the server total in the MRR tile and says what it leaves out', async () => {
+      renderTab();
+      const tiles = await screen.findByLabelText('Subscription totals for the current filters');
+      expect(await within(tiles).findByText('$12.3K')).toBeTruthy();
+      expect(within(tiles).getByText('Not in total: 2 with no amount yet, 1 in another currency')).toBeTruthy();
+    });
+
+    it('shows the past due amount as MRR at risk', async () => {
+      renderTab();
+      const tiles = await screen.findByLabelText('Subscription totals for the current filters');
+      expect(await within(tiles).findByText('$19.00 MRR at risk')).toBeTruthy();
+    });
+
+    it('defines MRR in a help popover', async () => {
+      renderTab();
+      fireEvent.click(await screen.findByTestId('admin-subscriptions-mrr-help-btn'));
+      const definition = await screen.findByTestId('admin-subscriptions-mrr-definition');
+      expect(definition.textContent).toContain('active or past due');
+      expect(definition.textContent).toContain('Not counted: comps');
+    });
+  });
+
   it('flags Stripe rows started since the last visit as New, and never comps', async () => {
     act(() => useSubscriptionsLastSeen.setState({ lastSeen: '2026-09-01T00:00:00.000Z' }));
     renderTab();
@@ -204,7 +267,7 @@ describe('AdminSubscriptions', () => {
 
   it('counts the canceling tile for the current filters, and not under another cancel filter', async () => {
     renderTab();
-    const tiles = await screen.findByLabelText('Subscription counts for the current filters');
+    const tiles = await screen.findByLabelText('Subscription totals for the current filters');
     await waitFor(() => expect(within(tiles).getByText('4')).toBeTruthy());
 
     fireEvent.click(screen.getByTestId('admin-subscriptions-views-churned-btn'));
