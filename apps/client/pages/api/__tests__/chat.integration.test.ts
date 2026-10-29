@@ -33,6 +33,7 @@ const {
   mockProcess,
   mockGetSettingsMap,
   mockResolveDefaultChatModel,
+  mockResolveCallerDefaultModel,
   mockIsChatModelUsable,
   mockTryIncrement,
   mockResolveUserRateLimitPerMin,
@@ -56,6 +57,7 @@ const {
   mockProcess: vi.fn(),
   mockGetSettingsMap: vi.fn(),
   mockResolveDefaultChatModel: vi.fn(),
+  mockResolveCallerDefaultModel: vi.fn(async (model: string) => model),
   mockIsChatModelUsable: vi.fn(),
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
@@ -138,6 +140,10 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
   isChatModelUsable: (...a: unknown[]) => mockIsChatModelUsable(...a),
+}));
+// Passthrough: the free-tier default fallback has its own tests (server/utils/callerModelList.test.ts).
+vi.mock('@server/utils/callerModelList', () => ({
+  resolveCallerDefaultModel: (...a: unknown[]) => mockResolveCallerDefaultModel(...a),
 }));
 
 // Only the data dependencies of the real apiKeyAuth middleware and the chat
@@ -600,6 +606,23 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(res._getStatusCode()).toBe(200);
       expect(mockTryIncrement).not.toHaveBeenCalled();
     });
+  });
+
+  it('starts a model-less request on the caller-specific default when it differs from the admin default', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockResolveDefaultChatModel.mockResolvedValueOnce({ model: 'admin-default' });
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('allowlisted-model');
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res.statusCode).toBeLessThan(300);
+    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith(
+      'admin-default',
+      expect.objectContaining({ id: 'user-1' }),
+      expect.anything()
+    );
+    expect((mockInvoke.mock.calls[0][0] as { body: { params: { model?: string } } }).body.params.model).toBe(
+      'allowlisted-model'
+    );
   });
 
   it('returns 400 when the resolved default chat model is unusable (self-host, no key, no local model)', async () => {

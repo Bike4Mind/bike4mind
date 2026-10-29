@@ -6,6 +6,7 @@ import {
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
+  ollamaNumCtx,
   PermissionDeniedError,
   stripToolArtifactMarkup,
   type MessageContentObject,
@@ -153,7 +154,7 @@ export class OllamaBackend implements ICompletionBackend {
         // model was trained for: callers size history against this number, so
         // publishing an uncapped 262K would have them build prompts Ollama
         // then truncates from the front.
-        const contextWindow = OllamaBackend.effectiveContextWindow(reportedContextWindow);
+        const contextWindow = ollamaNumCtx(reportedContextWindow);
         const modelInfo = {
           id: model.name,
           type: 'text',
@@ -195,14 +196,6 @@ export class OllamaBackend implements ICompletionBackend {
   private static readonly DEFAULT_CONTEXT_WINDOW = 8192;
 
   /**
-   * Ceiling on the num_ctx we ask Ollama to allocate. Models advertise windows
-   * far larger than a dev box can hold in KV cache (262K on qwen3.5), so the
-   * useful value is the model's window capped at something affordable rather
-   * than the advertised maximum. Override with OLLAMA_MAX_NUM_CTX.
-   */
-  private static readonly DEFAULT_MAX_NUM_CTX = 32768;
-
-  /**
    * Output ceiling we advertise for a local model. Half of what we allocate, because advertising
    * the whole window made the server's context - output - buffer negative and emptied the prompt.
    *
@@ -218,13 +211,6 @@ export class OllamaBackend implements ICompletionBackend {
   private static advertisedOutputCap(contextWindow: number): number {
     const halved = Math.floor(contextWindow / 2);
     return Math.max(1, Math.min(halved, contextWindow - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS - 1));
-  }
-
-  /** A model's reported window clamped to what we are willing to allocate. */
-  private static effectiveContextWindow(reported: number): number {
-    const configuredCap = Number(process.env.OLLAMA_MAX_NUM_CTX);
-    const cap = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : OllamaBackend.DEFAULT_MAX_NUM_CTX;
-    return Math.min(reported, cap);
   }
 
   /** Per-model /api/show results, so the tool-call recursion shows once, not per round. */
@@ -282,7 +268,7 @@ export class OllamaBackend implements ICompletionBackend {
     options: Partial<ICompletionOptions>
   ): Promise<Partial<OllamaOptions>> {
     const { contextWindow } = await this.getModelDetailsCached(model);
-    const numCtx = OllamaBackend.effectiveContextWindow(contextWindow);
+    const numCtx = ollamaNumCtx(contextWindow);
 
     return {
       num_ctx: numCtx,

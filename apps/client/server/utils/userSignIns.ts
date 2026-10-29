@@ -1,5 +1,10 @@
 import type { Types } from 'mongoose';
-import { User, UserAuthAuditLogModel, type UserAuthAuditEvent } from '@bike4mind/database';
+import {
+  User,
+  UserAuthAuditLogModel,
+  USER_AUTH_AUDIT_LOG_RETENTION_SECONDS,
+  type UserAuthAuditEvent,
+} from '@bike4mind/database';
 import {
   SIGNUP_CLUSTER_WINDOW_DAYS,
   type AuditLogCursor,
@@ -61,6 +66,14 @@ export const authEventSummary = (event: UserAuthAuditEvent, method: string | und
       return 'Passed an identity check';
     case 'step_up_failed':
       return 'Failed an identity check';
+    case 'email_change_requested':
+      return 'Requested an email change';
+    case 'email_change_confirmed':
+      return 'Changed email address';
+    case 'email_change_failed':
+      return 'Failed to confirm an email change';
+    case 'email_change_cancelled':
+      return 'Cancelled an email change';
   }
 };
 
@@ -78,6 +91,7 @@ export const SIGN_IN_EVENT_RESULTS: Readonly<Partial<Record<UserAuthAuditEvent, 
 };
 
 const SIGN_IN_EVENTS = Object.keys(SIGN_IN_EVENT_RESULTS) as UserAuthAuditEvent[];
+const SUCCESS_SIGN_IN_EVENTS = SIGN_IN_EVENTS.filter(event => SIGN_IN_EVENT_RESULTS[event] === 'success');
 
 const BROWSERS: ReadonlyArray<[RegExp, string]> = [
   [/Edg\//, 'Edge'],
@@ -163,6 +177,47 @@ export const listUserSignIns = async (
   const entries = rows.slice(0, page.limit).map(row => authRowToSignIn(row, loginRecords));
   const last = entries[entries.length - 1];
   return { entries, nextCursor: rows.length > page.limit && last ? { occurredAt: last.at, id: last.id } : null };
+};
+
+/** Complete, time-bounded inputs for risk rules; a UI page is not a complete risk history. */
+export const listUserRiskSignIns = async (
+  userId: string,
+  loginRecords: readonly ILoginRecord[],
+  now: Date,
+  failedWindowHours: number
+): Promise<UserSignIn[]> => {
+  const failuresFrom = new Date(now.getTime() - failedWindowHours * 60 * 60 * 1000);
+  const successesFrom = new Date(now.getTime() - USER_AUTH_AUDIT_LOG_RETENTION_SECONDS * 1000);
+  const failedEvents = SIGN_IN_EVENTS.filter(event => SIGN_IN_EVENT_RESULTS[event] !== 'success');
+  const cursor = UserAuthAuditLogModel.find({
+    userId,
+    createdAt: { $lte: now },
+    $or: [
+      { event: { $in: SUCCESS_SIGN_IN_EVENTS }, createdAt: { $gte: successesFrom } },
+      { event: { $in: failedEvents }, createdAt: { $gte: failuresFrom } },
+    ],
+  })
+    .select('_id userId event strategy actorIp userAgent createdAt')
+    .sort({ createdAt: -1, _id: -1 })
+    .maxTimeMS(QUERY_MAX_TIME_MS)
+    .lean<UserAuthAuditRow>()
+    .cursor({ batchSize: 200 });
+  const entries: UserSignIn[] = [];
+  try {
+    for await (const row of cursor) {
+      const signIn = authRowToSignIn(row, loginRecords);
+      const parsed = describeUserAgent(row.userAgent);
+      // Client record classifiers differ from the audit parser; compare one canonical device shape.
+      entries.push({
+        ...signIn,
+        browser: parsed.browser,
+        operatingSystem: parsed.operatingSystem,
+      });
+    }
+  } finally {
+    await cursor.close();
+  }
+  return entries;
 };
 
 type ClusterUserRow = { _id: Types.ObjectId; name?: string; email?: string; createdAt: Date };

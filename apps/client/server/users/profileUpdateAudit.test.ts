@@ -35,6 +35,9 @@ describe('profileFieldsSent', () => {
       currentCredits: 5,
       creditDelta: 1,
       creditReason: 'c',
+      isBanned: true,
+      isModerated: true,
+      statusChangeReason: 's',
       name: 'Ada',
       email: 'a@example.com',
     };

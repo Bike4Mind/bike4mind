@@ -21,6 +21,8 @@ import {
   LiveopsTriageConfigSchema,
   LLMTriageResponseSchema,
   LIVEOPS_TRIAGE_VALIDATION_LIMITS,
+  escapeSlackLine,
+  escapeSlackText,
 } from '@bike4mind/common';
 import {
   AdminSettings,
@@ -1608,10 +1610,10 @@ export class LiveopsTriageService {
 
     // Helper to format issue links
     const formatCreatedIssue = (i: { number: number; title: string; priority: string; url: string }) =>
-      `• <${i.url}|#${i.number}>: ${i.title}`;
+      `• <${i.url}|#${i.number}>: ${escapeSlackLine(i.title)}`;
 
     const formatMatchedIssue = (i: { issueNumber: number; title: string; repoFullName: string }) =>
-      `• <https://github.com/${i.repoFullName}/issues/${i.issueNumber}|#${i.issueNumber}>: ${i.title}`;
+      `• <https://github.com/${i.repoFullName}/issues/${i.issueNumber}|#${i.issueNumber}>: ${escapeSlackLine(i.title)}`;
 
     // P0 section (Critical)
     if (p0Issues.length > 0) {
@@ -1700,7 +1702,7 @@ export class LiveopsTriageService {
         const closedNote = rawClosedAt
           ? `closed ${Math.floor((Date.now() - new Date(rawClosedAt).getTime()) / (1000 * 60 * 60 * 24))} days ago`
           : 'closed previously';
-        return `• <${i.url}|#${i.number}>: ${i.title}\n  ↳ Was #${i.matchedClosedIssue!.issueNumber} (${closedNote})`;
+        return `• <${i.url}|#${i.number}>: ${escapeSlackLine(i.title)}\n  ↳ Was #${i.matchedClosedIssue!.issueNumber} (${closedNote})`;
       });
       blocks.push({
         type: 'section',
@@ -1753,7 +1755,7 @@ export class LiveopsTriageService {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*Health Assessment:*\n${summary.healthAssessment}`,
+          text: `*Health Assessment:*\n${escapeSlackText(summary.healthAssessment)}`,
         },
       });
     }

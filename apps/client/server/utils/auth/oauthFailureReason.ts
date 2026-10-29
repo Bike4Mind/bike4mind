@@ -19,6 +19,8 @@ export const OAUTH_FAILURE_REASONS = [
   'state_missing',
   'registration_closed',
   'signup_limited',
+  'signup_email_unverified',
+  'signup_email_blocked',
   // Set by the callback itself from the provider's `?error=access_denied` (user cancelled consent).
   'access_denied',
   'internal',
@@ -53,6 +55,10 @@ export function oauthFailureLoginErrorCode(reason: OAuthFailureReason): LoginErr
       return 'registration_closed';
     case 'signup_limited':
       return 'signup_limited';
+    case 'signup_email_unverified':
+      return 'verified_email_required';
+    case 'signup_email_blocked':
+      return 'signup_not_allowed';
     default:
       return 'callback_error';
   }
