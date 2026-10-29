@@ -662,6 +662,25 @@ describe('ModelHubService Hugging Face token', () => {
     await expect(result).resolves.toMatchObject({ ok: true });
   });
 
+  it('re-reads past the cache when the token looks denied, so a fresh access grant shows', async () => {
+    const gated = { gated: 'manual' as const, ollamaNeedsSshKey: true };
+    const { service, hub } = harness({
+      token: TOKEN,
+      detail: detail({ ...gated, builds: [hidden], canDownload: false }),
+    });
+    hub.getModel.mockResolvedValueOnce(detail({ ...gated, builds: [hidden], canDownload: false }));
+    hub.getModel.mockResolvedValueOnce(detail({ ...gated, canDownload: true }));
+    expect(await service.detail(REPO)).toMatchObject({ ok: true, model: { hubAccess: 'granted' } });
+    expect(hub.getModel).toHaveBeenLastCalledWith(REPO, { refresh: true });
+
+    const open = harness({ token: TOKEN, detail: detail({ ...gated, canDownload: true }) });
+    await open.service.detail(REPO);
+    const anonymous = harness({ detail: detail({ ...gated, builds: [hidden], canDownload: false }) });
+    await anonymous.service.detail(REPO);
+    expect(open.hub.getModel).toHaveBeenCalledTimes(1);
+    expect(anonymous.hub.getModel).toHaveBeenCalledTimes(1);
+  });
+
   it('pulls a gated or private repo by its huggingface.co name, which Ollama can sign in to', async () => {
     for (const repo of [{ gated: 'auto' as const }, { private: true }]) {
       const { service, runtime, pulls } = harness({

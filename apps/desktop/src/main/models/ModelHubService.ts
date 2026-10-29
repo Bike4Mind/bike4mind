@@ -387,7 +387,10 @@ export class ModelHubService {
       const session = await this.#hub();
       token = session.token;
       const { hub } = session;
-      return { ok: true, model: toView(hub.endpoint, await hub.getModel(repo), token) };
+      let found = await hub.getModel(repo);
+      // A cached denial would outlive an access grant by up to the cache TTL; re-ask before saying "cannot read".
+      if (token && hubAccess(found, token) === 'denied') found = await hub.getModel(repo, { refresh: true });
+      return { ok: true, model: toView(hub.endpoint, found, token) };
     } catch (error) {
       return { ok: false, error: toModelHubError(error, token) };
     }
