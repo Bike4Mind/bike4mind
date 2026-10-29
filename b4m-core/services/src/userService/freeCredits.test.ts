@@ -136,6 +136,26 @@ describe('free credits service', () => {
       expect(addCreditsSpy).not.toHaveBeenCalled();
     });
 
+    it('neither holds nor draws the budget for an alias that earns nothing', async () => {
+      const adapters = buildAdapters('100');
+      const repository = { reserve: vi.fn(), refund: vi.fn(), markAlerted: vi.fn(), getSpent: vi.fn() };
+      repository.reserve.mockResolvedValue(null);
+      adapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => ({
+        settingValue: name === 'signupGrantDailyBudget' ? '50' : '100',
+      }));
+      adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+      const users = Object.assign(adapters.db.users, { addTagsToUser: vi.fn(), update: vi.fn() });
+      Object.assign(adapters.db, { signupProtection: { repository: {}, grantBudget: { repository } } });
+
+      const result = await grantFreeCredits({ id: 'user-2' }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
+      expect(repository.reserve).not.toHaveBeenCalled();
+      expect(users.addTagsToUser).not.toHaveBeenCalled();
+      expect(users.update).not.toHaveBeenCalled();
+      expect(addCreditsSpy).not.toHaveBeenCalled();
+    });
+
     it('grants an invite-resolved amount without claiming the inbox', async () => {
       const adapters = buildAdapters('100');
       adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
