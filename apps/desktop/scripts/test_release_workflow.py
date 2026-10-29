@@ -55,6 +55,17 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn('run: python3 apps/desktop/scripts/reserve-source-tag.py', reserve)
         self.assertNotIn('2>/dev/null', reserve)
 
+    def test_curated_build_check_runs_between_each_build_and_packaging(self):
+        build = job('build')
+        self.assertIn('B4M_CURATED_MANIFEST_URL: ${{ vars.B4M_CURATED_MANIFEST_URL }}', build)
+        self.assertIn('CURATED_PUBLIC_URL: ${{ vars.CURATED_PUBLIC_URL }}', build)
+        check = 'pnpm --filter @bike4mind/scripts curated:check-build out --expect-url "$CURATED_PUBLIC_URL"'
+        for step in ('- name: Package installers', '- name: Sign and notarize macOS installers'):
+            body = build.split(step, 1)[1].split('- name:', 1)[0]
+            with self.subTest(step=step):
+                self.assertLess(body.rindex('pnpm build'), body.index(check))
+                self.assertLess(body.index(check), body.index('electron-builder'))
+
     def test_token_guard_fails_closed(self):
         guard = next(line.strip() for line in WORKFLOW.splitlines()
                      if 'if [ -z "$GH_TOKEN" ]; then' in line)

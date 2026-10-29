@@ -94,6 +94,10 @@ import type {
 } from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type {
+  CuratedCheckResult,
+  CuratedList,
+  CuratedListSettings,
+  CuratedPullResult,
   HfTokenResult,
   HfTokenStatus,
   HubDetailResult,
@@ -310,6 +314,15 @@ export const IPC_CHANNELS = {
   modelsListInstalled: 'models:list-installed',
   modelsSearch: 'models:search',
   modelsGetDetail: 'models:get-detail',
+  modelsListCurated: 'models:list-curated',
+  modelsGetCuratedPull: 'models:get-curated-pull',
+  modelsCheckCurated: 'models:check-curated',
+  /** Check now on the list itself: skips the 6 h throttle; the result arrives as modelsCuratedChanged. */
+  modelsCheckCuratedList: 'models:check-curated-list',
+  modelsCuratedSettings: 'models:curated-settings',
+  modelsCuratedSetEnabled: 'models:curated-set-enabled',
+  /** main -> renderer push; the curated list or its check status changed. */
+  modelsCuratedChanged: 'models:curated-changed',
   modelsListPulls: 'models:list-pulls',
   /** Starts a download; resolves when it finishes, fails or is cancelled. */
   modelsPull: 'models:pull',
@@ -575,6 +588,15 @@ export interface DesktopApi {
     listInstalled(): Promise<InstalledModelsResult>;
     search(request: HubSearchRequest): Promise<HubSearchResult>;
     getDetail(repo: string): Promise<HubDetailResult>;
+    listCurated(): Promise<CuratedList>;
+    getCuratedPull(entryId: string, buildId: string): Promise<CuratedPullResult>;
+    /** Checks an installed curated build against its review again, after Ollama could not describe it. */
+    checkCurated(entryId: string, buildId: string): Promise<CuratedCheckResult>;
+    /** Checks for a newer curated list now. */
+    checkCuratedList(): Promise<void>;
+    getCuratedSettings(): Promise<CuratedListSettings>;
+    setCuratedEnabled(enabled: boolean): Promise<CuratedListSettings>;
+    onCuratedChanged(listener: () => void): () => void;
     listPulls(): Promise<ModelPull[]>;
     pull(request: ModelPullRequest): Promise<ModelPullResult>;
     cancelPull(key: string): Promise<void>;
