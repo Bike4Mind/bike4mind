@@ -36,8 +36,8 @@ export default function LoopDetailPage() {
   const setRun = (executionId?: string) =>
     navigate({ to: '/loops/$id', params: { id }, search: executionId ? { run: executionId } : {} });
   // Only mounted inside LoopsGate, so the loops API is never called while EnableLoops is off.
-  const { data: loop, isLoading } = useLoop(id, true);
-  const { data: tickets } = useLoopTickets(id, true);
+  const { data: loop, isLoading } = useLoop(id);
+  const { data: tickets } = useLoopTickets(id);
   useDocumentTitle(loop?.name ?? 'Loop');
 
   if (isLoading) return <CircularProgress size="sm" sx={{ m: 2 }} />;

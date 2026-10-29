@@ -19,7 +19,7 @@ export default function LoopsPage() {
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   // Only mounted inside LoopsGate, so the loops API is never called while EnableLoops is off.
-  const { data: loops, isLoading } = useLoops(true);
+  const { data: loops, isLoading } = useLoops();
   useDocumentTitle('Loops');
 
   const newLoopButton = (

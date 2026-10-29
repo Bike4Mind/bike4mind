@@ -1149,9 +1149,10 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   /**
-   * Credits per loop over its top-level runs (children already roll up into their parent), keyed by
-   * loop id. `sessionIds` are the loops' notebooks: they narrow the scan to the {sessionId, status}
-   * index, while `loopId` leaves out any chat a user starts by hand in a loop's notebook.
+   * Credits per loop over its top-level runs, keyed by loop id. Sync children roll up into their parent;
+   * background children carry no loopId, so they are not counted. `sessionIds` are the loops' notebooks:
+   * they narrow the scan to the {sessionId, status} index, while `loopId` leaves out any chat a user starts
+   * by hand in a loop's notebook.
    */
   async sumCreditsByLoop(loopIds: string[], sessionIds: string[]): Promise<Record<string, number>> {
     if (loopIds.length === 0) return {};
