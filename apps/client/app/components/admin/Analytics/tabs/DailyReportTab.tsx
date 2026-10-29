@@ -83,7 +83,7 @@ export const DailyReportTab: React.FC = () => {
                       <AnalyticsErrorCard
                         key={item.date}
                         error={new Error(item.error)}
-                        onRetry={handleRefresh}
+                        onRetry={() => dailyReportsQuery.refetch()}
                         title={`Could not generate the report for ${item.date}`}
                         testId={`daily-report-error-${item.date}`}
                       />
