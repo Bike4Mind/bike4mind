@@ -29,6 +29,8 @@ describe('resolveNoCardUnlockSettings', () => {
       phoneEnabled: false,
       phoneCredits: 0,
       phoneBlockedPrefixes: [],
+      phoneAsnDailyCap: 50,
+      phoneCountryDailyCap: 200,
     });
   });
 
@@ -94,6 +96,11 @@ describe('phone blocked prefixes', () => {
     expect(resolveNoCardUnlockSettings({ noCardUnlockPhoneBlockedPrefixes: '{not json' }).phoneBlockedPrefixes).toEqual(
       []
     );
+  });
+
+  it('falls back to the default network caps when unset or zero, and honors a set value', () => {
+    expect(resolveNoCardUnlockSettings({ noCardUnlockPhoneAsnDailyCap: 0 }).phoneAsnDailyCap).toBe(50);
+    expect(resolveNoCardUnlockSettings({ noCardUnlockPhoneCountryDailyCap: '500' }).phoneCountryDailyCap).toBe(500);
   });
 
   it('blocks every number under a prefix', () => {

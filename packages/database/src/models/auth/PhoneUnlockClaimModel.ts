@@ -2,7 +2,10 @@ import { IMongoDocument } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
-/** `phoneHash` is a SHA-256 of the E.164 number, so the collection never holds the number itself. */
+/**
+ * `phoneHash` is an unsalted SHA-256 of the canonical E.164 number: it keeps the number out of plain
+ * view, but the number space is small enough to enumerate, so treat the hash as personal data.
+ */
 export interface IPhoneUnlockClaimDocument extends IMongoDocument {
   phoneHash: string;
   userId: string;

@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { PHONE_UNLOCK_CODE_PATTERN } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { runNoCardUnlock } from '@server/noCardUnlock/runNoCardUnlock';
 
-const VerifySchema = z.object({ code: z.string().regex(/^\d{4,10}$/) });
+const VerifySchema = z.object({ code: z.string().regex(PHONE_UNLOCK_CODE_PATTERN) });
 
 const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Unauthorized' });

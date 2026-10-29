@@ -3,9 +3,13 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 const TWILIO_TIMEOUT_MS = 8000;
 const UNSET_SECRET = 'not-configured';
 
-/** Twilio error codes: 60200 invalid parameter (a malformed number), 60203 max send attempts reached. */
+/**
+ * Twilio error codes: 60200/21211/21614 a malformed or non-mobile number, 60202 max check attempts,
+ * 60203 max send attempts, 20429 too many requests, 60410 a number Fraud Guard blocks.
+ */
 const INVALID_NUMBER_CODES = new Set([60200, 21211, 21614]);
-const RATE_LIMIT_CODES = new Set([60203, 20429]);
+const RATE_LIMIT_CODES = new Set([60202, 60203, 20429]);
+const BLOCKED_NUMBER_CODES = new Set([60410]);
 
 export class TwilioApiError extends Error {
   constructor(
@@ -22,6 +26,10 @@ export class TwilioApiError extends Error {
 
   get invalidNumber(): boolean {
     return this.code !== null && INVALID_NUMBER_CODES.has(this.code);
+  }
+
+  get blockedNumber(): boolean {
+    return this.code !== null && BLOCKED_NUMBER_CODES.has(this.code);
   }
 }
 
@@ -58,7 +66,13 @@ async function twilioRequest(
   return record;
 }
 
-export type PhoneLookup = { valid: boolean; countryCode: string | null; lineType: string | null };
+export type PhoneLookup = {
+  valid: boolean;
+  /** Twilio's canonical E.164 form; two spellings of one number (e.g. a kept trunk 0) resolve to the same value. */
+  phoneNumber: string | null;
+  countryCode: string | null;
+  lineType: string | null;
+};
 
 /** Lookup v2 with line type intelligence; `lineType` is Twilio's value, e.g. mobile, landline, nonFixedVoip. */
 export async function lookupPhone(credentials: TwilioCredentials, phone: string): Promise<PhoneLookup> {
@@ -67,6 +81,7 @@ export async function lookupPhone(credentials: TwilioCredentials, phone: string)
   const intelligence = body.line_type_intelligence as { type?: unknown } | null | undefined;
   return {
     valid: body.valid === true,
+    phoneNumber: typeof body.phone_number === 'string' ? body.phone_number : null,
     countryCode: typeof body.country_code === 'string' ? body.country_code : null,
     lineType: typeof intelligence?.type === 'string' ? intelligence.type : null,
   };
@@ -83,7 +98,10 @@ export async function sendVerificationCode(credentials: TwilioCredentials, phone
   );
 }
 
-/** True only for an approved code. Twilio answers 404 once a verification has expired or used its attempts. */
+/**
+ * True only for an approved code. Twilio answers 404 once a verification has expired and 429 (60202)
+ * once it has used its check attempts; both mean "this code will not work", so the user re-sends.
+ */
 export async function checkVerificationCode(
   credentials: TwilioCredentials,
   phone: string,
@@ -97,7 +115,7 @@ export async function checkVerificationCode(
     );
     return body.status === 'approved';
   } catch (error) {
-    if (error instanceof TwilioApiError && error.status === 404) return false;
+    if (error instanceof TwilioApiError && (error.status === 404 || error.rateLimited)) return false;
     throw error;
   }
 }

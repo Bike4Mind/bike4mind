@@ -45,7 +45,13 @@ export interface NoCardUnlockSettings {
   phoneEnabled: boolean;
   phoneCredits: number;
   phoneBlockedPrefixes: string[];
+  phoneAsnDailyCap: number;
+  phoneCountryDailyCap: number;
 }
+
+/** Defaults for the network-wide phone caps, so an unset setting never blocks every send. */
+export const PHONE_UNLOCK_DEFAULT_ASN_DAILY_CAP = 50;
+export const PHONE_UNLOCK_DEFAULT_COUNTRY_DAILY_CAP = 200;
 
 function parsePositiveInt(raw: unknown): number {
   const n = typeof raw === 'string' ? (raw.trim() === '' ? NaN : Number(raw)) : raw;
@@ -55,6 +61,11 @@ function parsePositiveInt(raw: unknown): number {
 function parseFlag(raw: unknown): boolean {
   return raw === true || (typeof raw === 'string' && raw.trim().toLowerCase() === 'true');
 }
+
+/** Shared by the verify route and the billing form so a code the form accepts is never a 400. */
+export const PHONE_UNLOCK_CODE_PATTERN = /^\d{4,10}$/;
+/** Longest raw phone input the start route accepts, formatting characters included. */
+export const PHONE_UNLOCK_INPUT_MAX_LENGTH = 32;
 
 const E164 = /^\+[1-9]\d{6,14}$/;
 const PHONE_PREFIX = /^\+[1-9]\d{0,14}$/;
@@ -100,5 +111,9 @@ export function resolveNoCardUnlockSettings(adminSettings: Record<string, unknow
     phoneEnabled: parseFlag(adminSettings.noCardUnlockPhoneEnabled),
     phoneCredits: parsePositiveInt(adminSettings.noCardUnlockPhoneCredits),
     phoneBlockedPrefixes: parsePhonePrefixes(adminSettings.noCardUnlockPhoneBlockedPrefixes),
+    phoneAsnDailyCap:
+      parsePositiveInt(adminSettings.noCardUnlockPhoneAsnDailyCap) || PHONE_UNLOCK_DEFAULT_ASN_DAILY_CAP,
+    phoneCountryDailyCap:
+      parsePositiveInt(adminSettings.noCardUnlockPhoneCountryDailyCap) || PHONE_UNLOCK_DEFAULT_COUNTRY_DAILY_CAP,
   };
 }

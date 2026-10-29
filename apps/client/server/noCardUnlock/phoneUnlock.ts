@@ -23,15 +23,15 @@ const DAY_MS = 24 * HOUR_MS;
 const PENDING_TTL_MS = 10 * 60 * 1000;
 
 /**
- * SMS sends, counted per attempt before any paid Twilio call. Farms rotate numbers cheaply, so the
- * ceilings sit on what they cannot rotate as cheaply: the account, the source network, the ASN,
- * and the number's country.
+ * Send attempts per day. Farms rotate numbers cheaply, so the ceilings sit on what they cannot rotate
+ * as cheaply: the account and source IP (fixed here), and the ASN and the number's country (admin
+ * settings, since a fixed value would refuse real users on a large carrier). The account, IP and ASN
+ * caps run before any check that reveals something and before any paid call; the country cap needs the
+ * paid Lookup to know the country.
  */
 export const PHONE_UNLOCK_SEND_LIMITS = {
   perUser: { limit: 3, windowMs: DAY_MS },
   perIp: { limit: 5, windowMs: DAY_MS },
-  perAsn: { limit: 50, windowMs: DAY_MS },
-  perCountry: { limit: 200, windowMs: DAY_MS },
 } as const;
 
 /** Twilio caps checks per verification too; this bounds code guessing across re-sends. */
@@ -56,11 +56,24 @@ async function getPendingPhone(userId: string): Promise<string | null> {
   return typeof phone === 'string' ? phone : null;
 }
 
+async function unusableNumber(
+  phone: string,
+  userId: string,
+  settings: NoCardUnlockSettings
+): Promise<NoCardUnlockRefusal | null> {
+  if (isBlockedPhone(phone, settings.phoneBlockedPrefixes)) return 'phone_blocked';
+  const owner = await phoneUnlockClaimRepository.ownerOf(hashPhone(phone));
+  return owner && owner !== userId ? 'phone_already_claimed' : null;
+}
+
 export type PhoneUnlockStartResponse = { sent: true } | { sent: false; refusal: NoCardUnlockRefusal };
 
 const refuse = (refusal: NoCardUnlockRefusal): PhoneUnlockStartResponse => ({ sent: false, refusal });
 
-/** Checks everything that costs nothing first, then the paid Lookup, then the paid SMS send. */
+/**
+ * Order: free checks, then the send caps (so the blocklist and the claimed-number answers cannot be
+ * probed without spending them), then the paid Lookup, then the paid SMS send.
+ */
 export async function startPhoneUnlock(
   userId: string,
   rawPhone: unknown,
@@ -84,37 +97,45 @@ export async function startPhoneUnlock(
 
   const credentials = twilioCredentials();
   if (!credentials) return refuse('disabled');
-  if (isBlockedPhone(phone, settings.phoneBlockedPrefixes)) return refuse('phone_blocked');
-
-  const owner = await phoneUnlockClaimRepository.ownerOf(hashPhone(phone));
-  if (owner && owner !== userId) return refuse('phone_already_claimed');
 
   const { asn } = getClientNetwork(req);
   const limits = [
     withinLimit(`phone-unlock:send:user:${userId}`, PHONE_UNLOCK_SEND_LIMITS.perUser),
     withinLimit(`phone-unlock:send:ip:${otcIpBucket(getClientIp(req))}`, PHONE_UNLOCK_SEND_LIMITS.perIp),
-    ...(asn === null ? [] : [withinLimit(`phone-unlock:send:asn:${asn}`, PHONE_UNLOCK_SEND_LIMITS.perAsn)]),
+    ...(asn === null
+      ? []
+      : [withinLimit(`phone-unlock:send:asn:${asn}`, { limit: settings.phoneAsnDailyCap, windowMs: DAY_MS })]),
   ];
   if ((await Promise.all(limits)).includes(false)) return refuse('phone_rate_limited');
 
+  const unusable = await unusableNumber(phone, userId, settings);
+  if (unusable) return refuse(unusable);
+
+  let canonical: string;
   try {
     const lookup = await lookupPhone(credentials, phone);
     if (!lookup.valid) return refuse('phone_invalid');
     if (!lookup.lineType || !ACCEPTED_LINE_TYPES.has(lookup.lineType)) return refuse('phone_line_type');
-    const country = lookup.countryCode ?? 'unknown';
-    if (!(await withinLimit(`phone-unlock:send:country:${country}`, PHONE_UNLOCK_SEND_LIMITS.perCountry))) {
+    // The typed string is not the identity: a kept trunk 0 or similar variant reaches the same line.
+    canonical = normalizeE164(lookup.phoneNumber) ?? phone;
+    const canonicalUnusable = canonical === phone ? null : await unusableNumber(canonical, userId, settings);
+    if (canonicalUnusable) return refuse(canonicalUnusable);
+
+    const countryCap = { limit: settings.phoneCountryDailyCap, windowMs: DAY_MS };
+    if (!(await withinLimit(`phone-unlock:send:country:${lookup.countryCode ?? 'unknown'}`, countryCap))) {
       return refuse('phone_rate_limited');
     }
-    await sendVerificationCode(credentials, phone);
+    await sendVerificationCode(credentials, canonical);
   } catch (error) {
     if (error instanceof TwilioApiError && error.rateLimited) return refuse('phone_rate_limited');
     if (error instanceof TwilioApiError && error.invalidNumber) return refuse('phone_invalid');
+    if (error instanceof TwilioApiError && error.blockedNumber) return refuse('phone_blocked');
     throw error;
   }
 
   await cacheRepository.createOrUpdate({
     key: pendingKey(userId),
-    result: { phone },
+    result: { phone: canonical },
     expiresAt: new Date(Date.now() + PENDING_TTL_MS),
   });
   return { sent: true };

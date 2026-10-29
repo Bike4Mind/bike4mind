@@ -6,7 +6,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { noCardUnlockTransactionId } from '@bike4mind/common';
+import { CreditHolderType, noCardUnlockTransactionId } from '@bike4mind/common';
 import { AdminSettings, Cache, CreditLot, CreditTransaction, PhoneUnlockClaim, User } from '@bike4mind/database';
 import { hashPhone, startPhoneUnlock } from './phoneUnlock';
 import { runNoCardUnlock } from './runNoCardUnlock';
@@ -47,13 +47,24 @@ afterAll(async () => {
   await replSet?.stop();
 });
 
-type TwilioScript = { lineType?: string; valid?: boolean; approved?: boolean; sendStatus?: number; sendCode?: number };
+type TwilioScript = {
+  lineType?: string;
+  valid?: boolean;
+  approved?: boolean;
+  sendStatus?: number;
+  sendCode?: number;
+  checkStatus?: number;
+  checkCode?: number;
+  canonical?: string;
+};
 
 const twilioFetch = (script: TwilioScript = {}) =>
   vi.fn(async (url: string) => {
     if (url.startsWith('https://lookups.twilio.com/')) {
+      const typed = decodeURIComponent(url.split('/PhoneNumbers/')[1].split('?')[0]);
       const body = {
         valid: script.valid ?? true,
+        phone_number: script.canonical ?? typed,
         country_code: 'GB',
         line_type_intelligence: { type: script.lineType ?? 'mobile' },
       };
@@ -64,6 +75,9 @@ const twilioFetch = (script: TwilioScript = {}) =>
       return new Response(JSON.stringify(status < 300 ? { status: 'pending' } : { code: script.sendCode }), { status });
     }
     if (url.endsWith('/VerificationCheck')) {
+      if (script.checkStatus) {
+        return new Response(JSON.stringify({ code: script.checkCode }), { status: script.checkStatus });
+      }
       return new Response(JSON.stringify({ status: script.approved === false ? 'pending' : 'approved' }), {
         status: 200,
       });
@@ -220,5 +234,80 @@ describe('phone unlock start + verify', () => {
     const id = await seedUser();
     expect(await startPhoneUnlock(id, NUMBER, req())).toEqual({ sent: false, refusal: 'phone_rate_limited' });
     expect(await Cache.countDocuments({ key: `phone-unlock:pending:${id}` })).toBe(0);
+  });
+
+  it('treats a different spelling of a claimed number as the same number', async () => {
+    const [a, b] = [await seedUser(), await seedUser()];
+    await startPhoneUnlock(a, NUMBER, req());
+    await runNoCardUnlock('phone_verified', a, { phoneCode: '123456' });
+
+    vi.stubGlobal('fetch', (fetchMock = twilioFetch({ canonical: NUMBER })));
+    expect(await startPhoneUnlock(b, '+4407700900123', req('198.51.100.9'))).toEqual({
+      sent: false,
+      refusal: 'phone_already_claimed',
+    });
+    expect(sentCount()).toBe(0);
+  });
+
+  it('sends to and binds the canonical number, so verify claims it', async () => {
+    vi.stubGlobal('fetch', (fetchMock = twilioFetch({ canonical: NUMBER })));
+    const id = await seedUser();
+    expect(await startPhoneUnlock(id, '+4407700900123', req())).toEqual({ sent: true });
+    const send = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/Verifications'));
+    expect(String((send?.[1] as RequestInit).body)).toContain(encodeURIComponent(NUMBER));
+    await runNoCardUnlock('phone_verified', id, { phoneCode: '123456' });
+    expect((await PhoneUnlockClaim.findOne({}).lean())?.phoneHash).toBe(hashPhone(NUMBER));
+  });
+
+  it('spends nothing on Twilio for a user who could not be granted', async () => {
+    const id = await seedUser();
+    await CreditTransaction.create({
+      ownerId: id,
+      ownerType: CreditHolderType.User,
+      credits: PHONE_CREDITS,
+      type: 'generic_add',
+      reason: 'no_card_unlock:phone_verified',
+      transactionId: noCardUnlockTransactionId('phone_verified', id),
+    });
+    expect(await startPhoneUnlock(id, NUMBER, req())).toEqual({ sent: false, refusal: 'already_granted' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('caps sends per number country from the admin setting', async () => {
+    await AdminSettings.create({ settingName: 'noCardUnlockPhoneCountryDailyCap', settingValue: 1 });
+    expect(await startPhoneUnlock(await seedUser(), NUMBER, req('198.51.100.1'))).toEqual({ sent: true });
+    expect(await startPhoneUnlock(await seedUser(), '+447700900124', req('198.51.100.2'))).toEqual({
+      sent: false,
+      refusal: 'phone_rate_limited',
+    });
+  });
+
+  it('caps code checks per account', async () => {
+    vi.stubGlobal('fetch', (fetchMock = twilioFetch({ approved: false })));
+    const id = await seedUser();
+    await startPhoneUnlock(id, NUMBER, req());
+    for (let i = 0; i < 10; i++) {
+      expect(await runNoCardUnlock('phone_verified', id, { phoneCode: '000000' })).toMatchObject({
+        refusal: 'phone_code_invalid',
+      });
+    }
+    expect(await runNoCardUnlock('phone_verified', id, { phoneCode: '000000' })).toMatchObject({
+      refusal: 'phone_rate_limited',
+    });
+  });
+
+  it('answers a wrong code, not a server error, once Twilio stops accepting checks', async () => {
+    vi.stubGlobal('fetch', (fetchMock = twilioFetch({ checkStatus: 429, checkCode: 60202 })));
+    const id = await seedUser();
+    await startPhoneUnlock(id, NUMBER, req());
+    expect(await runNoCardUnlock('phone_verified', id, { phoneCode: '123456' })).toMatchObject({
+      creditsGranted: 0,
+      refusal: 'phone_code_invalid',
+    });
+  });
+
+  it('maps a Fraud Guard block on send to a blocked refusal', async () => {
+    vi.stubGlobal('fetch', (fetchMock = twilioFetch({ sendStatus: 403, sendCode: 60410 })));
+    expect(await startPhoneUnlock(await seedUser(), NUMBER, req())).toEqual({ sent: false, refusal: 'phone_blocked' });
   });
 });

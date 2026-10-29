@@ -233,6 +233,8 @@ const SETTING_NAMES = [
   'noCardUnlockPhoneEnabled',
   'noCardUnlockPhoneCredits',
   'noCardUnlockPhoneBlockedPrefixes',
+  'noCardUnlockPhoneAsnDailyCap',
+  'noCardUnlockPhoneCountryDailyCap',
 ] as const;
 
 export async function loadNoCardUnlockSettings(

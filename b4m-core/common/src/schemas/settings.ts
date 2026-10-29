@@ -502,6 +502,8 @@ export const SettingKeySchema = z.enum([
   'noCardUnlockPhoneEnabled',
   'noCardUnlockPhoneCredits',
   'noCardUnlockPhoneBlockedPrefixes',
+  'noCardUnlockPhoneAsnDailyCap',
+  'noCardUnlockPhoneCountryDailyCap',
   'signupAnomaly',
 
   // WEATHER SERVICE SETTINGS
@@ -4480,6 +4482,26 @@ export const settingsMap = {
     category: 'Users',
     // Private: the ranges are abuse intelligence, so the key carries no userReadable or publicSafe tag.
     schema: z.array(z.string()),
+  }),
+  noCardUnlockPhoneAsnDailyCap: makeNumberSetting({
+    key: 'noCardUnlockPhoneAsnDailyCap',
+    name: 'No-Card Unlock: Phone Codes per Network (ASN) per Day',
+    defaultValue: 50,
+    int: true,
+    min: 0,
+    description:
+      'Most phone unlock codes sent per day to users on one network (autonomous system). Raise it if a large carrier or ISP hits the cap. 0 or unset uses 50. Not enforced where the network is unknown, such as self-hosted installs without CloudFront.',
+    category: 'Users',
+  }),
+  noCardUnlockPhoneCountryDailyCap: makeNumberSetting({
+    key: 'noCardUnlockPhoneCountryDailyCap',
+    name: 'No-Card Unlock: Phone Codes per Country per Day',
+    defaultValue: 200,
+    int: true,
+    min: 0,
+    description:
+      "Most phone unlock codes sent per day to numbers in one country, by the number's country. 0 or unset uses 200.",
+    category: 'Users',
   }),
   freeTierDailySpendCapCredits: makeNumberSetting({
     key: 'freeTierDailySpendCapCredits',

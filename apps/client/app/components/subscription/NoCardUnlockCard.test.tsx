@@ -162,5 +162,90 @@ describe('NoCardUnlockCard', () => {
       expect(screen.getByTestId('no-card-unlock-phone-input')).toBeTruthy();
       expect(state.verifyPhone).not.toHaveBeenCalled();
     });
+
+    const reachCodeStep = async () => {
+      state.phoneEnabled = true;
+      settleWith(state.startPhone, { sent: true });
+      renderCard();
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-btn'));
+      fireEvent.change(screen.getByTestId('no-card-unlock-phone-input'), { target: { value: '+14155552671' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-send-btn'));
+      return screen.findByTestId('no-card-unlock-phone-code-input');
+    };
+
+    it('enables verify only for a 4 to 10 digit code', async () => {
+      const codeInput = await reachCodeStep();
+      const verifyBtn = () => screen.getByTestId('no-card-unlock-phone-verify-btn') as HTMLButtonElement;
+      fireEvent.change(codeInput, { target: { value: '123' } });
+      expect(verifyBtn().disabled).toBe(true);
+      fireEvent.change(codeInput, { target: { value: '1234' } });
+      expect(verifyBtn().disabled).toBe(false);
+    });
+
+    it('keeps the code step after a wrong code, and re-sends to the same number', async () => {
+      const codeInput = await reachCodeStep();
+      settleWith(state.verifyPhone, { creditsGranted: 0, currentCredits: 0, refusal: 'phone_code_invalid' });
+      fireEvent.change(codeInput, { target: { value: '000000' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-verify-btn'));
+      expect((await screen.findByTestId('no-card-unlock-refusal')).textContent).toContain('code is not valid');
+      expect(screen.getByTestId('no-card-unlock-phone-code-input')).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-resend-btn'));
+      expect(state.startPhone).toHaveBeenCalledTimes(2);
+      expect(state.startPhone.mock.calls[1][0]).toBe('+14155552671');
+      expect(screen.queryByTestId('no-card-unlock-refusal')).toBeNull();
+    });
+
+    it('clears a stale refusal when switching to a different number', async () => {
+      const codeInput = await reachCodeStep();
+      settleWith(state.verifyPhone, { creditsGranted: 0, currentCredits: 0, refusal: 'phone_code_invalid' });
+      fireEvent.change(codeInput, { target: { value: '000000' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-verify-btn'));
+      await screen.findByTestId('no-card-unlock-refusal');
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-change-btn'));
+      expect(screen.getByTestId('no-card-unlock-phone-input')).toBeTruthy();
+      expect(screen.queryByTestId('no-card-unlock-refusal')).toBeNull();
+    });
+
+    it('closes the form after a grant so a second click cannot replace the success', async () => {
+      const codeInput = await reachCodeStep();
+      settleWith(state.verifyPhone, { creditsGranted: 3, currentCredits: 3 });
+      fireEvent.change(codeInput, { target: { value: '123456' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-verify-btn'));
+      await screen.findByTestId('no-card-unlock-success');
+      expect(screen.queryByTestId('no-card-unlock-phone-form')).toBeNull();
+      expect(screen.queryByTestId('no-card-unlock-phone-btn')).toBeNull();
+    });
+
+    it('locks the other unlocks while a phone request is in flight, and the reverse', () => {
+      state.phoneEnabled = true;
+      state.startPhone.mockImplementation(() => {});
+      const { unmount } = renderCard();
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-btn'));
+      fireEvent.change(screen.getByTestId('no-card-unlock-phone-input'), { target: { value: '+14155552671' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-send-btn'));
+      expect((screen.getByTestId('no-card-unlock-github-btn') as HTMLButtonElement).disabled).toBe(true);
+      unmount();
+
+      state.mutate.mockImplementation(() => {});
+      renderCard();
+      fireEvent.click(screen.getByTestId('no-card-unlock-github-btn'));
+      expect((screen.getByTestId('no-card-unlock-phone-btn') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('shows the error alert when sending fails, and clears it on retry', async () => {
+      state.phoneEnabled = true;
+      state.startPhone.mockImplementationOnce((_arg, opts) => {
+        opts.onError(new Error('network'));
+        opts.onSettled();
+      });
+      renderCard();
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-btn'));
+      fireEvent.change(screen.getByTestId('no-card-unlock-phone-input'), { target: { value: '+14155552671' } });
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-send-btn'));
+      await screen.findByTestId('no-card-unlock-error');
+      fireEvent.click(screen.getByTestId('no-card-unlock-phone-send-btn'));
+      expect(screen.queryByTestId('no-card-unlock-error')).toBeNull();
+    });
   });
 });

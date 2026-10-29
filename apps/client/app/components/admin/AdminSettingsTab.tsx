@@ -176,6 +176,7 @@ const STRING_LIST_SETTING_KEYS = new Set<string>([
   'ImageModerationReviewerEmails',
   'blockedEmailDomains',
   'freeTierAllowedModels',
+  'noCardUnlockPhoneBlockedPrefixes',
 ]);
 
 const AdminSettingsTab: React.FC = () => {
