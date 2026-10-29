@@ -14,6 +14,7 @@ import {
   type HubSearchResult,
   type InstalledModelsResult,
   type ModelFit,
+  type ModelHubError,
   type ModelPull,
   type ModelPullResult,
   type ModelRuntimeStatus,
@@ -229,6 +230,7 @@ const calls = {
   getStatus: vi.fn(),
   getCuratedPull: vi.fn(),
   checkCurated: vi.fn(),
+  dismissPull: vi.fn(),
 };
 
 beforeEach(() => {
@@ -276,7 +278,7 @@ beforeEach(() => {
       checkCurated: calls.checkCurated,
       pull: calls.pull,
       cancelPull: calls.cancelPull,
-      dismissPull: vi.fn(),
+      dismissPull: calls.dismissPull,
       remove: calls.remove,
       onPullsChanged: (listener: (pulls: ModelPull[]) => void) => {
         pushPulls = listener;
@@ -514,25 +516,87 @@ describe('ModelsScreen curated', () => {
     });
   });
 
-  it('offers Check again when Ollama could not describe a finished download, and clears the alert once it passes', async () => {
-    calls.pull.mockResolvedValue({
-      ok: false,
-      listed: false,
-      error: { kind: 'unverified', message: `Ollama could not describe ${E4B_REF} after downloading it.` },
+  /** Main's entry for an E4B pull that failed; `ref` is null when it failed before downloading. */
+  const failedE4B = (error: ModelHubError, ref: string | null = E4B_REF): ModelPull => ({
+    key: pullKey(E4B_REF, E4B.id),
+    repo: E4B_REF,
+    buildId: E4B.id,
+    quant: E4B.quant,
+    ref,
+    phase: 'failed',
+    completedBytes: ref ? E4B.sizeBytes : 0,
+    totalBytes: ref ? E4B.sizeBytes : null,
+    expectedBytes: E4B.sizeBytes,
+    error,
+  });
+
+  /** Confirms the fast pick's download; main lists `failed` and resolves the pull as a listed failure. */
+  async function pullFails(failed: ModelPull) {
+    calls.pull.mockImplementationOnce(async () => {
+      bridge.pulls = [failed];
+      pushPulls(bridge.pulls);
+      return { ok: false, listed: true, error: failed.error };
     });
-    calls.checkCurated.mockResolvedValueOnce({ ok: false, error: { kind: 'unverified', message: 'Still no answer.' } });
-    calls.checkCurated.mockResolvedValueOnce({ ok: true });
     await mount(undefined, 'curated');
     await click(pickButton('fast'));
     await click(q('models-pull-dialog-confirm-btn'));
+  }
+
+  it('offers Check again when Ollama could not describe a finished download, and clears the alert once it passes', async () => {
+    const unverified = {
+      kind: 'unverified' as const,
+      message: `Ollama could not describe ${E4B_REF} after downloading it.`,
+    };
+    const still = { kind: 'unverified' as const, message: 'Still no answer.' };
+    calls.checkCurated.mockImplementationOnce(async () => {
+      bridge.pulls = [failedE4B(still)];
+      pushPulls(bridge.pulls);
+      return { ok: false, error: still };
+    });
+    calls.checkCurated.mockImplementationOnce(async () => {
+      bridge.pulls = [];
+      pushPulls([]);
+      return { ok: true };
+    });
+    await pullFails(failedE4B(unverified));
     expect(q('models-curated-error')?.textContent).toContain('could not describe');
     expect(q('models-curated-explore-btn')).toBeNull();
 
     await click(q('models-curated-check-again-btn'));
     expect(calls.checkCurated).toHaveBeenCalledWith('gemma-4-e4b', 'qat-q4-0');
     expect(q('models-curated-error')?.textContent).toContain('Still no answer.');
+    expect(q('models-curated-check-again-btn')).not.toBeNull();
 
     await click(q('models-curated-check-again-btn'));
+    expect(q('models-curated-error')).toBeNull();
+  });
+
+  it('offers no Check again for a pull refused before anything downloaded', async () => {
+    await pullFails(
+      failedE4B(
+        { kind: 'unverified', message: 'Hugging Face could not confirm Ollama would get this exact file.' },
+        null
+      )
+    );
+    expect(q('models-curated-error')?.textContent).toContain('could not confirm');
+    expect(q('models-curated-check-again-btn')).toBeNull();
+  });
+
+  it('clears the warning of a failed curated download when it is dismissed', async () => {
+    const failed = failedE4B({
+      kind: 'unverified',
+      message: `Ollama could not describe ${E4B_REF} after downloading it.`,
+    });
+    calls.dismissPull.mockImplementationOnce(() => {
+      bridge.pulls = [];
+      pushPulls([]);
+    });
+    await pullFails(failed);
+    expect(q('models-curated-error')).not.toBeNull();
+
+    await click(q('models-pull-dismiss-btn'));
+    expect(calls.dismissPull).toHaveBeenCalledWith(failed.key);
+    expect(q('models-pull-list')).toBeNull();
     expect(q('models-curated-error')).toBeNull();
   });
 
