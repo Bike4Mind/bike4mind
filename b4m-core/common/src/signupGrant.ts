@@ -63,11 +63,21 @@ export type SignupGrantKey = (typeof SIGNUP_GRANT_KEYS)[number];
 
 const isOn = (value: unknown) => value === true || value === 'true';
 
+/** The policy is stored as a JSON string by the seed migration and as an object elsewhere; the runtime reads both. */
+function parsePolicyValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Protections still at their off defaults; stored settings may arrive as strings. */
 export function findUnsetSignupProtections(
   values: Partial<Record<SignupGrantProtectionKey, unknown>>
 ): SignupGrantProtectionKey[] {
-  const policy = values.signupGrantRiskPolicy;
+  const policy = parsePolicyValue(values.signupGrantRiskPolicy);
   const policyOn = typeof policy === 'object' && policy !== null && isOn((policy as { enabled?: unknown }).enabled);
   const checks: Record<SignupGrantProtectionKey, boolean> = {
     signupGrantRiskPolicy: policyOn,
