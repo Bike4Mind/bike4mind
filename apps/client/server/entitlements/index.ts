@@ -59,6 +59,8 @@ export interface EntitlementUser {
   /** Granting a domain entitlement requires BOTH (verified-email gate). */
   email?: string | null;
   emailVerified?: boolean | null;
+  /** Set by a credit purchase (and by an admin credit grant); unlocks `plan:paid` like a subscription. */
+  lastCreditsPurchasedAt?: Date | null;
 }
 
 /** Projects an authenticated `IUserDocument` onto the fields `getUserEntitlements` reads. */
@@ -69,6 +71,7 @@ export function toEntitlementUser(user: IUserDocument): EntitlementUser {
     isAdmin: user.isAdmin,
     email: user.email,
     emailVerified: user.emailVerified,
+    lastCreditsPurchasedAt: user.lastCreditsPurchasedAt,
   };
 }
 
@@ -123,12 +126,12 @@ export async function getUserEntitlements(
   // subscription. Must stay the only place they are applied for gating.
   const resolved = applyImpliedEntitlements(keys);
   // `plan:paid` unlocks paid-only models (the free-tier gate in modelAdmission.ts), so it comes from
-  // the subscription ladder alone, never from a passthrough tag or any other source above. An admin
-  // comps it with an `admin_grant` subscription row, which the ladder read honors.
+  // the subscription ladder or a credit purchase alone, never from a passthrough tag or any other source
+  // above. An admin comps it with an `admin_grant` subscription row, which the ladder read honors.
+  // A purchase is "ever bought", the same signal hasPaidStanding (userApiKeyService/trust.ts) reads.
   const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
-  return getHighestLadderTier(activeSubscriptions) === undefined
-    ? withoutPaidPlan
-    : [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY];
+  const holdsPaidPlan = Boolean(user.lastCreditsPurchasedAt) || getHighestLadderTier(activeSubscriptions) !== undefined;
+  return holdsPaidPlan ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
 }
 
 /**
