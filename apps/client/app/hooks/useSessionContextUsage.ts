@@ -22,6 +22,8 @@ export interface SessionContextUsage {
   actualInputTokens: number;
   /** Model whose tokenizer sized the assembled input, before any generation fallback. */
   inputModelId?: string;
+  /** Model that answered the last turn, so the one holding this conversation's prompt cache. */
+  answeredModelId?: string;
   /** The model's full context window. */
   contextLimit: number;
   /** Input budget after reserving output + safety buffer (the real ceiling). */
@@ -76,6 +78,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
     let latest: ContextWindowUsage | null = null;
     let latestCacheReadTokens = 0;
     let latestInputModelId: string | undefined;
+    let latestAnsweredModelId: string | undefined;
 
     for (const page of data?.pages ?? []) {
       for (const quest of page.data) {
@@ -85,6 +88,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
           latestId = quest.id;
           latest = usage;
           latestInputModelId = quest.fallbackInfo?.primaryModel ?? quest.promptMeta?.model?.name;
+          latestAnsweredModelId = quest.promptMeta?.model?.name;
           latestCacheReadTokens = quest.promptMeta?.tokenUsage?.cacheReadInputTokens ?? 0;
         }
       }
@@ -98,6 +102,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
     return {
       actualInputTokens: latest.actualInputTokens,
       inputModelId: latestInputModelId,
+      answeredModelId: latestAnsweredModelId,
       contextLimit: latest.contextLimit,
       safeMaxInputTokens: latest.safeMaxInputTokens,
       utilizationPercentage: pct,
