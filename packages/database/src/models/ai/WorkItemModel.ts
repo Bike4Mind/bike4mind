@@ -74,17 +74,17 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return results.map(doc => doc.toJSON());
   }
 
-  async listReadyForUser(userId: string): Promise<IWorkItemReadyResult> {
+  async listReadyForUser(userId: string, loopId?: string): Promise<IWorkItemReadyResult> {
     // Closed loop tickets pile up; leaving them out keeps them from crowding plain items out of the
     // window, and a missing dependency already counts as satisfied below.
     const { items, truncated } = await this.loadAllForUser(userId, { skipClosedLoopTickets: true });
     const statusById = new Map(items.map(item => [item.id, item.status]));
 
     // Readiness is computed over every item so a dependency on a loop ticket is honoured, but loop
-    // tickets themselves are worked by their loop, not offered here.
+    // tickets themselves are worked by their loop, so they show only when asked for by loopId.
     const data = items.filter(
       item =>
-        !item.loopId &&
+        (loopId ? item.loopId === loopId : !item.loopId) &&
         item.status === 'open' &&
         item.dependencies.every(depId => {
           const depStatus = statusById.get(depId);

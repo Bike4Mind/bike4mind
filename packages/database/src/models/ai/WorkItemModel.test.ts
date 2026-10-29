@@ -380,6 +380,9 @@ describe('WorkItemRepository', () => {
 
       const ready = await workItemRepository.listReadyForUser(USER);
       expect(ready.data.map(item => item.title)).toEqual(['Free']);
+      expect((await workItemRepository.listReadyForUser(USER, LOOP)).data.map(item => item.title)).toEqual([
+        'Loop ticket',
+      ]);
     });
 
     it('findNextReadyForLoop picks the oldest open ticket with closed deps, outside the last stage', async () => {
