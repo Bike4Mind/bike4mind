@@ -161,7 +161,9 @@ describe('phone unlock start + verify', () => {
     expect(await runNoCardUnlock('phone_verified', a, { phoneCode: '123456' })).toMatchObject({
       creditsGranted: PHONE_CREDITS,
     });
+    const startedAt = Date.now();
     expect(await startPhoneUnlock(b, NUMBER, req('81.2.70.9'))).toEqual({ sent: true, sentTo: NUMBER });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(500);
     expect(sentCount()).toBe(1);
     vi.stubGlobal('fetch', (fetchMock = twilioFetch({ checkStatus: 404 })));
     expect(await runNoCardUnlock('phone_verified', b, { phoneCode: '123456' })).toMatchObject({

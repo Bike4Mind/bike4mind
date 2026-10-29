@@ -82,6 +82,16 @@ async function bindPending(userId: string, phone: string): Promise<PhoneUnlockSt
   return { sent: true, sentTo: phone };
 }
 
+/** Rough span of the Lookup and send round trips that a claimed-number answer skips (ms). */
+const CLAIMED_ANSWER_DELAY_MS = { min: 500, max: 1500 } as const;
+
+/** Answers a claimed number as sent, after a delay so the skipped Twilio calls do not show in timing. */
+async function answerClaimedAsSent(userId: string, phone: string): Promise<PhoneUnlockStartResponse> {
+  const { min, max } = CLAIMED_ANSWER_DELAY_MS;
+  await new Promise(resolve => setTimeout(resolve, min + Math.random() * (max - min)));
+  return bindPending(userId, phone);
+}
+
 /**
  * Narrowest scope first, stopping at the first refusal: each counter is spent only when every
  * narrower one admitted the request, so one capped account cannot drain its IP's or network's budget.
@@ -133,7 +143,7 @@ export async function startPhoneUnlock(
   if (isBlockedPhone(phone, settings.phoneBlockedPrefixes)) return refuse('phone_blocked');
   // A number another account claimed answers as sent but sends nothing, so start cannot be used to learn
   // whether a number is registered; verify then fails as a wrong code. Possession is proven before any reveal.
-  if (await claimedByOther(phone, userId)) return bindPending(userId, phone);
+  if (await claimedByOther(phone, userId)) return answerClaimedAsSent(userId, phone);
 
   let canonical: string;
   try {
@@ -144,7 +154,7 @@ export async function startPhoneUnlock(
     canonical = normalizeE164(lookup.phoneNumber) ?? phone;
     if (canonical !== phone) {
       if (isBlockedPhone(canonical, settings.phoneBlockedPrefixes)) return refuse('phone_blocked');
-      if (await claimedByOther(canonical, userId)) return bindPending(userId, canonical);
+      if (await claimedByOther(canonical, userId)) return answerClaimedAsSent(userId, canonical);
     }
 
     const countryCap = { limit: settings.phoneCountryDailyCap, windowMs: DAY_MS };
