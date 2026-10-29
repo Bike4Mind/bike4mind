@@ -110,6 +110,12 @@ describe('toCsvCell', () => {
     expect(toCsvCell(false)).toBe('false');
   });
 
+  it('prefixes numeric strings with a sign, unlike numbers', () => {
+    expect(toCsvCell('-5')).toBe("'-5");
+    expect(toCsvCell('+1')).toBe("'+1");
+    expect(toCsvCell(-5)).toBe('-5');
+  });
+
   it('renders null and undefined as empty', () => {
     expect(toCsvCell(null)).toBe('');
     expect(toCsvCell(undefined)).toBe('');
