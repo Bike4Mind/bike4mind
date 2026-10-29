@@ -9,8 +9,8 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Admin read surface for the EFFECTIVE value of a scoped setting - sibling to `./index.ts`, which only
@@ -25,7 +25,7 @@ import { ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/er
  * different shapes are clearer as different resources than as one endpoint branching on query params.
  *
  * Session/admin route, not a public API-key endpoint, so it carries no api-contract definition (mirrors
- * `./index.ts`). requiredScopes gates the API-key path only; ensureAdmin still runs for the session path.
+ * `./index.ts`). adminApi gates the permission; requiredScopes gates the API-key path.
  */
 
 // Owner must be identified as a pair (id + type) - reject either half arriving alone. Mirrors the
@@ -57,8 +57,10 @@ const EffectiveQuerySchema = z
 
 export type EffectiveSettingQuery = z.infer<typeof EffectiveQuerySchema>;
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
-  ensureAdmin(req.user?.isAdmin);
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req: Request, res: Response) => {
   const { settingName, organizationId, ownerId, ownerType, lakeId } = parseOrBadRequest(
     EffectiveQuerySchema,
     req.query

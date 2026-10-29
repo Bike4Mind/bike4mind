@@ -57,6 +57,7 @@ const lyriaStub: MusicProvider = {
 const makeDeps = (overrides: Partial<CreateMusicJobDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();
   const deps: CreateMusicJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createMusicProviderRegistry([new TestMusicProvider(), elevenLabsStub, lyriaStub]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
@@ -90,6 +91,25 @@ describe('createMusicJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+  });
+
+  it('refuses a paid-only model before holding credits or enqueuing work', async () => {
+    const { deps } = makeDeps();
+    const refusal = new Error('paid plan required');
+    vi.mocked(deps.assertModelAdmission).mockRejectedValue(refusal);
+    await expect(
+      createMusicJob(
+        {
+          user: { ...user, adminRoleWithheld: true },
+          request: { model: 'test-music', prompt: 'a song' },
+          source: 'api',
+        },
+        deps
+      )
+    ).rejects.toBe(refusal);
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-music', true);
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
   });
 
   it('holds credits, creates a pending music job with its defaults resolved and enqueues it', async () => {

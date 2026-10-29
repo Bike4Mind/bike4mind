@@ -54,6 +54,7 @@ const setup = (overrides: Partial<CreateMusicJobDeps> = {}) => {
   const commit = vi.spyOn(repository, 'commit');
   const queue: string[] = [];
   const deps: CreateMusicJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createMusicProviderRegistry([new TestMusicProvider()]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),

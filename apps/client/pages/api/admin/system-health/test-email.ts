@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { MailService, type TestEmailResult } from '@server/utils/mailer';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
@@ -11,7 +11,10 @@ const TestEmailSchema = z.object({
   to: z.email().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(
     rateLimit({
       limit: 5,
@@ -19,10 +22,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       const { to } = TestEmailSchema.parse(req.body);
 
