@@ -12,6 +12,7 @@ import {
   type CreditAdjustmentMode,
 } from './creditAdjustment';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
+import { useRefreshedUser } from './useRefreshedUser';
 import type { ProfileDialogProps } from './profileActions';
 import { displayName } from '../userProfileModel';
 
@@ -22,6 +23,7 @@ import { displayName } from '../userProfileModel';
  */
 export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
   const amountId = useId();
+  const refreshing = useRefreshedUser(user.id);
   const balance = user.currentCredits ?? 0;
   const [mode, setMode] = useState<CreditAdjustmentMode>('set');
   const [rawAmount, setRawAmount] = useState('0');
@@ -67,6 +69,7 @@ export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClos
         adjustment && adjustment.delta !== 0 ? `Set balance to ${formatCredits(adjustment.after)}` : 'Apply'
       }
       blockedReason={blockedReason}
+      pending={refreshing}
       onConfirm={handleConfirm}
       data-testid="adjust-credits-dialog"
     >

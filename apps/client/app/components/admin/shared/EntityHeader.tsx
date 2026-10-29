@@ -61,8 +61,9 @@ export function CopyValue({
   );
 }
 
+/** Past-tense only: a time at or after `now` (written since the last tick, or a skewed clock) reads as "now". */
 export function relativeTime(date: Date, now: number): string {
-  const seconds = Math.round((date.getTime() - now) / 1000);
+  const seconds = Math.round(Math.min(date.getTime() - now, 0) / 1000);
   const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
   if (Math.abs(seconds) < 60) return formatter.format(seconds, 'second');
   if (Math.abs(seconds) < 3600) return formatter.format(Math.round(seconds / 60), 'minute');
@@ -93,7 +94,10 @@ export function RelativeTime({ prefix, at, 'data-testid': testId }: EntityTime) 
     return () => clearInterval(timer);
   }, []);
   const date = at ? new Date(at) : undefined;
-  if (!date || !Number.isFinite(date.getTime())) return null;
+  const atMs = date?.getTime();
+  // Keyed on the number: callers often pass a fresh Date each render.
+  useEffect(() => setNow(Date.now()), [atMs]);
+  if (!date || !Number.isFinite(atMs)) return null;
   return (
     <Tooltip title={formatUtc(date)}>
       <Typography

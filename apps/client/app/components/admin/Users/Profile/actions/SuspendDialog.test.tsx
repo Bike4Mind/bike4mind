@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SuspendDialog } from './SuspendDialog';
-import { ProfileTestWrapper, buildProfile } from '../profileTestUtils';
+import { LiveProfile, ProfileTestWrapper, buildProfile } from '../profileTestUtils';
 
 const mocks = vi.hoisted(() => ({ update: vi.fn() }));
 
@@ -107,5 +107,27 @@ describe('SuspendDialog', () => {
     await waitFor(() => expect(mocks.update).toHaveBeenCalled());
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+  });
+
+  it('refetches the balance on open, so the wipe and its undo use the fresh figure', async () => {
+    const fetchCredits = vi.fn<() => Promise<number>>().mockResolvedValueOnce(500).mockResolvedValueOnce(320);
+    render(
+      <LiveProfile fetchCredits={fetchCredits}>{live => <SuspendDialog user={live} onClose={vi.fn()} />}</LiveProfile>,
+      { wrapper: ProfileTestWrapper }
+    );
+
+    expect(await screen.findByText('Removes 320 credits.')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('suspend-dialog-zero-credits-checkbox'));
+    pickReason();
+    fireEvent.click(confirmButton());
+    fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenLastCalledWith({
+        isBanned: false,
+        creditDelta: 320,
+        creditReason: 'Undo: Abuse / automated signups',
+      })
+    );
   });
 });

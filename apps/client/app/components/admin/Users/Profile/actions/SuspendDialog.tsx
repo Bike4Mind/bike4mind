@@ -3,6 +3,7 @@ import { Checkbox, Sheet, Typography } from '@mui/joy';
 import { ActionDialog, ADMIN_REASON_PRESETS, useUndoToast } from '../../../shared';
 import { formatCredits } from './creditAdjustment';
 import { useAdminUserUpdate } from './useAdminUserUpdate';
+import { useRefreshedUser } from './useRefreshedUser';
 import type { ProfileDialogProps } from './profileActions';
 import { displayName } from '../userProfileModel';
 
@@ -12,6 +13,7 @@ import { displayName } from '../userProfileModel';
  * gives back exactly the credits it removed.
  */
 export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onAudit }) => {
+  const refreshing = useRefreshedUser(user.id);
   const balance = user.currentCredits ?? 0;
   const [zeroCredits, setZeroCredits] = useState(false);
   const update = useAdminUserUpdate(user.id);
@@ -43,6 +45,7 @@ export const SuspendDialog: React.FC<ProfileDialogProps> = ({ user, onClose, onA
       reasonAudited={zeroCredits && balance > 0}
       confirmLabel="Suspend account"
       tone="danger"
+      pending={refreshing}
       onConfirm={handleConfirm}
       data-testid="suspend-dialog"
     >

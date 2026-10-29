@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import {
   AdminPageHeader,
@@ -19,6 +19,7 @@ import {
   BulkActionBar,
   type AdminSelection,
 } from './index';
+import { relativeTime } from './EntityHeader';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const renderToolkit = (children: ReactNode) => render(<CssVarsProvider theme={theme}>{children}</CssVarsProvider>);
@@ -152,6 +153,34 @@ describe('formatUtc and RelativeTime', () => {
     expect(screen.getByTestId('rel-valid')).toHaveTextContent(/^Active 2 days ago$/);
     expect(screen.getByTestId('rel-valid')).toHaveAttribute('datetime', at.toISOString());
     expect(screen.queryByTestId('rel-invalid')).not.toBeInTheDocument();
+  });
+
+  it('reads a time at or after now as "now", never as a future time', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    expect(relativeTime(new Date(now), now)).toBe('now');
+    expect(relativeTime(new Date(now + 5_000), now)).toBe('now');
+    expect(relativeTime(new Date(now + 3 * 86_400_000), now)).toBe('now');
+    expect(relativeTime(new Date(now - 5 * 60_000), now)).toBe('5 minutes ago');
+  });
+
+  describe('when the time changes between ticks', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('measures a new time against a fresh now', () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+      const { rerender } = renderToolkit(<RelativeTime at={new Date(Date.now() - 30_000)} data-testid="rel" />);
+      expect(screen.getByTestId('rel')).toHaveTextContent('30 seconds ago');
+
+      vi.setSystemTime(new Date('2026-10-29T12:05:00Z'));
+      rerender(
+        <CssVarsProvider theme={theme}>
+          <RelativeTime at={new Date(Date.now() - 10_000)} data-testid="rel" />
+        </CssVarsProvider>
+      );
+
+      expect(screen.getByTestId('rel')).toHaveTextContent('10 seconds ago');
+    });
   });
 });
 
