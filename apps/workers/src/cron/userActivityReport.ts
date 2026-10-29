@@ -62,7 +62,6 @@ export async function handler(event: UserActivityReportEvent, context: Context) 
     if (isWeeklyReport) {
       const { startDate, endDate } = previousIsoWeek(dayjs());
 
-      // The report service reads a weekly range as date (first day) .. endDate (last day).
       reportParams = { date: startDate, startDate, endDate };
       displayDate = `${startDate} to ${endDate}`;
       logger.log('Generating weekly report for:', displayDate);
