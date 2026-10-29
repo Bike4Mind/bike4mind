@@ -1,4 +1,4 @@
-import type { WorktreeRemoval } from './worktreeRemoval';
+import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -172,6 +172,9 @@ export const IPC_CHANNELS = {
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
   chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
+  chatListWorktrees: 'chat:list-worktrees',
+  chatRemoveWorktrees: 'chat:remove-worktrees',
+  chatRevealWorktree: 'chat:reveal-worktree',
   chatSendMessage: 'chat:send-message',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
@@ -691,6 +694,12 @@ export interface DesktopApi {
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
     inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
+    listWorktrees(directory: string): Promise<AppWorktree[]>;
+    /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */
+    removeWorktrees(directory: string, paths?: string[]): Promise<WorktreeSweepItem[]>;
+    /** Reveals a currently listed worktree in the file manager; false when it is not listed. */
+    revealWorktree(directory: string, path: string): Promise<boolean>;
     /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
     sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
