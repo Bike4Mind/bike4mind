@@ -18,7 +18,7 @@ const MCP_CONTENT_HASH = computeMcpContentHash({
 });
 
 export const mcpHandler = new sst.aws.Function('mcpHandler', {
-  handler: 'apps/client/server/utils/mcpCall.handler',
+  handler: 'apps/workers/src/mcp/mcpCall.handler',
   runtime: 'nodejs24.x',
   vpc: lambdaVpc,
   // No provisioned concurrency: see the note on AgentExecutor in infra/agentExecutor.ts. This

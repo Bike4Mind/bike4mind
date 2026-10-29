@@ -128,6 +128,67 @@ describe('UsageEventRepository', () => {
     });
   });
 
+  describe('userTokensSince', () => {
+    it("counts a chat row's cache tokens once, as part of its inputTokens", async () => {
+      await record({ feature: 'chat', inputTokens: 100, outputTokens: 50, cachedInputTokens: 20, cacheWriteTokens: 5 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(150);
+    });
+
+    it('adds the separate cache buckets of a non-chat row', async () => {
+      await record({
+        feature: 'completion_api',
+        inputTokens: 100,
+        outputTokens: 50,
+        cachedInputTokens: 20,
+        cacheWriteTokens: 5,
+      });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(175);
+    });
+
+    it("sums the user's own events in the window and reports the oldest", async () => {
+      const first = await record({ inputTokens: 100, outputTokens: 50 });
+      await record({ inputTokens: 10, outputTokens: 1 });
+      await record({ userId: 'user-2', ownerId: 'user-2', inputTokens: 9999 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(161);
+      expect(result.oldestAt?.getTime()).toBe(first!.createdAt.getTime());
+    });
+
+    it('leaves out usage billed to an organization', async () => {
+      await record({ inputTokens: 10, outputTokens: 0 });
+      await record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization, inputTokens: 5000 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(10);
+    });
+
+    it('ignores events before the window', async () => {
+      await record({ inputTokens: 100 });
+      // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 120_000) } });
+      await record({ inputTokens: 7, outputTokens: 0 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(7);
+    });
+
+    it('reads zero for a user with no recent usage', async () => {
+      expect(await usageEventRepository.userTokensSince('nobody', new Date(Date.now() - 60_000))).toEqual({
+        tokens: 0,
+      });
+    });
+  });
+
   describe('marginByModelDay', () => {
     it('groups cost and credits per provider/model per UTC day', async () => {
       await record({ costUsd: 0.01, creditsCharged: 50 });

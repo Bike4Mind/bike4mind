@@ -12,11 +12,14 @@ import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { logEvent } from '@server/utils/analyticsLog';
 
-const { validateUserApiKeyMock, findByIdMock, applyUntrustedRateLimitMock, isApiKeyAccessAllowedMock } = vi.hoisted(
+const { validateUserApiKeyMock, findByIdMock, resolveUntrustedKeyLimitsMock, isApiKeyAccessAllowedMock } = vi.hoisted(
   () => ({
     validateUserApiKeyMock: vi.fn(),
     findByIdMock: vi.fn(),
-    applyUntrustedRateLimitMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit),
+    resolveUntrustedKeyLimitsMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => ({
+      rateLimit: key.rateLimit,
+      ownerUntrusted: false,
+    })),
     isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
   })
 );
@@ -30,7 +33,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: findByIdMock } }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
-vi.mock('@server/utils/apiKeyTrust', () => ({ applyUntrustedRateLimit: applyUntrustedRateLimitMock }));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveUntrustedKeyLimits: resolveUntrustedKeyLimitsMock }));
 vi.mock('@server/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
@@ -234,11 +237,14 @@ describe('apiKeyAuth preauthorizedLakeIds binding', () => {
 
   it("puts the trust-adjusted rate limit on req.apiKeyInfo, judged against the key's owner", async () => {
     validateUserApiKeyMock.mockResolvedValue(validation({ billingOwnerType: CreditHolderType.User }));
-    applyUntrustedRateLimitMock.mockResolvedValueOnce({ requestsPerMinute: 20, requestsPerDay: 1000 });
+    resolveUntrustedKeyLimitsMock.mockResolvedValueOnce({
+      rateLimit: { requestsPerMinute: 20, requestsPerDay: 1000 },
+      ownerUntrusted: true,
+    });
     const req = makeReq();
 
     expect((await run(undefined, req)).passed).toBe(true);
-    expect(applyUntrustedRateLimitMock).toHaveBeenCalledWith(
+    expect(resolveUntrustedKeyLimitsMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1' }),
       {
         rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
@@ -456,14 +462,15 @@ describe('apiKeyAuth admin role', () => {
   it('judges the trust rate limit against the stored admin role, not the withheld one', async () => {
     keyWith([ApiKeyScope.AI_CHAT]);
     const seenIsAdmin: boolean[] = [];
-    applyUntrustedRateLimitMock.mockImplementationOnce(async (owner: unknown, key: { rateLimit: unknown }) => {
+    resolveUntrustedKeyLimitsMock.mockImplementationOnce(async (owner: unknown, key: { rateLimit: unknown }) => {
       seenIsAdmin.push((owner as { isAdmin?: boolean }).isAdmin === true);
-      return key.rateLimit;
+      return { rateLimit: key.rateLimit, ownerUntrusted: false };
     });
     const req = makeReq();
 
     expect((await run(undefined, req)).passed).toBe(true);
     expect(seenIsAdmin).toEqual([true]);
+    expect(req.apiKeyInfo?.ownerUntrusted).toBe(false);
     expect(req.user?.isAdmin).toBe(false);
   });
 
@@ -509,7 +516,7 @@ describe('apiKeyAuth paid-only access switch', () => {
     expect(error).toBeInstanceOf(ForbiddenError);
     expect(error?.message).toBe('API keys require an active paid subscription');
     expect(req.user).toBeUndefined();
-    expect(applyUntrustedRateLimitMock).not.toHaveBeenCalled();
+    expect(resolveUntrustedKeyLimitsMock).not.toHaveBeenCalled();
     const call = req.logger.warn.mock.calls.find(
       ([msg]) => msg === 'API key rejected: apiKeyAccess setting denies this owner'
     );
@@ -528,13 +535,13 @@ describe('apiKeyAuth paid-only access switch', () => {
     });
     findByIdMock.mockResolvedValueOnce({ id: 'user-1', isBanned: false, emailVerified: false });
     const clamped = { requestsPerMinute: 3, requestsPerDay: 1000 };
-    applyUntrustedRateLimitMock.mockResolvedValueOnce(clamped);
+    resolveUntrustedKeyLimitsMock.mockResolvedValueOnce({ rateLimit: clamped, ownerUntrusted: true });
     const req = makeReq();
 
     expect((await run(undefined, req)).passed).toBe(true);
     expect(req.apiKeyInfo?.rateLimit).toEqual(clamped);
     expect(isApiKeyAccessAllowedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      applyUntrustedRateLimitMock.mock.invocationCallOrder[0]!
+      resolveUntrustedKeyLimitsMock.mock.invocationCallOrder[0]!
     );
   });
 

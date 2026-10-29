@@ -8,8 +8,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: () => ({
     delete: (fn: (req: unknown, res: unknown) => Promise<unknown>) => {
       h.handler = fn;
       return {};

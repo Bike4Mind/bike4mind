@@ -1,14 +1,9 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { subscriberRepository } from '@bike4mind/database';
 
-const handler = baseApi().get(
+const handler = adminApi({ adminPermissions: { GET: 'credits:adjust' } }).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     // "Waiting" = subscribers who haven't had invites generated yet
     const count = await subscriberRepository.countWaiting();
 

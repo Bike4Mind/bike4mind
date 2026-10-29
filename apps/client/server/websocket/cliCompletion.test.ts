@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope, BadRequestError, CliCompletionChunkAction } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, CliCompletionChunkAction, CreditHolderType } from '@bike4mind/common';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 
 const mockExecuteCompletion = vi.fn();
 const mockLogCompletionAnalytics = vi.fn();
+const { mockAdmitCompletion, mockQuotaRelease } = vi.hoisted(() => {
+  const release = vi.fn().mockResolvedValue(undefined);
+  return { mockAdmitCompletion: vi.fn().mockResolvedValue({ release }), mockQuotaRelease: release };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitCompletion,
+  NO_COMPLETION_QUOTA: { release: async () => {} },
+}));
 
 // Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
 const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
@@ -377,5 +385,86 @@ describe('daily cap billing target', () => {
     expect(mockExecuteCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ billingOrganizationId: organizationId })
     );
+  });
+});
+
+describe('cliCompletion websocket handler - untrusted completion quotas', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(sendToConnection).mockResolvedValue(undefined);
+    mockExecuteCompletion.mockResolvedValue(undefined);
+    mockAdmitCompletion.mockResolvedValue({ release: mockQuotaRelease });
+  });
+
+  const authenticateKey = (ownerUntrusted = true) =>
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      userId: 'u1',
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted,
+      billingOwnerType: CreditHolderType.User,
+    } as never);
+
+  it.each([true, false])('forwards the owner trust judgment %s and releases after completion', async ownerUntrusted => {
+    authenticateKey(ownerUntrusted);
+    await run();
+    expect(mockAdmitCompletion).toHaveBeenCalledWith({
+      owner: 'u1',
+      ownerUntrusted,
+      billingOwnerType: CreditHolderType.User,
+      holdSlot: true,
+    });
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a quota refusal with its code and retry delay before starting work', async () => {
+    authenticateKey();
+    mockAdmitCompletion.mockRejectedValueOnce(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 })
+    );
+    await run();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+    expect(sendToConnection).toHaveBeenCalledWith(
+      'conn-1',
+      'https://example.test/test',
+      expect.objectContaining({
+        action: 'cli_completion_error',
+        errorCode: 'token_rate_limit_exceeded',
+        retryAfter: 12,
+      })
+    );
+  });
+
+  it('releases the slot after a provider failure', async () => {
+    authenticateKey();
+    mockExecuteCompletion.mockRejectedValueOnce(new Error('provider down'));
+    await run();
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the slot while disconnected-client work continues and releases when it settles', async () => {
+    authenticateKey();
+    let settle: () => void = () => {};
+    mockExecuteCompletion.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          settle = resolve;
+        })
+    );
+    const pending = run();
+    await vi.waitFor(() => expect(mockExecuteCompletion).toHaveBeenCalled());
+    vi.mocked(sendToConnection).mockRejectedValue(new Error('connection gone'));
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
+    settle();
+    await expect(pending).rejects.toThrow('connection gone');
+    expect(mockQuotaRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves JWT completions exempt', async () => {
+    await run();
+    expect(mockAdmitCompletion).not.toHaveBeenCalled();
+    expect(mockQuotaRelease).not.toHaveBeenCalled();
   });
 });

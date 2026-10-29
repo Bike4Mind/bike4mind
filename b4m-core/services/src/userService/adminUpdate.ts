@@ -28,6 +28,8 @@ import { MODERATION_POLICY } from './moderationPolicy';
 import { entersBlockedState } from './accountState';
 import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
+const MAX_CREDIT_VALUE = 1_000_000_000;
+
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
   // Admins can directly update email addresses without verification
@@ -40,14 +42,13 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   organizationId: z.string().optional().nullable(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).optional(),
   storageLimitOverride: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
-  currentCredits: z.number().optional(),
+  currentCredits: z.number().int().min(0).max(MAX_CREDIT_VALUE).optional(),
   isBanned: z.boolean().optional(),
   isModerated: z.boolean().optional(),
   subscribedUntil: z.string().optional().nullable(),
   systemFiles: z.array(z.object({ fileId: z.string(), enabled: z.boolean() })).optional(),
   level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).optional(),
   lastNotebookId: z.string().optional().nullable(),
-  userNotes: z.array(z.object({ timestamp: z.string(), note: z.string(), userName: z.string() })).optional(),
   numReferralsAvailable: z.number().optional(),
   disputePending: z.boolean().optional(),
   // Admin control over the per-user moderation escalation state. Routed through
@@ -65,7 +66,7 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // this write is never refunded (the failure mode of sending a frozen client snapshot
   // as an absolute `currentCredits`). Not a user-doc field: stripped from the doc write
   // and routed to addCredits/subtractCredits. Takes precedence over `currentCredits`.
-  creditDelta: z.number().optional(),
+  creditDelta: z.number().int().min(-MAX_CREDIT_VALUE).max(MAX_CREDIT_VALUE).optional(),
   // Why the admin role is being granted or revoked. Not a user-doc field: the route records it on
   // the audit entry, and it is stripped from the doc write here.
   roleChangeReason: z.string().max(500).optional(),
@@ -185,11 +186,12 @@ export async function adminUpdateUser(
       : params.currentCredits !== undefined && params.currentCredits !== previousBalance
         ? params.currentCredits - previousBalance
         : 0;
-  // Floor a deduction so a non-negative balance is never driven below zero (mirrors the
-  // old client-side Math.max(0, ...) clamp). Only when the balance is non-negative: when
-  // it is already negative, `-previousBalance` is a positive floor that would invert a
-  // deduction into a credit, so apply the delta verbatim in that case.
-  const creditDelta = previousBalance >= 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
+  // A deduction never drives the balance further down than zero, and is rejected outright when
+  // there is nothing to deduct so the caller does not see a silent success.
+  if (rawDelta < 0 && previousBalance <= 0) {
+    throw new BadRequestError('Balance is already at or below zero; nothing to deduct');
+  }
+  const creditDelta = rawDelta < 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
   const note = creditReason?.trim() || undefined;
 
   // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
@@ -241,9 +243,8 @@ export async function adminUpdateUser(
   // generic_deduct CreditTransaction (ordering and failure modes: see above).
   let creditAdjustment: AdminCreditAdjustment | null = null;
   if (creditDelta !== 0) {
-    // Best-effort resulting balance predicted from the read snapshot. The atomic $inc
-    // inside addCredits/subtractCredits is the source of truth, so concurrent spend
-    // between the read and the increment can make this differ from the committed balance.
+    // Predicted from the read snapshot; an absolute set is applied as a delta, so concurrent
+    // spend before the atomic $inc makes the committed balance differ from this value.
     const resultingBalance = previousBalance + creditDelta;
     const metadata: Record<string, unknown> = { actorId: userId, previousBalance, resultingBalance };
     if (note) {

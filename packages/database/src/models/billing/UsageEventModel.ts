@@ -161,6 +161,37 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return this.create(event as IUsageEventDocument);
   }
 
+  /**
+   * Tokens a user's provider calls billed to the user themself (ownerType User) settled since
+   * `since`, and when the oldest of those calls landed. Input plus output, plus the cache buckets
+   * where they are separate: a 'chat' row's inputTokens is the estimate of the whole prompt, so its
+   * cache read and write tokens are already in it; every other feature records them disjointly
+   * (see `rates` in UsageEventTypes.ts). Served by the { userId, createdAt } index.
+   */
+  async userTokensSince(userId: string, since: Date): Promise<{ tokens: number; oldestAt?: Date }> {
+    const [row] = await this.model.aggregate<{ tokens: number; oldestAt: Date }>([
+      { $match: { userId, ownerType: CreditHolderType.User, createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          tokens: {
+            $sum: {
+              $add: [
+                '$inputTokens',
+                '$outputTokens',
+                {
+                  $cond: [{ $eq: ['$feature', 'chat'] }, 0, { $add: ['$cachedInputTokens', '$cacheWriteTokens'] }],
+                },
+              ],
+            },
+          },
+          oldestAt: { $min: '$createdAt' },
+        },
+      },
+    ]);
+    return row ? { tokens: row.tokens, oldestAt: row.oldestAt } : { tokens: 0 };
+  }
+
   async creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number> {
     const [row] = await this.model.aggregate<{ credits: number }>([
       { $match: { userId, createdAt: { $gte: from, $lt: to } } },

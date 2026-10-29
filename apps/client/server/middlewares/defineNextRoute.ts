@@ -34,6 +34,13 @@ function omit(obj: Record<string, unknown>, keys: readonly string[]): Record<str
   return Object.fromEntries(Object.entries(obj).filter(([key]) => !excluded.has(key)));
 }
 
+/** The request a contract route's handler receives; name it when a wrapper hides the handler from inference. */
+export type ContractRequest<C extends EndpointContract> = Request & {
+  validated: RequestBodyOf<C>;
+  validatedParams: PathParamsOf<C>;
+  validatedQuery: QueryParamsOf<C>;
+};
+
 /**
  * Next.js transport adapter for an {@link EndpointContract}.
  *
@@ -56,11 +63,7 @@ export function nextRouteForContract<C extends EndpointContract>(
   contract: C,
   options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean; rateLimit?: RequestHandler } = {}
 ) {
-  type ValidatedReq = Request & {
-    validated: RequestBodyOf<C>;
-    validatedParams: PathParamsOf<C>;
-    validatedQuery: QueryParamsOf<C>;
-  };
+  type ValidatedReq = ContractRequest<C>;
   type Handler = (req: ValidatedReq, res: Response, next: NextFunction) => unknown;
 
   const { rateLimit, ...baseOptions } = options;

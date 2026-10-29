@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
+
 const h = vi.hoisted(() => ({
   agentFindById: vi.fn(),
   agentUpdate: vi.fn(),
@@ -152,6 +156,7 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
 
     expect(h.storageUpload).toHaveBeenCalledTimes(1);
     expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+    expect(h.getOperationsModel).toHaveBeenCalledTimes(1);
   });
 
   // Marked clean up front, so it records the version that covers: its own S3 event must not rescan it.

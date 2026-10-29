@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  quotaAdmission: vi.fn(),
+  quotaRelease: vi.fn(),
   batchFindById: vi.fn(),
   lakeFindById: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
@@ -18,6 +20,8 @@ const h = vi.hoisted(() => ({
   toAccessContext: vi.fn(),
   assertRequestCanAfford: vi.fn(),
 }));
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: h.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -88,6 +92,8 @@ const run = (batchId: string, res: unknown, body?: unknown, user?: { id: string;
 describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.quotaAdmission.mockResolvedValue({ release: h.quotaRelease });
+    h.quotaRelease.mockResolvedValue(undefined);
     h.tx.length = 0;
     h.claimBatchForAnalysis.mockImplementation(async () => (h.tx.push('claim'), { id: 'b1' }));
     h.batchFindById.mockResolvedValue({ id: 'b1', dataLakeId: 'lake1' });
@@ -100,6 +106,25 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     h.toAccessContext.mockImplementation((req: { user: { id: string; isAdmin: boolean } }) =>
       Promise.resolve({ userId: req.user.id, isAdmin: req.user.isAdmin })
     );
+  });
+
+  it('refuses quota exhaustion before claiming or analyzing a batch', async () => {
+    h.quotaAdmission.mockRejectedValueOnce(Object.assign(new Error('token quota'), { statusCode: 429 }));
+    await expect(run('b1', makeRes().res)).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.claimBatchForAnalysis).not.toHaveBeenCalled();
+    expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
+  });
+
+  it('holds a quota slot through inference and releases it after success', async () => {
+    h.analyzeBatchTaxonomy.mockImplementationOnce(async () => {
+      expect(h.quotaRelease).not.toHaveBeenCalled();
+      return { outcome: 'ready', batch: { id: 'b1' } };
+    });
+    await run('b1', makeRes().res);
+    expect(h.quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 'u1', isAdmin: false } }), {
+      holdSlot: true,
+    });
+    expect(h.quotaRelease).toHaveBeenCalledOnce();
   });
 
   it('refuses a caller who cannot afford the inference before claiming the batch', async () => {

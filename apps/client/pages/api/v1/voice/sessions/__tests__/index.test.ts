@@ -1,8 +1,13 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, TooManyRequestsError } from '@bike4mind/common';
 
-const h = vi.hoisted(() => ({ signToken: vi.fn(), createSession: vi.fn() }));
+const h = vi.hoisted(() => ({
+  signToken: vi.fn(),
+  createSession: vi.fn(),
+  trustSettings: vi.fn(),
+  tokensSince: vi.fn(),
+}));
 
 vi.mock('@server/middlewares/defineNextRoute', () => ({
   nextRouteForContract: () => ({ post: (fn: unknown) => fn }),
@@ -15,8 +20,13 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
   sessionRepository: { countActiveVoiceSessionsByUserId: vi.fn().mockResolvedValue(0) },
+  usageEventRepository: { userTokensSince: h.tokensSince },
 }));
-vi.mock('@bike4mind/services', () => ({ sessionService: { createSession: h.createSession } }));
+vi.mock('@bike4mind/services', () => ({
+  sessionService: { createSession: h.createSession },
+  userApiKeyService: { loadApiKeyTrustSettings: h.trustSettings },
+}));
+vi.mock('@server/utils/apiKeyTrust', () => ({ resolveApiKeyTrust: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn().mockResolvedValue({}),
   getSettingsValue: (name: string) => ({ voiceV2Enabled: true, elevenLabsServerApiKey: 'el-key' })[name],
@@ -36,7 +46,7 @@ vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: () => (
 
 import handler from '../index';
 
-const run = (apiKeyInfo?: { keyId: string; scopes: ApiKeyScope[] }) => {
+const run = (apiKeyInfo?: { keyId: string; scopes: ApiKeyScope[]; ownerUntrusted?: boolean }) => {
   const json = vi.fn();
   const req = {
     validated: {},
@@ -56,6 +66,7 @@ describe('POST /api/v1/voice/sessions - admin role in the session token', () => 
     vi.clearAllMocks();
     h.signToken.mockReturnValue('signed');
     h.createSession.mockResolvedValue({ id: 'session-1', name: 'Voice' });
+    h.trustSettings.mockResolvedValue({ gateEnabled: false });
   });
 
   it('marks the role withheld for a key without the admin scope', async () => {
@@ -71,5 +82,42 @@ describe('POST /api/v1/voice/sessions - admin role in the session token', () => 
   it('leaves the claim off for a signed-in session', async () => {
     await run();
     expect(mintedClaims().adminRoleWithheld).toBeUndefined();
+  });
+});
+
+describe('POST /api/v1/voice/sessions - untrusted API key owner quota', () => {
+  const untrustedKey = { keyId: 'key-1', scopes: [ApiKeyScope.AI_GENERATE], ownerUntrusted: true };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.signToken.mockReturnValue('signed');
+    h.createSession.mockResolvedValue({ id: 'session-1', name: 'Voice' });
+    h.trustSettings.mockResolvedValue({ gateEnabled: true, untrustedTokensPerMinute: 1000, untrustedMaxConcurrent: 2 });
+  });
+
+  it('refuses an untrusted owner over the token window before opening a session or signing a token', async () => {
+    h.tokensSince.mockResolvedValue({ tokens: 1000, oldestAt: new Date(Date.now() - 30_000) });
+    const refusal = await run(untrustedKey).catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(TooManyRequestsError);
+    expect(refusal).toMatchObject({
+      statusCode: 429,
+      additionalInfo: { errorCode: 'token_rate_limit_exceeded', retryAfter: 30 },
+    });
+    expect(h.createSession).not.toHaveBeenCalled();
+    expect(h.signToken).not.toHaveBeenCalled();
+  });
+
+  it('admits an untrusted owner under the token window', async () => {
+    h.tokensSince.mockResolvedValue({ tokens: 999 });
+    await run(untrustedKey);
+    expect(h.tokensSince).toHaveBeenCalledWith('owner-1', expect.any(Date));
+    expect(h.signToken).toHaveBeenCalledOnce();
+  });
+
+  it('does not check a signed-in session', async () => {
+    await run();
+    expect(h.trustSettings).not.toHaveBeenCalled();
+    expect(h.tokensSince).not.toHaveBeenCalled();
+    expect(h.signToken).toHaveBeenCalledOnce();
   });
 });

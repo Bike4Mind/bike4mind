@@ -57,6 +57,7 @@ import type {
   UpdateFallbackLakeSettingsRequestInputType,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
@@ -130,9 +131,10 @@ export function useGetDataLakes(
   enabled = true,
   opts?: { staleTime?: number; retry?: number | boolean; refetchOnWindowFocus?: boolean }
 ) {
+  const impersonating = useAccessToken(s => s.impersonating);
   return useQuery({
     queryKey: dataLakeKeys.list,
-    enabled,
+    enabled: enabled && !impersonating,
     retry: opts?.retry ?? false,
     queryFn: async () => {
       const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');

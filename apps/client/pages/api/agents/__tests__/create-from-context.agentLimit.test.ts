@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 import { AGENT_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
 
 /**

@@ -81,6 +81,7 @@ describe('useMfaChallenge begin', () => {
     const verify = setup();
     await act(() => verify.result.current.begin({ ...verifyStart, passkeyAvailable: true }));
     expect(verify.result.current.modalProps.onPasskeyVerify).toBeDefined();
+    expect(verify.result.current.modalProps.mode).toBe('verify');
 
     const noPasskey = setup();
     await act(() => noPasskey.result.current.begin(verifyStart));
@@ -97,7 +98,12 @@ describe('useMfaChallenge begin', () => {
     await act(() => result.current.begin({ ...verifyStart, mode: 'setup' }));
 
     expect(mocks.setupMutateAsync).toHaveBeenCalledTimes(1);
-    expect(result.current.modalProps).toMatchObject({ open: true, qrCodeUrl: 'qr', manualEntryKey: 'KEY' });
+    expect(result.current.modalProps).toMatchObject({
+      open: true,
+      mode: 'setup',
+      qrCodeUrl: 'qr',
+      manualEntryKey: 'KEY',
+    });
   });
 
   it('ends the sign-in as a cancelled setup when enrollment cannot start', async () => {

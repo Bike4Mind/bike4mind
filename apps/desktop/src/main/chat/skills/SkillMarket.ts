@@ -475,6 +475,11 @@ function toFields(value: unknown): SkillUploadFields | null {
       ? fields.claudeCodeAllowedTools.filter((tool): tool is string => typeof tool === 'string')
       : [],
     disableModelInvocation: fields.disableModelInvocation === true,
+    // Always sent, so re-uploading over a skill replaces its files (the server validates paths and limits).
+    files: (Array.isArray(fields.files) ? fields.files : []).flatMap(file => {
+      const f = asRecord(file);
+      return typeof f?.path === 'string' && typeof f.content === 'string' ? [{ path: f.path, content: f.content }] : [];
+    }),
   };
 }
 

@@ -54,6 +54,7 @@ const LOCAL_RISKY_TOOLS = [
 const toolKey = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const KNOWN_TOOL_KEYS = new Set<string>(b4mLLMTools.options.map(toolKey));
+const PROSE_EXTENSIONS = new Set(['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'csv']);
 
 export type ScanOptions = {
   /** Tools that force human review, ADDED to DEFAULT_HIGH_RISK_TOOLS (admin setting). */
@@ -538,7 +539,46 @@ function scanTools(
 }
 
 export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOptions): ISkillScanFinding[] {
-  const raw = scannableText(snapshot);
+  const allowlist = (options.urlAllowlist ?? []).map(h => h.toLowerCase());
+  const { findings, text, folded } = scanText(scannableText(snapshot), allowlist);
+
+  // The admin setting ADDS to the built-in list: a custom tool must never silently drop web_fetch
+  // and the other defaults out of the review gate.
+  const highRiskTools = [...DEFAULT_HIGH_RISK_TOOLS, ...(options.highRiskTools ?? [])];
+  scanTools(snapshot, text, folded, highRiskTools).forEach(f => findings.push(f));
+
+  // Supporting files get the same text rules as the body. A script runs on the importer's machine
+  // outside the model's view, so any script needs a human reviewer even when no rule fires.
+  for (const file of snapshot.files ?? []) {
+    const scanned = scanText(file.content, allowlist);
+    // Only the tool-mention half of scanTools: the declared-tools finding is about the body's frontmatter.
+    const mentions = snapshot.allowedTools?.length
+      ? []
+      : scanTools(snapshot, scanned.text, scanned.folded, highRiskTools);
+    for (const f of [...scanned.findings, ...mentions]) {
+      findings.push({ ...f, message: `${file.path}: ${f.message}`, file: file.path });
+    }
+    const isScript = file.path.startsWith('scripts/');
+    const extension = /\.([^./]+)$/.exec(file.path)?.[1].toLowerCase() ?? '';
+    if (isScript || !PROSE_EXTENSIONS.has(extension) || file.content.startsWith('#!')) {
+      findings.push({
+        ...finding(
+          'script_present',
+          'medium',
+          isScript
+            ? `${file.path}: Ships a script that runs on the importer's machine`
+            : `${file.path}: Ships a file that could run on the importer's machine`
+        ),
+        file: file.path,
+      });
+    }
+  }
+
+  return findings;
+}
+
+/** The text rules shared by a skill's SKILL.md fields and each supporting file. */
+function scanText(raw: string, allowlist: string[]) {
   const findings: ISkillScanFinding[] = [];
 
   const hidden = raw.match(HIDDEN_CHARS);
@@ -571,7 +611,6 @@ export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOpti
     );
   }
 
-  const allowlist = (options.urlAllowlist ?? []).map(h => h.toLowerCase());
   const image = scanMarkdownImages(text, allowlist);
   if (image) add(image);
 
@@ -607,13 +646,7 @@ export function runDeterministicScan(snapshot: ISkillSnapshot, options: ScanOpti
     add(finding('external_url', 'medium', 'References URLs outside the allowlist', outside.slice(0, 5).join(', ')));
   }
 
-  // The admin setting ADDS to the built-in list: a custom tool must never silently drop web_fetch
-  // and the other defaults out of the review gate.
-  scanTools(snapshot, text, folded, [...DEFAULT_HIGH_RISK_TOOLS, ...(options.highRiskTools ?? [])]).forEach(f =>
-    findings.push(f)
-  );
-
-  return findings;
+  return { findings, text, folded };
 }
 
 /**

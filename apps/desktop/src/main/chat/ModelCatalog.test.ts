@@ -2,7 +2,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
-import { cpuMachine, GIB, stubArch } from './fitStub.testHelper';
+import { GIB, stubArch, unifiedMachine } from './fitStub.testHelper';
 import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 
 vi.mock('@bike4mind/common', async importOriginal => ({
@@ -197,7 +197,7 @@ describe('ModelCatalog', () => {
 
   it("shows a local model's context as it is now: grown by a conversation, or sized again after Settings", async () => {
     // The stub estimator: 64K is the most that fits 13 GiB, 32K the most that fits 10 GiB.
-    let hardware = cpuMachine(13);
+    let hardware = unifiedMachine(13);
     const footprint = () => ({ arch: stubArch(131072), weightsBytes: 4 * GIB, hardware });
     const replies = [
       () =>
@@ -237,7 +237,7 @@ describe('ModelCatalog', () => {
       expect(catalog.cached()?.find(model => model.id === 'local:ollama:qwen')?.contextWindow).toBe(grown);
       expect((await contextOf())?.contextWindow).toBe(grown);
 
-      hardware = cpuMachine(10);
+      hardware = unifiedMachine(10);
       forgetLocalContexts();
       catalog.forgetLocal();
       expect((await contextOf())?.contextWindow).toBe(32768);

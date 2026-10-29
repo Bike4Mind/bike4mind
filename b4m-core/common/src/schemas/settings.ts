@@ -440,6 +440,11 @@ export const SettingKeySchema = z.enum([
   'apiKeyMinAccountAgeDays',
   'maxActiveKeysUntrusted',
   'apiKeyUntrustedRateLimitPerMin',
+  'apiKeyUntrustedRequestsPerDay',
+  'apiKeyUntrustedTokensPerMin',
+  'apiKeyUntrustedMaxConcurrent',
+  'usagePatternSignalsEnabled',
+  'usagePatternSignalsConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -455,6 +460,9 @@ export const SettingKeySchema = z.enum([
   'signupBurstThreshold',
   'signupBurstWindowHours',
   'signupBurstAutoHold',
+  'enableDomainIntelligence',
+  'holdSignupsFromDomainsYoungerThanDays',
+  'domainIntelligenceTimeoutMs',
   'defaultFreeCredits',
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
@@ -478,6 +486,14 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
+  'noCardUnlockEnabled',
+  'noCardUnlockGithubCredits',
+  'noCardUnlockWorkEmailCredits',
+  'noCardUnlockMaxCredits',
+  'noCardUnlockGithubMinAgeDays',
+  'noCardUnlockGithubMinRepos',
+  'noCardUnlockWorkEmailDomainDailyCap',
+  'noCardUnlockProbeInconclusiveAllows',
   'signupAnomaly',
 
   // WEATHER SERVICE SETTINGS
@@ -634,6 +650,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitFreePerMin',
   'apiRateLimitBasicPerMin',
   'apiRateLimitProPerMin',
+  'apiRateLimitCreditsPerMin',
   'apiKeyAccess',
 
   // FREE-TIER MODEL ALLOWLIST
@@ -1216,6 +1233,47 @@ export function makeContributedBooleanSetting(
 //     schema: z.array(z.string()).default(config.defaultValue ?? []),
 //   };
 // }
+
+/**
+ * Thresholds and weights for the per-user usage pattern signals
+ * (b4m-core/services/src/userService/usagePatternSignals.ts). The defaults are generic
+ * placeholders; a deployment tunes the real values in admin settings.
+ */
+export const UsagePatternSignalsConfigSchema = z.object({
+  /** Users with usage in this many recent hours are candidates; keep it near the hourly job cadence. */
+  activeWindowHours: z.number().int().min(1).max(720).prefault(2),
+  /** Free-tier users scored per run; the least recently scored go first. */
+  maxUsersPerRun: z.number().int().min(1).max(10_000).prefault(500),
+  /** Window for the cadence and credit-polling signals. */
+  lookbackDays: z.number().int().min(1).max(90).prefault(7),
+  /** Window for the API-only signal. */
+  apiOnlyLookbackDays: z.number().int().min(1).max(365).prefault(30),
+  /** Most recent UsageEvent rows read per user, bounding each user's read. */
+  maxEventsPerUser: z.number().int().min(10).max(50_000).prefault(5000),
+  weights: z
+    .object({
+      apiOnlyUsage: z.number().min(0).max(100).prefault(25),
+      regularCadence: z.number().min(0).max(100).prefault(25),
+      creditPolling: z.number().min(0).max(100).prefault(25),
+      quickApiKey: z.number().min(0).max(100).prefault(25),
+    })
+    .prefault({}),
+  reviewThreshold: z.number().min(1).max(100).prefault(50),
+  apiOnlyMinRequests: z.number().int().min(1).prefault(20),
+  /** Share (0-1) of usage made with an API key at which apiOnlyUsage triggers. */
+  apiOnlyMinShare: z.number().min(0).max(1).prefault(1),
+  /** Requests whose inter-request gaps are measured. */
+  cadenceSampleSize: z.number().int().min(3).max(1000).prefault(30),
+  /** Coefficient of variation of the gaps at or below which regularCadence triggers. */
+  cadenceMaxVariation: z.number().min(0).prefault(0.2),
+  creditPollMinCount: z.number().int().min(1).prefault(20),
+  creditPollMinPerCompletion: z.number().positive().prefault(2),
+  quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(30),
+  /** A first key created up to this many days before verification also triggers quickApiKey. */
+  quickApiKeyMaxDaysBeforeVerification: z.number().int().min(0).max(365).prefault(1),
+});
+
+export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
 
 export enum ServerStatusEnum {
   Live = 'live',
@@ -2108,6 +2166,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupBurstAutoHold', order: 23 },
       { key: 'signupRiskScoring', order: 24 },
       { key: 'signupAnomaly', order: 25 },
+      { key: 'enableDomainIntelligence', order: 26 },
+      { key: 'holdSignupsFromDomainsYoungerThanDays', order: 27 },
+      { key: 'domainIntelligenceTimeoutMs', order: 28 },
     ],
   },
   KNOWLEDGE: {
@@ -2205,13 +2266,14 @@ export const API_SERVICE_GROUPS = {
   RATE_LIMITING: {
     id: 'rateLimitingService',
     name: 'API Rate Limiting',
-    description: 'Per-user request rate limits on /chat and /opti, tunable per subscription tier (#9780)',
+    description: 'Per-user request rate limits on every per-user rate-limited API route, tunable per subscription tier',
     icon: 'Speed',
     settings: [
       { key: 'apiRateLimitFreePerMin', order: 1 },
       { key: 'apiRateLimitBasicPerMin', order: 2 },
       { key: 'apiRateLimitProPerMin', order: 3 },
-      { key: 'apiKeyAccess', order: 4 },
+      { key: 'apiRateLimitCreditsPerMin', order: 4 },
+      { key: 'apiKeyAccess', order: 5 },
     ],
   },
   API_KEY_TRUST: {
@@ -2224,6 +2286,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiKeyMinAccountAgeDays', order: 2 },
       { key: 'maxActiveKeysUntrusted', order: 3 },
       { key: 'apiKeyUntrustedRateLimitPerMin', order: 4 },
+      { key: 'apiKeyUntrustedRequestsPerDay', order: 5 },
+      { key: 'apiKeyUntrustedTokensPerMin', order: 6 },
+      { key: 'apiKeyUntrustedMaxConcurrent', order: 7 },
     ],
   },
   FREE_TIER_MODELS: {
@@ -2275,6 +2340,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'LakeAccessAuditRetentionDays', order: 1 },
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
       { key: 'LakeConfigAuditRetentionDays', order: 3 },
+    ],
+  },
+  USAGE_PATTERN_SIGNALS: {
+    id: 'usagePatternSignalsService',
+    name: 'Usage Pattern Signals',
+    description: 'Hourly read-only analysis of free-tier usage patterns for admin review',
+    icon: 'Security',
+    settings: [
+      { key: 'usagePatternSignalsEnabled', order: 1 },
+      { key: 'usagePatternSignalsConfig', order: 2 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3118,9 +3193,11 @@ export const settingsMap = {
     key: 'apiRateLimitFreePerMin',
     name: 'API Rate Limit — Free (requests/min)',
     defaultValue: 10,
-    min: 1,
+    min: 0,
     max: 100000,
-    description: 'Max /chat and /opti requests per minute for users with no active paid subscription.',
+    int: true,
+    description:
+      'Max requests per minute on tier-limited API routes for Free-tier users: in-app chat, API chat, the whole /api/v1 public API (including non-AI reads and writes of projects, files and artifacts) and MCP connections. Set to 0 to block Free-tier users from all of these and from AI helpers such as optimize-input, rapid-reply and data-lake search. Helpers keep their own fixed caps when this is positive.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 1,
@@ -3131,7 +3208,9 @@ export const settingsMap = {
     defaultValue: 30,
     min: 1,
     max: 100000,
-    description: 'Max /chat and /opti requests per minute for Basic-tier subscribers (e.g. Professional plan).',
+    int: true,
+    description:
+      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Basic-tier subscribers (e.g. Professional plan). AI helper routes keep their own fixed caps.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 2,
@@ -3142,10 +3221,25 @@ export const settingsMap = {
     defaultValue: 60,
     min: 1,
     max: 100000,
-    description: 'Max /chat and /opti requests per minute for Pro-tier subscribers.',
+    int: true,
+    description:
+      'Max requests per minute on tier-limited API routes (including in-app chat and API chat) for Pro-tier subscribers. AI helper routes keep their own fixed caps.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 3,
+  }),
+  apiRateLimitCreditsPerMin: makeNumberSetting({
+    key: 'apiRateLimitCreditsPerMin',
+    name: 'API Rate Limit - Credit Balance Reads (requests/min per key)',
+    defaultValue: 0,
+    min: 0,
+    max: 100000,
+    int: true,
+    description:
+      "Dedicated per-minute ceiling for GET /api/v1/credits, counted per API key. JWT sessions are exempt. Applies on top of the key's own limits. 0 disables it.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 4,
   }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
@@ -3160,7 +3254,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 4,
+    order: 5,
   }),
   tagLineMain: makeStringSetting({
     key: 'tagLineMain',
@@ -3672,6 +3766,70 @@ export const settingsMap = {
     order: 4,
     dependsOn: 'apiKeyTrustGateEnabled',
   }),
+  apiKeyUntrustedRequestsPerDay: makeNumberSetting({
+    key: 'apiKeyUntrustedRequestsPerDay',
+    name: 'API Key Trust: Untrusted Daily Limit (requests/day)',
+    defaultValue: 0,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      "Per-day request ceiling for each personal API key whose owner is untrusted, applied at request time and counted per key. A key's own lower limit still wins. 0 disables it.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 5,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  apiKeyUntrustedTokensPerMin: makeNumberSetting({
+    key: 'apiKeyUntrustedTokensPerMin',
+    name: 'API Key Trust: Untrusted Token Rate (tokens/min)',
+    defaultValue: 0,
+    min: 0,
+    max: 100000000,
+    int: true,
+    description:
+      'Tokens per rolling minute for an untrusted account using its personal API keys. Counts every settled model call the account billed to itself in the last minute, from any surface (input, output and prompt-cache tokens, each counted once); usage billed to an organization is left out. A completion is admitted while the account is under the limit, and its tokens count against the requests that follow. 0 disables it.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 6,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  apiKeyUntrustedMaxConcurrent: makeNumberSetting({
+    key: 'apiKeyUntrustedMaxConcurrent',
+    name: 'API Key Trust: Untrusted Concurrent Completions',
+    defaultValue: 0,
+    min: 0,
+    max: 1000,
+    int: true,
+    description:
+      "Completions an untrusted account's personal API keys may have in flight at once, on the streaming completion routes and blocking chat turns. 0 disables it.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.API_KEY_TRUST.id,
+    order: 7,
+    dependsOn: 'apiKeyTrustGateEnabled',
+  }),
+  usagePatternSignalsEnabled: makeBooleanSetting({
+    key: 'usagePatternSignalsEnabled',
+    name: 'Usage Pattern Signals',
+    defaultValue: false,
+    description:
+      'Runs an hourly job that computes usage pattern signals for recently active free-tier accounts and stores the latest result per account for review. Read-only: it never changes an account, its keys or its credits.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
+    order: 1,
+  }),
+  usagePatternSignalsConfig: makeObjectSetting({
+    key: 'usagePatternSignalsConfig',
+    name: 'Usage Pattern Signals: Thresholds and Weights',
+    defaultValue: UsagePatternSignalsConfigSchema.parse({}),
+    description:
+      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun, maxEventsPerUser), the windows for the API-only signal (apiOnlyLookbackDays) and for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. Unknown fields are ignored.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
+    order: 2,
+    dependsOn: 'usagePatternSignalsEnabled',
+    schema: UsagePatternSignalsConfigSchema,
+  }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
   freeTierModelGateEnabled: makeBooleanSetting({
@@ -4003,6 +4161,82 @@ export const settingsMap = {
       'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
     category: 'Users',
   }),
+  noCardUnlockEnabled: makeBooleanSetting({
+    key: 'noCardUnlockEnabled',
+    // Read by the billing UI to decide whether to render the unlock options.
+    userReadable: true,
+    name: 'No-Card Credit Unlock',
+    defaultValue: false,
+    description:
+      'Lets a verified user unlock starter credits without a card by linking a qualifying GitHub account or by verifying a work email. When OFF (default), no unlock is offered and every attempt is refused.',
+    category: 'Users',
+  }),
+  noCardUnlockGithubCredits: makeNumberSetting({
+    key: 'noCardUnlockGithubCredits',
+    name: 'No-Card Unlock: GitHub Credits',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits granted when a user links a qualifying GitHub account. 0 grants nothing. Each GitHub account can unlock once across all users.',
+    category: 'Users',
+  }),
+  noCardUnlockWorkEmailCredits: makeNumberSetting({
+    key: 'noCardUnlockWorkEmailCredits',
+    name: 'No-Card Unlock: Work Email Credits',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Credits granted when a user verifies a qualifying work email. 0 grants nothing.',
+    category: 'Users',
+  }),
+  noCardUnlockMaxCredits: makeNumberSetting({
+    key: 'noCardUnlockMaxCredits',
+    name: 'No-Card Unlock: Combined Maximum',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Most credits one user can receive from all no-card unlocks combined. 0 grants nothing.',
+    category: 'Users',
+  }),
+  noCardUnlockGithubMinAgeDays: makeNumberSetting({
+    key: 'noCardUnlockGithubMinAgeDays',
+    name: 'No-Card Unlock: GitHub Minimum Account Age (days)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'A linked GitHub account must be at least this many days old to qualify. 0 disables the GitHub unlock.',
+    category: 'Users',
+  }),
+  noCardUnlockGithubMinRepos: makeNumberSetting({
+    key: 'noCardUnlockGithubMinRepos',
+    name: 'No-Card Unlock: GitHub Minimum Public Repos',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'A linked GitHub account must have at least this many public repositories to qualify. 0 disables the GitHub unlock.',
+    category: 'Users',
+  }),
+  noCardUnlockWorkEmailDomainDailyCap: makeNumberSetting({
+    key: 'noCardUnlockWorkEmailDomainDailyCap',
+    name: 'No-Card Unlock: Work Email Domain Daily Cap',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Most work-email unlocks granted per email domain per day. 0 grants nothing.',
+    category: 'Users',
+  }),
+  noCardUnlockProbeInconclusiveAllows: makeBooleanSetting({
+    key: 'noCardUnlockProbeInconclusiveAllows',
+    name: 'No-Card Unlock: Allow When Catch-All Check Is Inconclusive',
+    defaultValue: false,
+    description:
+      'Grant the work-email unlock when the catch-all mail-domain check cannot reach a verdict. This deployment cannot run that check, so ON grants work-email unlocks after only the MX and disposable-domain checks. OFF (default) refuses them.',
+    category: 'Users',
+    userReadable: true,
+  }),
   freeTierDailySpendCapCredits: makeNumberSetting({
     key: 'freeTierDailySpendCapCredits',
     name: 'Free Tier Daily Spend Cap',
@@ -4186,6 +4420,38 @@ export const settingsMap = {
         minimumCount: z.number().int().min(1).max(1000000),
       })
       .strict(),
+  }),
+  enableDomainIntelligence: makeBooleanSetting({
+    key: 'enableDomainIntelligence',
+    name: 'Hold Risky Signup Domains',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Hold the free credits of signups from domains on only the aggregate disposable list, freshly registered domains, or domains whose mail is handled by a known disposable provider. Lookups fail open. Review in Signup Domain Holds.',
+  }),
+  holdSignupsFromDomainsYoungerThanDays: makeNumberSetting({
+    key: 'holdSignupsFromDomainsYoungerThanDays',
+    name: 'Hold Signups From Domains Younger Than (days)',
+    defaultValue: 30,
+    int: true,
+    min: 0,
+    max: 365,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Registration age (from RDAP) below which a signup domain is held for review. 0 turns the age check off.',
+  }),
+  domainIntelligenceTimeoutMs: makeNumberSetting({
+    key: 'domainIntelligenceTimeoutMs',
+    name: 'Domain Lookup Timeout (ms)',
+    defaultValue: 2000,
+    int: true,
+    min: 250,
+    max: 5000,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Budget for the RDAP and MX lookups on an uncached signup domain. A timeout lets the signup through.',
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',

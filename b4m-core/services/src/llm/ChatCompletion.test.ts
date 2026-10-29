@@ -61,6 +61,7 @@ import {
 } from '@bike4mind/llm-adapters';
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+  ADMIN_ASSISTANT_TOOL_NAMES,
   ChatModels,
   CreditHolderType,
   DATA_LAKE_TOOL_NAMES,
@@ -9779,9 +9780,15 @@ describe('ChatCompletionProcess', () => {
       expect(passedOptions?.offerOnlyNamedTools).toBe(false);
     });
 
+    // Every turn outside the admin assistant also denies the admin tool names (the closed gate in
+    // adminAssistantGate.ts rides the same denylist), so these compare the rest of the list.
+    const adminNames: readonly string[] = ADMIN_ASSISTANT_TOOL_NAMES;
+    const withoutAdminNames = (denied: readonly string[] | undefined) =>
+      denied?.filter(name => !adminNames.includes(name));
+
     it('threads session.disabledTools through as sessionDisabledTools', async () => {
       const { passedOptions } = await runWithOptions({ disabledTools: ['notion__notion_search'] });
-      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
+      expect(withoutAdminNames(passedOptions?.sessionDisabledTools)).toEqual(['notion__notion_search']);
     });
 
     // The contributed table is read once, into the same `deniedTools` local the session denylist
@@ -9789,7 +9796,7 @@ describe('ChatCompletionProcess', () => {
     // session. Dropping the surface argument at that one site re-opens every surface denial.
     it('threads the surface denials through as sessionDisabledTools', async () => {
       const { passedOptions } = await runWithOptions({ surface: 'denied-surface' });
-      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__search']);
+      expect(withoutAdminNames(passedOptions?.sessionDisabledTools)).toEqual(['notion__search']);
     });
 
     it('unions the surface denials with the session denylist', async () => {
@@ -9797,12 +9804,15 @@ describe('ChatCompletionProcess', () => {
         surface: 'denied-surface',
         disabledTools: ['notion__create_page'],
       });
-      expect(passedOptions?.sessionDisabledTools?.sort()).toEqual(['notion__create_page', 'notion__search']);
+      expect(withoutAdminNames(passedOptions?.sessionDisabledTools)?.sort()).toEqual([
+        'notion__create_page',
+        'notion__search',
+      ]);
     });
 
-    it('leaves a session on an unnamed surface with no denials', async () => {
+    it('leaves a session on an unnamed surface with only the closed admin-assistant denials', async () => {
       const { passedOptions } = await runWithOptions({ surface: 'other-surface' });
-      expect(passedOptions?.sessionDisabledTools).toBeUndefined();
+      expect(passedOptions?.sessionDisabledTools).toEqual([...ADMIN_ASSISTANT_TOOL_NAMES]);
     });
 
     it('passes only offered MCP tools into the tool prompt after narrowing', async () => {

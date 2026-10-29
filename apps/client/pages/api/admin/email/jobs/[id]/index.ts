@@ -1,7 +1,7 @@
 import { emailJobRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { definedKeys, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
@@ -30,12 +30,11 @@ const updateBodySchema = z.object({
   testEmailAddresses: z.array(z.string()).optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
 
     const job = await emailJobRepository.findById(id);
@@ -46,10 +45,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(job);
   })
   .put(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as { id: string };
 
     const existing = await emailJobRepository.findById(id);

@@ -201,6 +201,10 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'GET /api/v1/agents',
       'GET /api/v1/agents/:id',
       'PATCH|DELETE /api/v1/agents/:id',
+      'POST /api/v1/agents/:id/generate-avatar',
+      'POST /api/v1/agents/:id/generate-description',
+      'POST /api/v1/agents/:id/generate-system-prompt',
+      'POST /api/v1/agents/:id/enhance-field',
     ],
   },
   {
@@ -214,8 +218,35 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.SKILLS_READ,
     label: 'Skill Market: Claude Code feed',
     // Confined, so it is minted from the Skill Market's "Use in Claude Code" dialog, not the New-Key modals.
-    description: "Read the Claude Code plugin marketplace of an organization's approved Skill Market listings",
-    endpoints: ['GET /api/v1/skills/market/claude-marketplace.json', 'GET /api/v1/skills/market/:id/claude-plugin.zip'],
+    description:
+      "Read the Claude Code plugin marketplace of an organization's approved Skill Market listings, and browse and read listings",
+    endpoints: [
+      'GET /api/v1/skills/market/claude-marketplace.json',
+      'GET /api/v1/skills/market/:id/claude-plugin.zip',
+      'GET /api/v1/skills/market/listings',
+      'GET /api/v1/skills/market/listings/:id',
+    ],
+  },
+  {
+    value: ApiKeyScope.SKILLS_WRITE,
+    label: 'Skill Market: Write',
+    description:
+      'Publish your skills to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings. Unlike skills:read, it is not confined: it also reaches API routes that declare no scope',
+    endpoints: [
+      'GET|POST /api/v1/skills/market/listings',
+      'GET /api/v1/skills/market/listings/mine',
+      'GET|DELETE /api/v1/skills/market/listings/:id',
+      'POST /api/v1/skills/market/listings/:id/versions',
+      'POST /api/v1/skills/market/listings/:id/import',
+      'POST /api/v1/skills/market/versions/:vid/rescan',
+    ],
+  },
+  {
+    value: ApiKeyScope.SKILLS_REVIEW,
+    label: 'Skill Market: Review',
+    description:
+      "Review your organizations' held Skill Market versions: list the review queue and approve or reject (org admins only)",
+    endpoints: ['GET /api/v1/skills/market/review-queue', 'POST /api/v1/skills/market/versions/:vid/review'],
   },
   {
     value: ApiKeyScope.MARKETING_REPORTS_READ,
@@ -295,6 +326,9 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'DELETE /api/data-lakes/:id/transfer-ownership',
       'POST /api/data-lakes/ownership-offers/:offerId/accept',
       'POST /api/data-lakes/ownership-offers/:offerId/decline',
+      'DELETE /api/organizations/:id',
+      'DELETE /api/organizations/:id/members',
+      'DELETE /api/organizations/:id/members/:userId',
     ],
   },
   {

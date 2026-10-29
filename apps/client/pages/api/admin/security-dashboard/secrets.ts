@@ -1,7 +1,7 @@
 import axios from 'axios';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
@@ -14,12 +14,11 @@ import {
 import type { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi<Request, Response>({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
     const snapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'secrets');
 
@@ -37,10 +36,6 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     });
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
 
     const latest = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'secrets');

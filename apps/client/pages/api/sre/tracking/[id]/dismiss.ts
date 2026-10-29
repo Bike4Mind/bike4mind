@@ -15,9 +15,9 @@
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, DISMISSABLE_STATUSES } from '@bike4mind/database';
 import { SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -26,10 +26,8 @@ const BodySchema = z.object({
   reason: z.string().min(3, 'Reason must be at least 3 characters').max(500),
 });
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
-
     const { id } = req.query as Record<string, string>;
     if (typeof id !== 'string' || !isValidObjectId(id)) {
       throw new NotFoundError('Invalid tracking ID');
