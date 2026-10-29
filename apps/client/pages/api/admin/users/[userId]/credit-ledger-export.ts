@@ -78,9 +78,10 @@ type ExportRequestQuery = {
  * GET /api/admin/users/[userId]/credit-ledger-export?kind=&model=&source=&from=&to=
  *
  * Streams the user's ledger, narrowed by the same filter as the credit-ledger route, as CSV, newest
- * first, in keyset pages of 500 rows up to ADMIN_LEDGER_EXPORT_MAX_ROWS. Truncation is only known after the last allowed page, when
- * the headers are long gone, so a truncated export ends with a `# Truncated at N rows` line instead
- * of an `X-Export-Truncated` header. Balance-after follows the same rule as the ledger route.
+ * first, in keyset pages of 500 rows up to ADMIN_LEDGER_EXPORT_MAX_ROWS. Truncation is only known
+ * after the last allowed page, when the headers are long gone, so a truncated export ends with a
+ * `# Truncated at N rows` line instead of an `X-Export-Truncated` header. Balance-after follows the
+ * same rule as the ledger route.
  */
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler<{}, unknown, unknown, ExportRequestQuery>(async (req, res) => {
