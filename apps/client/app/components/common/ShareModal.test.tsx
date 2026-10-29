@@ -367,6 +367,34 @@ describe('ShareModal - By Users tab', () => {
     expect(mocks.toast.warning).toHaveBeenCalledTimes(1);
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
+
+  it('stops a bulk share at the first rate-limit refusal and says why', async () => {
+    mocks.mutateAsync
+      .mockImplementationOnce(async () => ({}))
+      .mockImplementationOnce(async () => {
+        const error = {
+          isAxiosError: true,
+          response: { status: 429, data: { message: 'Too many invitations. Try again later.' } },
+        };
+        mocks.shareDocumentOptions?.onError?.(error);
+        throw error;
+      });
+
+    const user = await openByUsersTab([
+      { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
+      { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
+      { id: 'file-3', fileName: 'c.pdf' } as IFabFileDocument,
+    ]);
+    const input = screen.getByTestId('share-modal-recipients-input');
+    await user.type(input, 'friend@test.com{Enter}');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith('Too many invitations. Try again later. Shared 1 of 3 files.')
+    );
+    expect(mocks.mutateAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.toast.warning).not.toHaveBeenCalled();
+  });
 });
 
 describe('ShareModal - Email tab', () => {

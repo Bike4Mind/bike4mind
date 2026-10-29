@@ -25,13 +25,20 @@ import {
 import { z } from 'zod';
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
 import {
-  chargeTypedAddressBudget,
-  INVITE_RATE_LIMIT,
   MAX_INVITE_MESSAGE_LENGTH,
   MAX_INVITE_RECIPIENTS,
   notifyInvitees,
+  reserveInviteSendBudget,
 } from '@server/utils/inviteSendLimits';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+
+// Loose because the Add Members modal sends one request per selected user. The mail itself is
+// bounded per recipient by reserveInviteSendBudget.
+const PROJECT_INVITE_RATE_LIMIT = {
+  limit: 100,
+  windowMs: 60 * 60 * 1000,
+  bucket: 'POST /api/projects/[id]/invites',
+} as const;
 
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
@@ -63,7 +70,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
     return res.json({ ...result, data: await toSharerInviteViews(result.data, req.user!) });
   })
   .post(
-    rateLimit(INVITE_RATE_LIMIT),
+    rateLimit(PROJECT_INVITE_RATE_LIMIT),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
       assertProjectsWriteScope(req);
       const { id } = req.query as { id: string };
@@ -76,7 +83,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
 
-      await chargeTypedAddressBudget(req.user.id, restBody.recipients);
+      const budget = await reserveInviteSendBudget(req.user.id, restBody.recipients, { chargeTypedAddresses: true });
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
@@ -94,6 +101,9 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
             },
           }
         );
+      }).catch(async (error: unknown) => {
+        await budget.release();
+        throw error;
       });
 
       await logEvent(

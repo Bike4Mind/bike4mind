@@ -47,6 +47,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
+const decrementCounter = vi.hoisted(() => vi.fn());
 const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
 
@@ -57,7 +58,7 @@ vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  cacheRepository: { tryAddWithinLimitFixedWindow },
+  cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
   User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
   FabFile: { findById: () => Promise.resolve({ fileName: 'report.pdf' }) },
   Group: { findById: groupFindById },
@@ -159,13 +160,24 @@ describe('POST /api/[type]/[id]/invites', () => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
     mockRefs.accounts = [];
-    tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
+    tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
   });
 
-  it('rate limits invite creation per user with the bucket every invite route shares', () => {
-    expect(mockRefs.postMiddleware).toEqual([
-      { rateLimitOptions: expect.objectContaining({ limit: 100, bucket: 'POST invites' }) },
-    ]);
+  // Bulk share links send one request per item and mail nobody, so a request limit here would fail
+  // them partway; the mail is bounded per recipient instead.
+  it('applies no per-request limit and charges nothing for a share link', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockRefs.postMiddleware).toEqual([]);
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(createInvite).toHaveBeenCalledOnce();
   });
 
   // The project route enforces API-key scopes this route does not; only the raw value can reach
@@ -210,7 +222,7 @@ describe('POST /api/[type]/[id]/invites', () => {
 
   // Only project invites can name an address with no account, so the typed-address budget is
   // the project route's alone; charging it here would fail bulk shares to account holders.
-  it('does not charge the typed-address budget, which only project invites need', async () => {
+  it('charges the recipients against the shared budget but not the typed-address budget', async () => {
     const { req, res } = createMocks({
       method: 'POST',
       query: { type: 'files', id: '507f1f77bcf86cd799439011' },
@@ -220,8 +232,41 @@ describe('POST /api/[type]/[id]/invites', () => {
 
     await mockRefs.postHandler!(req, res);
 
-    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledOnce();
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:invite-recipients',
+      2,
+      200,
+      60 * 60 * 1000
+    );
     expect(createInvite).toHaveBeenCalledOnce();
+  });
+
+  it('refuses the invite once the recipient budget is spent', async () => {
+    tryAddWithinLimitFixedWindow.mockResolvedValueOnce({ success: false, expiresAt: new Date(Date.now() + 60_000) });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many invitations/);
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('gives the budget back when the invite is not created', async () => {
+    createInvite.mockRejectedValueOnce(new Error('Could not find a user for: a@example.com'));
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com', 'b@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Could not find a user/);
+    expect(decrementCounter).toHaveBeenCalledTimes(2);
+    expect(decrementCounter).toHaveBeenCalledWith('rate-limit:u1:invite-recipients');
   });
 
   // No type this route accepts puts an address with no account in `pending` today; this pins the

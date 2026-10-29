@@ -48,6 +48,7 @@ import { toast } from 'sonner';
 import { brandAlpha } from '../../utils/themes/colors';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
+import { isAxiosError } from 'axios';
 
 // Helper to show bulk operation feedback with success/partial/failure states
 const showBulkFeedback = (
@@ -71,6 +72,19 @@ const showBulkFeedback = (
     toast.error(`Failed to ${action.replace(/ed$/, '')} any ${itemType}s`);
     return 'failure';
   }
+};
+
+const isRateLimitError = (error: unknown) => isAxiosError(error) && error.response?.status === 429;
+
+// A rate-limited bulk share stops at the first refusal: every later item would be refused too.
+const showRateLimitedBulkFeedback = (
+  message: string,
+  successCount: number,
+  totalCount: number,
+  itemType: string
+): 'partial' | 'failure' => {
+  toast.error(`${message} Shared ${successCount} of ${totalCount} ${itemType}s.`);
+  return successCount > 0 ? 'partial' : 'failure';
 };
 
 // The server now resolves recipients case-insensitively (UserModel.findAllByEmailsOrUsernames),
@@ -341,6 +355,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
           // Handle bulk sharing to users - process items sequentially to show accurate progress
           const successResults: Array<{ link?: string }> = [];
           const failedItems: string[] = [];
+          let rateLimitMessage: string | null = null;
           const items = isBulkSharingFiles ? files! : sessions!;
 
           for (let i = 0; i < items.length; i++) {
@@ -360,13 +375,19 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
 
               successResults.push(result);
             } catch (error) {
+              if (isRateLimitError(error)) {
+                rateLimitMessage = getErrorMessage(error);
+                break;
+              }
               console.error(`Failed to share ${itemName}:`, error);
               failedItems.push(itemName);
             }
             setCompletedShares(i + 1);
           }
 
-          const result = showBulkFeedback(successResults.length, failedItems, itemType, 'shared');
+          const result = rateLimitMessage
+            ? showRateLimitedBulkFeedback(rateLimitMessage, successResults.length, items.length, itemType)
+            : showBulkFeedback(successResults.length, failedItems, itemType, 'shared');
           if (result === 'failure') {
             setLoading(false);
             return; // Don't close modal if all failed

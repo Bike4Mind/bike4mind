@@ -32,11 +32,12 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
+const decrementCounter = vi.hoisted(() => vi.fn());
 const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
 
 vi.mock('@bike4mind/database', () => ({
-  cacheRepository: { tryAddWithinLimitFixedWindow },
+  cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
   projectRepository: {},
   inviteRepository: {},
   userRepository: {},
@@ -74,12 +75,12 @@ describe('POST /api/projects/:id/invites', () => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'inv-1', recipients: { pending: [] } });
     mockRefs.accounts = [];
-    tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date() });
+    tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
   });
 
-  it('rate limits invite creation per user with the bucket every invite route shares', () => {
+  it('rate limits invite creation per user with a route-wide bucket', () => {
     expect(mockRefs.postMiddleware).toEqual([
-      { rateLimitOptions: expect.objectContaining({ limit: 100, bucket: 'POST invites' }) },
+      { rateLimitOptions: expect.objectContaining({ limit: 100, bucket: 'POST /api/projects/[id]/invites' }) },
     ]);
   });
 
@@ -108,8 +109,10 @@ describe('POST /api/projects/:id/invites', () => {
     expect(createInvite).not.toHaveBeenCalled();
   });
 
-  it('charges the typed addresses against the hourly budget in one step and refuses them once it is spent', async () => {
-    tryAddWithinLimitFixedWindow.mockResolvedValueOnce({ success: false, expiresAt: new Date() });
+  it('charges the typed addresses in one step, refuses them once spent and gives back the recipient charge', async () => {
+    tryAddWithinLimitFixedWindow
+      .mockResolvedValueOnce({ success: true, expiresAt: new Date(Date.now() + 60_000) })
+      .mockResolvedValueOnce({ success: false, expiresAt: new Date(Date.now() + 60_000) });
     const { req, res } = createMocks({
       method: 'POST',
       query: { id: '507f1f77bcf86cd799439033' },
@@ -118,13 +121,22 @@ describe('POST /api/projects/:id/invites', () => {
     (req as any).user = { id: 'u1' };
 
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many email invitations/);
-    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledOnce();
-    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(
+      1,
+      'rate-limit:u1:invite-recipients',
+      3,
+      200,
+      60 * 60 * 1000
+    );
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(
+      2,
       'rate-limit:u1:project-invite-typed-address',
       2,
       20,
       60 * 60 * 1000
     );
+    expect(decrementCounter).toHaveBeenCalledTimes(3);
+    expect(decrementCounter).toHaveBeenCalledWith('rate-limit:u1:invite-recipients');
     expect(createInvite).not.toHaveBeenCalled();
     expect(sendInviteNotificationEmails).not.toHaveBeenCalled();
   });
@@ -139,7 +151,13 @@ describe('POST /api/projects/:id/invites', () => {
 
     await mockRefs.postHandler!(req, res);
 
-    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledOnce();
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:invite-recipients',
+      1,
+      200,
+      60 * 60 * 1000
+    );
     expect(createInvite).toHaveBeenCalledOnce();
   });
 

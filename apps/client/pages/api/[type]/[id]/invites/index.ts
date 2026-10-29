@@ -24,12 +24,11 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
 import {
-  INVITE_RATE_LIMIT,
   MAX_INVITE_MESSAGE_LENGTH,
   MAX_INVITE_RECIPIENTS,
   notifyInvitees,
+  reserveInviteSendBudget,
 } from '@server/utils/inviteSendLimits';
-import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 // Audit-only lookup: a failure here must not fail an invite that is already committed.
 const lookUpGroupOrganizationId = async (
@@ -112,7 +111,6 @@ const handler = baseApi()
    * - Creates a new invitation.  If one or more email addresses given, will also send email(s) to the given addresses.
    */
   .post(
-    rateLimit(INVITE_RATE_LIMIT),
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>, IParams>(async (req, res) => {
       const { type: urlPathType, id } = req.query;
       if (!urlPathType || !id) {
@@ -130,6 +128,7 @@ const handler = baseApi()
       if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
+      const budget = await reserveInviteSendBudget(req.user.id, restBody.recipients, { chargeTypedAddresses: false });
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
@@ -147,6 +146,9 @@ const handler = baseApi()
             },
           }
         );
+      }).catch(async (error: unknown) => {
+        await budget.release();
+        throw error;
       });
 
       // Log invite creation event
