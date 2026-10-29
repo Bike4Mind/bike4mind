@@ -7,6 +7,7 @@
 
 import { web } from './web';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
+import { messageFilterPattern } from './logMessageFilterPattern';
 import {
   API_KEY_CREATE_BURST_DEFAULT,
   SIGNUP_CODE_SEND_BURST_DEFAULT,
@@ -30,11 +31,6 @@ const apiKeyThreshold = parseAlarmThreshold(
   API_KEY_CREATE_BURST_DEFAULT
 );
 const metricNamespace = `${$app.name}/${$app.stage}/Signup`;
-
-/** Matches the JSON message field inside Lambda-prefixed logs, not caller-controlled metadata. */
-function messageFilterPattern(message: string): string {
-  return `%\\x22message\\x22:\\x22${message}\\x22%`;
-}
 
 if (isMonitoredStage) {
   if (!dlqAlarmTopic || !oobAlarmTopic) {

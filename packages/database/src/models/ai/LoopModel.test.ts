@@ -134,4 +134,19 @@ describe('LoopRepository', () => {
     expect(await loopRepository.deleteForUser(loop.id, 'user-2')).toBe(false);
     expect(await loopRepository.deleteForUser(loop.id, USER)).toBe(true);
   });
+
+  it('makeDueNow pulls a live loop forward and leaves others alone', async () => {
+    const now = new Date();
+    const later = new Date(now.getTime() + 60_000);
+    const live = await create({ status: 'live', nextRunAt: later });
+    const paused = await create({ status: 'paused', nextRunAt: later });
+    const earlier = new Date(now.getTime() - 60_000);
+    const alreadyDue = await create({ status: 'live', nextRunAt: earlier });
+
+    for (const loop of [live, paused, alreadyDue]) await loopRepository.makeDueNow(loop.id, now);
+
+    expect((await loopRepository.findByIdAndUserId(live.id, USER))?.nextRunAt).toEqual(now);
+    expect((await loopRepository.findByIdAndUserId(paused.id, USER))?.nextRunAt).toEqual(later);
+    expect((await loopRepository.findByIdAndUserId(alreadyDue.id, USER))?.nextRunAt).toEqual(earlier);
+  });
 });

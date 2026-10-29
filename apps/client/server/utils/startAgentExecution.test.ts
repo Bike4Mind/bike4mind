@@ -561,6 +561,17 @@ describe('startAgentExecution', () => {
     );
   });
 
+  it("persists a loop run's loopId and pre-approves the loop ticket tools the executor adds for it", async () => {
+    await startAgentExecution(input({ userId: 'loop-run', enabledTools: ['web_search'], loopId: 'loop1' }), logger);
+
+    expect(mockCreateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        loopId: 'loop1',
+        approvedTools: ['web_search', 'loop_ticket_list', 'loop_ticket_create', 'loop_ticket_update'],
+      })
+    );
+  });
+
   it('forwards enabledToolsAreAmbient to the executor so the union survives the wire', async () => {
     // The whole refactor rests on this one field arriving. Drop it anywhere between the
     // composer and the Lambda and the executor reads the user's Smart Tools as a PINNED

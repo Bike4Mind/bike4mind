@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { loopRepository } from '@bike4mind/database';
-import { ILoop } from '@bike4mind/common';
+import { agentExecutionRepository, loopRepository, workItemRepository } from '@bike4mind/database';
+import { ILoop, ILoopWithUsage } from '@bike4mind/common';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   assertLoopsEnabled,
@@ -29,7 +29,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const id = String(req.query.id);
     const loop = await loopRepository.findByIdAndUserId(id, req.user!.id);
     if (!loop) throw notFound(id);
-    res.json(loop);
+    const credits = await agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId]);
+    res.json({ ...loop, creditsUsed: credits[loop.id] ?? 0 } satisfies ILoopWithUsage);
   })
   .patch(async (req, res) => {
     await assertLoopsEnabled();
@@ -73,6 +74,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const id = String(req.query.id);
     // The notebook stays: it holds the loop's run history.
     if (!(await loopRepository.deleteForUser(id, req.user!.id))) throw notFound(id);
+    await workItemRepository.softDeleteByLoop(req.user!.id, id);
     res.status(204).end();
   });
 

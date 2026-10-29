@@ -117,6 +117,7 @@ import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAcce
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
+import { resolveLoopTicketTools } from './agentExecutor.loopTicketTools';
 // Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
 // header for why the start-payload/doc precedence is the part worth pinning in a test.
 import {
@@ -1830,6 +1831,7 @@ async function processExecution(
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
       user: user as IUserDocument,
+      getEntitlements: () => getUserEntitlements(user),
       logger,
       thinkingVisibility,
       // The run's active account, already membership-checked at start; lake-creating tools scope to it.
@@ -2129,6 +2131,12 @@ async function processExecution(
       startPayloadEnableLattice: startPayload?.enableLattice,
       executionEnableLattice: execution.enableLattice,
     });
+    // Loop runs get the loop_ticket_* tools, appended like Lattice; see agentExecutor.loopTicketTools.ts.
+    const { loopTicketEnabledTools, loopTicketExternalTools } = resolveLoopTicketTools({
+      loopId: execution.loopId,
+      loopsEnabled: execution.loopId ? (await adminSettingsRepository.getSettingsValue('EnableLoops')) === true : false,
+      userId: execution.userId,
+    });
 
     const subagentToolConfig = buildSubagentToolConfig({
       model: execution.model,
@@ -2208,7 +2216,14 @@ async function processExecution(
     // `chat_completion` gives it. See `agentExecutor.sessionToolPolicy.ts` for why
     // `session.enabledTools` is deliberately not unioned here.
     const resolvedToolNames = applySessionToolPolicy({
-      toolNames: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
+      toolNames: [
+        ...new Set([
+          ...profileEnabledTools,
+          ...MISSION_CHAT_TOOL_NAMES,
+          ...latticeEnabledTools,
+          ...loopTicketEnabledTools,
+        ]),
+      ],
       session,
       profileDeniedTools: orchestrationProfile?.deniedTools ?? execution.profileDeniedTools,
       hasAttachments: runHasAttachments(execution, session.knowledgeIds),
@@ -2231,7 +2246,12 @@ async function processExecution(
         orchestrationProfile?.deniedTools,
         execution.profileDeniedTools
       ),
-      externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
+      externalTools: {
+        ...guardedPremiumTools,
+        ...missionChatTools,
+        ...latticeExternalTools,
+        ...loopTicketExternalTools,
+      },
       config: subagentToolConfig,
       mcpToolsByServer,
       agentOnlyMcpServers,
@@ -3970,6 +3990,7 @@ async function processSubagentDispatch(
     const toolDeps: ToolBuilderDeps = {
       userId: child.userId,
       user: user as IUserDocument,
+      getEntitlements: () => getUserEntitlements(user),
       logger,
       thinkingVisibility,
       organizationId: child.organizationId,

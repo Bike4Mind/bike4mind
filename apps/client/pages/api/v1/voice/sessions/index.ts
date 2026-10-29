@@ -13,6 +13,7 @@ import {
 } from '@bike4mind/database';
 import {
   ChatModels,
+  CONVERSATIONAL_VOICE_MODEL_ID,
   createVoiceSessionContract,
   insufficientCreditsError,
   type ChatModelName,
@@ -24,6 +25,7 @@ import { sessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import {
   BadGatewayError,
   BadRequestError,
@@ -120,6 +122,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   const elevenLabsAgentId = voiceAgent.elevenLabsAgentId;
 
   const reasoningModelId = remapVoiceModel((bodyModelId ?? DEFAULT_MODEL) as ChatModelName);
+  const admission = await createModelAdmission(req.user!);
+  await admission.assert(CONVERSATIONAL_VOICE_MODEL_ID);
+  await admission.assert(reasoningModelId);
 
   // Always resolve to a real session row so transcripts can be persisted to it.
   // Either attach to an existing notebook or create a new one with a voice-flavored

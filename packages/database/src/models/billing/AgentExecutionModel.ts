@@ -331,6 +331,11 @@ export interface IAgentExecution {
    */
   enableLattice?: boolean;
   /**
+   * The loop that dispatched this run. Its presence gives the run the `loop_ticket_*` tools
+   * (re-read on every invocation, like `enableLattice`).
+   */
+  loopId?: string;
+  /**
    * The caller's per-request artifact intent, mirroring the chat surface's `enableArtifacts` body
    * field. Combined with the admin `EnableArtifacts` setting by `resolveArtifactsEnabled`, so only
    * an explicit `false` opts out and `undefined` leaves the admin setting as the only gate.
@@ -783,6 +788,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // Feature-parity flags
     enableMementos: { type: Boolean },
     enableLattice: { type: Boolean },
+    loopId: { type: String },
     enableArtifacts: { type: Boolean },
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
@@ -1140,6 +1146,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       .select('status parentExecutionId totalCreditsUsed iterationBilling')
       .sort({ createdAt: 1 });
     return results.map(doc => doc.toObject());
+  }
+
+  /**
+   * Credits per loop over its top-level runs (children already roll up into their parent), keyed by
+   * loop id. `sessionIds` are the loops' notebooks: they narrow the scan to the {sessionId, status}
+   * index, while `loopId` leaves out any chat a user starts by hand in a loop's notebook.
+   */
+  async sumCreditsByLoop(loopIds: string[], sessionIds: string[]): Promise<Record<string, number>> {
+    if (loopIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      { $match: { sessionId: { $in: sessionIds }, loopId: { $in: loopIds }, parentExecutionId: null } },
+      { $group: { _id: '$loopId', credits: { $sum: '$totalCreditsUsed' } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [row._id, row.credits]));
   }
 
   /**

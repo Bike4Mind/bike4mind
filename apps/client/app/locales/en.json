@@ -727,6 +727,9 @@
     "audience_label": "Plan type",
     "includes": "Includes"
   },
+  "loops": {
+    "title": "Loops"
+  },
   "agents": {
     "title": "Agents",
     "new_agent": "New Agent",

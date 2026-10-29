@@ -35,6 +35,7 @@ export const generateTools = (
   // inputs should keep going here.
   {
     db,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -57,6 +58,7 @@ export const generateTools = (
     getAbortSignal,
   }: {
     db: ToolContext['db'];
+    getEntitlements?: ToolContext['getEntitlements'];
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
@@ -121,6 +123,7 @@ export const generateTools = (
     imageProcessorLambdaName,
     allowedDirectories,
     entitlementKeys,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,

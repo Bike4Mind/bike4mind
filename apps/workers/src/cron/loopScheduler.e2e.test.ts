@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { adminSettingsRepository, agentExecutionRepository, Loop, loopRepository } from '@bike4mind/database';
+import { adminSettingsRepository, agentExecutionRepository, Loop, loopRepository, WorkItem } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -311,5 +311,135 @@ describe('runLoopSchedulerTick', () => {
     await runLoopSchedulerTick(NOW, logger);
 
     expect(await reload(loop.id)).toMatchObject({ runCount: 1, memory: { notes: 'plain answer', nextAction: '' } });
+  });
+});
+
+describe('runLoopSchedulerTick - tickets', () => {
+  const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
+    (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId,
+        title: 'Write the summary',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+        ...overrides,
+      })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const LATER = new Date(NOW.getTime() + 60 * 60_000);
+
+  it('a ready ticket makes the loop due, runs it and links the run', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    const ticket = await createTicket(loop.id);
+    await loopRepository.makeDueNow(loop.id, NOW);
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    const input = h.startAgentExecution.mock.calls[0][0];
+    expect(input).toMatchObject({ loopId: loop.id });
+    expect(input.query).toContain(`Ticket id: ${ticket.id}`);
+    expect(input.query).toContain('Title: "Write the summary"');
+    expect(input).not.toHaveProperty('systemContext');
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-1' });
+  });
+
+  it('waits for a dependency in another loop to close', async () => {
+    const other = await createLoop({ nextRunAt: LATER });
+    const blocker = await createTicket(other.id);
+    const loop = await createLoop();
+    const waiting = await createTicket(loop.id, { dependencies: [blocker.id] });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    // The loop still runs, as a plain goal run; its ticket stays open.
+    expect(h.startAgentExecution.mock.calls[0][0].query).not.toContain('Ticket id:');
+    expect(await ticketOf(waiting.id)).toMatchObject({ status: 'open' });
+  });
+
+  it('a completed run advances its ticket, and from the second-to-last stage closes it', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+    // Reconcile runs before claim, so the advanced ticket is picked again in the same tick.
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing', status: 'in_progress', executionId: 'exec-1' });
+    expect(h.startAgentExecution.mock.calls[0][0].query).toContain('Current stage: doing');
+
+    executions['exec-1'] = { status: 'completed', result: { answer: 'done' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+    const closed = await ticketOf(ticket.id);
+    expect(closed).toMatchObject({ stage: 'done', status: 'closed' });
+    expect(closed.closedAt).toBeInstanceOf(Date);
+  });
+
+  it('a failed run blocks its ticket; an out-of-credits run returns it to open', async () => {
+    const failing = await createLoop({ activeExecutionId: 'exec-f', nextRunAt: LATER });
+    const blocked = await createTicket(failing.id, { status: 'in_progress', executionId: 'exec-f' });
+    executions['exec-f'] = { status: 'aborted' };
+    const broke = await createLoop({ activeExecutionId: 'exec-c', nextRunAt: LATER });
+    const reopened = await createTicket(broke.id, { status: 'in_progress', executionId: 'exec-c' });
+    executions['exec-c'] = { status: 'failed', failureReason: 'insufficient_credits', error: { message: 'x' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(blocked.id)).toMatchObject({ status: 'blocked', statusReason: 'Run aborted' });
+    expect(await ticketOf(reopened.id)).toMatchObject({ status: 'open', stage: 'todo' });
+    expect(await reload(broke.id)).toMatchObject({ status: 'paused' });
+  });
+
+  it('respects a ticket the run blocked itself', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, {
+      status: 'blocked',
+      statusReason: 'needs a login',
+      executionId: 'exec-0',
+    });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({
+      status: 'blocked',
+      statusReason: 'needs a login',
+      stage: 'todo',
+    });
+  });
+
+  it('runs the next ready ticket right after a fold, and waits the interval when none is left', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    const next = await createTicket(loop.id, { title: 'Next one' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    // The folded ticket (now in "doing") and the next one are both ready; the older one goes first.
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(h.startAgentExecution.mock.calls[0][0].query).not.toContain(next.id);
+
+    const quiet = await createLoop({ activeExecutionId: 'exec-q', nextRunAt: LATER });
+    await createTicket(quiet.id, { stage: 'doing', status: 'in_progress', executionId: 'exec-q' });
+    executions['exec-q'] = { status: 'completed', result: { answer: 'done' } };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(quiet.id)).nextRunAt).toEqual(LATER);
+  });
+
+  it('reopens the ticket when the run could not start', async () => {
+    h.startAgentExecution.mockResolvedValue({ ok: false, reason: 'concurrent_limit', message: 'busy' });
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    const after = await ticketOf(ticket.id);
+    expect(after.status).toBe('open');
+    expect(after.executionId).toBeUndefined();
   });
 });
