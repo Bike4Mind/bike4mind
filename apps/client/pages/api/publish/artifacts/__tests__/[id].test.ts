@@ -820,6 +820,27 @@ describe('PATCH /api/publish/artifacts/[id] - outbound gate on widening exposure
       { discoverable: false },
       () => Object.assign(makeArtifact(), { discoverable: true }),
     ],
+    [
+      'taking a gated public page private and clearing the gate',
+      { visibility: 'private', accessGate: null },
+      passphraseGated,
+    ],
+    ['re-sending public on a public page', { visibility: 'public' }, makeArtifact],
+    [
+      're-sending search indexing on a discoverable page',
+      { discoverable: true },
+      () => Object.assign(makeArtifact(), { discoverable: true }),
+    ],
+    [
+      're-sending the same allowed domains',
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } },
+      () => domainGated(['acme.com']),
+    ],
+    [
+      'removing every embed origin',
+      { embedOrigins: [] },
+      () => Object.assign(makeArtifact(), { embedOrigins: ['https://example.com'] }),
+    ],
   ])('does not consult the gate for %s', async (_label, body, build) => {
     const { res } = await patch(body, build());
     expect(res._getStatusCode()).toBe(200);
