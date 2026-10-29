@@ -105,6 +105,15 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     action:
       'Open the Turnstile settings in the admin console and turn the toggle on with a site key, or provision the secret for the stage. The alarm clears an hour after the server stops reporting it.',
   },
+  'turnstile-misconfigured': {
+    title: 'The sign-in bot challenge is rejecting everyone',
+    level: 'page',
+    unit: 'rejections',
+    meaning:
+      'Turnstile is on, but the server cannot verify any challenge: Cloudflare rejected the secret, or the stage has no hostname allowlist. Every challenged sign-in and signup is answered 503 until it is fixed. The log line lists the error codes.',
+    action:
+      'Check the Turnstile secret provisioned for the stage against the Cloudflare widget, and that APP_URL or TURNSTILE_ALLOWED_HOSTNAMES is set. The alarm clears an hour after the server stops reporting it.',
+  },
   'ungranted-credit-purchases': {
     title: 'Customer paid but got no credits',
     level: 'page',

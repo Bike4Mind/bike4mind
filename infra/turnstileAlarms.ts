@@ -2,6 +2,8 @@
  * Alarms when the Next.js server reports the Turnstile policy inactive on a deployed stage (event
  * `turnstile-policy-inactive` from apps/client/server/utils/auth/turnstile.ts, logged at most every
  * 5 minutes per container), so a stage that should be challenging sign-ins and is not gets noticed.
+ * Also alarms on `turnstile-misconfigured` (apps/client/server/middlewares/requireTurnstile.ts), where
+ * the challenge is on but rejects every request because the secret or hostname allowlist is wrong.
  */
 
 import { web } from './web';
@@ -34,34 +36,49 @@ if (isMonitoredStage) {
   // breach is a fresh ALARM transition and notifies again.
   const actions = [dlqAlarmTopic.arn, oobAlarmTopic.arn];
 
-  new aws.cloudwatch.LogMetricFilter('turnstilePolicyInactiveFilter', {
-    name: `${$app.name}-${$app.stage}-turnstile-policy-inactive`,
-    logGroupName: serverLogGroupName,
-    pattern: messageFilterPattern('turnstile-policy-inactive'),
-    metricTransformation: {
-      name: 'TurnstilePolicyInactive',
-      namespace: metricNamespace,
-      value: '1',
-      unit: 'Count',
-    },
-  });
+  const watchEvent = (event: string, resourceName: string, metricName: string, alarmDescription: string) => {
+    new aws.cloudwatch.LogMetricFilter(`${resourceName}Filter`, {
+      name: `${$app.name}-${$app.stage}-${event}`,
+      logGroupName: serverLogGroupName,
+      pattern: messageFilterPattern(event),
+      metricTransformation: {
+        name: metricName,
+        namespace: metricNamespace,
+        value: '1',
+        unit: 'Count',
+      },
+    });
 
-  new aws.cloudwatch.MetricAlarm('turnstilePolicyInactive', {
-    name: `${$app.name}-${$app.stage}-turnstile-policy-inactive`,
-    alarmDescription: 'The server reported the Turnstile policy inactive in the last hour',
-    comparisonOperator: 'GreaterThanOrEqualToThreshold',
-    evaluationPeriods: 1,
-    metricName: 'TurnstilePolicyInactive',
-    namespace: metricNamespace,
-    period: 3600,
-    statistic: 'Sum',
-    threshold: 1,
-    treatMissingData: 'notBreaching',
-    alarmActions: actions,
-    okActions: actions,
-    tags: {
-      Application: 'Turnstile',
-      Severity: 'High',
-    },
-  });
+    new aws.cloudwatch.MetricAlarm(resourceName, {
+      name: `${$app.name}-${$app.stage}-${event}`,
+      alarmDescription,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName,
+      namespace: metricNamespace,
+      period: 3600,
+      statistic: 'Sum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
+      tags: {
+        Application: 'Turnstile',
+        Severity: 'High',
+      },
+    });
+  };
+
+  watchEvent(
+    'turnstile-policy-inactive',
+    'turnstilePolicyInactive',
+    'TurnstilePolicyInactive',
+    'The server reported the Turnstile policy inactive in the last hour'
+  );
+  watchEvent(
+    'turnstile-misconfigured',
+    'turnstileMisconfigured',
+    'TurnstileMisconfigured',
+    'Turnstile rejected the server configuration in the last hour, so challenged sign-ins are failing'
+  );
 }

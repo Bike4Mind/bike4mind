@@ -101,6 +101,29 @@ describe('turnstile policy alarm wiring', () => {
     });
   });
 
+  it('alarms on the misconfigured message with the same routing', async () => {
+    await loadAlarms();
+    expect(resources.filter).toHaveBeenCalledWith(
+      'turnstileMisconfiguredFilter',
+      expect.objectContaining({
+        name: 'test-app-production-turnstile-misconfigured',
+        pattern: '%\\x22message\\x22:\\x22turnstile-misconfigured\\x22%',
+        metricTransformation: expect.objectContaining({ name: 'TurnstileMisconfigured' }),
+      })
+    );
+    expect(resources.alarm).toHaveBeenCalledWith(
+      'turnstileMisconfigured',
+      expect.objectContaining({
+        name: 'test-app-production-turnstile-misconfigured',
+        metricName: 'TurnstileMisconfigured',
+        namespace: 'test-app/production/Turnstile',
+        threshold: 1,
+        alarmActions: ['alarm-topic', 'email-topic'],
+        okActions: ['alarm-topic', 'email-topic'],
+      })
+    );
+  });
+
   it('creates no resources on an unmonitored stage', async () => {
     await loadAlarms('preview');
     expect(resources.filter).not.toHaveBeenCalled();
