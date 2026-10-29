@@ -91,6 +91,18 @@ export interface ModelServerUpdateInput {
 
 export type ModelServerMutationResult = { ok: true; servers: ModelServerView[] } | { ok: false; error: string };
 
+/**
+ * What the Models screen may do on a server: `chat-only` is the server's "Chat only" setting, and
+ * `unsupported` an OpenAI-compatible server, which lists models but has no pull or delete API.
+ */
+export type ModelServerManagement = 'allowed' | 'chat-only' | 'unsupported';
+
+export function serverManagement(server: Pick<ModelServerView, 'local' | 'kind' | 'access'>): ModelServerManagement {
+  if (server.local) return 'allowed';
+  if (server.kind !== 'ollama') return 'unsupported';
+  return server.access === 'manage' ? 'allowed' : 'chat-only';
+}
+
 export const LOCAL_SERVER_ID = 'local';
 export const LOCAL_SERVER_NAME = 'This computer';
 

@@ -1,5 +1,18 @@
 # Signup abuse alarms
 
+Committed staged signup assessments also publish `SignupGrant_full`,
+`SignupGrant_reduced` and `SignupGrant_review` counts in `<app-name>/<stage>/Signup`
+via the server's structured log messages. Rolled-back transactions and ordinary
+grant retries do not emit a new assessment event. Emission is best effort after
+commit, so a process crash between commit and logging can undercount; these metrics
+are operational signals, not the credit ledger.
+
+Set `SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN` privately to a positive integer to alert
+when zero-credit review decisions reach that count in five minutes. Unset disables
+this alarm. Monitored stages route both ALARM and OK transitions through the same
+Slack and out-of-band email topics as the other signup alarms. No policy weights,
+network data, account identifiers or email addresses are included in band messages.
+
 All thresholds are read from the deployer's environment, are listed in
 `infra/deploy-contract.json`, and must be integers of at least 1. Invalid values
 fail deployment (or, for the scheduled worker, fail the run).

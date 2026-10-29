@@ -1,5 +1,23 @@
 # Signup burst protection
 
+## Account risk review and AI access
+
+Accounts whose signup risk score reaches the review threshold enter **Admin > Risk review**.
+While a review is pending, AI requests are refused with an account-review message, including
+free models and requests made with API keys. Sign-in and access to existing data remain available;
+users can contact support to request a review. Existing pending reviews also receive this hold.
+
+**Approve** lifts the signup review hold. A separate manual AI restriction or account suspension
+still applies. **Undo** restores the pending review and AI hold. Rescoring updates the score and
+signals but never clears a pending hold or overturns an approval. To deny access to the account
+as a whole, use **Suspend** in the review queue.
+
+This hold is independent of the domain and signup-credit controls below. It does not deduct
+credits or turn a credit-only domain hold into an account suspension. If an approved user still
+cannot use AI, check for a manual AI restriction, suspension, and normal plan and credit limits.
+
+## Domain holds
+
 Admins can enable **Auto-hold Signup Bursts** in Admin > Settings > Users.
 The default is off. **Signup Burst Threshold** defaults to 5 verified signups
 and **Signup Burst Window (hours)** defaults to 6 (maximum 168).

@@ -34,6 +34,7 @@ export {
   ModelFileConflictError,
   ModelIncompleteError,
   ModelNotFoundError,
+  PullIdleTimeoutError,
   RuntimeConnectionError,
   RuntimeHttpError,
   RuntimeProtocolError,

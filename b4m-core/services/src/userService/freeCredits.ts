@@ -9,11 +9,12 @@ import {
   settingsMap,
   type SignupProtection,
 } from '@bike4mind/common';
-import { addCredits } from '../creditService';
-import type { SignupRiskSignals } from './signupRisk';
+import { addCredits, DuplicateCreditTransactionError } from '../creditService';
+import type { SignupRiskBand, SignupRiskSignals } from './signupRisk';
 import { releaseSignupTranche } from './stagedSignupGrant';
 import { protectSignupCredits } from './signupProtection';
 import { logUnprotectedSignupGrant } from './signupGrantProtectionAlarm';
+import { reserveSignupGrantBudget } from './signupGrantBudget';
 
 type FreeCreditUser = {
   id: string;
@@ -32,6 +33,10 @@ export type FreeCreditAdapters = {
   reason: string;
   /** Network signals for a staged grant's first assessment; without it only signupMeta is read. */
   collectRiskSignals?: (user: IUserDocument) => Promise<SignupRiskSignals>;
+  /** Admin overrides and a card unlock of a held tranche pay without drawing the daily signup grant budget. */
+  bypassBudget?: boolean;
+  /** Called only after the first staged assessment commits, including a zero-credit hold. */
+  emitRiskBand?: (band: SignupRiskBand) => Promise<void>;
 };
 
 type FreeCreditLogger = {
@@ -41,12 +46,18 @@ type FreeCreditLogger = {
 
 export type GrantFreeCreditsResult = {
   withheld?: boolean;
+  /** Set when the grant stayed held because the daily budget was spent. */
+  budgetExhausted?: boolean;
   creditsGranted: number;
   currentCredits: number | null;
 };
 
 export type ReleasePendingFreeCreditsResult = {
   released: boolean;
+  /** True when the release stopped because the daily signup grant budget was spent. */
+  budgetExhausted?: boolean;
+  /** True when the grant threw; the tag is kept for a retry. */
+  failed?: boolean;
   creditsGranted: number;
   /** Balance after the grant; null when nothing was granted. */
   currentCredits: number | null;
@@ -79,10 +90,11 @@ const legacyOtcRegisterTransactionId = (userId: string) => `otc-register-grant:$
  */
 export const grantFreeCredits = async (
   user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
-  { db, reason, collectRiskSignals }: FreeCreditAdapters
+  { db, reason, collectRiskSignals, bypassBudget, emitRiskBand }: FreeCreditAdapters
 ): Promise<GrantFreeCreditsResult> => {
   const persisted = await db.users.findById(user.id);
-  if (persisted?.signupGrant) return releaseSignupTranche(user.id, { db, reason, collectRiskSignals });
+  if (persisted?.signupGrant)
+    return releaseSignupTranche(user.id, { db, reason, collectRiskSignals, bypassBudget, emitRiskBand });
   if (await protectSignupCredits(user.id, db)) {
     const alreadyGranted = await db.creditTransactions.findOne({
       transactionId: { $in: [`verify-grant:${user.id}`, legacyOtcRegisterTransactionId(user.id)] },
@@ -90,35 +102,85 @@ export const grantFreeCredits = async (
     if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
+  const result = await grantFlatFreeCredits(user, { db, reason, bypassBudget }, !!persisted?.referredByUserId);
+  // Every outcome but a hold is final, so a held reason left from an earlier attempt must not outlive it.
+  if (!result.withheld && persisted?.signupGrantHeldReason)
+    await db.users.update({ id: user.id, signupGrantHeldReason: null });
+  return result;
+};
+
+async function grantFlatFreeCredits(
+  user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
+  { db, reason, bypassBudget }: Pick<FreeCreditAdapters, 'db' | 'reason' | 'bypassBudget'>,
+  referred: boolean
+): Promise<GrantFreeCreditsResult> {
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
 
-  const legacyGrant = await db.creditTransactions.findOne({
-    transactionId: legacyOtcRegisterTransactionId(user.id),
+  const transactionId = `verify-grant:${user.id}`;
+  // Checked before the budget so a paid account never draws, or is tagged and held, on an exhausted day.
+  const alreadyGranted = await db.creditTransactions.findOne({
+    transactionId: { $in: [transactionId, legacyOtcRegisterTransactionId(user.id)] },
   });
-  if (legacyGrant) return { creditsGranted: 0, currentCredits: null };
+  if (alreadyGranted) return { creditsGranted: 0, currentCredits: null };
 
   // The transactionId dedupes per account; the claim dedupes the open-registration default per
   // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
   // none. An invite-resolved amount is an explicit grant to that account and is not claimed.
+  // Claimed before the draw so an alias that earns nothing is never held; the claim is idempotent
+  // per account, so a held grant re-claims when released.
   const isDefaultGrant = user.pendingCreditGrant === null || user.pendingCreditGrant === undefined;
   if (isDefaultGrant && !(await db.users.claimFreeCreditGrant(user.id))) {
     return { creditsGranted: 0, currentCredits: null };
   }
 
-  const holder = await addCredits(
-    {
-      ownerId: user.id,
-      ownerType: CreditHolderType.User,
-      credits: amount,
-      type: 'generic_add',
-      transactionId: `verify-grant:${user.id}`,
-      reason,
-    },
-    { db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots }, creditHolderMethods: db.users }
-  );
-  return { creditsGranted: amount, currentCredits: holder.currentCredits };
-};
+  // An invite-resolved amount is an explicit grant (admin/unlimited code, subscriber), not the open-signup
+  // budget. A referral invitee also carries one (staging off) but is an open-signup grant: it stays metered.
+  const isExplicitGrant = !isDefaultGrant && !referred;
+  const budget =
+    bypassBudget || isExplicitGrant
+      ? { outcome: 'unmetered' as const, release: async () => {} }
+      : await reserveSignupGrantBudget(db, transactionId, amount);
+  if (budget.outcome === 'exhausted') {
+    await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
+    await db.users.update({ id: user.id, signupGrantHeldReason: 'budget_exhausted' });
+    return { creditsGranted: 0, currentCredits: null, withheld: true, budgetExhausted: true };
+  }
+
+  let credited = false;
+  try {
+    // A concurrent grant can land after the check above; addCredits treats a repeated transactionId as
+    // success, which would leave a reservation spent and let an admin release report credits an
+    // earlier payout already made.
+    if ((budget.outcome === 'reserved' || bypassBudget) && (await db.creditTransactions.findOne({ transactionId }))) {
+      await budget.release();
+      return { creditsGranted: 0, currentCredits: null };
+    }
+    const holder = await addCredits(
+      {
+        ownerId: user.id,
+        ownerType: CreditHolderType.User,
+        credits: amount,
+        type: 'generic_add',
+        transactionId,
+        reason,
+      },
+      {
+        db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },
+        creditHolderMethods: db.users,
+        duplicateTransactionId: 'throw',
+      }
+    );
+    credited = true;
+    return { creditsGranted: amount, currentCredits: holder.currentCredits };
+  } catch (error) {
+    // A peer already wrote this ledger row, so the draw it made is the one that counts.
+    if (error instanceof DuplicateCreditTransactionError) return { creditsGranted: 0, currentCredits: null };
+    // Once the ledger row is written the draw is spent; a later throw must not hand it back.
+    if (!credited) await budget.release();
+    throw error;
+  }
+}
 
 /**
  * Grants the deferred free credits for a user tagged PENDING_FREE_CREDITS_TAG and returns the
@@ -137,8 +199,8 @@ export const releasePendingFreeCredits = async (
       return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
     }
     await logUnprotectedSignupGrant(adapters.db.adminSettings, adapters.logger);
-    const { creditsGranted, currentCredits, withheld } = await grantFreeCredits(user, adapters);
-    if (withheld) return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
+    const { creditsGranted, currentCredits, withheld, budgetExhausted } = await grantFreeCredits(user, adapters);
+    if (withheld) return { released: false, budgetExhausted, creditsGranted: 0, currentCredits: null, patch: {} };
     return {
       released: true,
       creditsGranted,
@@ -150,6 +212,6 @@ export const releasePendingFreeCredits = async (
       `Free credit grant failed for user ${user.id}; keeping ${PENDING_FREE_CREDITS_TAG} for retry`,
       error
     );
-    return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
+    return { released: false, failed: true, creditsGranted: 0, currentCredits: null, patch: {} };
   }
 };

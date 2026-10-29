@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { matchesMessageFilterPattern } from './helpers/matchesMessageFilterPattern';
 import { parseAlarmThreshold, parseSignupCodeSendAlarmThreshold } from '../signupAlarmThreshold';
 
 const resources = vi.hoisted(() => {
@@ -51,6 +52,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('SIGNUP_CODE_SEND_ALARM_PER_HOUR', '12');
   vi.stubEnv('ENABLE_MONITORING', undefined);
+  vi.stubEnv('SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN', undefined);
   vi.stubGlobal('aws', { cloudwatch: { LogMetricFilter: resources.filter, MetricAlarm: resources.alarm } });
   resources.logGroup = { name: 'server-logs' };
   resources.topic = { arn: 'alarm-topic' };
@@ -89,12 +91,34 @@ describe('parseAlarmThreshold', () => {
 });
 
 describe('signup code send alarm wiring', () => {
+  it('counts each committed grant band and routes a configured review spike to both alarm channels', async () => {
+    vi.stubEnv('SIGNUP_GRANT_REVIEW_ALARM_PER_5MIN', '7');
+    await loadAlarms();
+    for (const band of ['full', 'reduced', 'review']) {
+      expect(callFor(resources.filter, `signupGrant${band}Filter`)).toMatchObject({
+        pattern: `{ $.message = "signup-grant-assessed-${band}" }`,
+        metricTransformation: { name: `SignupGrant_${band}`, namespace: 'test-app/production/Signup', value: '1' },
+      });
+    }
+    expect(callFor(resources.alarm, 'signupGrantReviewBurst')).toMatchObject({
+      metricName: 'SignupGrant_review',
+      threshold: 7,
+      period: 300,
+      alarmActions: ['alarm-topic', 'email-topic'],
+      okActions: ['alarm-topic', 'email-topic'],
+    });
+  });
+
+  it('leaves the review alarm off without private configuration', async () => {
+    await loadAlarms();
+    expect(callFor(resources.alarm, 'signupGrantReviewBurst')).toBeUndefined();
+  });
   it('counts dispatch messages, excluding request timing and spoofed metadata', async () => {
     await loadAlarms();
     expect(resources.filter).toHaveBeenCalledWith('signupCodeSendsFilter', {
       name: 'test-app-production-signup-code-sends',
       logGroupName: expect.objectContaining({ value: 'server-logs' }),
-      pattern: '%\\x22message\\x22:\\x22otc-code-dispatched\\x22%',
+      pattern: '{ $.message = "otc-code-dispatched" }',
       metricTransformation: {
         name: 'SignupCodeSends',
         namespace: 'test-app/production/Signup',
@@ -104,7 +128,7 @@ describe('signup code send alarm wiring', () => {
     });
     const pattern = callFor(resources.filter, 'signupCodeSendsFilter')?.pattern;
     if (typeof pattern !== 'string') throw new Error('Missing metric filter pattern');
-    const expression = new RegExp(pattern.slice(1, -1));
+    const expression = { test: (line: string) => matchesMessageFilterPattern(pattern, line) };
     const prefix = '2026-10-23T00:00:00.000Z request-id INFO ';
     expect(expression.test(prefix + JSON.stringify({ message: 'otc-code-dispatched' }))).toBe(true);
     expect(expression.test(prefix + JSON.stringify({ path: '/api/otc/send', message: 'req-timing' }))).toBe(false);
@@ -161,7 +185,7 @@ describe('signup code send alarm wiring', () => {
     expect(resources.filter).toHaveBeenCalledWith('apiKeyCreationsFilter', {
       name: 'test-app-production-api-key-creations',
       logGroupName: expect.objectContaining({ value: 'server-logs' }),
-      pattern: '%\\x22message\\x22:\\x22user-api-key-created\\x22%',
+      pattern: '{ $.message = "user-api-key-created" }',
       metricTransformation: {
         name: 'ApiKeyCreations',
         namespace: 'test-app/production/Signup',
@@ -181,7 +205,7 @@ describe('signup code send alarm wiring', () => {
     });
     const pattern = callFor(resources.filter, 'apiKeyCreationsFilter')?.pattern;
     if (typeof pattern !== 'string') throw new Error('Missing metric filter pattern');
-    const expression = new RegExp(pattern.slice(1, -1));
+    const expression = { test: (line: string) => matchesMessageFilterPattern(pattern, line) };
     const prefix = '2026-10-23T00:00:00.000Z request-id INFO ';
     expect(expression.test(prefix + JSON.stringify({ message: 'user-api-key-created' }))).toBe(true);
     expect(expression.test(prefix + JSON.stringify({ name: 'user-api-key-created', message: 'req-timing' }))).toBe(

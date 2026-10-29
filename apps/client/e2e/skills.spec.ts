@@ -15,6 +15,9 @@ import { apiCreateSkill, apiDeleteAllSkills, apiShareSkill } from './helpers/api
  * stubs the list response instead of relying on the DB.
  */
 test.describe.configure({ mode: 'serial' });
+// The empty-state step stubs the list with page.route, which cannot see a request the service worker
+// answers (same as notebook.spec.ts's map test).
+test.use({ serviceWorkers: 'block' });
 
 // kebab-case only (SkillModel `name` regex); TEST_RUN_ID is digits, so it's valid.
 const TEST_RUN_ID = Date.now().toString().slice(-6);

@@ -125,9 +125,18 @@ describe('POST /api/embed/session - mint embed session token', () => {
     expect(res._getStatusCode()).toBe(403);
   });
 
-  it('accepts Origin: null on a key with no allowed origins', async () => {
+  it('rejects Origin: null on a key with no allowed origins', async () => {
     mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
     const { req, res } = makeReq({ 'x-api-key': 'b4m_live_embed', origin: 'null' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (handler as any)(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('accepts a request without an Origin header on a key with no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const { req, res } = makeReq({ 'x-api-key': 'b4m_live_embed' });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (handler as any)(req, res);
     expect(res._getStatusCode()).toBe(200);

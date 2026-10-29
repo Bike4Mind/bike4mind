@@ -26,6 +26,7 @@ import { SlackClient } from '@bike4mind/slack';
 import type { KnownBlock, Block } from '@slack/web-api';
 import type { GitHubService } from '@server/services/githubService';
 import type { SecopsTriageConfig, SecopsTriageScanSource } from '@bike4mind/common';
+import { escapeSlackLine, escapeSlackText } from '@bike4mind/common';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -712,7 +713,7 @@ function buildSlackSummaryBlocks(
 
   // Strip <, >, and | from link labels - these characters prematurely close Slack mrkdwn <url|label> anchors.
   // ZAP finding titles can legitimately contain them (e.g. SQL payloads, XSS examples).
-  const safeMrkdwnLabel = (s: string) => s.replace(/[<>|]/g, ' ');
+  const safeMrkdwnLabel = (s: string) => escapeSlackLine(s).replace(/\|/g, ' ');
   const issueLines = (links: SecopsTriageIssueLink[]) =>
     links.map(l => `  ↳ <${l.url}|${safeMrkdwnLabel(l.title)}>`).join('\n');
 
@@ -760,7 +761,7 @@ function buildSlackSummaryBlocks(
     blocks.push({ type: 'divider' });
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `*🤖 AI Health Assessment*\n${healthAssessment}` },
+      text: { type: 'mrkdwn', text: `*🤖 AI Health Assessment*\n${escapeSlackText(healthAssessment)}` },
     });
   }
 

@@ -82,6 +82,69 @@ async function createUser(enrolled = true) {
   });
 }
 
+describe('committed grant band telemetry', () => {
+  it.each([
+    ['full', false, 0, 12],
+    ['reduced', true, 0, 6],
+    ['review', true, 2, 0],
+  ] as const)(
+    'emits %s once after committing, including zero-credit holds',
+    async (band, datacenter, ipSignups, credits) => {
+      const user = await createUser();
+      const policy = {
+        enabled: true,
+        version: 'synthetic',
+        reducedAt: 4,
+        reviewAt: 8,
+        reducedFraction: 0.5,
+        rules: [
+          { signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 4, missing: 'review', missingWeight: 0 },
+          { signal: 'ipSignups', comparison: 'gte', threshold: 2, weight: 4, missing: 'review', missingWeight: 0 },
+        ],
+      };
+      const observedState: { band: string | undefined; credits: number | null | undefined }[] = [];
+      const emitRiskBand = vi.fn(async () => {
+        const persisted = await User.findById(user.id);
+        observedState.push({ band: persisted?.signupGrantAssessment?.band, credits: persisted?.currentCredits });
+      });
+      const observed = {
+        ...adapters,
+        db: {
+          ...adapters.db,
+          adminSettings: {
+            ...adminSettings,
+            findBySettingName: async () => ({ settingValue: JSON.stringify(policy) }),
+          },
+        },
+        collectRiskSignals: async () => ({ datacenter, ipSignups }),
+        emitRiskBand,
+      };
+      await userService.grantFreeCredits({ id: user.id }, observed);
+      await userService.grantFreeCredits({ id: user.id }, observed);
+      expect(emitRiskBand).toHaveBeenCalledExactlyOnceWith(band);
+      expect(observedState).toEqual([{ band, credits }]);
+    }
+  );
+
+  it('does not emit for a rolled-back assessment and tolerates telemetry failure after commit', async () => {
+    const user = await createUser();
+    const emitRiskBand = vi.fn(async () => {
+      throw new Error('telemetry unavailable');
+    });
+    const update = vi.spyOn(userRepository, 'update').mockRejectedValueOnce(new Error('write unavailable'));
+    await expect(userService.releaseSignupTranche(user.id, { ...adapters, emitRiskBand })).rejects.toThrow(
+      'write unavailable'
+    );
+    expect(emitRiskBand).not.toHaveBeenCalled();
+    update.mockRestore();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect((await userService.releaseSignupTranche(user.id, { ...adapters, emitRiskBand })).creditsGranted).toBe(12);
+    expect((await userService.releaseSignupTranche(user.id, { ...adapters, emitRiskBand })).creditsGranted).toBe(0);
+    expect(emitRiskBand).toHaveBeenCalledExactlyOnceWith('full');
+    expect(warning).toHaveBeenCalledWith('[signup-risk] Band telemetry failed after grant commit');
+  });
+});
+
 function heldAdapters() {
   const review: SignupDomainReview = {
     domain: 'example.test',
@@ -398,78 +461,41 @@ describe('staged signup ledger', () => {
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${user.id}` })).toBe(1);
   });
 
-  it('unlocks from persisted completed session turns on distinct elapsed days, not pending or copied turns', async () => {
-    const user = await createUser();
-    const first = new Date(Date.now() - 3 * 86400000);
-    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date(first.getTime() - 86400000) } });
-    await userService.releaseSignupTranche(user.id, adapters);
+  const activitySettings = (overrides: Record<string, string | undefined> = {}) =>
     vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
       async name =>
         ({
           settingValue: (
             {
               signupGrantActivityEnabled: 'true',
-              signupGrantActivityMinMessages: '2',
-              signupGrantActivityMinDays: '2',
-            } as Record<string, string>
+              signupGrantActivityMinActiveSeconds: '600',
+              signupGrantActivityDailyCredits: '10',
+              signupGrantActivityMaxCredits: '28',
+              ...overrides,
+            } as Record<string, string | undefined>
           )[name],
         }) as never
     );
-    const turn = {
-      sessionId: 'synthetic-session',
-      timestamp: first,
-      type: 'message',
-      status: 'done',
-      reply: 'Completed answer',
-      signupActivity: { userId: user.id, turnId: 'original', startedAt: first },
-    };
-    await Quest.create([
-      turn,
-      { ...turn, sessionId: 'copy' },
-      { ...turn, signupActivity: undefined },
-      {
-        ...turn,
-        status: 'running',
-        signupActivity: { ...turn.signupActivity, turnId: 'pending', startedAt: new Date() },
-      },
-    ]);
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
-    await Quest.create({
-      ...turn,
-      signupActivity: { ...turn.signupActivity, turnId: 'second', startedAt: new Date(first.getTime() + 86400000) },
-    });
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(28);
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
-  });
+  const accrue = (userId: string, day: string, ms: number) =>
+    User.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(userId) },
+      { $set: { 'signupGrant.activity': { day, ms, lastAt: new Date(`${day}T10:00:00Z`) } } }
+    );
 
-  it('does not equate a midnight boundary with a full elapsed activity day', async () => {
+  it('drips once per UTC day from accrued active time via the eligibility fallback', async () => {
     const user = await createUser();
+    const dayOne = new Date('2030-03-01T10:00:00Z');
     await userService.releaseSignupTranche(user.id, adapters);
-    const first = new Date('2026-01-01T23:59:00Z');
-    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2026-01-01T00:00:00Z') } });
-    vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
-      async name =>
-        ({
-          settingValue: (
-            {
-              signupGrantActivityEnabled: 'true',
-              signupGrantActivityMinMessages: '2',
-              signupGrantActivityMinDays: '2',
-            } as Record<string, string>
-          )[name],
-        }) as never
-    );
-    await Quest.create(
-      [0, 120000].map((offset, index) => ({
-        sessionId: 'synthetic-session',
-        timestamp: first,
-        type: 'message',
-        status: 'done',
-        reply: 'Completed answer',
-        signupActivity: { userId: user.id, turnId: String(index), startedAt: new Date(first.getTime() + offset) },
-      }))
-    );
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
+    activitySettings({ signupGrantActivityMinActiveSeconds: '600' });
+    await accrue(user.id, '2030-03-01', 599_000);
+    expect((await unlockSignupGrantFromActivity(user.id, dayOne)).creditsGranted).toBe(0);
+    await accrue(user.id, '2030-03-01', 600_000);
+    expect((await unlockSignupGrantFromActivity(user.id, dayOne)).creditsGranted).toBe(10);
+    expect((await unlockSignupGrantFromActivity(user.id, dayOne)).creditsGranted).toBe(0);
+    const nextDay = new Date(dayOne.getTime() + 86400000);
+    expect((await unlockSignupGrantFromActivity(user.id, nextDay)).creditsGranted).toBe(0);
+    await accrue(user.id, '2030-03-02', 600_000);
+    expect((await unlockSignupGrantFromActivity(user.id, nextDay)).creditsGranted).toBe(10);
   });
 
   it('pays only the delta as stronger validated identities arrive, including concurrent retries', async () => {
@@ -754,32 +780,12 @@ describe('staged signup ledger', () => {
 
   it.each([['false'], [undefined]])('does not unlock from activity when the flag is %s', async flag => {
     const user = await createUser();
-    const first = new Date(Date.now() - 3 * 86400000);
-    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date(first.getTime() - 86400000) } });
+    const at = new Date('2030-03-01T10:00:00Z');
+    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2030-02-01T00:00:00Z') } });
     await userService.releaseSignupTranche(user.id, adapters);
-    vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
-      async name =>
-        ({
-          settingValue: (
-            {
-              signupGrantActivityEnabled: flag,
-              signupGrantActivityMinMessages: '2',
-              signupGrantActivityMinDays: '2',
-            } as Record<string, string | undefined>
-          )[name],
-        }) as never
-    );
-    await Quest.create(
-      [0, 86400000].map((offset, index) => ({
-        sessionId: 'synthetic-session',
-        timestamp: first,
-        type: 'message',
-        status: 'done',
-        reply: 'Completed answer',
-        signupActivity: { userId: user.id, turnId: String(index), startedAt: new Date(first.getTime() + offset) },
-      }))
-    );
-    expect((await unlockSignupGrantFromActivity(user.id)).creditsGranted).toBe(0);
+    activitySettings({ signupGrantActivityEnabled: flag });
+    await accrue(user.id, '2030-03-01', 600_000);
+    expect((await unlockSignupGrantFromActivity(user.id, at)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.currentCredits).toBe(12);
   });
 });

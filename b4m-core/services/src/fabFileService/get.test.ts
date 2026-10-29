@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import mongoose from 'mongoose';
 import { generateSignedUrl, type GetFabFileAdapter } from './get';
 import type { IFabFileDocument } from '@bike4mind/common';
 
@@ -28,6 +29,41 @@ describe('generateSignedUrl - curator ruling boundary', () => {
   it('strips it on the not-yet-serveable early return too', async () => {
     const result = await generateSignedUrl(fabFile({ moderationStatus: 'pending' }), adapters());
     expect(result.supersededInLakes).toBeUndefined();
+  });
+});
+
+describe('generateSignedUrl - hydrated Mongoose document', () => {
+  // findAllAccessibleByIds (byIds, list) hands over hydrated docs, whose fields live on the
+  // prototype: a spread copies only _doc/$__, so the response lost id and moderationStatus.
+  const schema = new mongoose.Schema(
+    { fileName: String, mimeType: String, filePath: String, moderationStatus: String },
+    { toJSON: { virtuals: true, transform: (_doc, ret) => void (ret.id = ret._id.toString()) } }
+  );
+  const Model = mongoose.models.GetFabFileHydratedTest || mongoose.model('GetFabFileHydratedTest', schema);
+  const hydrated = (moderationStatus: string) =>
+    new Model({
+      fileName: 'paste.png',
+      mimeType: 'image/png',
+      filePath: 'p.png',
+      moderationStatus,
+    }) as unknown as IFabFileDocument;
+
+  it('returns the fields top-level, without Mongoose internals', async () => {
+    const doc = hydrated('clean');
+    const adapter = adapters();
+    vi.mocked(adapter.storage.generateSignedUrl).mockResolvedValue('https://signed.example.invalid/p.png');
+    adapter.db.fabFiles.update = vi.fn();
+    const result = await generateSignedUrl(doc, adapter);
+    expect(result).toMatchObject({ id: doc.id, moderationStatus: 'clean', fileName: 'paste.png' });
+    expect(result.fileUrl).toBe('https://signed.example.invalid/p.png');
+    expect(result).not.toHaveProperty('_doc');
+    expect(result).not.toHaveProperty('$__');
+  });
+
+  it('keeps a pending image recognisable as pending', async () => {
+    const result = await generateSignedUrl(hydrated('pending'), adapters());
+    expect(result).toMatchObject({ moderationStatus: 'pending', fileUrl: undefined });
+    expect(result).not.toHaveProperty('_doc');
   });
 });
 
