@@ -7,7 +7,9 @@
  * real here (not mocked) - only its inputs (the session doc) are controlled per test.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { insufficientCreditsError } from '@bike4mind/common';
+import { insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
+
+vi.mock('@server/entitlements', () => ({ getUserEntitlements: h.getUserEntitlements }));
 
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
@@ -24,6 +26,7 @@ const h = vi.hoisted(() => ({
   generateAndSendProactiveMessage: vi.fn(),
   sendToClient: vi.fn(),
   createCompletionMeter: vi.fn(),
+  getUserEntitlements: vi.fn(async (_user: unknown) => ['plan:paid']),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -107,6 +110,16 @@ describe('agentProactiveMessage consumer', () => {
     h.sendToClient.mockResolvedValue(undefined);
   });
 
+  it('passes a lazy entitlement resolver for the executing owner', async () => {
+    await dispatch(makeEvent(payload), {} as never, logger);
+    const adapters = h.generateAndSendProactiveMessage.mock.calls[0][0] as {
+      getEntitlements: () => Promise<string[]>;
+    };
+    expect(h.getUserEntitlements).not.toHaveBeenCalled();
+    await expect(adapters.getEntitlements()).resolves.toEqual(['plan:paid']);
+    expect(h.getUserEntitlements).toHaveBeenCalledExactlyOnceWith({ id: 'editor', groups: [] });
+  });
+
   it('executes when config.userId still has write access to the session and can still reach the agent', async () => {
     await dispatch(makeEvent(payload), {} as never, logger);
 
@@ -154,5 +167,23 @@ describe('agentProactiveMessage consumer', () => {
 
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
     expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('skips without retrying or notifying when the owner hit the free-tier daily cap', async () => {
+    h.generateAndSendProactiveMessage.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: 'daily_free_limit_reached',
+        retryAfter: 3600,
+      })
+    );
+
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('still rethrows an unrelated generation failure', async () => {
+    h.generateAndSendProactiveMessage.mockRejectedValue(new Error('provider exploded'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('provider exploded');
   });
 });

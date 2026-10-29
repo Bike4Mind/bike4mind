@@ -231,6 +231,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(res._getJSONData()).toMatchObject({ quest: { id: 'quest-1' } });
     expect(GenerateImageResponseSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
   });
 
   it('strips server-owned fields from the returned session', async () => {
@@ -656,6 +657,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     it('route -> invoke -> queued SQS body: organization_id null stays null, omitted becomes the home org', async () => {
       const queued: Array<Record<string, unknown>> = [];
       const service = new ImageGenerationService({
+        assertModelAdmission: async () => {},
         db: {
           sessions: { findById: vi.fn(async () => ({ id: 'sess-1' })) },
           quests: {

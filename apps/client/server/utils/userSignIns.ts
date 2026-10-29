@@ -61,6 +61,14 @@ export const authEventSummary = (event: UserAuthAuditEvent, method: string | und
       return 'Passed an identity check';
     case 'step_up_failed':
       return 'Failed an identity check';
+    case 'email_change_requested':
+      return 'Requested an email change';
+    case 'email_change_confirmed':
+      return 'Changed email address';
+    case 'email_change_failed':
+      return 'Failed to confirm an email change';
+    case 'email_change_cancelled':
+      return 'Cancelled an email change';
   }
 };
 

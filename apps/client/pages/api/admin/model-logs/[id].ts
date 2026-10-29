@@ -1,10 +1,10 @@
 import { ApiKeyScope, type PromptMeta, redactPromptMetaForViewer } from '@bike4mind/common';
 import type { Types } from 'mongoose';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const paramsSchema = z.object({
@@ -12,12 +12,12 @@ const paramsSchema = z.object({
 });
 
 // GET /api/admin/model-logs/[id] - the full promptMeta of one log, which the list route leaves out.
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = paramsSchema.parse(req.query);
 
     const quest = isValidObjectId(id)

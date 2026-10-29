@@ -3,7 +3,9 @@ import type { Request, Response } from 'express';
 
 type Handler = (request: Request, response: Response) => Promise<unknown>;
 const quota = vi.hoisted(() => ({ admit: vi.fn() }));
+const reserveRequestCredits = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: quota.admit }));
+vi.mock('@server/billing/reserveRequestCredits', () => ({ reserveRequestCredits }));
 
 // Keep each route's real completion wrapper. The router only captures its registered handler;
 // quota rejection must prevent entering the handler at all, even with no body/query supplied.
@@ -80,5 +82,6 @@ describe('utility completion quota admission', () => {
 
     await expect(handler(request, response)).rejects.toBe(error);
     expect(quota.admit).toHaveBeenCalledExactlyOnceWith(request, { holdSlot: true });
+    expect(reserveRequestCredits).not.toHaveBeenCalled();
   });
 });
