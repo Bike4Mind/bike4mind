@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatModelOption } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { groupByServer, ModelPicker } from './ModelPicker';
+import { groupByServer, ModelPicker, sortByRecency } from './ModelPicker';
 import type { ModelCatalogController } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -163,5 +163,53 @@ describe('ModelPicker server groups', () => {
     expect(down.getAttribute('aria-disabled')).toBe('true');
     act(() => down.click());
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe('ModelPicker recency order', () => {
+  const dated: ChatModelOption[] = [
+    { id: 'undated-a', name: 'Undated A' },
+    { id: 'old', name: 'Old', releaseDate: '2024-01-15', backend: 'openai' },
+    { id: 'new', name: 'New', releaseDate: '2025-06-01', backend: 'anthropic' },
+    { id: 'undated-b', name: 'Undated B' },
+    { id: 'tie-1', name: 'Tie 1', releaseDate: '2025-01-01' },
+    { id: 'tie-2', name: 'Tie 2', releaseDate: '2025-01-01' },
+  ];
+
+  it('puts the newest first, undated last, and keeps ties and undated in incoming order', () => {
+    const input = [...dated];
+    expect(sortByRecency(dated).map(model => model.id)).toEqual([
+      'new',
+      'tie-1',
+      'tie-2',
+      'old',
+      'undated-a',
+      'undated-b',
+    ]);
+    expect(dated).toEqual(input);
+  });
+
+  it('lists rows newest first and hides the model id, showing the provider instead', () => {
+    mount(dated);
+    expect(options().map(option => option.textContent?.replace('• ', ''))).toEqual([
+      'New' + 'anthropic',
+      'Tie 1',
+      'Tie 2',
+      'Old' + 'openai',
+      'Undated A',
+      'Undated B',
+    ]);
+    expect(options().some(option => option.textContent?.includes('undated-a'))).toBe(false);
+  });
+
+  it('renders no secondary line for a row with nothing to say, and still filters on the id', () => {
+    mount([...dated, ...MODELS]);
+    expect(
+      options()
+        .find(option => option.textContent?.includes('Undated A'))
+        ?.querySelector('[data-testid="model-picker-option-detail"]')
+    ).toBeNull();
+    typeInto(filterBox(), 'undated-a');
+    expect(options().map(option => option.textContent?.replace('• ', ''))).toEqual(['Undated A']);
   });
 });

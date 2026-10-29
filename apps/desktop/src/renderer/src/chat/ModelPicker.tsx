@@ -50,6 +50,15 @@ export function groupByServer(models: readonly ChatModelOption[]): ModelGroup[] 
   return [...groups.values()];
 }
 
+/** Newest release first; undated models (local, saved servers) follow, each run in its incoming order. */
+export function sortByRecency(models: readonly ChatModelOption[]): ChatModelOption[] {
+  return [...models].sort((a, b) => {
+    if (a.releaseDate && b.releaseDate)
+      return a.releaseDate < b.releaseDate ? 1 : a.releaseDate > b.releaseDate ? -1 : 0;
+    return a.releaseDate ? -1 : b.releaseDate ? 1 : 0;
+  });
+}
+
 /** The first model row of the menu the filter box sits in - the one the query narrowed to. */
 function topMatch(filterInput: HTMLElement): HTMLElement | null {
   return (
@@ -132,8 +141,9 @@ export function ModelPicker({
 
   const matches = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    if (!query) return models;
-    return models.filter(model => model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query));
+    const sorted = sortByRecency(models);
+    if (!query) return sorted;
+    return sorted.filter(model => model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query));
   }, [models, filter]);
   const groups = useMemo(() => groupByServer(matches), [matches]);
 
@@ -293,14 +303,16 @@ export function ModelPicker({
                     {model.id === modelId ? '• ' : ''}
                     {model.name}
                   </Typography>
-                  <Typography level="body-xs" textColor="text.tertiary" noWrap>
-                    {model.unavailable ?? (
-                      <>
-                        {model.server ? '' : model.backend ? `${model.backend} - ` : ''}
-                        {model.id}
-                      </>
-                    )}
-                  </Typography>
+                  {(model.unavailable ?? (!model.server && model.backend)) && (
+                    <Typography
+                      level="body-xs"
+                      textColor="text.tertiary"
+                      noWrap
+                      data-testid="model-picker-option-detail"
+                    >
+                      {model.unavailable ?? model.backend}
+                    </Typography>
+                  )}
                 </Stack>
               </MenuItem>
             ))}
