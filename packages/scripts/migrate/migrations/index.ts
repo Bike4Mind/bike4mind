@@ -232,6 +232,8 @@ import EnsureSignupFingerprintWindowIndex from './20260921235939_ensure-signup-f
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureUserSignupMetaCapturedAtIndex from './20260921235973_ensure-user-signupmeta-capturedat-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureUserRiskScoreReviewIndex from './20260921235956_ensure-user-riskscore-review-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureAdminAuditLogIndexes from './20260921235940_ensure-adminauditlog-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillAdminAuditLog from './20260921235941_backfill-admin-audit-log';
@@ -432,6 +434,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureAuthEventIndexes,
   EnsureSignupFingerprintWindowIndex,
   EnsureUserSignupMetaCapturedAtIndex,
+  EnsureUserRiskScoreReviewIndex,
   BackfillStorageLimitOverrides,
   SeedStagedSignupSettings,
   EnsureQuestSignupActivityIndex,

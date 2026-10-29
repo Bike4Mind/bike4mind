@@ -192,7 +192,9 @@ export function DataTable<Row>({
     }
   };
   const onRowClick = (event: MouseEvent<HTMLTableRowElement>, row: Row) => {
-    if ((event.target as HTMLElement).closest(CELL_CONTROLS)) return;
+    const target = event.target as HTMLElement;
+    // Portalled cell content (a menu, a popover) bubbles here through React but sits outside the row.
+    if (!event.currentTarget.contains(target) || target.closest(CELL_CONTROLS)) return;
     onRowActivate?.(row);
   };
 

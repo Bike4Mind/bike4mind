@@ -56,6 +56,7 @@ import {
   Timer,
   TrendingUp,
   UserPlus,
+  UserSearch,
   Users,
   UsersRound,
   Webhook,
@@ -132,6 +133,7 @@ export enum AdminTab {
   AuditLog = 66,
   Dashboard = 67,
   SignupDomainHolds = 68,
+  SignupRiskReview = 69,
 }
 
 /**
@@ -196,6 +198,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: MailCheck, tab: AdminTab.EmailVerification, label: 'Email verification' },
       { Icon: Handshake, tab: AdminTab.PartnerSignupRules, label: 'Partner signups' },
       { Icon: Handshake, tab: AdminTab.SignupDomainHolds, label: 'Signup domain holds' },
+      {
+        Icon: UserSearch,
+        tab: AdminTab.SignupRiskReview,
+        label: 'Risk review',
+        testid: 'admin-signup-risk-review-btn',
+      },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },
