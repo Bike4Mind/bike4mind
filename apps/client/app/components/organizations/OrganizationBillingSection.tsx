@@ -15,7 +15,11 @@ import {
   ISubscription,
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
+  resolveSubscriptionSource,
+  SubscriptionSource,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { useUser } from '@client/app/contexts/UserContext';
+import PayNowButton from '@client/app/components/subscription/PayNowButton';
 import AddIcon from '@mui/icons-material/Add';
 import GroupIcon from '@mui/icons-material/Group';
 import PaymentIcon from '@mui/icons-material/Payment';
@@ -300,6 +304,16 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
   // A delinquent plan is still a plan: the row exists so the Billing Portal stays reachable,
   // but it must not read as healthy - Stripe is dunning it and entitlements deny access.
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
+  const { currentUser } = useUser();
+  // Only the owner may pay, as with the portal; admin grants have no Stripe invoice.
+  const payableSubscriptionId =
+    subscription &&
+    paymentIssue &&
+    !!currentUser &&
+    currentUser.id === organization.userId &&
+    resolveSubscriptionSource(subscription) === SubscriptionSource.Stripe
+      ? subscription.subscriptionId
+      : undefined;
   const plans = useGetSubscriptionPlans();
 
   // Get the price per seat from Stripe
@@ -431,9 +445,14 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
                     {paymentIssue ? (
                       // A delinquent plan still carries a period end, so a renewal date would read
                       // as healthy. Send them to the portal - the only place the card is fixed.
-                      <Typography level="body-sm" color="danger" className="organization-billing-plan-payment-issue">
-                        Update your payment method in the Billing Portal to keep this plan
-                      </Typography>
+                      <Stack spacing={1} alignItems="flex-end">
+                        <Typography level="body-sm" color="danger" className="organization-billing-plan-payment-issue">
+                          Update your payment method in the Billing Portal to keep this plan
+                        </Typography>
+                        {payableSubscriptionId && (
+                          <PayNowButton subscriptionId={payableSubscriptionId} testId="org-billing-pay-now-btn" />
+                        )}
+                      </Stack>
                     ) : (
                       <Typography
                         level="body-sm"
