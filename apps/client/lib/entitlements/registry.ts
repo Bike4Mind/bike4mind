@@ -353,7 +353,8 @@ export const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
  * Keys and ids a contribution may never name: `base` is held by every user, `datalake:` and
  * `embed:` keys need a literal owner grant, and `source:` tags are self-assertable OAuth
  * attribution. `customer` and `pending-free-credits` are stamped on accounts by core, and `plan:paid` is
- * derived from the subscription ladder only. Must stay in sync with the codegen check.
+ * derived from the subscription ladder or a credit purchase only. Must stay in sync with the codegen
+ * check.
  */
 export function isReservedContributionKey(key: string): boolean {
   return (
