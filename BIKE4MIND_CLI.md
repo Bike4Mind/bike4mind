@@ -216,6 +216,10 @@ Create a key in the app under **Settings > API Keys** with the scopes for the to
 
 HTTP mode binds **loopback only** (`127.0.0.1`) and requires an `Authorization: Bearer <token>` header on every request. The token is `--token`, else `B4M_MCP_TOKEN`, else generated at startup and printed to stderr. There is no flag to change the bind address. Only the `/mcp` path is served (any other path is a 404).
 
+### Local model tools only (`--local`)
+
+`b4m mcp serve --local` serves only the local model tools (`models_list`, `models_search`, `models_pull`, `models_remove`) and needs no Bike4Mind backend, key or login: they talk to your local Ollama, the Ollama registry and Hugging Face. It ignores any configured endpoint and offers none of the tools, resources or prompts above, and says so in one line on stderr. It is stdio only; `--local` with `--http` is an error, and so is `--local` with `--dev` or `--prod`. Only after `b4m mcp serve` is `--local` this command's own flag; anywhere else, including `b4m --local mcp serve`, it is the `--dev` alias and changes the CLI's saved backend. Without `--local`, `b4m mcp serve` still exits with `No API endpoint configured` when no backend is set.
+
 ### Claude Desktop
 
 Add the server to `claude_desktop_config.json`:
@@ -235,7 +239,7 @@ Add the server to `claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop and the Bike4Mind tools appear in its tools menu.
+Restart Claude Desktop and the Bike4Mind tools appear in its tools menu. For the local model tools alone, use `"args": ["mcp", "serve", "--local"]` and no Bike4Mind `env`.
 
 ## Headless / scripting mode
 
