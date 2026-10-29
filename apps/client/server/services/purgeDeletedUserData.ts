@@ -84,6 +84,8 @@ export async function purgeDeletedUserData(
 
   // Hashed first, so deleting accounts does not reset the per-network signup caps. A failure here
   // still deletes the raw rows below: dropping the IPs outranks keeping the count.
+  // If the trace is kept but that delete fails, the account counts twice until its trace expires
+  // (an over-count, so the cap fails closed).
   try {
     const retained = await retainDeletedSignupTraces(userId);
     if (retained) logger.info(`Kept ${retained} hashed signup trace(s) of deleted user ${userId}`);
