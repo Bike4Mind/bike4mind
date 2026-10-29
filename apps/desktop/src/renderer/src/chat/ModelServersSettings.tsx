@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
@@ -73,6 +73,17 @@ export function healthLine(server: ModelServerView): string {
 type CredentialDraft = { type: ModelServerAuthKind; token: string; headerName: string; headerValue: string };
 
 const EMPTY_CREDENTIAL: CredentialDraft = { type: 'none', token: '', headerName: '', headerValue: '' };
+
+/** A form for this server's current kind of credential; the secret itself never comes back from main. */
+function draftFor(auth: ModelServerView['auth']): CredentialDraft {
+  return { ...EMPTY_CREDENTIAL, type: auth.type, headerName: auth.headerName ?? '' };
+}
+
+function secretMissing(draft: CredentialDraft): boolean {
+  if (draft.type === 'bearer') return !draft.token.trim();
+  if (draft.type === 'header') return !draft.headerName.trim() || !draft.headerValue.trim();
+  return false;
+}
 
 function toCredential(draft: CredentialDraft): ModelServerCredentialInput {
   if (draft.type === 'bearer') return { type: 'bearer', token: draft.token };
@@ -158,12 +169,14 @@ function ServerRow({
   onResult: (result: ModelServerMutationResult) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<CredentialDraft>(EMPTY_CREDENTIAL);
+  const [draft, setDraft] = useState<CredentialDraft>(() => draftFor(server.auth));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const look = STATE_LOOK[server.health.state];
   const askCredentials = !server.local && (server.health.state === 'credentials' || server.credentialsMissing);
+  const removesCredential = draft.type === 'none' && server.auth.type !== 'none';
+  const canSaveCredential = !secretMissing(draft) && (draft.type !== 'none' || removesCredential);
 
   const run = async (work: () => Promise<ModelServerMutationResult>) => {
     setBusy(true);
@@ -277,19 +290,20 @@ function ServerRow({
             <CredentialFields draft={draft} onChange={setDraft} testPrefix="model-servers-edit" />
             <Button
               size="sm"
-              disabled={busy}
+              color={removesCredential ? 'danger' : 'primary'}
+              disabled={busy || !canSaveCredential}
               sx={{ alignSelf: 'flex-start' }}
               onClick={() =>
                 void update({ credential: toCredential(draft) }).then(ok => {
                   if (ok) {
                     setEditing(false);
-                    setDraft(EMPTY_CREDENTIAL);
+                    setDraft(saved => draftFor({ type: saved.type, headerName: saved.headerName }));
                   }
                 })
               }
               data-testid="model-servers-credentials-save-btn"
             >
-              Save credentials
+              {removesCredential ? 'Remove credential' : 'Save credentials'}
             </Button>
           </Stack>
         )}
@@ -359,6 +373,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
   const [acceptOpen, setAcceptOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const suggestedName = useRef<string | null>(null);
 
   const reset = useCallback(() => {
     setAddress('');
@@ -367,7 +382,14 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     setName('');
     setAcceptOpen(false);
     setError(null);
+    suggestedName.current = null;
   }, []);
+
+  // The "Save it anyway" answer was about the address and credentials the user tested, not new ones.
+  const untest = () => {
+    setProbe(null);
+    setAcceptOpen(false);
+  };
 
   const test = async () => {
     setBusy(true);
@@ -376,7 +398,8 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
       const result = await window.b4m.modelServers.probe({ address, credential: toCredential(credential) });
       setProbe(result);
       if (result.kind) setKind(result.kind);
-      if (!name && result.suggestedName) setName(result.suggestedName);
+      if (result.suggestedName && (!name.trim() || name === suggestedName.current)) setName(result.suggestedName);
+      if (result.suggestedName) suggestedName.current = result.suggestedName;
     } finally {
       setBusy(false);
     }
@@ -417,7 +440,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
             placeholder="https://gpu.example.com, http://192.168.1.20:11434 or host:port"
             onChange={event => {
               setAddress(event.target.value);
-              setProbe(null);
+              untest();
             }}
             slotProps={{ input: { 'data-testid': 'model-servers-add-address-input' } }}
           />
@@ -429,7 +452,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
           draft={credential}
           onChange={next => {
             setCredential(next);
-            setProbe(null);
+            untest();
           }}
           testPrefix="model-servers-add"
         />
