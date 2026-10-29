@@ -596,6 +596,59 @@ describe('registerUser', () => {
       expect(invited.signupGrant).toBeUndefined();
     });
 
+    describe('invite-code grants under the staged signup grant', () => {
+      const enableStaging = () => {
+        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+          const values: Record<string, string> = {
+            stagedSignupGrantEnabled: 'true',
+            signupGrantCredits: '4',
+            verifiedUnlockCredits: '0',
+            ReferralCreditsAmount: '10',
+          };
+          return name in values ? { settingValue: values[name] } : readSetting(name);
+        });
+      };
+      const created = () => mockAdapters.db.users.create.mock.calls[0][0];
+      const referralInvite = (extra: object = {}) => ({
+        ...mockInvite,
+        email: baseParams.email,
+        source: RegInviteSource.referral,
+        ...extra,
+      });
+
+      it('splits a refer-a-friend flat grant into a tranche plus a locked remainder', async () => {
+        enableStaging();
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 6, creditsReleased: 0 });
+        expect(created().pendingCreditGrant).toBeNull();
+        expect(created().tags).toContain(PENDING_FREE_CREDITS_TAG);
+      });
+
+      it('keeps the flat grant for an admin code', async () => {
+        enableStaging();
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toBeUndefined();
+        expect(created().pendingCreditGrant).toBe(10);
+      });
+
+      it('keeps the flat grant for an unlimited referral-sourced code', async () => {
+        enableStaging();
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ unlimitedUse: true }));
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toBeUndefined();
+        expect(created().pendingCreditGrant).toBe(10);
+      });
+
+      it('keeps the flat grant for a referral invite when staging is off', async () => {
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toBeUndefined();
+        expect(created().pendingCreditGrant).toBe(10);
+      });
+    });
+
     it('allows registration when invite check is skipped (OTC \u2014 email already proven)', async () => {
       setAllowOpenRegistration('false');
       const result = await registerUser(noInviteParams, { ...mockAdapters, skipInviteCheck: true });

@@ -46,7 +46,7 @@ describe('router noindex injection', () => {
 
   it('is wired into the viewer-response function with the deployed stage', () => {
     expect(router).toMatch(
-      /viewerResponse: \{\s*injection: userFileCspInjection \+ noindexResponseInjection\(\$app\.stage\)/
+      /viewerResponse: \{\s*injection:\s*userFileCspInjection \+ noindexResponseInjection\(\$app\.stage\)/
     );
   });
 });

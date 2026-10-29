@@ -95,11 +95,13 @@ interface RegisterUserAdapters {
   skipInviteCheck?: boolean;
   /** Forwarded to the staged signup grant's first assessment (see FreeCreditAdapters). */
   collectRiskSignals?: FreeCreditAdapters['collectRiskSignals'];
+  emitRiskBand?: FreeCreditAdapters['emitRiskBand'];
+  signupMeta?: IUserDocument['signupMeta'];
 }
 
 export const registerUser = async (
   params: RegisterUserParameters,
-  { db, logger, skipInviteCheck }: RegisterUserAdapters
+  { db, logger, skipInviteCheck, signupMeta }: RegisterUserAdapters
 ) => {
   const { email, name, inviteCode, password, metadata, acceptedPolicyVersion, ageAttestation, sourceClientId } = params;
 
@@ -285,6 +287,14 @@ export const registerUser = async (
     }
   }
 
+  // Open signups and refer-a-friend invitees trickle their grant; admin and unlimited codes keep the flat grant.
+  const isReferralInvite = Boolean(invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral);
+  const referralGrant = !hasInviteCode
+    ? await newSignupGrant(db.adminSettings)
+    : isReferralInvite && freeCredits > 0
+      ? await newSignupGrant(db.adminSettings, freeCredits)
+      : undefined;
+
   // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
   // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
   // minted before `source` existed are deliberately not attributed.
@@ -322,8 +332,9 @@ export const registerUser = async (
     planStorageLimit: null,
     currentStorageSize: 0,
     currentCredits: 0,
-    pendingCreditGrant: freeCredits > 0 ? freeCredits : null,
-    ...(!hasInviteCode ? { signupGrant: await newSignupGrant(db.adminSettings) } : {}),
+    pendingCreditGrant: freeCredits > 0 && !referralGrant ? freeCredits : null,
+    ...(signupMeta ? { signupMeta } : {}),
+    ...(referralGrant ? { signupGrant: referralGrant } : {}),
     level: 'DemoUser',
     isBanned: false,
     isModerated: false,
@@ -458,6 +469,7 @@ export const registerViaOTC = async (
       reason: 'OTC registration (email verified)',
       logger,
       collectRiskSignals: adapters.collectRiskSignals,
+      emitRiskBand: adapters.emitRiskBand,
     });
     // On failure the patch is empty, so the pending tag and amount survive as the retry
     // breadcrumb while the user is still verified and let in.

@@ -103,6 +103,38 @@ describe('createModelAdmission', () => {
     const admission = createModelAdmission({ user: { isModerated: false }, configs: [] });
     await expect(admission.admits('anything')).resolves.toBe(true);
   });
+
+  it.each([false, true])('holds all models pending signup review, with isAdmin=%s', async isAdmin => {
+    const getEntitlements = vi.fn().mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    const admission = createModelAdmission({
+      user: { isAdmin, riskScore: { reviewState: 'pending' } },
+      configs: [],
+      models,
+      enforceCredits: false,
+      getEntitlements,
+    });
+    for (const model of models) {
+      await expect(admission.assert(model.id)).rejects.toBeInstanceOf(ForbiddenError);
+      await expect(admission.admits(model.id)).rejects.toThrow('awaits review');
+    }
+    expect(getEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('restores AI access on approval, reapplies the hold on undo, and keeps manual restrictions', async () => {
+    const user: Parameters<typeof createModelAdmission>[0]['user'] = {
+      isModerated: false,
+      riskScore: { reviewState: 'pending' },
+    };
+    const admission = createModelAdmission({ user, configs: [] });
+    await expect(admission.assert('free')).rejects.toThrow('awaits review');
+    user.riskScore = { reviewState: 'approved' };
+    await expect(admission.assert('free')).resolves.toBeUndefined();
+    user.riskScore = { reviewState: 'pending' };
+    await expect(admission.assert('free')).rejects.toThrow('awaits review');
+    user.riskScore = { reviewState: 'approved' };
+    user.isModerated = true;
+    await expect(admission.assert('free')).rejects.toThrow('disabled on your account by an administrator');
+  });
 });
 
 describe('isUnpricedTextModel', () => {

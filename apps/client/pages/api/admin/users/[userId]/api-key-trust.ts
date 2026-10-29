@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 interface RequestQuery {
   userId: string;
@@ -34,6 +34,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         throw new BadRequestError('Invalid request body: expected { approved: boolean }');
       }
       const { approved } = parsedBody.data;
+      const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
       await withTransaction(async () => {
         const user = await userRepository.findById(userId);
@@ -52,6 +53,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
           action: approved ? 'user.api_key_trust.approved' : 'user.api_key_trust.revoked',
           target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
           summary: approved ? 'approved account for personal API keys' : 'revoked personal API key trust',
+          reason,
           changes: [{ field: 'apiKeyTrustApproved', before, after: approved }],
         });
 
