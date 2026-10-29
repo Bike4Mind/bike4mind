@@ -5,6 +5,18 @@ import * as stagedSignupGrant from './stagedSignupGrant';
 import { grantFreeCredits, releasePendingFreeCredits, resolveFreeCreditAmount } from './freeCredits';
 import * as signupProtection from './signupProtection';
 
+const VALID_POLICY = {
+  enabled: true,
+  version: 'v1',
+  rules: [
+    { signal: 'datacenter', comparison: 'eq', threshold: 1, weight: 2, missing: 'score', missingWeight: 0 },
+    { signal: 'ipSignups', comparison: 'gte', threshold: 3, weight: 2, missing: 'score', missingWeight: 0 },
+  ],
+  reducedAt: 3,
+  reviewAt: 6,
+  reducedFraction: 0.5,
+};
+
 const buildAdapters = (defaultFreeCredits: string | null = '100') => {
   const logger = { error: vi.fn(), warn: vi.fn() };
   const adapters = {
@@ -238,7 +250,7 @@ describe('free credits service', () => {
       const protectedAdapters = buildAdapters('500');
       protectedAdapters.db.adminSettings.findBySettingNames.mockResolvedValue([
         { settingName: 'defaultFreeCredits', settingValue: 500 },
-        { settingName: 'signupGrantRiskPolicy', settingValue: { enabled: true } },
+        { settingName: 'signupGrantRiskPolicy', settingValue: VALID_POLICY },
         { settingName: 'maxSignupsPerIpPerDay', settingValue: 5 },
         { settingName: 'maxSignupsPerAsnPerHour', settingValue: 20 },
         { settingName: 'signupBurstAutoHold', settingValue: true },
