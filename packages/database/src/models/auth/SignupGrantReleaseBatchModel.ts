@@ -66,7 +66,7 @@ export const signupGrantReleaseRepository = {
   },
   async unclaimReversal(batchId: string, userId: string) {
     await SignupGrantReleaseBatchModel.updateOne(
-      { _id: batchId, 'entries.userId': userId },
+      { _id: batchId, entries: { $elemMatch: { userId, outcome: 'released' } } },
       { $set: { 'entries.$.reversed': false } }
     );
   },

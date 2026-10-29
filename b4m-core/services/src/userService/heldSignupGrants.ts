@@ -50,12 +50,18 @@ async function releaseHeldGrant(
       { id: userId, tags: [...user.tags], pendingCreditGrant: user.pendingCreditGrant ?? null },
       { ...adapters.grant, bypassBudget }
     );
+    if (result.failed) return none('failed');
     if (!result.released) return none('withheld', !!result.budgetExhausted);
-    // Blocked accounts were kept held above; a zero payout here is final (already paid, or the inbox's
-    // grant went to another account), so the hold is dropped rather than left to clog the cron queue.
-    if (result.creditsGranted <= 0) await users.update({ id: userId, signupGrantHeldReason: null });
-    // The credits landed under an idempotent transactionId, so a failed tag clear is retried by re-releasing.
-    await adapters.clearPending(userId);
+    // The payout has committed, so the entry must stay 'released' with its credits for revoke to see it.
+    try {
+      // Blocked accounts were kept held above; a zero payout here is final (already paid, or the inbox's
+      // grant went to another account), so the hold is dropped rather than left to clog the cron queue.
+      if (result.creditsGranted <= 0) await users.update({ id: userId, signupGrantHeldReason: null });
+      // The credits landed under an idempotent transactionId, so a failed tag clear is retried by re-releasing.
+      await adapters.clearPending(userId);
+    } catch (error) {
+      adapters.grant.logger.error(`Held signup grant for user ${userId} paid but its hold was not cleared`, error);
+    }
     return { entry: { userId, outcome: 'released', credits: result.creditsGranted }, budgetExhausted: false };
   } catch (error) {
     adapters.grant.logger.error(`Held signup grant release failed for user ${userId}`, error);
@@ -82,11 +88,12 @@ export async function revokeHeldGrantRelease(
   input: { batchId: string; actorId: string },
   adapters: {
     batches: HeldReleaseBatchRepository;
-    users: Pick<IUserRepository, 'findById' | 'incrementCredits'> & {
-      /** Atomic debit floored at zero; resolves the credits actually taken. */
-      decrementCreditsFloored: (userId: string, credits: number) => Promise<number>;
+    users: Pick<IUserRepository, 'incrementCredits'> & {
+      /** Atomic debit applied only when the balance covers all of `credits`. */
+      decrementCreditsIfCovered: (userId: string, credits: number) => Promise<boolean>;
     };
     creditTransactions: ICreditTransactionRepository;
+    logger: { error: (message: string, ...args: unknown[]) => void };
   }
 ) {
   const batch = await adapters.batches.findBatch(input.batchId);
@@ -102,21 +109,12 @@ export async function revokeHeldGrantRelease(
     // Credits taken from the balance and not yet restored or covered by a ledger row.
     let outstanding = 0;
     try {
-      const user = await adapters.users.findById(entry.userId);
-      if (!user || user.currentCredits < entry.credits) {
+      if (!(await adapters.users.decrementCreditsIfCovered(entry.userId, entry.credits))) {
         await adapters.batches.unclaimReversal(batch.id, entry.userId);
         row('insufficient_balance');
         continue;
       }
-      // One atomic floored debit: a balance spent since the check above is never driven negative.
-      outstanding = await adapters.users.decrementCreditsFloored(entry.userId, entry.credits);
-      if (outstanding < entry.credits) {
-        if (outstanding > 0) await adapters.users.incrementCredits(entry.userId, outstanding);
-        outstanding = 0;
-        await adapters.batches.unclaimReversal(batch.id, entry.userId);
-        row('insufficient_balance');
-        continue;
-      }
+      outstanding = entry.credits;
       try {
         await adapters.creditTransactions.createTransaction('generic_deduct', {
           ownerId: entry.userId,
@@ -135,13 +133,13 @@ export async function revokeHeldGrantRelease(
     } catch (error) {
       // Unclaiming an uncompensated debit would let a retry debit the same grant twice.
       if (outstanding > 0) {
-        console.error(
-          `[held-signup-grants] Reversal for user ${entry.userId} debited ${outstanding} credits with no ledger row; entry left claimed for manual repair`,
+        adapters.logger.error(
+          `Reversal for user ${entry.userId} debited ${outstanding} credits with no ledger row; entry left claimed for manual repair`,
           error
         );
       } else {
         await adapters.batches.unclaimReversal(batch.id, entry.userId);
-        console.error(`[held-signup-grants] Reversal failed for user ${entry.userId}`, error);
+        adapters.logger.error(`Reversal failed for user ${entry.userId}`, error);
       }
       row('failed');
     }

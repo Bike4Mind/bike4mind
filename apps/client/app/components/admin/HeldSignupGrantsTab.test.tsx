@@ -67,6 +67,23 @@ describe('HeldSignupGrantsTab', () => {
     expect(getMock).toHaveBeenCalledTimes(3);
   });
 
+  it('allows another revoke when the previous one left a retryable entry', async () => {
+    postMock
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'released', credits: 12 }] },
+      })
+      .mockResolvedValueOnce({
+        data: { batchId: 'batch-1', results: [{ userId: rows[1].id, outcome: 'insufficient_balance', credits: 12 }] },
+      });
+    renderTab();
+    fireEvent.click(await screen.findByTestId(`held-signup-grants-select-${rows[1].id}`));
+    fireEvent.click(screen.getByTestId('held-signup-grants-release-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-btn'));
+    fireEvent.click(await screen.findByTestId('held-signup-grants-revoke-confirm-btn'));
+    expect(await screen.findByTestId('held-signup-grants-revoke-result')).toHaveTextContent('Revoked 0 of 1');
+    await waitFor(() => expect(screen.getByTestId('held-signup-grants-revoke-btn')).not.toBeDisabled());
+  });
+
   it('disables Next without a cursor', async () => {
     renderTab();
     await screen.findByTestId(`held-signup-grants-select-${rows[0].id}`);
