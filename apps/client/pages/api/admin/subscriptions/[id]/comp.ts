@@ -78,6 +78,8 @@ const planEnd = (subscription: ISubscription, now: Date): Mutation => {
 };
 
 const planReopen = async (subscription: ISubscription): Promise<Mutation> => {
+  // These checks run before the transaction and the guarded update does not re-check them, so two concurrent
+  // admin reopens/grants for one owner could both pass; accepted because the window is admin-only and tiny.
   if (subscription.status !== 'canceled') throw new ConflictError('Only an ended comp can be reopened.');
   const live = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
     subscription.ownerType,
@@ -160,6 +162,7 @@ const applyGuardedUpdate = async (
 ) => {
   const filter: Record<string, unknown> = {
     _id: id,
+    // findById hydrates the schema default source, so $exists only guards a raw legacy row (belt-and-braces).
     source: subscription.source ?? { $exists: false },
     subscriptionId: subscription.subscriptionId,
     status: subscription.status,
