@@ -89,15 +89,27 @@ export const grantFreeCredits = async (
     if (!alreadyGranted) await db.users.addTagsToUser(user.id, [PENDING_FREE_CREDITS_TAG]);
     return { creditsGranted: 0, currentCredits: null, withheld: true };
   }
+  const result = await grantFlatFreeCredits(user, { db, reason, bypassBudget });
+  // Every outcome but a hold is final, so a held reason left from an earlier attempt must not outlive it.
+  if (!result.withheld && persisted?.signupGrantHeldReason)
+    await db.users.update({ id: user.id, signupGrantHeldReason: null });
+  return result;
+};
+
+async function grantFlatFreeCredits(
+  user: Pick<FreeCreditUser, 'id' | 'pendingCreditGrant'>,
+  { db, reason, bypassBudget }: Pick<FreeCreditAdapters, 'db' | 'reason' | 'bypassBudget'>
+): Promise<GrantFreeCreditsResult> {
   const amount = await resolveFreeCreditAmount(user.pendingCreditGrant, db.adminSettings);
   if (amount <= 0) return { creditsGranted: 0, currentCredits: null };
 
-  const legacyGrant = await db.creditTransactions.findOne({
-    transactionId: legacyOtcRegisterTransactionId(user.id),
-  });
-  if (legacyGrant) return { creditsGranted: 0, currentCredits: null };
-
   const transactionId = `verify-grant:${user.id}`;
+  // Checked before the budget so a paid account never draws, or is tagged and held, on an exhausted day.
+  const alreadyGranted = await db.creditTransactions.findOne({
+    transactionId: { $in: [transactionId, legacyOtcRegisterTransactionId(user.id)] },
+  });
+  if (alreadyGranted) return { creditsGranted: 0, currentCredits: null };
+
   // The transactionId dedupes per account; the claim dedupes the open-registration default per
   // inbox, so an alias of an address that already earned it (x+1@gmail.com, x.y@gmail.com) earns
   // none. An invite-resolved amount is an explicit grant to that account and is not claimed.
@@ -119,7 +131,8 @@ export const grantFreeCredits = async (
 
   let credited = false;
   try {
-    // addCredits treats a repeated transactionId as success, which would leave this reservation spent.
+    // A concurrent grant can land after the check above; addCredits treats a repeated transactionId as
+    // success, which would leave this reservation spent.
     if (budget.outcome === 'reserved' && (await db.creditTransactions.findOne({ transactionId }))) {
       await budget.release();
       return { creditsGranted: 0, currentCredits: null };
@@ -136,14 +149,13 @@ export const grantFreeCredits = async (
       { db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots }, creditHolderMethods: db.users }
     );
     credited = true;
-    if (persisted?.signupGrantHeldReason) await db.users.update({ id: user.id, signupGrantHeldReason: null });
     return { creditsGranted: amount, currentCredits: holder.currentCredits };
   } catch (error) {
     // Once the ledger row is written the draw is spent; a later throw must not hand it back.
     if (!credited) await budget.release();
     throw error;
   }
-};
+}
 
 /**
  * Grants the deferred free credits for a user tagged PENDING_FREE_CREDITS_TAG and returns the
