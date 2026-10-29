@@ -127,8 +127,10 @@ export async function getUserEntitlements(
   const resolved = applyImpliedEntitlements(keys);
   // `plan:paid` unlocks paid-only models (the free-tier gate in modelAdmission.ts), so it comes from
   // the subscription ladder or a credit purchase alone, never from a passthrough tag or any other source
-  // above. An admin comps it with an `admin_grant` subscription row, which the ladder read honors.
-  // A purchase is "ever bought", the same signal hasPaidStanding (userApiKeyService/trust.ts) reads.
+  // above. An admin comps it with an `admin_grant` subscription row, which the ladder read honors, or
+  // with any positive single-user credit adjustment, which stamps the purchase field (adminUpdate.ts).
+  // A purchase is "ever bought", the same signal hasPaidStanding (userApiKeyService/trust.ts) reads:
+  // a refund or dispute does not clear the stamp.
   const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
   const holdsPaidPlan = Boolean(user.lastCreditsPurchasedAt) || getHighestLadderTier(activeSubscriptions) !== undefined;
   return holdsPaidPlan ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
