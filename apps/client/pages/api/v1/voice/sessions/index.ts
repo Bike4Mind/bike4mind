@@ -44,6 +44,7 @@ import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { requestTurnAuth } from '@server/auth/turnAuth';
 import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
@@ -97,6 +98,9 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   if (activeVoiceCount >= MAX_CONCURRENT_VOICE_SESSIONS) {
     throw new ForbiddenError(`Maximum ${MAX_CONCURRENT_VOICE_SESSIONS} concurrent voice sessions allowed`);
   }
+
+  // No slot: the call runs on the provider long after this request returns.
+  await admitRequestCompletion(req, { holdSlot: false });
 
   const elevenLabsApiKey = getSettingsValue('elevenLabsServerApiKey', settings);
   if (!elevenLabsApiKey) {

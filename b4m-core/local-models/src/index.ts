@@ -94,6 +94,7 @@ export {
   type DetectedRuntime,
   type ProbeHost,
 } from './detect';
+export { parseBaseUrl } from './http';
 export {
   DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS,
   type DownloadOptions,

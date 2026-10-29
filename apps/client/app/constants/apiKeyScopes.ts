@@ -201,6 +201,10 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'GET /api/v1/agents',
       'GET /api/v1/agents/:id',
       'PATCH|DELETE /api/v1/agents/:id',
+      'POST /api/v1/agents/:id/generate-avatar',
+      'POST /api/v1/agents/:id/generate-description',
+      'POST /api/v1/agents/:id/generate-system-prompt',
+      'POST /api/v1/agents/:id/enhance-field',
     ],
   },
   {

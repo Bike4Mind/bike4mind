@@ -14,6 +14,11 @@ export type VerifyTurnstileInput = {
   expectedAction: string;
   /** Lowercase hostnames the widget may have been solved on; empty skips the hostname check. */
   allowedHostnames?: string[];
+  /**
+   * Skip the action and hostname checks when `secret` is one of Cloudflare's public test secrets,
+   * whose siteverify answers never carry our action or host. Callers must pass false in production.
+   */
+  allowTestSecret?: boolean;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 };
@@ -28,6 +33,22 @@ const siteverifyResponseSchema = z.object({
 /** Secrets default to this placeholder on stages that never provisioned a key. */
 export function isTurnstileSecretConfigured(secret: string | undefined): secret is string {
   return !!secret && secret.trim() !== '' && secret !== 'not-configured';
+}
+
+/**
+ * Cloudflare's published test secrets (always pass, always fail, token already spent). They are
+ * public, so they are honored only off production (see `allowTestSecret`); on production they keep
+ * the strict checks and every token is rejected.
+ * See https://developers.cloudflare.com/turnstile/troubleshooting/testing/
+ */
+const TURNSTILE_TEST_SECRETS: ReadonlySet<string> = new Set([
+  '1x0000000000000000000000000000000AA',
+  '2x0000000000000000000000000000000AA',
+  '3x0000000000000000000000000000000AA',
+]);
+
+export function isTurnstileTestSecret(secret: string): boolean {
+  return TURNSTILE_TEST_SECRETS.has(secret.trim());
 }
 
 /**
@@ -67,6 +88,7 @@ export async function verifyTurnstile(input: VerifyTurnstileInput): Promise<Turn
       return { ok: false, reason: 'unavailable', errorCodes };
     return { ok: false, reason: 'invalid', errorCodes };
   }
+  if (input.allowTestSecret === true && isTurnstileTestSecret(secret)) return { ok: true };
   if (data.action !== expectedAction) return { ok: false, reason: 'invalid', errorCodes: ['action-mismatch'] };
   if (allowedHostnames.length > 0 && !allowedHostnames.includes((data.hostname ?? '').toLowerCase())) {
     return { ok: false, reason: 'invalid', errorCodes: ['hostname-mismatch'] };

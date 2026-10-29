@@ -1,7 +1,6 @@
 import type { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Resource } from 'sst';
@@ -13,12 +12,11 @@ const logger = new Logger({ metadata: { service: 'cloud-prowler-api' } });
 
 const WORKFLOW_FILE = 'prowler-only.yml';
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi<Request, Response>({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const stage = resolveStage();
     const snapshot = await securityDashboardSnapshotRepository.findLatestByStageAndScanType(stage, 'cloud-prowler');
 
@@ -26,10 +24,6 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     return res.status(200).json(snapshot ?? null);
   })
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const prowlerResource = Resource as typeof Resource & {
       SECOPS_PROWLER_WORKFLOW_TOKEN?: { value: string };
     };

@@ -26,7 +26,6 @@ import {
   gatedMessage,
   hiddenAbliteratedMessage,
   hubAccessMessage,
-  largestProjectorBytes,
   licenseFor,
   listInstalled,
   normalizeModelName,
@@ -48,10 +47,10 @@ import {
 } from '../models/localModels.js';
 import {
   FIT_LABELS,
+  fitForHubBuild,
   fitForPlan,
   machineLabel,
   machineReader,
-  rateDownload,
   type MachineReader,
   type ModelFit,
 } from '../models/fit.js';
@@ -213,9 +212,7 @@ export async function showModel(repo: string, deps: ModelsDeps, opts: ModelsOpti
   const hub = deps.hub();
   const detail = await hub.getModel(repo, { signal: deps.signal });
   const reading = await abortable(deps.machine(deps.runtimeHost()), deps.signal);
-  const projector = largestProjectorBytes(detail);
-  const fitOf = (build: HubGgufBuild): ModelFit =>
-    rateDownload(build.sizeBytes + projector, reading, detail.gguf?.contextLength ?? null);
+  const fitOf = (build: HubGgufBuild): ModelFit => fitForHubBuild(build, detail, reading);
   if (opts.json) {
     const rated = { ...detail, builds: detail.builds.map(build => ({ ...build, fit: fitOf(build) })) };
     deps.log(
@@ -298,10 +295,10 @@ async function pullWithProgress(target: RuntimeTarget, ref: string, deps: Models
     await target.runtime.pull(ref, {
       signal: deps.signal,
       onProgress: ({ status, completedBytes, totalBytes }) => {
-        // Bytes in the first counted frame were already on the runtime: a resumed partial or a shared layer.
-        if (!sawBytes && totalBytes) {
+        // A cached layer can precede the first partial one; wait until there is work left.
+        if (!sawBytes && totalBytes && completedBytes < totalBytes) {
           sawBytes = true;
-          if (completedBytes > 0 && completedBytes < totalBytes) {
+          if (completedBytes > 0) {
             if (deps.isTTY) deps.progress.end();
             deps.log(`Already downloaded: ${formatBytes(completedBytes)}; pulling the rest.`);
           }

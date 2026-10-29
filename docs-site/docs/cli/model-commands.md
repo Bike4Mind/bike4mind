@@ -67,14 +67,14 @@ Every build is rated for the machine Ollama runs on:
 - `fits`: the file and its working memory fit with room left for context.
 - `tight`: it fits with little room to spare, or part of it runs from system RAM and replies are slower.
 - `too large`: it does not fit in the memory a model can use here.
-- `unknown`: the CLI cannot read the machine's memory, or Ollama runs on another machine.
+- `unknown`: the CLI cannot read the machine's memory, Ollama runs on another machine, or Hugging Face does not report the size of the build or its vision projector.
 
 The rating is a rough estimate from the file size, at the context the CLI asks Ollama for: the model's trained length capped at 32K tokens, or at `OLLAMA_MAX_NUM_CTX` when you set it.
 
 `pull` refuses a too-large build before asking anything:
 
 ```text
-Fit:      too large. Rough estimate from the file size: about 50.8 GB before context memory, at the 32K context the CLI requests, more than the 50.5 GB a model can use in RAM here.
+Fit:      too large. Rough estimate from the file size: about 50.8 GB before context memory, at the 32K context the CLI requests; with 268 MB reserved headroom, this exceeds the 50.5 GB a model can use in RAM here.
 Error: Nothing was downloaded: this build is rated too large for this machine. Pick a smaller quant from: b4m models show bartowski/Llama-3.3-70B-Instruct-GGUF, or re-run with --force to download it anyway.
 ```
 

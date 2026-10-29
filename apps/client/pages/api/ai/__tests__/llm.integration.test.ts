@@ -29,6 +29,7 @@ const {
   mockLoadIdentityPrompts,
   mockOrgFindAccessibleById,
   mockOrgFindById,
+  mockResolveUserRateLimitPerMin,
 } = vi.hoisted(() => ({
   mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
   mockValidate: vi.fn(),
@@ -42,6 +43,7 @@ const {
   mockLoadIdentityPrompts: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
   mockOrgFindById: vi.fn(),
+  mockResolveUserRateLimitPerMin: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -58,13 +60,19 @@ vi.mock('@server/billing/freeTierDailyCapGate', () => ({
 }));
 
 vi.mock('@server/utils/apiKeyTrust', () => ({
-  applyUntrustedRateLimit: async (_owner: unknown, key: { rateLimit: unknown }) => key.rateLimit,
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
 }));
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockApiKeyRateLimit(...a),
+}));
+vi.mock('@server/utils/userRateTier', () => ({
+  resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
@@ -162,6 +170,17 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+const { mockAdmitRequestCompletion, mockQuotaRelease } = vi.hoisted(() => {
+  const mockQuotaRelease = vi.fn(async () => {});
+  return {
+    mockQuotaRelease,
+    mockAdmitRequestCompletion: vi.fn(async (..._a: unknown[]) => ({ release: mockQuotaRelease })),
+  };
+});
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
+}));
+
 import handler from '../llm';
 import { ApiKeyScope, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
 
@@ -210,6 +229,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockResolveUserRateLimitPerMin.mockResolvedValue(10);
     mockUserUpdate.mockResolvedValue(undefined);
     mockWillInjectAuthoredPrompt.mockResolvedValue(false);
     mockLoadIdentityPrompts.mockResolvedValue([]);
@@ -465,6 +485,43 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
   });
 
+  describe('per-user tier rate limit', () => {
+    it('blocks a caller whose tier limit is 0 (429) with no bucket write, session, or completion', async () => {
+      mockResolveUserRateLimitPerMin.mockResolvedValue(0);
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('still serves a caller at the Free default of 10 and counts against that limit', async () => {
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).toHaveBeenCalledWith(expect.any(String), 10, 60_000);
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    it('429s an over-limit caller once the bucket is full', async () => {
+      mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('skips enforcement for an unlimited (admin/developer) caller', async () => {
+      mockResolveUserRateLimitPerMin.mockResolvedValue(Infinity);
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
     const { req, res } = fire({ apiKey: null });
     await handler(req, res);
@@ -645,5 +702,39 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke.mock.calls[0][0].body.systemPrompt).toBe(atCap);
+  });
+});
+
+describe('POST /api/ai/llm (integration - untrusted owner quotas)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
+    mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockWillInjectAuthoredPrompt.mockResolvedValue(false);
+    mockLoadIdentityPrompts.mockResolvedValue([]);
+    mockGetOrCreateSession.mockResolvedValue({ sessionId: 'sess-1', asyncPromises: [], session: { id: 'sess-1' } });
+    mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+    mockAdmitRequestCompletion.mockResolvedValue({ release: mockQuotaRelease });
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+  });
+
+  it('checks the token quota for the queued turn without holding a concurrency slot', async () => {
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(req, { holdSlot: false });
+  });
+
+  it('refuses an over-quota turn with a 429 and its errorCode before creating a session', async () => {
+    mockAdmitRequestCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 5 })
+    );
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'token_rate_limit_exceeded' });
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 });

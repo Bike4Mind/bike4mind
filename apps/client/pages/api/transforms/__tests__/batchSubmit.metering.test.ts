@@ -12,6 +12,7 @@ const m = vi.hoisted(() => ({
   denied: new Set<string>(),
   enforced: true,
   hold: { ownerId: 'u1', reservedCredits: 40 },
+  quotaAdmission: vi.fn(),
   reserve: vi.fn(),
   refund: vi.fn(),
   submitBatch: vi.fn(),
@@ -19,6 +20,8 @@ const m = vi.hoisted(() => ({
   cancel: vi.fn(),
   ceiling: vi.fn(),
 }));
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: m.quotaAdmission }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
@@ -74,6 +77,7 @@ async function submit(requests: unknown[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.quotaAdmission.mockResolvedValue({ release: vi.fn() });
   m.denied.clear();
   m.enforced = true;
   m.ceiling.mockReturnValue(2);
@@ -86,6 +90,22 @@ beforeEach(() => {
 });
 
 describe('POST /api/transforms/batch metering', () => {
+  it('refuses quota exhaustion before reserving credits or submitting provider work', async () => {
+    m.quotaAdmission.mockRejectedValueOnce(Object.assign(new Error('token quota'), { statusCode: 429 }));
+    await expect(submit([item('a')])).rejects.toMatchObject({ statusCode: 429 });
+    expect(m.reserve).not.toHaveBeenCalled();
+    expect(m.submitBatch).not.toHaveBeenCalled();
+    expect(m.create).not.toHaveBeenCalled();
+  });
+
+  it('checks only the token quota for queued provider work', async () => {
+    await submit([item('a')]);
+    expect(m.quotaAdmission).toHaveBeenCalledWith(expect.objectContaining({ apiKeyInfo: { keyId: 'k1' } }), {
+      holdSlot: false,
+    });
+    expect(m.quotaAdmission).toHaveBeenCalledBefore(m.reserve);
+  });
+
   it('refuses a zero-credit key with 422 and never submits', async () => {
     m.reserve.mockRejectedValue(insufficientCreditsError('You do not have enough credits for batch transforms.'));
 

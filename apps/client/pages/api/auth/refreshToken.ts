@@ -15,6 +15,7 @@ import { buildSessionDevice } from '@server/auth/sessionDevice';
 import {
   LEGACY_REFRESH_COOKIE_SESSION_CUTOFF,
   readRefreshCookieWithSource,
+  readAdminReturnCookie,
   setRefreshCookie,
 } from '@bike4mind/server-utils/auth/refreshCookie';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
@@ -77,25 +78,34 @@ const handler = baseApi({ auth: false })
     // New session-store path: an opaque `<sid>.<secret>` refresh token is rotated against the
     // AuthSession store (rotation + grace window + reuse detection live in the service).
     if (authSessionService.isOpaqueRefreshToken(token)) {
-      const rotated = await authSessionService.rotateSession(token, {
-        db: {
-          authSessions: authSessionRepository,
-          users: userRepository,
-          realtimeConnections: realtimeConnectionRepository,
-        },
-        signAccessToken,
-        // Involuntary session outcomes -> the forensic audit log. The service's event types are
-        // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
-        // dropped so the service can await the write on the paths that throw immediately after
-        // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
-        audit: event =>
-          logAuthAudit(req, {
-            userId: event.userId,
-            event: event.type,
-            metadata: { ...event.metadata, sid: event.sid },
-          }),
-        logger: req.logger,
-      });
+      const rotated = await authSessionService
+        .rotateSession(token, {
+          db: {
+            authSessions: authSessionRepository,
+            users: userRepository,
+            realtimeConnections: realtimeConnectionRepository,
+          },
+          signAccessToken,
+          // Involuntary session outcomes -> the forensic audit log. The service's event types are
+          // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
+          // dropped so the service can await the write on the paths that throw immediately after
+          // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
+          audit: event =>
+            logAuthAudit(req, {
+              userId: event.userId,
+              event: event.type,
+              metadata: { ...event.metadata, sid: event.sid },
+            }),
+          logger: req.logger,
+        })
+        .catch(error => {
+          if (useCookie && !bodyToken && readAdminReturnCookie(req) && error instanceof UnauthorizedError) {
+            throw new UnauthorizedError('Support session ended. Return to admin.', {
+              code: 'impersonation_return_required',
+            });
+          }
+          throw error;
+        });
       requireNonSystemUser(rotated.user);
       await refuseBlockedRotatedSession(rotated, req.logger);
       return sendSession(
@@ -125,6 +135,7 @@ const handler = baseApi({ auth: false })
     const decoded = authTokenGenerator.verifyRefreshToken(token, previousSecret);
 
     if (!decoded) throw new UnauthorizedError('Invalid refresh token');
+    if (decoded.impersonatedBy) throw new UnauthorizedError('Legacy support session expired. Return to admin.');
 
     const user = await User.findById(decoded.userId);
 

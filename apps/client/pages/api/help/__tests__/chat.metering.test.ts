@@ -5,6 +5,10 @@
  * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 import { createMocks } from 'node-mocks-http';
 import { getEmbeddingModelCost, getTextModelCost, insufficientCreditsError, usdToCredits } from '@bike4mind/common';
 
@@ -39,6 +43,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return api;
   },
 }));
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit: (n: number) => n }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));

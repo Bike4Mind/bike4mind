@@ -49,6 +49,9 @@ describe('resolveApiKeyTrust', () => {
       minAccountAgeDays: 7,
       maxActiveKeysUntrusted: 1,
       untrustedRateLimitPerMinute: 20,
+      untrustedRequestsPerDay: 0,
+      untrustedTokensPerMinute: 0,
+      untrustedMaxConcurrent: 0,
     });
     expect(assessment).toMatchObject({ status: 'untrusted', reason: 'not_yet_trusted' });
   });
@@ -93,6 +96,23 @@ describe('applyUntrustedRateLimit', () => {
       billingOwnerType: CreditHolderType.User,
     });
     expect(limit).toEqual({ requestsPerMinute: 20, requestsPerDay: 1000 });
+  });
+
+  it('also clamps the per-day ceiling when the untrusted daily limit is on', async () => {
+    settingsMap.mockResolvedValue({ apiKeyUntrustedRequestsPerDay: '200' });
+    const limit = await applyUntrustedRateLimit(youngVerified, { rateLimit: keyLimit });
+    expect(limit).toEqual({ requestsPerMinute: 20, requestsPerDay: 200 });
+  });
+
+  it("keeps a key's own lower daily limit", async () => {
+    settingsMap.mockResolvedValue({ apiKeyUntrustedRequestsPerDay: '5000' });
+    const limit = await applyUntrustedRateLimit(youngVerified, { rateLimit: keyLimit });
+    expect(limit.requestsPerDay).toBe(1000);
+  });
+
+  it('leaves a trusted owner untouched when the untrusted daily limit is on', async () => {
+    settingsMap.mockResolvedValue({ apiKeyUntrustedRequestsPerDay: '200' });
+    expect(await applyUntrustedRateLimit(oldVerified, { rateLimit: keyLimit })).toBe(keyLimit);
   });
 
   it("keeps a key's own lower limit", async () => {

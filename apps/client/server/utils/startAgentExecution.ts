@@ -8,9 +8,10 @@
  * (AgentExecution + the dispatch-time prompt Quest) before dispatching the executor.
  * Duplicating that across two transports is how the two drift; it lives here instead.
  *
- * The function never throws for a rejected request and never speaks HTTP or WebSocket:
+ * The function returns guard refusals and never speaks HTTP or WebSocket:
  * it returns a discriminated {@link StartAgentExecutionResult} and each caller maps the
  * `reason` onto its own wire (an `agent_error` frame, or an HTTP status).
+ * Operational quota errors throw so each transport can preserve their retry metadata.
  */
 
 import {
@@ -37,6 +38,7 @@ import {
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
+import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
 
 /**
@@ -118,7 +120,8 @@ export type StartAgentExecutionInput = {
    * `scopeDeniedTools` and `apiKeyId` are all derived from it here so a door cannot forward one
    * without the others.
    */
-  apiKeyInfo: (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId'>) | undefined;
+  apiKeyInfo:
+    (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted'>) | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   /**
@@ -205,6 +208,17 @@ export async function startAgentExecution(
   const billing = await resolveRunBillingOrg(input, logger);
   if (!billing.ok) return billing;
   const { organizationId } = billing;
+
+  // Queued work does not occupy a synchronous completion slot. Both transports must
+  // still refuse starts while the verified personal-key owner's token window is full.
+  if (input.apiKeyInfo) {
+    await admitApiKeyCompletion({
+      owner: userId,
+      ownerUntrusted: input.apiKeyInfo.ownerUntrusted,
+      billingOwnerType: input.apiKeyInfo.billingOwnerType,
+      holdSlot: false,
+    });
+  }
 
   // Sweep stale active executions before counting - `pending` / `running` /
   // `continuing` / `awaiting_permission` / `paused` that the executor never

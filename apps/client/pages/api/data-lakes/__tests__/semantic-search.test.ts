@@ -54,6 +54,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown) => undefined,
 }));
+vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: async () => 10 }));
 vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockResolveScope }));
 // Paying by default, so the toggle tests below are not changed by the free-tier carve-out.
 vi.mock('@server/entitlements/activeSubscriptions', () => ({

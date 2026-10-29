@@ -175,10 +175,10 @@ describe('verifyWsAccessToken: enforceMFA for an existing session', () => {
     });
   });
 
-  it('passes the impersonation claim through to the enrollment gate', async () => {
+  it('refuses impersonation on the alternate realtime credential path', async () => {
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 0, typ: 'access', impersonatedBy: 'admin-1' });
-    await verifyWsAccessToken('token');
-    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.anything(), { impersonatedBy: 'admin-1' });
+    await expect(verifyWsAccessToken('token')).rejects.toThrow('Impersonated sessions cannot use realtime credentials');
+    expect(mockIsMfaEnrollmentOwed).not.toHaveBeenCalled();
   });
 
   it('fails closed when the enforcement read fails', async () => {

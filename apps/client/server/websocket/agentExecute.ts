@@ -14,6 +14,7 @@
  */
 
 import { withWebSocketContext } from '@server/websocket/utils';
+import { TooManyRequestsError } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
@@ -300,38 +301,50 @@ async function handleStart(
   // Guards, document creation and executor dispatch are shared with the public REST
   // route (`pages/api/v1/agent-executions/index.ts`) so the two transports cannot
   // drift; this handler only translates the outcome into `agent_error` frames.
-  const result = await startAgentExecution(
-    {
-      userId,
-      sessionId: cmd.sessionId,
-      questId: cmd.questId,
-      query: cmd.query,
-      model: cmd.model,
-      connectionId,
-      organizationId: cmd.organizationId,
-      agentId: cmd.agentId,
-      enabledTools: cmd.enabledTools,
-      enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
-      // A b4m_live_ key authenticates this transport too, so it gets the REST door's scope gate and audit principal.
-      apiKeyInfo,
-      maxIterations: cmd.maxIterations,
-      messageFileIds: cmd.messageFileIds,
-      pinMessageFiles: true,
-      messageOnlyFileIds: cmd.messageOnlyFileIds,
-      sessionFabFileIds: cmd.sessionFabFileIds,
-      temperature: cmd.temperature,
-      maxTokens: cmd.maxTokens,
-      thinking: cmd.thinking,
-      enableMementos: cmd.enableMementos,
-      enableLattice: cmd.enableLattice,
-      enableArtifacts: cmd.enableArtifacts,
-      imageConfig: cmd.imageConfig,
-      audioConfig: cmd.audioConfig,
-      routingSource: cmd.routingSource,
-      systemContext: cmd.systemContext,
-    },
-    logger
-  );
+  let result: Awaited<ReturnType<typeof startAgentExecution>>;
+  try {
+    result = await startAgentExecution(
+      {
+        userId,
+        sessionId: cmd.sessionId,
+        questId: cmd.questId,
+        query: cmd.query,
+        model: cmd.model,
+        connectionId,
+        organizationId: cmd.organizationId,
+        agentId: cmd.agentId,
+        enabledTools: cmd.enabledTools,
+        enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
+        // A b4m_live_ key authenticates this transport too, so it gets the REST door's scope gate and audit principal.
+        apiKeyInfo,
+        maxIterations: cmd.maxIterations,
+        messageFileIds: cmd.messageFileIds,
+        pinMessageFiles: true,
+        messageOnlyFileIds: cmd.messageOnlyFileIds,
+        sessionFabFileIds: cmd.sessionFabFileIds,
+        temperature: cmd.temperature,
+        maxTokens: cmd.maxTokens,
+        thinking: cmd.thinking,
+        enableMementos: cmd.enableMementos,
+        enableLattice: cmd.enableLattice,
+        enableArtifacts: cmd.enableArtifacts,
+        imageConfig: cmd.imageConfig,
+        audioConfig: cmd.audioConfig,
+        routingSource: cmd.routingSource,
+        systemContext: cmd.systemContext,
+      },
+      logger
+    );
+  } catch (error) {
+    if (!(error instanceof TooManyRequestsError)) throw error;
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'agent_error',
+      message: error.message,
+      ...(typeof error.additionalInfo?.errorCode === 'string' ? { errorCode: error.additionalInfo.errorCode } : {}),
+      ...(typeof error.additionalInfo?.retryAfter === 'number' ? { retryAfter: error.additionalInfo.retryAfter } : {}),
+    });
+    return;
+  }
 
   if (result.ok) return;
 

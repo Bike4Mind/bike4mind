@@ -30,7 +30,9 @@ beforeEach(async () => {
 
 // Raw inserts: the classifier only reads these fields, and the full User schema's required fields are
 // irrelevant to the time series.
-const insertUsers = (rows: { email: string; createdAt: Date; signupMeta?: Record<string, unknown> }[]) =>
+const insertUsers = (
+  rows: { email: string; createdAt: Date; lastActiveAt?: Date; signupMeta?: Record<string, unknown> }[]
+) =>
   User.collection.insertMany(
     rows.map(row => {
       const _id = new mongoose.Types.ObjectId();
@@ -75,6 +77,31 @@ describe('getSignupTimeseries', () => {
     await insertUsers([{ email: 'old@company.test', createdAt: new Date(NOW.getTime() - HOUR) }]);
     const result = await getSignupTimeseries({ range: '24h' }, NOW);
     expect(result.totals).toMatchObject({ total: 1, suspected: 0, likelyLegit: 1 });
+  });
+
+  it('judges a Gmail spike against hours before the range, splitting never-active accounts from real ones', async () => {
+    const spikeHour = new Date('2026-03-08T09:00:00Z').getTime();
+    const quiet = Array.from({ length: 20 }, (_, i) => ({
+      email: `earlier${i}@gmail.com`,
+      createdAt: new Date(NOW.getTime() - 20 * 24 * HOUR + i * 17 * HOUR),
+      lastActiveAt: new Date(NOW.getTime() - 20 * 24 * HOUR + i * 17 * HOUR + 3 * 24 * HOUR),
+    }));
+    const wave = Array.from({ length: 30 }, (_, i) => ({
+      email: `wave${i}@gmail.com`,
+      createdAt: new Date(spikeHour + i * MIN),
+    }));
+    const real = Array.from({ length: 3 }, (_, i) => ({
+      email: `real${i}@gmail.com`,
+      createdAt: new Date(spikeHour + (40 + i) * MIN),
+      lastActiveAt: new Date(spikeHour + 30 * HOUR),
+    }));
+    await insertUsers([...quiet, ...wave, ...real]);
+
+    const result = await getSignupTimeseries({ range: '7d' }, NOW);
+
+    expect(result.totals.bySignal.signupSpike).toBe(33);
+    expect(result.totals.bySignal.dormantAfterSignup).toBe(30);
+    expect(result.totals.suspected).toBe(30);
   });
 
   it('flags a WAF bot label from signup metadata', async () => {
@@ -130,12 +157,9 @@ describe('getSignupTimeseries', () => {
     );
     const result = await getSignupTimeseries({ range: '24h' }, NOW);
     expect(result.truncated).toBe(true);
-    expect(result.totals).toMatchObject({
-      total: TIMESERIES_SCAN_LIMIT + extra,
-      unclassified: extra,
-      likelyLegit: TIMESERIES_SCAN_LIMIT,
-      suspected: 0,
-    });
+    expect(result.totals).toMatchObject({ total: TIMESERIES_SCAN_LIMIT + extra, unclassified: extra });
+    // Twenty thousand signups in one hour is itself a spike, so only the classified total is pinned here.
+    expect(result.totals.likelyLegit + result.totals.suspected).toBe(TIMESERIES_SCAN_LIMIT);
     for (const bucket of result.buckets)
       expect(bucket.suspected + bucket.likelyLegit + bucket.unclassified).toBe(bucket.total);
   });

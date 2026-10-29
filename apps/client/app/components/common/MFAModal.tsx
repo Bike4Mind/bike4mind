@@ -1,10 +1,11 @@
 import { Modal, Typography, Box, Stack, Button, Sheet, IconButton, Input, Checkbox, Divider } from '@mui/joy';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import { toast } from 'sonner';
 import Image from 'next/image';
 import CloseIcon from '@mui/icons-material/Close';
 import FingerprintIcon from '@mui/icons-material/Fingerprint';
 import { passkeysSupported } from '@client/app/hooks/data/passkeys';
+import type { MfaChallengeMode } from '@client/app/hooks/useMfaChallenge';
 
 interface MFAModalProps {
   open: boolean;
@@ -13,6 +14,8 @@ interface MFAModalProps {
   onCancel: () => void;
   onVerify: (code: string, rememberDevice: boolean) => void;
   loading?: boolean;
+  /** 'setup' enrolls a new authenticator; 'verify' checks an existing one. */
+  mode?: MfaChallengeMode;
   /** Show the "remember this device" opt-in. Verification only - never during setup. */
   allowRememberDevice?: boolean;
   /** Length of the trust window, for the checkbox label. */
@@ -36,6 +39,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
   onCancel,
   onVerify,
   loading = false,
+  mode = 'verify',
   error = null,
   title,
   qrCodeUrl,
@@ -51,7 +55,9 @@ const MFAModal: React.FC<MFAModalProps> = ({
 }) => {
   const [code, setCode] = useState('');
   const [rememberDevice, setRememberDevice] = useState(false);
-  const isSetupMode = title?.includes('Set Up');
+  const [pasteHint, setPasteHint] = useState<string | null>(null);
+  const titleId = useId();
+  const isSetupMode = mode === 'setup';
   // Setup enrolls the second factor; offering to skip it in the same breath makes no
   // sense, so the opt-in is verification-only.
   const showRememberDevice = allowRememberDevice && showVerify && !isSetupMode;
@@ -63,21 +69,49 @@ const MFAModal: React.FC<MFAModalProps> = ({
     if (open) {
       setCode('');
       setRememberDevice(false);
+      setPasteHint(null);
     }
   }, [open]);
 
   const handleCodeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value.replace(/\s/g, ''); // Remove spaces
+    setPasteHint(null);
     if (value.length <= 10) {
       // Allow up to 10 characters for backup codes
       setCode(value);
     }
   };
 
-  const handleCopyBackupCodes = () => {
+  const handleCopyBackupCodes = async () => {
     if (backupCodes && backupCodes.length > 0) {
-      navigator.clipboard.writeText(backupCodes.join('\n'));
-      toast.success('Backup codes copied to clipboard');
+      try {
+        await navigator.clipboard.writeText(backupCodes.join('\n'));
+        toast.success('Backup codes copied to clipboard');
+      } catch {
+        toast.error('Could not copy backup codes. Use Download instead.');
+      }
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const rawText = e.clipboardData.getData('text');
+    // Only space- or hyphen-grouped digits ("123 456", "123-456") are stripped: stripping before the backup match would
+    // turn "hello world" into a base32-shaped code. The 6-digit code wins over a 10-letter label word.
+    const spacedDigits = rawText.replace(/[\s-]/g, '').match(/^\d{6}$/);
+    const embedded =
+      spacedDigits ??
+      rawText.match(/(?<![A-Za-z0-9])\d{6}(?![A-Za-z0-9])/) ??
+      (qrCodeUrl ? null : rawText.match(/(?<![A-Za-z0-9])[A-Za-z2-7]{10}(?![A-Za-z0-9])/));
+    if (embedded) {
+      setPasteHint(null);
+      setCode(embedded[0]);
+    } else {
+      setPasteHint(
+        qrCodeUrl
+          ? 'Paste or enter the 6-digit code from your authenticator app.'
+          : 'Paste or enter a 6-digit code or 10-character backup code.'
+      );
     }
   };
 
@@ -118,14 +152,22 @@ const MFAModal: React.FC<MFAModalProps> = ({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
+        p: 2,
       }}
     >
       <Sheet
         className="mfa-modal-content"
+        data-testid="mfa-modal-content"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         variant="outlined"
         sx={{
           width: 400,
           maxWidth: '100%',
+          // Setup (QR + key + backup codes) is taller than most viewports; scroll inside the dialog.
+          maxHeight: 'calc(100dvh - 32px)',
+          overflowY: 'auto',
           borderRadius: 'md',
           p: 3,
           boxShadow: 'lg',
@@ -143,7 +185,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
           </IconButton>
         )}
         <Stack spacing={2}>
-          <Typography className="mfa-modal-title" level="h4">
+          <Typography id={titleId} className="mfa-modal-title" level="h4">
             {title || 'Multi-Factor Authentication'}
           </Typography>
           {description && <Typography>{description}</Typography>}
@@ -240,16 +282,15 @@ const MFAModal: React.FC<MFAModalProps> = ({
                     }
                   }
                 }}
-                onPaste={e => {
-                  e.preventDefault();
-                  const pastedText = e.clipboardData.getData('text').replace(/\s/g, '');
-                  // Setup mode: only 6-digit codes, Verification mode: allow up to 10 characters
-                  const maxLength = qrCodeUrl ? 6 : 10;
-                  if (pastedText.length <= maxLength) {
-                    setCode(pastedText);
-                  }
-                }}
+                onPaste={handlePaste}
               />
+              <Box aria-live="polite">
+                {pasteHint && (
+                  <Typography data-testid="mfa-modal-paste-hint" level="body-sm" sx={{ mb: 1 }}>
+                    {pasteHint}
+                  </Typography>
+                )}
+              </Box>
               {error && (
                 <Typography color="danger" sx={{ mb: 1 }}>
                   {error}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import {
+  canManageOrgConnectors,
   canManageOrgIntegrations,
   canViewOrgAnalysis,
   canViewOrgBilling,
@@ -343,6 +344,7 @@ describe('resolveAccessibleTab', () => {
     canManageIntegrations: true,
     canManageGroups: true,
     canViewBilling: true,
+    canManageConnectors: true,
   };
 
   it('leaves a tab the caller may see alone', () => {
@@ -414,10 +416,57 @@ describe('resolveAccessibleTab', () => {
       canViewUsage: false,
       canViewAnalysis: false,
       canManageIntegrations: false,
+      canManageConnectors: false,
       canManageGroups: false,
       canViewBilling: false,
     };
     expect(resolveAccessibleTab(OrganizationTabs.Overview, none)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Members, none)).toBe(OrganizationTabs.Members);
+  });
+});
+
+describe('canManageOrgConnectors', () => {
+  // The Connectors tab fronts organizations/[id]/custom-mcp/*, which verifyOrgAccess gates to the
+  // owner, a current manager or a platform admin.
+  const org = {
+    userId: 'owner1',
+    adminUserIds: ['manager1', 'lapsed1'],
+    users: [
+      { userId: 'manager1', permissions: [Permission.read] },
+      { userId: 'member1', permissions: [Permission.read, Permission.update] },
+    ],
+  };
+
+  it('admits the owner, a current manager and a platform admin', () => {
+    expect(canManageOrgConnectors({ id: 'owner1' }, org)).toBe(true);
+    expect(canManageOrgConnectors({ id: 'manager1' }, org)).toBe(true);
+    expect(canManageOrgConnectors({ id: 'stranger', isAdmin: true }, org)).toBe(true);
+  });
+
+  it('refuses a member with update permission, a manager no longer on the roster, and a stranger', () => {
+    expect(canManageOrgConnectors({ id: 'member1' }, org)).toBe(false);
+    expect(canManageOrgConnectors({ id: 'lapsed1' }, org)).toBe(false);
+    expect(canManageOrgConnectors({ id: 'stranger' }, org)).toBe(false);
+  });
+
+  it('fails closed while the user or org is loading', () => {
+    expect(canManageOrgConnectors(null, org)).toBe(false);
+    expect(canManageOrgConnectors({ id: 'owner1' }, undefined)).toBe(false);
+  });
+
+  it('bounces a deep link to Connectors for a caller who may not manage them', () => {
+    const access = {
+      canManageOrg: true,
+      canViewUsage: false,
+      canViewAnalysis: true,
+      canManageIntegrations: false,
+      canManageGroups: false,
+      canViewBilling: false,
+      canManageConnectors: false,
+    };
+    expect(resolveAccessibleTab(OrganizationTabs.Connectors, access)).toBe(OrganizationTabs.Overview);
+    expect(resolveAccessibleTab(OrganizationTabs.Connectors, { ...access, canManageConnectors: true })).toBe(
+      OrganizationTabs.Connectors
+    );
   });
 });

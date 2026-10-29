@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { Logger } from '@bike4mind/observability';
-import { ISessionDocument, IKeywordRoutingRule, canUpdateShareable } from '@bike4mind/common';
+import { ISessionDocument, IKeywordRoutingRule, IUser, canUpdateShareable } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 
@@ -64,7 +64,7 @@ export async function resolveAccessibleNotebookId(
 /**
  * Helper function to update user's slack settings
  */
-export async function updateUserSlackSettings(userId: string, slackSettings: any) {
+export async function updateUserSlackSettings(userId: string, slackSettings: NonNullable<IUser['slackSettings']>) {
   const { User } = getSlackDb();
   await (User as any).findByIdAndUpdate(userId, { $set: { slackSettings } }, { new: true, upsert: false });
 }
@@ -94,7 +94,7 @@ export async function getOrCreateNotebookForSlackUser(
   threadTs?: string,
   agentName?: string | null,
   workspaceId?: string // Slack workspace ID for async notification
-) {
+): Promise<string> {
   const { User, Session, sessionRepository, projectRepository, fabFileRepository, defineAbilitiesFor } = getSlackDb();
   const { sessionManager } = getSlackDeps();
 
