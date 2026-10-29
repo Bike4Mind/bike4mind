@@ -177,6 +177,12 @@ describe('grantNoCardUnlock on a real replica set', () => {
     expect(await balance(fourth)).toBe(0);
   });
 
+  it('does not refuse a staged account that has no budget-held reason', async () => {
+    await seedSettings();
+    const id = await seedUser({ signupGrant: { stage: 'pending_email', signupCredits: 12, unlockCredits: 0, creditsReleased: 0 } });
+    expect(await grantNoCardUnlock(id, 'github_verified', await build())).toMatchObject({ granted: true });
+  });
+
   it('refuses a young GitHub account and leaves the balance unchanged', async () => {
     await seedSettings();
     const id = await seedUser();
