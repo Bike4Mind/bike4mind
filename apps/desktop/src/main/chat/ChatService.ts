@@ -3419,6 +3419,7 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      promptCache: message.promptCache,
     });
     if (updated) this.captureSessionHistory(updated, historyScope);
   }

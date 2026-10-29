@@ -30,6 +30,7 @@ describe('ChatService prompt cache lifetime', () => {
   let posted: Posted[];
   let events: ChatStreamEvent[];
   let service: ChatService;
+  let store: SessionStore;
 
   beforeEach(async () => {
     const opened: Posted[] = (posted = []);
@@ -40,8 +41,9 @@ describe('ChatService prompt cache lifetime', () => {
       opened.push({ body, stream });
       return Promise.resolve({ data: stream, status: 200 });
     });
+    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-cache-ttl-sessions-')), 'claude-opus-5-5');
     service = new ChatService({
-      store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-cache-ttl-sessions-')), 'claude-opus-5-5'),
+      store,
       models: { list: async () => ({ models: MODELS }), cached: () => MODELS } as unknown as ModelCatalog,
       access: { list: async () => [root] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
@@ -95,6 +97,32 @@ describe('ChatService prompt cache lifetime', () => {
     const older = await runTurn('claude-sonnet-4-5', '1h');
     expect(older.options).not.toHaveProperty('cacheTtl');
     expect(older.done.promptCache).toMatchObject({ ttl: '5m', model: 'claude-sonnet-4-5' });
+  });
+
+  it('stores the stamp on a continued reply, not just on its done event', async () => {
+    const { id } = await service.createSession();
+    await store.appendMessage(id, {
+      id: 'resume-me',
+      role: 'assistant',
+      content: 'Partial',
+      createdAt: new Date().toISOString(),
+      stopReason: 'tool_turn_limit',
+    });
+    expect(await service.continueReply(id)).toMatchObject({ ok: true });
+    const turn = await vi.waitUntil(() => posted.find(entry => entry.body.messages[0]?.content !== TITLE_INSTRUCTION), {
+      timeout: 3000,
+      interval: 5,
+    });
+    turn.stream.write(frame({ type: 'content', text: 'more' }));
+    turn.stream.write(frame('[DONE]'));
+    const done = await vi.waitUntil(
+      () => events.find((event): event is Extract<ChatStreamEvent, { type: 'done' }> => event.type === 'done'),
+      { timeout: 3000, interval: 5 }
+    );
+
+    expect(done.promptCache).toMatchObject({ ttl: '5m', model: 'claude-opus-5-5' });
+    const stored = (await service.getSession(id))?.messages.find(message => message.id === 'resume-me');
+    expect(stored?.promptCache).toEqual(done.promptCache);
   });
 
   it('stamps nothing on a model Desktop does not cache', async () => {

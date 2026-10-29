@@ -61,7 +61,7 @@ export function PromptCacheTtlPicker({
             >
               <Stack sx={{ minWidth: 0 }}>
                 <Typography level="body-sm" noWrap>
-                  {choice === ttl ? '• ' : ''}
+                  {choice === ttl ? '\u2022 ' : ''}
                   {CHOICES[choice].label}
                 </Typography>
                 <Typography level="body-xs" textColor="text.tertiary" noWrap>

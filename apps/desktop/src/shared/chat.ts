@@ -1728,13 +1728,6 @@ export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion 
 export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self' | 'empty-message' | 'unavailable';
 
 /**
- * One tool round of a reply: what the model said, and then what it went on to run.
- *
- * Holds call IDS rather than the calls, so a call has exactly one home - the message's
- * `toolCalls` - and a round naming one that is no longer there draws prose with no row instead
- * of the same row twice.
- */
-/**
  * The server-side prompt cache a reply left behind. `cachedAt` is the last request's first
  * token (or its end when nothing streamed), which is after the cache was written, so an
  * expiry read off it is late by at most the prompt's processing time, never early.
@@ -1746,6 +1739,13 @@ export interface ChatPromptCacheStamp {
   model: string;
 }
 
+/**
+ * One tool round of a reply: what the model said, and then what it went on to run.
+ *
+ * Holds call IDS rather than the calls, so a call has exactly one home - the message's
+ * `toolCalls` - and a round naming one that is no longer there draws prose with no row instead
+ * of the same row twice.
+ */
 export interface ChatRoundTiming {
   startedAt: number;
   /** The first streamed delta of any kind; absent when the stream produced nothing. */

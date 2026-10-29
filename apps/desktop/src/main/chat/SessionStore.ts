@@ -698,6 +698,7 @@ export class SessionStore {
    */
   async setPromptCacheTtl(id: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
     const updated = await this.mutate(id, session => {
+      if (session.promptCacheTtl === ttl) return false;
       session.promptCacheTtl = ttl;
       return true;
     });
