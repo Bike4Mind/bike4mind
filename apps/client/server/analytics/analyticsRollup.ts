@@ -99,7 +99,8 @@ async function classifyCohort(day: string, { now = new Date(), logger }: RollupO
       new Date(scanSince.getTime() - SPIKE_BASELINE_HOURS * HOUR_MS),
       new Date(end.getTime() + DAY_MS),
       'hour',
-      0
+      0,
+      QUERY_DEADLINE_MS
     ),
   ]);
   if (truncated) logger?.warn(`analytics rollup: signup candidate scan truncated for ${day}`);
@@ -134,6 +135,7 @@ async function classifyCohort(day: string, { now = new Date(), logger }: RollupO
  */
 export async function evaluateSignupDay(day: string, options: RollupOptions = {}) {
   const { signups, suspectedIds } = await classifyCohort(day, options);
+  // Not atomic: readers between the reset and the re-flag can see suspected=false for the cohort.
   await AnalyticsUserDay.updateMany({ signupDay: day }, { $set: { suspected: false } });
   if (suspectedIds.length > 0) {
     await AnalyticsUserDay.updateMany({ signupDay: day, userId: { $in: suspectedIds } }, { $set: { suspected: true } });
@@ -306,7 +308,11 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
   for (let i = 0; i < ops.length; i += USER_BATCH) {
     await AnalyticsUserDay.bulkWrite(ops.slice(i, i + USER_BATCH), { ordered: false });
   }
-  await AnalyticsUserDay.deleteMany({ day, userId: { $nin: [...perUser.keys()] } });
+  const existingIds: string[] = await AnalyticsUserDay.distinct('userId', { day });
+  const staleIds = existingIds.filter(id => !perUser.has(id));
+  for (let i = 0; i < staleIds.length; i += USER_BATCH) {
+    await AnalyticsUserDay.deleteMany({ day, userId: { $in: staleIds.slice(i, i + USER_BATCH) } });
+  }
 
   const signups = await evaluateSignupDay(day, options);
   const [wau, mau] = await windowCounts(day);
