@@ -164,6 +164,21 @@ describe('ModelPicker server groups', () => {
     act(() => down.click());
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['unreachable', 1],
+    ['local-srv-def456', 0],
+  ])('filters unavailable rows by their visible reason (%s)', (query, count) => {
+    mount([
+      ...grouped.map(model => (model.unavailable ? { ...model, backend: 'local-srv-def456' } : model)),
+      ...MODELS,
+    ]);
+
+    typeInto(filterBox(), query);
+
+    expect(options()).toHaveLength(count);
+    if (count) expect(options()[0]?.textContent?.toLowerCase()).toContain(query);
+  });
 });
 
 describe('ModelPicker recency order', () => {
@@ -200,6 +215,21 @@ describe('ModelPicker recency order', () => {
       'Undated B',
     ]);
     expect(options().some(option => option.textContent?.includes('undated-a'))).toBe(false);
+  });
+
+  it('selects the newest filtered match on Enter without changing catalog order', async () => {
+    const models = [
+      { id: 'older', name: 'Matching old', releaseDate: '2024-01-01' },
+      { id: 'newer', name: 'Matching new', releaseDate: '2025-01-01' },
+      ...MODELS,
+    ];
+    const { onSelect } = mount(models);
+
+    typeInto(filterBox(), 'matching');
+    await act(async () => key(filterBox(), 'Enter'));
+
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('newer');
+    expect(models[0]?.id).toBe('older');
   });
 
   it('renders no secondary line for a row with nothing to say', () => {
@@ -258,5 +288,17 @@ describe('ModelPicker twin rows', () => {
 
     typeInto(filterBox(), '2025-04');
     expect(options()).toHaveLength(1);
+  });
+
+  it.each([
+    ['needs credentials', 2],
+    ['2025-04', 0],
+  ])('filters unavailable twins by the reason replacing their ids (%s)', (query, count) => {
+    mount([...twins.slice(0, 2).map(model => ({ ...model, unavailable: 'Provider needs credentials' })), ...MODELS]);
+
+    typeInto(filterBox(), query);
+
+    expect(options()).toHaveLength(count);
+    expect(options().every(option => option.textContent?.toLowerCase().includes(query))).toBe(true);
   });
 });

@@ -65,8 +65,8 @@ function providerLabel(model: ChatModelOption): string | undefined {
 }
 
 /**
- * Each row's secondary line, keyed by model id: the provider, plus the id only where another row
- * in the same group shows the same name and provider - the catalog lists some models twice.
+ * Each row's visible secondary line, keyed by model id. Unavailable reasons replace provider/id
+ * details so filtering and rendering agree even when a server goes down.
  */
 export function rowDetails(models: readonly ChatModelOption[]): Map<string, string | undefined> {
   const rowKey = (model: ChatModelOption) => `${model.server?.id ?? ''}\n${model.name}\n${providerLabel(model) ?? ''}`;
@@ -74,6 +74,7 @@ export function rowDetails(models: readonly ChatModelOption[]): Map<string, stri
   for (const model of models) counts.set(rowKey(model), (counts.get(rowKey(model)) ?? 0) + 1);
   return new Map(
     models.map(model => {
+      if (model.unavailable !== undefined) return [model.id, model.unavailable];
       const provider = providerLabel(model);
       if ((counts.get(rowKey(model)) ?? 0) < 2) return [model.id, provider];
       return [model.id, provider ? `${provider} - ${model.id}` : model.id];
@@ -328,14 +329,14 @@ export function ModelPicker({
                     {model.id === modelId ? '\u2022 ' : ''}
                     {model.name}
                   </Typography>
-                  {(model.unavailable ?? details.get(model.id)) && (
+                  {details.get(model.id) && (
                     <Typography
                       level="body-xs"
                       textColor="text.tertiary"
                       noWrap
                       data-testid="model-picker-option-detail"
                     >
-                      {model.unavailable ?? details.get(model.id)}
+                      {details.get(model.id)}
                     </Typography>
                   )}
                 </Stack>
