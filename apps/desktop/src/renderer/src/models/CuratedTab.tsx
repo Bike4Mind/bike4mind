@@ -16,6 +16,7 @@ import {
   type CuratedList,
   type CuratedPickView,
   type CuratedSlot,
+  type CuratedSourceView,
   type HubBuildView,
   type HubModelView,
   type InstalledModelsResult,
@@ -45,6 +46,26 @@ function machineText(machine: MachineView): string {
       machine.gpuName ? ` (${machine.gpuName})` : ''
     }.`;
   return `This computer has ${memory} of RAM and no GPU memory was detected, so badges assume models run on the CPU.`;
+}
+
+function checkedAgo(checkedAt: string, now: number): string {
+  const minutes = Math.floor((now - Date.parse(checkedAt)) / 60_000);
+  if (!Number.isFinite(minutes) || minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+/** Where the shown list came from, and what the last check for a newer one found. */
+export function sourceText(source: CuratedSourceView, now = Date.now()): string {
+  const parts = [source.origin === 'updated' ? 'Updated online.' : 'Bundled with this app.'];
+  if (source.check === 'checking') parts.push('Checking for updates...');
+  else if (source.check === 'failed') parts.push('Could not check for updates.');
+  else if (source.check !== 'off' && source.checkedAt) parts.push(`Checked ${checkedAgo(source.checkedAt, now)}.`);
+  if (source.stale) parts.push('This list may be out of date.');
+  return parts.join(' ');
 }
 
 function listDate(updatedAt: string): string {
@@ -470,6 +491,9 @@ export function CuratedTab({
     };
   }, [attempt, runtimeReachable, runtimeVersion, installedKey]);
 
+  // The shown list stays up while a check runs; a newer one replaces it when main says so.
+  useEffect(() => window.b4m.models.onCuratedChanged(() => setAttempt(n => n + 1)), []);
+
   if (loadFailed)
     return (
       <Alert
@@ -513,6 +537,28 @@ export function CuratedTab({
         <span data-testid="models-curated-date">Curated list from {listDate(list.updatedAt)}.</span>{' '}
         {machineText(list.machine)} Hover a badge for why.
       </Typography>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Typography
+          level="body-xs"
+          textColor="text.tertiary"
+          data-testid="curated-header-status"
+          data-origin={list.source.origin}
+          data-check={list.source.check}
+        >
+          {sourceText(list.source)}
+        </Typography>
+        {list.source.check !== 'off' && (
+          <Button
+            size="sm"
+            variant="plain"
+            loading={list.source.check === 'checking'}
+            onClick={() => void window.b4m.models.checkCuratedList().catch(() => undefined)}
+            data-testid="curated-check-now-btn"
+          >
+            Check now
+          </Button>
+        )}
+      </Stack>
       {!runtimeReady && (
         <Alert color="neutral" variant="soft" data-testid="models-curated-runtime-down">
           Downloads need Ollama running on this computer.

@@ -110,8 +110,11 @@ export interface ModelHubServiceDeps {
   hardware: () => Promise<HardwareProfile>;
   /** The Settings choice local chat sizes its context with; fit badges plan for that same context. */
   localContext: () => Promise<LocalContextSetting>;
-  /** The Curated tab's list. */
-  curated: HubManifest;
+  /**
+   * The Curated tab's current list, which can change while the app runs. Each call here reads it once and uses
+   * that snapshot throughout, so a list update during a download never changes the pins it is checked against.
+   */
+  curated: () => HubManifest;
   onPullsChanged: (pulls: ModelPull[]) => void;
   onInstalledChanged: () => void;
   /** The main log. */
@@ -554,12 +557,12 @@ export class ModelHubService {
   }
 
   /** A reviewed curated file is rated as its Curated row is; any other file falls back to its size. */
-  #buildFit(detail: HubModelDetail, sizing: Sizing): (build: HubGgufBuild) => ModelFit | null {
+  #buildFit(detail: HubModelDetail, sizing: Sizing, manifest: HubManifest): (build: HubGgufBuild) => ModelFit | null {
     const projector = projectorBytes(detail) ?? 0;
     return build => {
       if (build.sizeBytes <= 0) return null;
       const file = build.files.length === 1 ? build.files[0] : null;
-      for (const entry of this.#deps.curated.entries)
+      for (const entry of manifest.entries)
         for (const reviewed of entry.builds) {
           const weights = reviewed.weights[0];
           if (
@@ -577,8 +580,7 @@ export class ModelHubService {
     };
   }
 
-  #reviewed(entryId: string, buildId: string): { entry: HubEntry; build: HubBuild } | null {
-    const manifest = this.#deps.curated;
+  #reviewed(manifest: HubManifest, entryId: string, buildId: string): { entry: HubEntry; build: HubBuild } | null {
     const entry = manifest.entries.find(candidate => candidate.id === entryId && listable(candidate, manifest));
     const build = entry?.builds.find(candidate => candidate.id === buildId && pullable(candidate));
     return entry && build ? { entry, build } : null;
@@ -682,7 +684,7 @@ export class ModelHubService {
 
   /** Re-runs the post-download check on an installed curated build that Ollama could not describe. */
   async checkCurated(entryId: string, buildId: string): Promise<CuratedCheckResult> {
-    const picked = this.#reviewed(entryId, buildId);
+    const picked = this.#reviewed(this.#deps.curated(), entryId, buildId);
     if (!picked) return { ok: false, error: hubError('not-found', 'That model is not on the list.') };
     const { build } = picked;
     const ref = libraryOf(build)?.ref ?? this.#hfRef(entryId, build);
@@ -738,8 +740,8 @@ export class ModelHubService {
   }
 
   /** Recommended goes to the first pick, best first, that fits and can be downloaded here. */
-  #picks(entries: readonly CuratedEntryView[], hardware: HardwareProfile): CuratedPickView[] {
-    const shown = curatedPicks(this.#deps.curated, hardware).picks.flatMap(({ pick }) => {
+  #picks(manifest: HubManifest, entries: readonly CuratedEntryView[], hardware: HardwareProfile): CuratedPickView[] {
+    const shown = curatedPicks(manifest, hardware).picks.flatMap(({ pick }) => {
       const build = entries.find(entry => entry.id === pick.entry)?.builds.find(view => view.id === pick.build);
       return build ? [{ pick, build }] : [];
     });
@@ -752,10 +754,11 @@ export class ModelHubService {
     }));
   }
 
-  async curated(): Promise<CuratedList> {
+  /** The list's source status is the caller's to add; this service only sees the manifest. */
+  async curated(): Promise<Omit<CuratedList, 'source'>> {
+    const manifest = this.#deps.curated();
     const [sizing, health, { hub }] = await Promise.all([this.#sizing(), this.#deps.runtime.health(), this.#hub()]);
     const { hardware } = sizing;
-    const manifest = this.#deps.curated;
     const version = health.ok ? health.version : null;
     const entries = curatedListing(manifest).map(({ entry, builds }): CuratedEntryView => {
       const library = entry.builds.map(libraryOf).find(source => source !== null);
@@ -783,7 +786,7 @@ export class ModelHubService {
     return {
       updatedAt: manifest.updatedAt,
       machine: machineView(hardware),
-      picks: this.#picks(entries, hardware),
+      picks: this.#picks(manifest, entries, hardware),
       entries,
     };
   }
@@ -793,7 +796,8 @@ export class ModelHubService {
    * checks again when the request carries the curated identity.
    */
   async curatedPull(entryId: string, buildId: string): Promise<CuratedPullResult> {
-    const picked = this.#reviewed(entryId, buildId);
+    const manifest = this.#deps.curated();
+    const picked = this.#reviewed(manifest, entryId, buildId);
     if (!picked) return { ok: false, error: hubError('not-found', 'That model is not on the list.') };
     const { entry, build: reviewed } = picked;
     let token = false;
@@ -834,7 +838,7 @@ export class ModelHubService {
         };
       const refusal = await this.#checkLayers(reviewed, ref.slice(ref.lastIndexOf(':') + 1));
       if (refusal) return { ok: false, error: refusal };
-      const model = toView(hub.endpoint, detail, token, this.#buildFit(detail, sizing));
+      const model = toView(hub.endpoint, detail, token, this.#buildFit(detail, sizing, manifest));
       const build = model.builds.find(candidate => candidate.id === live.id);
       if (!build) return { ok: false, error: hubError('not-found', 'That build is no longer in this repo.') };
       const kind = permissive(entry) && model.licenseKind === 'permissive' ? 'permissive' : 'restricted';
@@ -977,7 +981,7 @@ export class ModelHubService {
       // A cached denial would outlive an access grant by up to the cache TTL; re-ask before saying "cannot read".
       const detail =
         token && hubAccess(found, token) === 'denied' ? await hub.getModel(repo, { refresh: true }) : found;
-      return { ok: true, model: toView(hub.endpoint, detail, token, this.#buildFit(detail, sizing)) };
+      return { ok: true, model: toView(hub.endpoint, detail, token, this.#buildFit(detail, sizing, this.#deps.curated())) };
     } catch (error) {
       return { ok: false, error: toModelHubError(error, token) };
     }
@@ -1018,7 +1022,9 @@ export class ModelHubService {
       return { ok: false, error, listed: false };
     };
 
-    const curated = request.curated ? this.#reviewed(request.curated.entryId, request.curated.buildId) : null;
+    // One snapshot for every check below; a list update mid-pull applies to the next pull.
+    const manifest = this.#deps.curated();
+    const curated = request.curated ? this.#reviewed(manifest, request.curated.entryId, request.curated.buildId) : null;
     if (request.curated && !curated) return refuse(hubError('not-found', 'That model is not on the list.'));
 
     let token = false;

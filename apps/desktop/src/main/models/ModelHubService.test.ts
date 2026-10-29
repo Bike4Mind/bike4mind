@@ -184,7 +184,7 @@ function harness(
     healthy?: boolean;
     /** null: Ollama answers but reports no version. */
     version?: string | null;
-    curated?: HubManifest;
+    curated?: HubManifest | (() => HubManifest);
     hardware?: HardwareProfile;
     setting?: LocalContextSetting;
     checkBackoffMs?: number[];
@@ -253,7 +253,8 @@ function harness(
     libraryLayers,
     hardware,
     localContext: async () => options.setting ?? AUTO_LOCAL_CONTEXT,
-    curated: options.curated ?? CURATED,
+    curated:
+      typeof options.curated === 'function' ? options.curated : () => (options.curated as HubManifest) ?? CURATED,
     onPullsChanged: next => pushed.push(next),
     onInstalledChanged: installedChanged,
     warn,
@@ -426,7 +427,7 @@ describe('ModelHubService pulls', () => {
       libraryLayers: async () => null,
       hardware: async () => CPU_16,
       localContext: async () => AUTO_LOCAL_CONTEXT,
-      curated: CURATED,
+      curated: () => CURATED,
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
       warn: () => {},
@@ -515,7 +516,7 @@ describe('ModelHubService pulls', () => {
       libraryLayers: async () => null,
       hardware: async () => CPU_16,
       localContext: async () => AUTO_LOCAL_CONTEXT,
-      curated: CURATED,
+      curated: () => CURATED,
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
       warn: () => {},
@@ -1278,6 +1279,23 @@ describe('ModelHubService curated library pulls', () => {
     expect(runtime.remove).not.toHaveBeenCalled();
   });
 
+  it('checks a pull against the list it started with when the list changes mid-download', async () => {
+    const updated = structuredClone(CURATED);
+    const moved = updated.entries.find(entry => entry.id === LIBRARY.id)?.builds[0].ollama;
+    if (moved?.kind !== 'library') throw new Error('no library build');
+    moved.digest = 'e'.repeat(64);
+    let list = CURATED;
+    const { service, runtime, pulls } = harness({ curated: () => list });
+    const result = service.pull(libraryRequest);
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    list = updated;
+    pulls[0].resolve();
+
+    await expect(result).resolves.toEqual({ ok: true, ref: REF });
+    expect(runtime.remove).not.toHaveBeenCalled();
+    expect(await service.pull(libraryRequest)).toMatchObject({ ok: false, error: { kind: 'changed' } });
+  });
+
   /** Pulls E4B to completion with Ollama reporting `installed` for it; resolves with the pull's result. */
   async function pulledAs(
     setup: ReturnType<typeof harness>,
@@ -1431,6 +1449,22 @@ describe('ModelHubService curated library pulls', () => {
     expect(setup.service.pulls()).toHaveLength(1);
     expect(await setup.service.remove(REF)).toEqual({ ok: true });
     expect(setup.service.pulls()).toEqual([]);
+  });
+
+  it('checks again against one snapshot of the list as it is now', async () => {
+    let list = CURATED;
+    const getter = vi.fn(() => list);
+    const setup = harness({ curated: getter });
+    for (let read = 0; read < 3; read++) setup.runtime.inspect.mockRejectedValueOnce(showTimedOut());
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+
+    list = { ...structuredClone(CURATED), entries: CURATED.entries.filter(entry => entry.id !== LIBRARY.id) };
+    getter.mockClear();
+    expect(await setup.service.checkCurated(LIBRARY.id, E4B.id)).toMatchObject({
+      ok: false,
+      error: { kind: 'not-found' },
+    });
+    expect(getter).toHaveBeenCalledTimes(1);
   });
 
   it('removes an unverified download that a later check finds unreviewed, when Ollama lacked the tag', async () => {
@@ -2144,7 +2178,7 @@ describe('ModelHubService Hugging Face token', () => {
       libraryLayers: async () => null,
       hardware: async () => CPU_16,
       localContext: async () => AUTO_LOCAL_CONTEXT,
-      curated: CURATED,
+      curated: () => CURATED,
       onPullsChanged: next => pushed.push(next),
       onInstalledChanged: () => {},
       warn: () => {},
@@ -2209,7 +2243,7 @@ describe('removing the token with the real store', () => {
         libraryLayers: async () => null,
         hardware: async () => CPU_16,
         localContext: async () => AUTO_LOCAL_CONTEXT,
-        curated: CURATED,
+        curated: () => CURATED,
         onPullsChanged: () => undefined,
         onInstalledChanged: () => undefined,
         warn: () => undefined,

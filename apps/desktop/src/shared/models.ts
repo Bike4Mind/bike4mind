@@ -207,9 +207,31 @@ export interface CuratedPickView {
   recommended: boolean;
 }
 
+/** 'off' when this build has no list URL or trusted key, or the user turned checks off; rejected lists show as failed. */
+export type CuratedCheckStatus = 'off' | 'idle' | 'checking' | 'up-to-date' | 'updated' | 'failed';
+
+export interface CuratedSourceView {
+  /** The list shown: the one bundled with this app, or a newer signed one Desktop downloaded. */
+  origin: 'bundled' | 'updated';
+  sequence: number | null;
+  check: CuratedCheckStatus;
+  /** The last check that reached the list, as an ISO time; null before the first. */
+  checkedAt: string | null;
+  /** The list is over 180 days old and no check has succeeded in 7 days; information only. */
+  stale: boolean;
+}
+
+export interface CuratedListSettings {
+  /** This build has a list URL and a key it trusts; without both it only has the bundled list. */
+  available: boolean;
+  /** The user lets Desktop check for an updated list when Models opens. */
+  enabled: boolean;
+}
+
 export interface CuratedList {
   /** The list's date, from its updatedAt. */
   updatedAt: string;
+  source: CuratedSourceView;
   machine: MachineView;
   /** This computer's picks in slot order; empty when the list has none for its memory. */
   picks: CuratedPickView[];

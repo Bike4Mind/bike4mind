@@ -58,6 +58,28 @@ export {
   type CuratedSource,
   type CuratedTierPick,
 } from './curated';
+export {
+  CURATED_KEY_ROLES,
+  CURATED_MAX_MANIFEST_BYTES,
+  CURATED_MAX_SEQUENCE,
+  CURATED_MAX_SIGNATURE_BYTES,
+  CURATED_SIGNATURE_DOMAIN,
+  curatedKeyFromSeed,
+  curatedKeyId,
+  curatedPublicKey,
+  curatedSignedMessage,
+  parseCuratedKey,
+  parseCuratedSignatureFile,
+  signCurated,
+  verifyCurated,
+  type CuratedKey,
+  type CuratedKeyRole,
+  type CuratedSignatureEntry,
+  type CuratedSignatureFile,
+  type CuratedVerifyFailure,
+  type CuratedVerifyResult,
+} from './curatedSignature';
+export { BodyTooLargeError, DEFAULT_REQUEST_TIMEOUT_MS, readCapped } from './http';
 export { archFromModelInfo, tensorStatsFromTensors } from './arch';
 export {
   DEFAULT_GGUF_MAX_ARRAY_LENGTH,

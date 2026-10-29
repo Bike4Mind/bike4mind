@@ -11,11 +11,13 @@ import {
   RuntimeProtocolError,
 } from './errors';
 import {
+  BodyTooLargeError,
   DEFAULT_REQUEST_TIMEOUT_MS,
   assertHeaderValues,
   combinedSignal,
   describeError,
   parseJson,
+  readCapped,
   runtimeEndpointId,
   type HttpClient,
 } from './http';
@@ -731,8 +733,6 @@ function retryAfterMs(headers: Headers): number | null {
   return reset ? Number(reset[1]) * 1000 : null;
 }
 
-class BodyTooLargeError extends Error {}
-
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason);
@@ -776,25 +776,7 @@ export function clearHubCache(): void {
 }
 
 async function readText(response: Response, maxBytes: number): Promise<string> {
-  if (Number(response.headers.get('content-length')) > maxBytes) throw new BodyTooLargeError();
-  if (!response.body) return '';
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let text = '';
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > maxBytes) throw new BodyTooLargeError();
-      text += decoder.decode(value, { stream: true });
-    }
-    return text + decoder.decode();
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
+  return new TextDecoder().decode(await readCapped(response, maxBytes));
 }
 
 /**

@@ -9,7 +9,9 @@ const MAX_FAMILIES = 200;
 const MAX_BUILDS = 16;
 const MAX_CHANGELOG = 200;
 const MAX_TIERS = 32;
-const MAX_SEQUENCE = 2 ** 31;
+/** The highest curated list sequence; the publish script also caps each step over live. */
+export const HUB_MAX_SEQUENCE = 1_000_000;
+const MAX_SEQUENCE = HUB_MAX_SEQUENCE;
 /** The shortest trained context, in tokens, a chat entry may declare. */
 export const MIN_CHAT_CONTEXT = 16384;
 
@@ -433,6 +435,8 @@ const EntryHeaderSchema = z.object({
   }),
   reviewedAt: z.iso.date(),
   notesUrl: HttpsUrlSchema.nullable().optional(),
+  // Older Desktops leave the entry out; compared to the app's major.minor.patch.
+  minDesktopVersion: SemverSchema.optional(),
 });
 type EntryHeader = z.infer<typeof EntryHeaderSchema>;
 
@@ -653,6 +657,12 @@ function pickIssue(pick: HubTierPick, tier: HubTier, entries: readonly HubEntry[
   return entry.builds.some(build => build.id === pick.build) ? null : `no build ${pick.build} in ${pick.entry}`;
 }
 
+// Signing key ids a recovery-signed list revokes; clients keep them for good, and the list is append-only.
+const RevokedKeyIdsSchema = z
+  .array(z.string().regex(/^[0-9a-f]{16}$/))
+  .max(16)
+  .default([]);
+
 const ManifestObjectSchema = z.object({
   schemaVersion: z.literal(2),
   // Strictly increases on every published change; the only ordering key between two lists.
@@ -661,6 +671,7 @@ const ManifestObjectSchema = z.object({
   updatedAt: z.iso.datetime(),
   notesUrl: HttpsUrlSchema.nullable().optional(),
   changelog: z.array(ChangelogItemSchema).max(MAX_CHANGELOG).default([]),
+  revokedKeyIds: RevokedKeyIdsSchema,
   policy: HubPolicySchema.prefault({}),
   families: z.record(SlugSchema, FamilySchema).refine(maxKeys(MAX_FAMILIES), 'too many families'),
   // Per role, best first.
@@ -711,6 +722,26 @@ export const HubManifestSchema = ManifestObjectSchema.superRefine(refineManifest
 export type HubManifest = z.infer<typeof HubManifestSchema>;
 export type HubManifestInput = z.input<typeof HubManifestSchema>;
 
+/**
+ * The published catalog as CI and the publish script hold it: a sequence its changelog leads with and strictly
+ * decreases from, and a newest item naming only listed entries (older items are history, removals unlisted ones).
+ */
+export const CuratedCatalogSchema = HubManifestSchema.superRefine((manifest, ctx) => {
+  const issue = (path: PropertyKey[], message: string) => ctx.addIssue({ code: 'custom', path, message });
+  if (manifest.sequence === undefined) return issue(['sequence'], 'a published catalog needs a sequence');
+  const [newest, ...older] = manifest.changelog;
+  if (newest?.sequence !== manifest.sequence)
+    return issue(['changelog', 0, 'sequence'], 'the newest changelog item must carry the catalog sequence');
+  older.forEach((item, i) => {
+    if (item.sequence >= manifest.changelog[i].sequence)
+      issue(['changelog', i + 1, 'sequence'], 'changelog sequences must strictly decrease');
+  });
+  const ids = new Set(manifest.entries.map(entry => entry.id));
+  for (const id of [...newest.added, ...newest.changed]) if (!ids.has(id)) issue(['changelog', 0], `no entry ${id}`);
+  for (const removed of newest.removed)
+    if (ids.has(removed.id)) issue(['changelog', 0, 'removed'], `entry ${removed.id} is still listed`);
+});
+
 /** Something a client skipped while reading a newer or partly invalid manifest. */
 export interface HubManifestDrop {
   path: string;
@@ -736,6 +767,8 @@ const ManifestEnvelopeSchema = z.object({
   updatedAt: z.iso.datetime(),
   notesUrl: HttpsUrlSchema.nullable().optional(),
   changelog: z.unknown().optional(),
+  // Strict even here: a revocation a client cannot read must not be skipped quietly.
+  revokedKeyIds: RevokedKeyIdsSchema,
   tiers: z.unknown().optional(),
   policy: z.record(z.string(), z.unknown()).nullable().optional(),
   families: z.record(z.string(), z.unknown()).refine(maxKeys(MAX_FAMILIES), 'too many families'),
@@ -960,6 +993,7 @@ export function parseHubManifest(input: unknown): HubManifestParse {
     updatedAt: envelope.updatedAt,
     notesUrl: envelope.notesUrl,
     changelog: reader.changelog(envelope.changelog),
+    revokedKeyIds: envelope.revokedKeyIds,
     policy,
     families,
     rankings: reader.rankings(envelope.rankings, entries),
