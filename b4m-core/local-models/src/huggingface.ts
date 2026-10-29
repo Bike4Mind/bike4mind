@@ -26,6 +26,30 @@ export const DEFAULT_HUGGING_FACE_ENDPOINT = 'https://huggingface.co';
 /** Registry host Ollama pulls Hugging Face GGUFs from, as `hf.co/<repo>:<quant>`. */
 export const OLLAMA_HUGGING_FACE_HOST = 'hf.co';
 
+/**
+ * Host Ollama pulls gated and private repos by. Ollama refuses to sign a pull whose auth realm (huggingface.co) is
+ * not the host it asked, and hf.co redirects there, so those refs use this host instead.
+ */
+export const OLLAMA_SIGNED_HUGGING_FACE_HOST = 'huggingface.co';
+
+/** The name Ollama pulls `ref` (as planned, `hf.co/...`) by: `huggingface.co/...` when the repo needs the SSH key. */
+export function ollamaPullRef(ref: string, needsSshKey: boolean): string {
+  return needsSshKey ? ref.replace(/^hf\.co\//, `${OLLAMA_SIGNED_HUGGING_FACE_HOST}/`) : ref;
+}
+
+/** Identity of an installed Ollama model: a model pulled as hf.co/x or huggingface.co/x is one model. */
+export function ollamaModelKey(name: string): string {
+  return name.toLowerCase().replace(/^huggingface\.co\//, `${OLLAMA_HUGGING_FACE_HOST}/`);
+}
+
+/** Every name an installed copy of the model `ref` points at may be listed under, lower case. */
+export function ollamaRefAliases(ref: string): string[] {
+  const key = ollamaModelKey(ref);
+  return key.startsWith(`${OLLAMA_HUGGING_FACE_HOST}/`)
+    ? [key, key.replace(/^hf\.co\//, `${OLLAMA_SIGNED_HUGGING_FACE_HOST}/`)]
+    : [key];
+}
+
 /** Manifest requests one `verifyOllamaRef` call may send. */
 export const MAX_VERIFY_TAGS = 4;
 
@@ -196,7 +220,7 @@ export interface HubModelDetail extends HubModelSummary {
    */
   canDownload: boolean | null;
   /**
-   * True for a gated or private repo. Ollama pulls from hf.co with its own SSH key and never sees `token`, so the
+   * True for a gated or private repo. Ollama downloads with its own SSH key and never sees `token`, so the
    * Ollama host's public key (`~/.ollama/id_ed25519.pub`) must first be added at `HUGGING_FACE_SSH_KEYS_URL`
    * (Hugging Face Hub docs, "Use Ollama with any GGUF Model on Hugging Face Hub").
    */
@@ -834,6 +858,21 @@ export class HuggingFaceHub {
   }
 
   /**
+   * Whether the Hub accepts the configured token, from `whoami-v2`; false without a token. Worth asking before
+   * keeping one: the Hub ignores a bad token on public reads, so it would otherwise only fail on a gated repo.
+   */
+  async checkToken(options: { signal?: AbortSignal } = {}): Promise<boolean> {
+    if (!this.#token) return false;
+    try {
+      await this.#getJson('/api/whoami-v2', z.object({}).passthrough(), { signal: options.signal });
+      return true;
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && error.status === 401) return false;
+      throw error;
+    }
+  }
+
+  /**
    * Repo metadata and its GGUF builds, pinned to one commit. A missing repo, and a private one the token cannot
    * read, both reject with `ModelNotFoundError`, since the Hub answers both with a bare 401; a token the Hub
    * rejects outright (403) gives `HubAccessError` with reason `unauthorized`.
@@ -900,12 +939,13 @@ export class HuggingFaceHub {
 
   /**
    * The Ollama ref that pulls exactly `build`'s file, asked of the registry itself (one manifest request per tag
-   * tried, at most `MAX_VERIFY_TAGS`); null when no tag does. Call it right before a pull: it also clears `ambiguous`
+   * tried, at most `MAX_VERIFY_TAGS`); null when no tag does. Gated and private repos come back by their
+   * `huggingface.co` name (see `ollamaPullRef`). Call it right before a pull: it also clears `ambiguous`
    * and `pinned-revision` builds whose file the registry serves byte for byte, and catches files the registry skips.
    * The pull itself carries no token; see `ollamaNeedsSshKey`.
    */
   async verifyOllamaRef(
-    detail: Pick<HubModelDetail, 'id' | 'builds'>,
+    detail: Pick<HubModelDetail, 'id' | 'builds'> & Partial<Pick<HubModelDetail, 'ollamaNeedsSshKey'>>,
     build: HubGgufBuild,
     options: { signal?: AbortSignal } = {}
   ): Promise<string | null> {
@@ -925,7 +965,8 @@ export class HuggingFaceHub {
         throw error;
       }
       const model = manifest.layers.find(layer => layer.mediaType === OLLAMA_MODEL_LAYER);
-      if (model?.digest === `sha256:${sha256}`) return `${OLLAMA_HUGGING_FACE_HOST}/${detail.id}:${tag}`;
+      if (model?.digest === `sha256:${sha256}`)
+        return ollamaPullRef(`${OLLAMA_HUGGING_FACE_HOST}/${detail.id}:${tag}`, detail.ollamaNeedsSshKey === true);
     }
     return null;
   }

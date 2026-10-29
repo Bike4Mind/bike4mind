@@ -1054,6 +1054,17 @@ describe('models rm', () => {
     expect(confirmed.lines).toEqual(['Removed qwen2.5:0.5b.', expect.stringMatching(/It was your default model/)]);
   });
 
+  it.each([
+    ['hf.co/acme/m-GGUF:Q4_K_M', 'huggingface.co/acme/m-GGUF:Q4_K_M'],
+    ['huggingface.co/acme/m-GGUF:Q4_K_M', 'hf.co/acme/m-GGUF:Q4_K_M'],
+  ])('removes %s when it is installed as %s', async (name, listedAs) => {
+    const runtime = fakeRuntime({ list: vi.fn().mockResolvedValue([installed(listedAs)]) });
+    const h = harness({ runtime, config: { defaultModel: listedAs } });
+    await runModelsCommand('rm', { _: [], name, yes: true }, h.deps);
+    expect(runtime.remove).toHaveBeenCalledWith(listedAs);
+    expect(h.lines.some(line => line.includes('It was your default model'))).toBe(true);
+  });
+
   it('reports a missing model', async () => {
     const runtime = fakeRuntime({ remove: vi.fn().mockRejectedValue(new ModelNotFoundError('ollama', 'nope')) });
     await expect(runModelsCommand('rm', { _: [], name: 'nope', yes: true }, harness({ runtime }).deps)).rejects.toThrow(
@@ -1077,6 +1088,13 @@ describe('models use', () => {
     const h = harness({ runtime, config: { ollamaHost: 'http://127.0.0.1:11500' } });
     await runModelsCommand('use', { _: [], name: 'llama3' }, h.deps);
     expect(h.saved).toEqual([{ defaultModel: 'llama3:latest', localDefaultModel: 'llama3:latest' }]);
+  });
+
+  it('finds a Hugging Face model installed under the other host name', async () => {
+    const runtime = fakeRuntime({ list: vi.fn().mockResolvedValue([installed('huggingface.co/acme/m-GGUF:Q4_K_M')]) });
+    const h = harness({ runtime });
+    await runModelsCommand('use', { _: [], name: 'hf.co/acme/m-GGUF:Q4_K_M' }, h.deps);
+    expect(h.saved[0]).toMatchObject({ defaultModel: 'huggingface.co/acme/m-GGUF:Q4_K_M' });
   });
 
   it('rejects unknown models and non-Ollama runtimes', async () => {

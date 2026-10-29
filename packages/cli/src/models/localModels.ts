@@ -15,6 +15,7 @@ import {
   hubBuildTag,
   isAbliteratedModel,
   isHubRepoId,
+  ollamaModelKey,
   type DetectedRuntime,
   type HubGgufBuild,
   type HubModelDetail,
@@ -323,7 +324,7 @@ export async function listInstalled(
   return models.map(model => ({
     ...model,
     loaded: loadedNames.has(model.name),
-    default: model.name === defaultModel,
+    default: !!defaultModel && sameModelName(model.name, defaultModel),
   }));
 }
 
@@ -332,6 +333,20 @@ export function normalizeModelName(name: string): string {
   return withoutLibrary.lastIndexOf(':') > withoutLibrary.lastIndexOf('/')
     ? withoutLibrary
     : `${withoutLibrary}:latest`;
+}
+
+/** Whether two names are one model, counting hf.co and huggingface.co as the same Hugging Face repo. */
+export function sameModelName(a: string, b: string): boolean {
+  return ollamaModelKey(normalizeModelName(a)) === ollamaModelKey(normalizeModelName(b));
+}
+
+export function findInstalledModel<T extends { name: string }>(models: T[], name: string): T | undefined {
+  const wanted = name.replace(/^library\//i, '');
+  return (
+    models.find(model => model.name === name || model.name === wanted) ??
+    models.find(model => model.name === `${wanted}:latest`) ??
+    models.find(model => sameModelName(model.name, name))
+  );
 }
 
 export function requireRemovable(target: RuntimeTarget): void {

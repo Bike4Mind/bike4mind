@@ -14,6 +14,7 @@ import {
   formatBytes,
   formatCount,
   pullKey,
+  type HfTokenStatus,
   type HubBuildView,
   type HubModelCard,
   type HubModelView,
@@ -24,7 +25,9 @@ import {
 } from '@shared/models';
 import { ExternalLink } from '../chat/ExternalLink';
 import { SearchIcon } from '../chat/icons';
+import { readShowAbliterated, writeShowAbliterated } from './abliteratedSetting';
 import { AccessSteps } from './AccessSteps';
+import { HuggingFaceToken } from './HuggingFaceToken';
 import { PullDialog, type PullConsent } from './PullDialog';
 import { pullLabel, pullPercent } from './pullDisplay';
 
@@ -37,7 +40,7 @@ type DetailState =
   { state: 'loading' } | { state: 'ready'; model: HubModelView } | { state: 'error'; error: ModelHubError };
 
 // Kept across visits so returning to the screen mid-pull shows the same search and repo.
-const remembered = { query: '', selected: null as string | null, showAbliterated: false };
+const remembered = { query: '', selected: null as string | null };
 
 export function hubErrorText(error: ModelHubError): string {
   if (error.kind === 'rate-limited') {
@@ -86,6 +89,11 @@ function ResultRow({ model, selected, onSelect }: { model: HubModelCard; selecte
         {model.gated && (
           <Chip size="sm" variant="soft" color="warning">
             Gated
+          </Chip>
+        )}
+        {model.private && (
+          <Chip size="sm" variant="soft" color="warning" data-testid="models-explore-private-chip">
+            Private
           </Chip>
         )}
         {model.abliterated && (
@@ -306,13 +314,7 @@ function ModelDetail({
 
       {model.needsAccess && (
         <Alert color="warning" variant="soft" data-testid="models-detail-access">
-          <Box>
-            <AccessSteps model={model} />
-            <Typography level="body-xs" sx={{ mt: 0.75 }}>
-              Bike4Mind cannot check gated files without a Hugging Face token, so their builds cannot be downloaded from
-              here yet.
-            </Typography>
-          </Box>
+          <AccessSteps model={model} />
         </Alert>
       )}
       {!runtimeReady && (
@@ -339,7 +341,7 @@ function ModelDetail({
               repo={model.id}
               build={build}
               pull={pulls.find(entry => entry.key === pullKey(model.id, build.id))}
-              installed={!!build.ollamaRef && installedNames.has(build.ollamaRef.toLowerCase())}
+              installed={build.installedNames.some(name => installedNames.has(name))}
               runtimeReady={runtimeReady}
               onPull={() => setConfirming(build)}
             />
@@ -378,8 +380,14 @@ export function ExploreTab({
   const [query, setQuery] = useState(remembered.query);
   const [search, setSearch] = useState<SearchState>({ state: 'loading' });
   const [selected, setSelected] = useState<string | null>(remembered.selected);
-  const [showAbliterated, setShowAbliterated] = useState(remembered.showAbliterated);
+  const [showAbliterated, setShowAbliterated] = useState(readShowAbliterated);
+  const [token, setToken] = useState<HfTokenStatus | null>(null);
+  const [tokenReadError, setTokenReadError] = useState(false);
+  const [tokenReadVersion, setTokenReadVersion] = useState(0);
+  // Bumped when the token changes, so the open repo is read again with what the new token can see.
+  const [tokenVersion, setTokenVersion] = useState(0);
   const generation = useRef(0);
+  const tokenGeneration = useRef(0);
 
   const run = useCallback(async (text: string) => {
     const mine = ++generation.current;
@@ -410,6 +418,41 @@ export function ExploreTab({
     void run(remembered.query);
   }, [run]);
 
+  useEffect(() => {
+    let live = true;
+    const mine = tokenGeneration.current;
+    setTokenReadError(false);
+    void window.b4m.models.getHfToken().then(
+      status => {
+        if (!live || mine !== tokenGeneration.current) return;
+        setToken(status);
+        if (tokenReadVersion > 0) {
+          setTokenVersion(version => version + 1);
+          void run(remembered.query);
+        }
+      },
+      () => {
+        if (live && mine === tokenGeneration.current) setTokenReadError(true);
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [run, tokenReadVersion]);
+
+  const tokenChanged = useCallback(
+    (status: HfTokenStatus) => {
+      tokenGeneration.current += 1;
+      setTokenReadError(false);
+      setToken(status);
+      setTokenVersion(version => version + 1);
+      void run(remembered.query);
+    },
+    [run]
+  );
+
+  useEffect(() => window.b4m.models.onHfTokenChanged(tokenChanged), [tokenChanged]);
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     remembered.query = query.trim();
@@ -420,7 +463,7 @@ export function ExploreTab({
     setSelected(repo);
   };
   const toggleAbliterated = (on: boolean) => {
-    remembered.showAbliterated = on;
+    writeShowAbliterated(on);
     setShowAbliterated(on);
   };
 
@@ -473,6 +516,20 @@ export function ExploreTab({
             />
           </Typography>
         </Stack>
+        <HuggingFaceToken status={token} onChanged={tokenChanged} />
+        {tokenReadError && (
+          <Alert
+            color="danger"
+            data-testid="models-hf-token-read-error"
+            endDecorator={
+              <Button size="sm" variant="plain" onClick={() => setTokenReadVersion(version => version + 1)}>
+                Retry
+              </Button>
+            }
+          >
+            Could not read the saved Hugging Face token. Try again.
+          </Alert>
+        )}
 
         {search.state === 'loading' && (
           <Box sx={{ display: 'grid', placeItems: 'center', py: 6 }} data-testid="models-explore-loading">
@@ -524,7 +581,7 @@ export function ExploreTab({
       <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2, position: { md: 'sticky' }, top: { md: 8 } }}>
         {selected ? (
           <ModelDetail
-            key={selected}
+            key={`${selected}:${tokenVersion}`}
             repo={selected}
             status={status}
             installedNames={installedNames}

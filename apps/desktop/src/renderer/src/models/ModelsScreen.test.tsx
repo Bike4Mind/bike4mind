@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type {
+  HfTokenStatus,
   HubDetailResult,
   HubModelView,
   HubSearchResult,
@@ -66,11 +67,13 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
         label: 'Q4_K_M',
         sizeBytes: 491_400_032,
         ollamaRef: `hf.co/${REPO}:Q4_K_M`,
+        installedNames: [`hf.co/${REPO}:q4_k_m`.toLowerCase(), `huggingface.co/${REPO}:q4_k_m`.toLowerCase()],
         blockedReason: null,
       },
     ],
     projectorBytes: null,
     needsAccess: false,
+    hubAccess: 'no-token',
     ...extra,
   };
 }
@@ -81,9 +84,11 @@ interface Bridge {
   search: HubSearchResult;
   detail: HubDetailResult;
   pulls: ModelPull[];
+  token: HfTokenStatus;
 }
 
 let bridge: Bridge;
+let pushToken: ((status: HfTokenStatus) => void) | null = null;
 let pushPulls: (pulls: ModelPull[]) => void = () => {};
 const calls = {
   pull: vi.fn(),
@@ -92,19 +97,34 @@ const calls = {
   search: vi.fn(),
   getDetail: vi.fn(),
   getStatus: vi.fn(),
+  getHfToken: vi.fn(),
+  setHfToken: vi.fn(),
+  clearHfToken: vi.fn(),
 };
 
 beforeEach(() => {
+  pushToken = null;
   bridge = {
     status: RUNNING,
     installed: { ok: true, models: [] },
     search: { ok: true, models: [card(REPO)], nextCursor: null },
     detail: { ok: true, model: view() },
     pulls: [],
+    token: { set: false, persisted: true },
   };
   for (const fn of Object.values(calls)) fn.mockReset();
+  window.localStorage.clear();
+  calls.getHfToken.mockImplementation(async () => bridge.token);
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.remove.mockResolvedValue({ ok: true });
+  calls.setHfToken.mockImplementation(async () => {
+    bridge.token = { ...bridge.token, set: true };
+    return { ok: true, status: bridge.token };
+  });
+  calls.clearHfToken.mockImplementation(async () => {
+    bridge.token = { ...bridge.token, set: false };
+    return { ok: true, status: bridge.token };
+  });
   (window as unknown as { b4m: unknown }).b4m = {
     shell: { openExternal: vi.fn() },
     models: {
@@ -126,9 +146,18 @@ beforeEach(() => {
       cancelPull: calls.cancelPull,
       dismissPull: vi.fn(),
       remove: calls.remove,
+      getHfToken: calls.getHfToken,
+      setHfToken: calls.setHfToken,
+      clearHfToken: calls.clearHfToken,
       onPullsChanged: (listener: (pulls: ModelPull[]) => void) => {
         pushPulls = listener;
         return () => {};
+      },
+      onHfTokenChanged: (listener: (status: HfTokenStatus) => void) => {
+        pushToken = listener;
+        return () => {
+          pushToken = null;
+        };
       },
       onInstalledChanged: () => () => {},
     },
@@ -175,6 +204,14 @@ const click = async (element: HTMLElement | null) => {
 
 async function openExplore() {
   await click(q('models-explore-tab'));
+}
+
+function type(input: HTMLInputElement, value: string) {
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 }
 
 describe('ModelsScreen installed', () => {
@@ -325,6 +362,31 @@ describe('ModelsScreen installed', () => {
 });
 
 describe('ModelsScreen explore', () => {
+  it.each([`hf.co/${REPO}:Q4_K_M`, `huggingface.co/${REPO}:Q4_K_M`])(
+    'shows a build installed as %s as installed',
+    async name => {
+      bridge.installed = {
+        ok: true,
+        models: [
+          {
+            name,
+            sizeBytes: 397_000_000,
+            quantization: 'Q4_K_M',
+            family: 'qwen2',
+            parameterSize: '494M',
+            modifiedAt: null,
+            capabilities,
+            loaded: false,
+          },
+        ],
+      };
+      await mount();
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      expect(q('models-build-installed-chip')).not.toBeNull();
+    }
+  );
+
   it('hides abliterated results until the toggle is on, then labels them', async () => {
     bridge.search = {
       ok: true,
@@ -341,6 +403,32 @@ describe('ModelsScreen explore', () => {
     expect(q('models-explore-abliterated-chip')).not.toBeNull();
     await click(q('models-explore-abliterated-switch'));
     expect(all('models-explore-result-row')).toHaveLength(1);
+  });
+
+  it('remembers the abliterated toggle across restarts, and keeps it off by default', async () => {
+    bridge.search = {
+      ok: true,
+      models: [card(REPO), card('someone/Qwen2.5-7B-abliterated-GGUF', { abliterated: true })],
+      nextCursor: null,
+    };
+    await mount();
+    await openExplore();
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBeNull();
+    expect(all('models-explore-result-row')).toHaveLength(1);
+    await click(q('models-explore-abliterated-switch'));
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBe('1');
+    await click(q('models-explore-abliterated-switch'));
+
+    act(() => root?.unmount());
+    host?.remove();
+    // Turned on in an earlier run; this run's module state never saw it.
+    window.localStorage.setItem('b4m.models.showAbliterated', '1');
+    await mount();
+    await openExplore();
+    expect(all('models-explore-result-row')).toHaveLength(2);
+    expect((q('models-explore-abliterated-switch') as HTMLInputElement).checked).toBe(true);
+    await click(q('models-explore-abliterated-switch'));
+    expect(window.localStorage.getItem('b4m.models.showAbliterated')).toBe('0');
   });
 
   it('shows the license before the download button and asks before pulling', async () => {
@@ -440,9 +528,41 @@ describe('ModelsScreen explore', () => {
     await openExplore();
     await click(q('models-explore-result-row'));
     expect(q('models-access-steps')?.textContent).toContain('Request access');
+    expect(q('models-access-step-token')?.textContent).toContain('Add a token from that account');
     expect(q('models-access-keys-link')?.getAttribute('href')).toBe('https://huggingface.co/settings/keys');
+    expect(q('models-access-steps')?.textContent).toContain('Ollama downloads with this key, not with your token.');
     expect(q('models-build-blocked-reason')?.textContent).toContain('Needs access');
     expect(q('models-build-pull-btn')).toBeNull();
+  });
+
+  it('drops the request-access step once the token can read the repo, and still asks about the Ollama key', async () => {
+    bridge.token = { set: true, persisted: true };
+    bridge.detail = { ok: true, model: view({ gated: 'auto', needsAccess: true, hubAccess: 'granted' }) };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-access-step-account')?.textContent).toBe('Your Hugging Face token can read it.');
+    expect(q('models-access-step-token')).toBeNull();
+    expect(q('models-access-repo-link')).toBeNull();
+
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(true);
+    expect(document.body.textContent).toContain(
+      "I added Ollama's public key to the Hugging Face account that has access."
+    );
+    await click(q('models-pull-dialog-access-checkbox'));
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ confirmAccess: true }));
+  });
+
+  it('says when the saved token cannot read a gated repo yet', async () => {
+    bridge.token = { set: true, persisted: true };
+    bridge.detail = { ok: true, model: view({ gated: 'manual', needsAccess: true, hubAccess: 'denied' }) };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-access-step-token')?.textContent).toContain('Your saved token cannot read it yet');
+    expect(q('models-access-repo-link')).not.toBeNull();
   });
 
   it('shows progress for a pull in flight and cancels it', async () => {
@@ -548,6 +668,68 @@ describe('ModelsScreen explore', () => {
     expect(q('models-explore-error')?.textContent).toContain(text);
   });
 
+  it('adds a token through Hugging Face, shows a rejected one, then reloads search and the open repo', async () => {
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+    expect(q('models-hf-token-status')?.textContent).toContain('not set');
+
+    await click(q('models-hf-token-edit-btn'));
+    expect(q('models-hf-token-dialog')).not.toBeNull();
+    expect(q('models-hf-token-ollama-note')?.textContent).toContain('never sees this token');
+    expect(q('models-hf-token-no-keychain')).toBeNull();
+    const input = q('models-hf-token-input') as HTMLInputElement;
+    expect(input.type).toBe('password');
+    type(input, 'hf_wrong');
+    calls.setHfToken.mockResolvedValueOnce({
+      ok: false,
+      error: { kind: 'token-rejected', message: 'Hugging Face did not accept this token.' },
+    });
+    await click(q('models-hf-token-save-btn'));
+    expect(calls.setHfToken).toHaveBeenLastCalledWith('hf_wrong');
+    expect(q('models-hf-token-error')?.textContent).toBe('Hugging Face did not accept this token.');
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+
+    const searches = calls.search.mock.calls.length;
+    const reads = calls.getDetail.mock.calls.length;
+    await click(q('models-hf-token-save-btn'));
+    expect(q('models-hf-token-dialog')).toBeNull();
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+    expect(q('models-hf-token-status')?.textContent).toBe('Hugging Face token: saved.');
+    expect(calls.search.mock.calls.length).toBe(searches + 1);
+    expect(calls.getDetail.mock.calls.length).toBe(reads + 1);
+
+    await click(q('models-hf-token-remove-btn'));
+    expect(calls.clearHfToken).toHaveBeenCalledTimes(1);
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+    expect(calls.search.mock.calls.length).toBe(searches + 2);
+  });
+
+  it('keeps the token shown as set and says so when removing it fails', async () => {
+    bridge.token = { set: true, persisted: true };
+    calls.clearHfToken.mockResolvedValueOnce({
+      ok: false,
+      error: { kind: 'failed', message: 'Could not remove the token. Try again.', retryAfterMs: null },
+    });
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-remove-btn'));
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+    expect(q('models-hf-token-remove-error')?.textContent).toBe('Could not remove the token. Try again.');
+  });
+
+  it('says a token lasts only until quit without a keychain', async () => {
+    bridge.token = { set: false, persisted: false };
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-edit-btn'));
+    expect(q('models-hf-token-no-keychain')?.textContent).toContain('kept only until you quit');
+    type(q('models-hf-token-input') as HTMLInputElement, 'hf_session');
+    await click(q('models-hf-token-save-btn'));
+    expect(q('models-hf-token-status')?.textContent).toBe('Hugging Face token: saved until you quit (no keychain).');
+  });
+
   it('says when nothing matches', async () => {
     bridge.search = { ok: true, models: [], nextCursor: null };
     await mount();
@@ -561,5 +743,80 @@ describe('ModelsScreen explore', () => {
     await click(q('models-explore-search-btn'));
     expect(calls.search).toHaveBeenLastCalledWith({ query: 'nothing-here' });
     expect(q('models-explore-empty')?.textContent).toBe('No GGUF models match "nothing-here".');
+  });
+});
+
+describe('Hugging Face token transport failures', () => {
+  it('shows a failed status read and lets the user retry', async () => {
+    await mount();
+    calls.getHfToken.mockRejectedValueOnce(new Error('IPC failed'));
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    const error = q('models-hf-token-read-error');
+    expect(error?.textContent).toContain('Could not read');
+    const searches = calls.search.mock.calls.length;
+    const details = calls.getDetail.mock.calls.length;
+    await click(error?.querySelector('button') ?? null);
+    expect(calls.search).toHaveBeenCalledTimes(searches + 1);
+    expect(calls.getDetail.mock.calls.length).toBeGreaterThan(details);
+    expect(q('models-hf-token-read-error')).toBeNull();
+    expect(q('models-hf-token')).not.toBeNull();
+  });
+
+  it('keeps a pending save open and shows rejected IPC as a visible error', async () => {
+    let rejectSave: (error: Error) => void = () => {};
+    calls.setHfToken.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSave = reject;
+        })
+    );
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-edit-btn'));
+    type(q('models-hf-token-input') as HTMLInputElement, 'hf_pending_token');
+    await click(q('models-hf-token-save-btn'));
+    expect((q('models-hf-token-cancel-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect((q('models-hf-token-input') as HTMLInputElement).disabled).toBe(true);
+    await click(q('models-hf-token-cancel-btn'));
+    expect(q('models-hf-token-dialog')).not.toBeNull();
+    await act(async () => {
+      rejectSave(new Error('IPC failed'));
+    });
+    expect(q('models-hf-token-error')?.textContent).toContain('Could not save');
+    expect((q('models-hf-token-cancel-btn') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('shows a rejected removal and keeps the saved state', async () => {
+    bridge.token = { set: true, persisted: true };
+    calls.clearHfToken.mockRejectedValueOnce(new Error('IPC failed'));
+    await mount();
+    await openExplore();
+    await click(q('models-hf-token-remove-btn'));
+    expect(q('models-hf-token-remove-error')?.textContent).toContain('Could not remove');
+    expect(q('models-hf-token')?.dataset.state).toBe('set');
+  });
+});
+
+describe('Hugging Face token changes across windows', () => {
+  it('refreshes cached private results and details on a token event and unsubscribes on exit', async () => {
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    const searches = calls.search.mock.calls.length;
+    const details = calls.getDetail.mock.calls.length;
+    bridge.search = { ok: true, models: [], nextCursor: null };
+    bridge.detail = { ok: false, error: { kind: 'not-found', message: 'No public repo.' } };
+    await act(async () => {
+      pushToken?.({ set: false, persisted: true });
+    });
+    await flush();
+    expect(calls.search).toHaveBeenCalledTimes(searches + 1);
+    expect(calls.getDetail).toHaveBeenCalledTimes(details + 1);
+    expect(q('models-explore-result-row')).toBeNull();
+    expect(q('models-detail-error')?.textContent).toContain('No public repo.');
+    expect(q('models-hf-token')?.dataset.state).toBe('unset');
+    await click(q('models-installed-tab'));
+    expect(pushToken).toBeNull();
   });
 });

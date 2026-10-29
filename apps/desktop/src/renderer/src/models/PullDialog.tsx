@@ -83,7 +83,7 @@ export function PullDialog({
                   size="sm"
                   checked={confirmAccess}
                   onChange={event => setConfirmAccess(event.target.checked)}
-                  label="I have access to this repo and added my Ollama key to Hugging Face."
+                  label="I added Ollama's public key to the Hugging Face account that has access."
                   slotProps={{ input: { 'data-testid': 'models-pull-dialog-access-checkbox' } }}
                 />
               </>

@@ -19,6 +19,9 @@ import {
   ggufQuantLabel,
   hubBuildTag,
   hubResolveUrl,
+  ollamaModelKey,
+  ollamaPullRef,
+  ollamaRefAliases,
   type HubModelDetail,
 } from './huggingface';
 import { closedPort, hang, json, startFakeServer, type FakeServer, type Handler } from './__test__/fakeServer';
@@ -980,6 +983,30 @@ describe('HuggingFaceHub Ollama refs', () => {
     expect(await hub.verifyOllamaRef(pinned, changed)).toBeNull();
   });
 
+  it('verifies a gated or private repo to its huggingface.co name and a public one to hf.co', async () => {
+    const server = await serve({
+      ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
+      [`GET /v2/${llama}/manifests/BF16`]: manifest(BF16_OID),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    const detail = await hub.getModel(llama);
+    const bf16 = detail.builds.find(build => build.quant === 'BF16')!;
+    expect(await hub.verifyOllamaRef({ ...detail, ollamaNeedsSshKey: false }, bf16)).toBe(`hf.co/${llama}:BF16`);
+    expect(await hub.verifyOllamaRef({ ...detail, ollamaNeedsSshKey: true }, bf16)).toBe(
+      `huggingface.co/${llama}:BF16`
+    );
+  });
+
+  it('treats hf.co and huggingface.co names of one repo as the same installed model', () => {
+    expect(ollamaPullRef('hf.co/a/b:Q4', true)).toBe('huggingface.co/a/b:Q4');
+    expect(ollamaPullRef('hf.co/a/b:Q4', false)).toBe('hf.co/a/b:Q4');
+    expect(ollamaModelKey('huggingface.co/A/b:Q4')).toBe(ollamaModelKey('hf.co/a/B:q4'));
+    expect(ollamaModelKey('qwen2.5:0.5b')).toBe('qwen2.5:0.5b');
+    expect(ollamaRefAliases('hf.co/A/b:Q4')).toEqual(['hf.co/a/b:q4', 'huggingface.co/a/b:q4']);
+    expect(ollamaRefAliases('huggingface.co/A/b:Q4')).toEqual(['hf.co/a/b:q4', 'huggingface.co/a/b:q4']);
+    expect(ollamaRefAliases('qwen2.5:0.5b')).toEqual(['qwen2.5:0.5b']);
+  });
+
   it('skips the request for builds no tag can pull and maps registry access errors', async () => {
     const server = await serve({
       ...repoRoutes(llama, llamaSha, { id: llama, sha: llamaSha }, llamaTree),
@@ -1172,6 +1199,37 @@ describe('HuggingFaceHub gated repos', () => {
     const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo));
     expect(error).toBeInstanceOf(HubAccessError);
     expect(error).toMatchObject({ status: 401, reason: 'gated', repo });
+  });
+});
+
+describe('HuggingFaceHub.checkToken', () => {
+  it('asks whoami-v2 with the token and reads 200 as valid and 401 as invalid', async () => {
+    const good = await serve({ 'GET /api/whoami-v2': json({ type: 'user', name: 'someone' }) });
+    expect(await new HuggingFaceHub({ endpoint: good.baseUrl, token: TOKEN }).checkToken()).toBe(true);
+    expect(good.requests[0].headers.authorization).toBe(`Bearer ${TOKEN}`);
+
+    const bad = await serve({ 'GET /api/whoami-v2': json({ error: 'Invalid username or password.' }, 401) });
+    expect(await new HuggingFaceHub({ endpoint: bad.baseUrl, token: TOKEN }).checkToken()).toBe(false);
+  });
+
+  it('answers false without a token and sends nothing', async () => {
+    const server = await serve({});
+    expect(await new HuggingFaceHub({ endpoint: server.baseUrl }).checkToken()).toBe(false);
+    expect(server.requests).toEqual([]);
+  });
+
+  it('rejects an outage or a rate limit instead of calling the token invalid, without echoing it', async () => {
+    const server = await serve({ 'GET /api/whoami-v2': json({ error: `bad ${TOKEN}` }, 500) });
+    const error = await caught(new HuggingFaceHub({ endpoint: server.baseUrl, token: TOKEN }).checkToken());
+    expect(error).toBeInstanceOf(RuntimeHttpError);
+    expect(inspect(error, { depth: 5 })).not.toContain(TOKEN);
+
+    const limited = await serve({
+      'GET /api/whoami-v2': withHeaders({ error: 'slow down' }, { 'retry-after': '5' }, 429),
+    });
+    expect(await caught(new HuggingFaceHub({ endpoint: limited.baseUrl, token: TOKEN }).checkToken())).toBeInstanceOf(
+      HubRateLimitError
+    );
   });
 });
 
