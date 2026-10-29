@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -139,6 +139,10 @@ export function InstalledTab({
   const [removeError, setRemoveError] = useState<string | null>(null);
   const canManage = target.management === 'allowed';
 
+  useEffect(() => {
+    if (!canManage) setConfirming(null);
+  }, [canManage]);
+
   const remove = async (model: LocalModelEntry, serverId: string | undefined) => {
     setRemoving(true);
     const result = await window.b4m.models.remove(model.name, serverId);
@@ -240,7 +244,7 @@ export function InstalledTab({
         </>
       )}
 
-      <Modal open={confirming !== null} onClose={() => !removing && setConfirming(null)}>
+      <Modal open={canManage && confirming !== null} onClose={() => !removing && setConfirming(null)}>
         <ModalDialog size="sm" role="alertdialog" data-testid="models-remove-dialog">
           <DialogTitle>Remove {confirming?.name}?</DialogTitle>
           <DialogContent>

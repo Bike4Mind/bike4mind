@@ -18,6 +18,8 @@
 
 ## Unreleased
 
+- Download and remove models on saved Ollama servers set to Chat and manage from the Models screen, with resumable downloads after a connection interruption.
+
 - Start new main-based worktrees from freshly fetched upstream `main` instead of local or stale `main`; if upstream cannot be fetched, the session reports the error instead of starting from a local base.
 
 - Add opt-in, account-scoped local history search and local Ollama chat without sign-in.

@@ -200,6 +200,11 @@ function ModelDetail({
   const [detail, setDetail] = useState<DetailState>({ state: 'loading' });
   const [confirmingOn, setConfirming] = useState<{ build: HubBuildView; serverId: string | undefined } | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
+  const canPull = target.management === 'allowed';
+
+  useEffect(() => {
+    if (!canPull) setConfirming(null);
+  }, [canPull]);
 
   const load = useCallback(async () => {
     setDetail({ state: 'loading' });
@@ -236,7 +241,6 @@ function ModelDetail({
 
   const model = detail.model;
   const runtimeReady = status?.reachable === true;
-  const canPull = target.management === 'allowed';
   const start = async (build: HubBuildView, serverId: string | undefined, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
@@ -362,7 +366,7 @@ function ModelDetail({
         )}
       </Box>
 
-      {confirmingOn && (
+      {canPull && confirmingOn && (
         <PullDialog
           model={model}
           build={confirmingOn.build}

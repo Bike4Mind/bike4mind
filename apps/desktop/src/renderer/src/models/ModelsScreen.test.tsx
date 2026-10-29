@@ -862,6 +862,75 @@ describe('ModelsScreen servers', () => {
     await flush();
   };
 
+  it.each([
+    ['Chat only', { access: 'chat' }, 'chat-only'],
+    ['OpenAI-compatible', { kind: 'openai-compatible' }, 'unsupported'],
+  ] as const)(
+    'closes both confirmations when the server becomes %s without reopening them later',
+    async (_label, patch, management) => {
+      await mount();
+      await pickServer('gpu');
+      await click(q('models-installed-remove-btn'));
+      expect(q('models-remove-dialog')).not.toBeNull();
+
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management });
+      await changeServers([THIS_COMPUTER, { ...GPU_BOX, ...patch }, SHARED_BOX]);
+      expect(q('models-remove-dialog')).toBeNull();
+
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX);
+      await changeServers([THIS_COMPUTER, GPU_BOX, SHARED_BOX]);
+      expect(q('models-remove-dialog')).toBeNull();
+      expect(q('models-installed-remove-btn')).not.toBeNull();
+      expect(calls.remove).not.toHaveBeenCalled();
+
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      await click(q('models-build-pull-btn'));
+      expect(q('models-pull-dialog')).not.toBeNull();
+
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management });
+      await changeServers([THIS_COMPUTER, { ...GPU_BOX, ...patch }, SHARED_BOX]);
+      expect(q('models-pull-dialog')).toBeNull();
+
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX);
+      await changeServers([THIS_COMPUTER, GPU_BOX, SHARED_BOX]);
+      expect(q('models-pull-dialog')).toBeNull();
+      expect(q('models-build-pull-btn')).not.toBeNull();
+      expect(calls.pull).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['failed', 'paused'] as const)('re-checks only the selected server when a pull becomes %s', async phase => {
+    await mount();
+    await pickServer('gpu');
+    calls.getStatus.mockClear();
+    calls.listInstalled.mockClear();
+    const pull: ModelPull = {
+      key: `shared/${REPO}#q`,
+      serverId: 'shared',
+      serverName: 'shared box',
+      repo: REPO,
+      buildId: 'q',
+      quant: 'Q4_K_M',
+      ref: `hf.co/${REPO}:Q4_K_M`,
+      phase,
+      completedBytes: 100,
+      totalBytes: 400,
+      expectedBytes: 400,
+      error: { kind: 'connection-lost', message: 'Lost the connection.' },
+    };
+
+    act(() => pushPulls([pull]));
+    await flush();
+    expect(calls.getStatus).not.toHaveBeenCalled();
+    expect(calls.listInstalled).not.toHaveBeenCalled();
+
+    act(() => pushPulls([pull, { ...pull, key: `gpu/${REPO}#q`, serverId: 'gpu', serverName: 'gpu box' }]));
+    await flush();
+    expect(calls.getStatus.mock.calls).toEqual([['gpu']]);
+    expect(calls.listInstalled.mock.calls).toEqual([['gpu']]);
+  });
+
   it('falls back to this computer when the selected server is removed, closing its Remove confirmation', async () => {
     await mount();
     await pickServer('gpu');
