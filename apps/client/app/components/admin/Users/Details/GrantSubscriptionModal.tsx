@@ -22,7 +22,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import React, { useState, useMemo } from 'react';
-import UserSelector from './UserSelector';
+import UserSelector from '@client/app/components/admin/shared/UserSelector';
 import { ReasonPicker } from '@client/app/components/admin/shared/ReasonPicker';
 import {
   ADMIN_REASON_PRESETS,

@@ -337,6 +337,11 @@ const argv = await yargs(hideBin(process.argv))
             description: 'Accept a non-permissive model license without a prompt',
             default: false,
           })
+          .option('force', {
+            type: 'boolean',
+            description: 'Download even when the fit check rates the model too large for this machine',
+            default: false,
+          })
           .example('b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M', 'Pull a Hugging Face GGUF build')
           .example('b4m models pull qwen2.5:0.5b', 'Pull from the Ollama library');
       }, async () => {
