@@ -1,5 +1,21 @@
 # @bike4mind/resource
 
+## 3.0.0
+
+### Major Changes
+
+- [#5640](https://github.com/Bike4Mind/bike4mind/pull/5640) [`b8146f3`](https://github.com/Bike4Mind/bike4mind/commit/b8146f33b24b69ee9e3762ab454e9a1b65cad880) Thanks [@jjmarfa](https://github.com/jjmarfa)! - remove the legacy What's New generation pipeline
+
+### Minor Changes
+
+- [#5673](https://github.com/Bike4Mind/bike4mind/pull/5673) [`906bf96`](https://github.com/Bike4Mind/bike4mind/commit/906bf96005592c4a384f777729dae4737d08db1f) Thanks [@erikbethke](https://github.com/erikbethke)! - render owner-only thumbnails for live artifacts
+
+- [#5882](https://github.com/Bike4Mind/bike4mind/pull/5882) [`d887b23`](https://github.com/Bike4Mind/bike4mind/commit/d887b23ed80334510b5105e638c3db9647bb7a68) Thanks [@poysama](https://github.com/poysama)! - post plain-English alarm messages to a dedicated Slack channel
+
+### Patch Changes
+
+- [#5968](https://github.com/Bike4Mind/bike4mind/pull/5968) [`97f9c6c`](https://github.com/Bike4Mind/bike4mind/commit/97f9c6cc482dfff4769e615efe94cea28db0ff76) Thanks [@jarlacut](https://github.com/jarlacut)! - register optional admin and Turnstile secrets in the resource manifest
+
 ## 2.0.0
 
 ### Major Changes
