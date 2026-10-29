@@ -350,6 +350,39 @@ describe('createVideoJob', () => {
     expect(second).toMatchObject({ ok: false, status: 422, code: 'idempotency_key_reused' });
   });
 
+  it.each([false, true])('preserves retired-job idempotency when the body changes: %s', async changedBody => {
+    const { deps, repository } = makeDeps();
+    const first = await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1' }, deps);
+    if (!first.ok) throw new Error('expected the first call to succeed');
+    const stored = repository.jobs.get(first.job.id)!;
+    // Represent a job persisted before the provider retired the model.
+    stored.payload.request = { ...stored.payload.request, model: 'veo-3.1-fast-generate-preview' };
+    const result = await createVideoJob(
+      {
+        user,
+        request: { ...stored.payload.request, ...(changedBody && { prompt: 'a dog' }) },
+        source: 'api',
+        idempotencyKey: 'k1',
+      },
+      deps
+    );
+    expect(result).toMatchObject(
+      changedBody
+        ? { ok: false, status: 422, code: 'idempotency_key_reused' }
+        : { ok: true, created: false, job: { id: first.job.id } }
+    );
+    expect(holdCredits).toHaveBeenCalledTimes(1);
+    expect(deps.enqueue).toHaveBeenCalledTimes(1);
+
+    const otherOwner = await createVideoJob(
+      { user: { ...user, id: 'u2' }, request: stored.payload.request, source: 'api', idempotencyKey: 'k1' },
+      deps
+    );
+    expect(otherOwner).toMatchObject({ ok: false, status: 422, code: 'model_unavailable' });
+    expect(repository.jobs.size).toBe(1);
+    expect(holdCredits).toHaveBeenCalledTimes(1);
+  });
+
   it('answers a lost idempotency race as a replay of the winner and releases its own hold', async () => {
     const { deps, repository } = makeDeps();
     const winner = await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1' }, deps);
