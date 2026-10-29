@@ -159,6 +159,14 @@ class DesktopAffectedTest(unittest.TestCase):
         self.commit('test: shared configuration', 'vitest.shared.ts')
         self.assertTrue(affected(self.base, 'HEAD'))
 
+    def test_curated_catalog_runs(self):
+        self.commit('fix(desktop): refresh curated pins', 'catalog/model-hub/curated-v2.json')
+        self.assertTrue(affected(self.base, 'HEAD'))
+
+    def test_curated_catalog_docs_only_skips(self):
+        self.commit('docs: catalog maintenance', 'catalog/model-hub/README.md')
+        self.assertFalse(affected(self.base, 'HEAD'))
+
     def test_gate_test_runs(self):
         self.commit('test: dependency gate', 'scripts/test_desktop_affected.py')
         self.assertTrue(affected(self.base, 'HEAD'))
@@ -180,11 +188,13 @@ class DesktopWorkflowTriggersTest(unittest.TestCase):
             'apps/desktop/**', '.github/workflows/desktop-release.yml',
             'scripts/desktop_release_version.py', 'scripts/test_desktop_release_version.py',
             'scripts/desktop_affected.py', 'scripts/test_desktop_affected.py',
+            'catalog/model-hub/**',
         }
         for event in ('pull_request', 'push'):
             paths = workflow['on'][event]['paths']
             self.assertEqual(set(paths), expected)
-            for path in ('apps/desktop/src/main/index.ts', *sorted(expected - {'apps/desktop/**'})):
+            for path in ('apps/desktop/src/main/index.ts', 'catalog/model-hub/curated-v2.json',
+                         *sorted(expected - {'apps/desktop/**', 'catalog/model-hub/**'})):
                 with self.subTest(event=event, included=path):
                     self.assertTrue(any(fnmatchcase(path, pattern) for pattern in paths))
             for path in ('b4m-core/services/src/notebookExportService/index.ts',
