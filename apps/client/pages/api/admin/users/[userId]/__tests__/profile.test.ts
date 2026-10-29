@@ -233,7 +233,7 @@ describe('PATCH /api/admin/users/[userId]/profile', () => {
     expect(h.requireStepUp).toHaveBeenCalledWith(req);
     expect(h.existsOtherUserWithEmail).toHaveBeenCalledWith('new@example.com', 'user-1');
     expect(h.writeUserUpdate).not.toHaveBeenCalled();
-    expect(h.buildEmailChangeMailer).toHaveBeenCalledWith(expect.any(Array), { byAdmin: true });
+    expect(h.buildEmailChangeMailer).toHaveBeenCalledWith(expect.any(Array), { adminNote: 'started' });
     expect(h.requestEmailChange).toHaveBeenCalledWith(
       { userId: 'user-1', newEmail: 'new@example.com' },
       { db: { users: expect.anything() }, mailer: { mailer: true } }

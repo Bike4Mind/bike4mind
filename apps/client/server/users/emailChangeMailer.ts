@@ -11,18 +11,27 @@ export type EmailChangeMessage = { to: string; subject: string; body: string };
 
 type EmailChangeUser = Pick<IUserDocument, 'username' | 'email'>;
 
-const ADMIN_NOTE = `
+const ADMIN_NOTES = {
+  started: 'An administrator started this email change on your behalf.',
+  resent: 'An administrator has resent your email change verification link.',
+} as const;
+
+const buildAdminNote = (text: string) => `
               <div class="admin-note" style="background-color: #e3f2fd; border-left: 4px solid #2196f3; padding: 12px; margin: 20px 0;">
-                <strong>Note:</strong> An administrator started this email change on your behalf.
+                <strong>Note:</strong> ${text}
               </div>`;
 
 /**
  * The mailer `userService.requestEmailChange` takes. Messages are buffered into `outbox` rather than
  * sent, so the caller publishes them only after its transaction commits (publishEmailChangeMessages).
- * `byAdmin` adds a note naming an administrator as the one who started the change.
+ * `adminNote` adds a note that an administrator started the change or resent its link, and words the
+ * verification email without claiming the user made the request.
  */
-export const buildEmailChangeMailer = (outbox: EmailChangeMessage[], { byAdmin = false } = {}) => {
-  const adminNote = byAdmin ? ADMIN_NOTE : '';
+export const buildEmailChangeMailer = (
+  outbox: EmailChangeMessage[],
+  { adminNote: noteKind }: { adminNote?: keyof typeof ADMIN_NOTES } = {}
+) => {
+  const adminNote = noteKind ? buildAdminNote(ADMIN_NOTES[noteKind]) : '';
   return {
     sendEmailChangeNotification: async (user: EmailChangeUser, pendingNewEmail: string) => {
       const brand = process.env.APP_NAME || '';
@@ -102,9 +111,10 @@ export const buildEmailChangeMailer = (outbox: EmailChangeMessage[], { byAdmin =
       const verificationLink = `${generateVerificationLink(token).replace('/verify-email', '/verify-change')}`;
       // An emailless account (OAuth signup with no provider-verified email) uses this
       // same flow to add its first address, so there is no "from" address to name.
+      const requested = noteKind ? 'A request was made' : 'You requested';
       const intro = user.email
-        ? `You requested to change your email address from <strong>${escapeHtml(user.email)}</strong> to <strong>${escapeHtml(pendingNewEmail)}</strong>.`
-        : `You requested to add <strong>${escapeHtml(pendingNewEmail)}</strong> as the email address on your account.`;
+        ? `${requested} to change your email address from <strong>${escapeHtml(user.email)}</strong> to <strong>${escapeHtml(pendingNewEmail)}</strong>.`
+        : `${requested} to add <strong>${escapeHtml(pendingNewEmail)}</strong> as the email address on your account.`;
 
       const emailBody = `
       <!DOCTYPE html>

@@ -44,15 +44,30 @@ describe('buildEmailChangeMailer', () => {
     expect(outbox[0].body).toContain('You requested to add <strong>new@b.test</strong>');
   });
 
-  it('notes an administrator started the change when byAdmin is set', async () => {
+  it('notes an administrator started the change and does not say the user requested it', async () => {
     const outbox: EmailChangeMessage[] = [];
-    const mailer = buildEmailChangeMailer(outbox, { byAdmin: true });
+    const mailer = buildEmailChangeMailer(outbox, { adminNote: 'started' });
 
     await mailer.sendEmailChangeNotification({ ...user, email: undefined }, 'new@b.test');
     await mailer.sendEmailChangeVerification(user, 'new@b.test', 'tok');
+    await mailer.sendEmailChangeVerification({ ...user, email: null }, 'new@b.test', 'tok');
 
     expect(outbox.every(message => message.body.includes('An administrator started this email change'))).toBe(true);
     expect(outbox[0].body).toContain('<strong>Current email:</strong> </p>');
+    expect(outbox[1].body).toContain('A request was made to change your email address from');
+    expect(outbox[2].body).toContain('A request was made to add <strong>new@b.test</strong>');
+    expect(outbox.some(message => message.body.includes('You requested'))).toBe(false);
+  });
+
+  it('notes an administrator resent the link', async () => {
+    const outbox: EmailChangeMessage[] = [];
+    await buildEmailChangeMailer(outbox, { adminNote: 'resent' }).sendEmailChangeVerification(
+      user,
+      'new@b.test',
+      'tok'
+    );
+
+    expect(outbox[0].body).toContain('An administrator has resent your email change verification link.');
   });
 
   it('uses APP_NAME as the brand when it is set', async () => {

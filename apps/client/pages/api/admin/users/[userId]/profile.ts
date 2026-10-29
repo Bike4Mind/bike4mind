@@ -101,7 +101,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         if (changesEmail) {
           await userService.requestEmailChange(
             { userId: user.id, newEmail: email },
-            { db: { users: userRepository }, mailer: buildEmailChangeMailer(outbox, { byAdmin: true }) }
+            { db: { users: userRepository }, mailer: buildEmailChangeMailer(outbox, { adminNote: 'started' }) }
           );
           changes.push({ field: 'pendingEmail', before: user.pendingEmail ?? null, after: email });
         }
