@@ -50,7 +50,7 @@ export const modalManagementTool = {
 
   execute: async (params: ModalManagementParams, context?: { user?: any }) => {
     // Same rule as the Modal 'manage' ability: full admins and settings:manage delegates
-    if (context?.user && !hasAdminPermission(context.user, 'settings:manage')) {
+    if (!context?.user || !hasAdminPermission(context.user, 'settings:manage')) {
       return {
         success: false,
         error: 'Modal management permission required',
