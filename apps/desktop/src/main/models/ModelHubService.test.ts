@@ -1341,6 +1341,31 @@ describe('ModelHubService curated library pulls', () => {
     });
   });
 
+  it('clears a failed download when dismissed, keeping the model installed', async () => {
+    const setup = harness();
+    setup.runtime.inspect.mockRejectedValue(showTimedOut());
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    const key = pullKey(libraryRequest.repo, libraryRequest.buildId);
+
+    setup.service.dismiss('no-such-pull');
+    expect(setup.service.pulls()).toHaveLength(1);
+    setup.service.dismiss(key);
+    expect(setup.service.pulls()).toEqual([]);
+    expect(setup.pushed.at(-1)).toEqual([]);
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+  });
+
+  it('leaves an active download in place when dismissed', async () => {
+    const setup = harness();
+    const result = setup.service.pull(libraryRequest);
+    await vi.waitFor(() => expect(setup.pulls).toHaveLength(1));
+
+    setup.service.dismiss(pullKey(libraryRequest.repo, libraryRequest.buildId));
+    expect(setup.service.pulls()).toMatchObject([{ phase: 'downloading' }]);
+    setup.pulls[0].resolve();
+    await expect(result).resolves.toEqual({ ok: true, ref: REF });
+  });
+
   it('keeps a warning after a failed removal, then clears it when the user removes the model', async () => {
     const setup = harness();
     setup.runtime.inspect.mockRejectedValue(showTimedOut());
