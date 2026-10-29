@@ -8,6 +8,8 @@ export const SIGNUP_GRANT_UNLOCK_REASONS = [
   'org_invite',
   'github_verified',
   'work_email_verified',
+  'activity_drip',
+  'subscription',
 ] as const;
 
 export type SignupGrantUnlockReason = (typeof SIGNUP_GRANT_UNLOCK_REASONS)[number];
@@ -31,6 +33,10 @@ export interface SignupGrant {
   unlockedBy?: SignupGrantUnlockReason;
   /** Organization whose invite released the remainder; caps org_invite unlocks per org. */
   unlockedOrgId?: string;
+  /** Credits released by the activity drip so far; absent on grants that predate it. */
+  dripCredits?: number;
+  /** UTC day (YYYY-MM-DD) of the latest drip payout. */
+  lastDripDay?: string;
 }
 
 export function signupGrantRemaining(grant: SignupGrant): number {

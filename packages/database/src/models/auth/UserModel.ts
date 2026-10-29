@@ -1015,6 +1015,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           nextCondition: { type: String, enum: ['email_verification', 'verification', null], default: null },
           unlockedBy: { type: String, enum: SIGNUP_GRANT_UNLOCK_REASONS },
           unlockedOrgId: { type: String },
+          dripCredits: { type: Number, min: 0 },
+          lastDripDay: { type: String },
         },
         { _id: false }
       ),
