@@ -20,9 +20,9 @@ import {
   extractJson,
   generateReleaseNotes,
   triageReleaseNotes,
-  trimToBoundary,
   writeReleaseNotes,
 } from './generate';
+import { trimToBoundary } from './limits';
 
 const pr = (number: number, extra: Partial<ReleaseNotesJobPr> = {}): ReleaseNotesJobPr => ({
   number,
@@ -438,7 +438,7 @@ describe('copy accuracy', () => {
     });
 
     expect(draft.headline.length).toBeLessThanOrEqual(120);
-    expect(draft.headline.endsWith('word')).toBe(true);
+    expect(draft.headline.endsWith('word...')).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('trimmed headline'));
   });
 
@@ -452,7 +452,7 @@ describe('copy accuracy', () => {
       logger: { warn: vi.fn() },
     });
 
-    expect(draft.summary).toBe('w'.repeat(600));
+    expect(draft.summary).toBe(`${'w'.repeat(597)}...`);
   });
 
   it.each([
@@ -602,16 +602,16 @@ describe('trimToBoundary', () => {
     expect(trimToBoundary('Ends right here. Next', 16)).toBe('Ends right here.');
   });
 
-  it('falls back to a word boundary when the only sentence end is too early', () => {
-    expect(trimToBoundary('Hi. then a very long run of words without stops', 30)).toBe('Hi. then a very long run of');
+  it('falls back to a word boundary with an ellipsis when the only sentence end is too early', () => {
+    expect(trimToBoundary('Hi. then a very long run of words without stops', 30)).toBe('Hi. then a very long run...');
   });
 
-  it('hard-cuts a single unbroken token', () => {
-    expect(trimToBoundary('w'.repeat(50), 20)).toBe('w'.repeat(20));
+  it('hard-cuts a single unbroken token with an ellipsis', () => {
+    expect(trimToBoundary('w'.repeat(50), 20)).toBe(`${'w'.repeat(17)}...`);
   });
 
   it('never leaves half of a surrogate pair', () => {
-    const text = `${'a'.repeat(9)}\u{1F600}${'b'.repeat(20)}`;
-    expect(trimToBoundary(text, 10)).toBe('a'.repeat(9));
+    const text = `${'a'.repeat(6)}\u{1F600}${'b'.repeat(20)}`;
+    expect(trimToBoundary(text, 10)).toBe(`${'a'.repeat(6)}...`);
   });
 });

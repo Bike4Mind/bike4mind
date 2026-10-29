@@ -5,7 +5,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { ChatModels, ReleaseNoteItemSchema, type ReleaseNotesConfig, type ReleaseNotesJobPr } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { MAX_HEADLINE_CHARS, MAX_ITEM_CHARS, MAX_SUMMARY_CHARS } from './limits';
+import { MAX_HEADLINE_CHARS, MAX_ITEM_CHARS, MAX_SUMMARY_CHARS, trimToBoundary } from './limits';
 
 /** Sends one user prompt and resolves with the full reply text. */
 export type CompleteFn = (prompt: string) => Promise<string>;
@@ -54,21 +54,6 @@ export function extractJson(text: string): unknown {
   const end = text.lastIndexOf('}');
   if (start === -1 || end <= start) throw new Error('reply contains no JSON object');
   return JSON.parse(text.slice(start, end + 1));
-}
-
-/**
- * Cuts `text` to at most `max` chars at the last sentence end past the halfway mark, else the last word
- * boundary, else a hard cut. Never splits a surrogate pair.
- */
-export function trimToBoundary(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const head = text.slice(0, max).replace(/[\uD800-\uDBFF]$/, '');
-  const sentenceEnd = Math.max(...['. ', '! ', '? '].map(end => head.lastIndexOf(end))) + 1;
-  const sentenceEndAtLimit = /[.!?]$/.test(head) && text[head.length] === ' ' ? head.length : 0;
-  const sentence = Math.max(sentenceEnd, sentenceEndAtLimit);
-  if (sentence > max / 2) return head.slice(0, sentence).trimEnd();
-  const word = head.lastIndexOf(' ');
-  return (word > 0 ? head.slice(0, word) : head).trimEnd();
 }
 
 const zodErrors = (error: z.ZodError): string[] =>
