@@ -114,6 +114,28 @@ describe('requireTurnstile', () => {
       );
     });
 
+    it('logs a lone bad-request at warn, outside the misconfigured alarm', async () => {
+      verify.mockResolvedValue({ ok: false, reason: 'misconfigured', errorCodes: ['bad-request'] });
+      const { next, status, logger } = await run();
+      expect(next).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(503);
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        'turnstile-bad-request',
+        expect.objectContaining({ action: 'otc-send', errorCodes: ['bad-request'] })
+      );
+    });
+
+    it('keeps bad-request mixed with a secret error at error level', async () => {
+      verify.mockResolvedValue({
+        ok: false,
+        reason: 'misconfigured',
+        errorCodes: ['bad-request', 'invalid-input-secret'],
+      });
+      const { logger } = await run();
+      expect(logger.error).toHaveBeenCalledWith('turnstile-misconfigured', expect.anything());
+    });
+
     it('hands challenge_unavailable to a custom failure handler', async () => {
       verify.mockResolvedValue(misconfigured);
       const onFailure = vi.fn();

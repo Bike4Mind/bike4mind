@@ -23,7 +23,7 @@ export type RequireTurnstileOptions = {
 const UNAVAILABLE: TurnstileFailure = {
   code: 'challenge_unavailable',
   status: 503,
-  error: 'Verification is temporarily unavailable. Please try again.',
+  error: 'Verification is temporarily unavailable. Please try again, or contact support if this persists.',
 };
 const FAILED: TurnstileFailure = {
   code: 'challenge_failed',
@@ -77,7 +77,13 @@ export const requireTurnstile = (action: string, options: RequireTurnstileOption
     if (result.ok) return next();
 
     if (result.reason === 'misconfigured') {
-      req.logger?.error('turnstile-misconfigured', { action, errorCodes: result.errorCodes });
+      // A lone bad-request may come from a malformed client token, so it stays out of the
+      // turnstile-misconfigured alarm (infra/turnstileAlarms.ts).
+      if (result.errorCodes?.length && result.errorCodes.every(code => code === 'bad-request')) {
+        req.logger?.warn('turnstile-bad-request', { action, errorCodes: result.errorCodes });
+      } else {
+        req.logger?.error('turnstile-misconfigured', { action, errorCodes: result.errorCodes });
+      }
       return fail(req, res, UNAVAILABLE);
     }
     if (result.reason === 'unavailable' && !policy.failClosed) {
