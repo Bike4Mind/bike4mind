@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   LARGE_SIGNUP_GRANT_CREDITS,
+  SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE,
   findUnsetSignupProtections,
   largestSignupGrant,
   newSignupGrant,
@@ -97,6 +98,10 @@ describe('signup grant protections', () => {
     expect(signupGrantPathTotal('defaultFreeCredits', values)).toBe(0);
     expect(signupGrantPathTotal('signupGrantCredits', values)).toBe(510);
     expect(signupGrantPathTotal('verifiedUnlockCredits', values)).toBe(510);
+  });
+
+  it('keeps the log message the infra alarm filter matches', () => {
+    expect(SIGNUP_GRANT_UNPROTECTED_LOG_MESSAGE).toBe('signup-grant-protections-off');
   });
 
   it('refuses only a raise above the limit, never a hold or a reduction', () => {
