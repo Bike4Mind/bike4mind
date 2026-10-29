@@ -529,3 +529,25 @@ describe('ResearchModeService edge cases', () => {
     expect(results[0]).toMatchObject({ success: true, response: 'plain', completionInfo: { channel: 'text' } });
   });
 });
+
+describe('researchModeUsages', () => {
+  const models = [{ id: 'model-a', name: 'A' }] as unknown as ModelInfo[];
+
+  it('bills a successful configuration what its provider reported, even below the streamed estimate', () => {
+    const [usage] = researchModeUsages(
+      [
+        {
+          configurationId: 'a',
+          model: 'model-a',
+          success: true,
+          streamedChars: 40_000,
+          completionInfo: { inputTokens: 50, outputTokens: 5 },
+        },
+      ],
+      models,
+      999
+    );
+
+    expect(usage).toMatchObject({ inputTokens: 50, outputTokens: 5 });
+  });
+});
