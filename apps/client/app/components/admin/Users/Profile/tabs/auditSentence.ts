@@ -117,14 +117,19 @@ export const describeAuditEntry = (entry: AuditEntry): string => {
 // previous value can be written back as-is qualify; credits, roles and deletions have their own flows.
 const UNDOABLE_FIELDS: ReadonlySet<string> = new Set(['isBanned', 'isModerated', 'tags']);
 
-const sameValue = (current: unknown, written: unknown): boolean =>
-  JSON.stringify(current) === JSON.stringify(written ?? null);
+const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-// Only reached for UNDOABLE_FIELDS, so anything that is not a flag is the tags list.
 const currentValue = (user: AdminUserProfile, field: string): unknown => {
-  if (field === 'isBanned') return Boolean(user.isBanned);
-  if (field === 'isModerated') return Boolean(user.isModerated);
-  return user.tags ?? [];
+  switch (field) {
+    case 'isBanned':
+      return Boolean(user.isBanned);
+    case 'isModerated':
+      return Boolean(user.isModerated);
+    case 'tags':
+      return user.tags ?? [];
+    default:
+      return undefined;
+  }
 };
 
 export type AuditUndo = { patch: Record<string, unknown>; redo: Record<string, unknown> };
