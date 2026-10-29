@@ -5,6 +5,7 @@ import { planPull, requireUnchangedLicenses, type HubClient, type ModelSourceDep
 const build: HubGgufBuild = {
   id: 'model-Q4_K_M',
   quant: 'Q4_K_M',
+  label: 'Q4_K_M',
   files: [],
   sizeBytes: 1024,
   split: false,
