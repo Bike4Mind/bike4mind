@@ -649,6 +649,18 @@ describe('customerSubscriptionUpdated - lifecycle events', () => {
     expect(mockEmitBillingEvent).not.toHaveBeenCalled();
   });
 
+  it('posts to Slack before the invoice cleanup, so a delivery that times out in it has still posted', async () => {
+    vi.mocked(voidOpenSubscriptionInvoices).mockReturnValueOnce(new Promise(() => {}));
+    const sub = userSub({ status: 'canceled', canceled_at: 1700500000 });
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(sub as never);
+
+    // Not awaited: the handler waits on the cleanup, which here never settles.
+    void run();
+    await vi.waitFor(() => expect(voidOpenSubscriptionInvoices).toHaveBeenCalled());
+
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledOnce();
+  });
+
   it('posts nothing to Slack for a row this stage does not own', async () => {
     writeFinds(null);
     vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(userSub({ canceled_at: 1700500000 }) as never);

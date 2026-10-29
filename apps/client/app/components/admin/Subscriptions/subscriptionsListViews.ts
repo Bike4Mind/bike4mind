@@ -61,7 +61,10 @@ export const SUBSCRIPTIONS_BUILT_IN_VIEWS: readonly SubscriptionsBuiltInView[] =
     id: 'churned',
     label: 'Churned (30 days)',
     filters: { status: ['canceled'], cancel: 'last30' },
-    empty: { title: 'No churn in the last 30 days', description: 'No subscription ended in the last 30 days.' },
+    empty: {
+      title: 'No cancellations in the last 30 days',
+      description: 'Canceled subscriptions appear here for 30 days after the cancellation was requested.',
+    },
   },
   {
     id: 'all',

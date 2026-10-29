@@ -270,6 +270,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
+      // Posted by whichever write moves the row into canceled (customerSubscriptionUpdated.ts may get
+      // there first); a redelivery finds it canceled, so this precedes the slower work below.
+      if (previous?.status !== 'canceled') {
+        await postSubscriptionLifecycleToSlack(endedLifecycleEvent(updated, subscription.cancellation_details?.reason));
+      }
+
       // Safely access userId from metadata (may be missing for legacy subscriptions)
       const userId = subscription.metadata?.userId;
       if (userId) {
@@ -331,12 +337,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           ...(daysSubscribed !== undefined && { daysSubscribed }),
         },
       });
-
-      // Posted by whichever write moves the row into canceled: a row already canceled here is a
-      // redelivery, or customerSubscriptionUpdated.ts synced the cancel first and posted it.
-      if (previous?.status !== 'canceled') {
-        await postSubscriptionLifecycleToSlack(endedLifecycleEvent(updated, subscription.cancellation_details?.reason));
-      }
 
       break;
     }

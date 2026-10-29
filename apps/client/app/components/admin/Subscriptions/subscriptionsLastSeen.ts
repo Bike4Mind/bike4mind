@@ -18,11 +18,13 @@ export const NEWEST_PAID_SUBSCRIPTION_QUERY = {
   sortOrder: 'desc',
 } as const;
 
+const parseLastSeen = (value: string | null): string | null =>
+  value && Number.isFinite(Date.parse(value)) ? value : null;
+
 // Storage can be blocked or throw (private windows, cleared site data); the in-memory value carries on.
 export const readStoredLastSeen = (): string | null => {
   try {
-    const value = window.localStorage.getItem(SUBSCRIPTIONS_LAST_SEEN_KEY);
-    return value && Number.isFinite(Date.parse(value)) ? value : null;
+    return parseLastSeen(window.localStorage.getItem(SUBSCRIPTIONS_LAST_SEEN_KEY));
   } catch {
     return null;
   }
@@ -50,16 +52,12 @@ export const isNewSince = (createdAt: string | null | undefined, since: string |
 
 /**
  * Whether a Stripe-billed subscription started after this browser last opened the tab. Polls only
- * while `enabled` and mounted (the admin sidebar). The first run on a browser stores now as the
- * baseline, so existing subscriptions never light the dot.
+ * while `enabled` and mounted (the admin sidebar). The first run on a browser stores the newest row's
+ * createdAt as the baseline, so neither existing subscriptions nor browser clock skew light the dot.
  */
 export function useNewSubscriptionsDot(enabled: boolean): boolean {
   const lastSeen = useSubscriptionsLastSeen(state => state.lastSeen);
   const markSeen = useSubscriptionsLastSeen(state => state.markSeen);
-
-  useEffect(() => {
-    if (enabled && lastSeen === null) markSeen();
-  }, [enabled, lastSeen, markSeen]);
 
   const newest = useQuery({
     queryKey: [...adminSubscriptionsQueryKey, 'newest-paid'],
@@ -69,10 +67,26 @@ export function useNewSubscriptionsDot(enabled: boolean): boolean {
       });
       return data.subscriptions[0]?.createdAt ?? null;
     },
-    enabled: enabled && lastSeen !== null,
+    enabled,
     refetchInterval: NEW_SUBSCRIPTIONS_POLL_MS,
     staleTime: NEW_SUBSCRIPTIONS_POLL_MS,
   });
+
+  // With no paid rows yet, the epoch baseline makes the first one new.
+  useEffect(() => {
+    if (lastSeen === null && newest.isSuccess) markSeen(new Date(newest.data ?? 0));
+  }, [lastSeen, newest.isSuccess, newest.data, markSeen]);
+
+  // Opening the tab in another browser tab clears the dot in this one.
+  useEffect(() => {
+    if (!enabled) return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === SUBSCRIPTIONS_LAST_SEEN_KEY)
+        useSubscriptionsLastSeen.setState({ lastSeen: parseLastSeen(event.newValue) });
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [enabled]);
 
   return isNewSince(newest.data, lastSeen);
 }

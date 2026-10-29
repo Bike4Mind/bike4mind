@@ -172,6 +172,21 @@ describe('AdminSubscriptions', () => {
     expect(screen.getByTestId('admin-subscriptions-views-comped-btn').getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('does not put a cleared search back while its debounce catches up', async () => {
+    renderTab();
+    await screen.findByTestId('admin-subscriptions-row-s1');
+    fireEvent.change(screen.getByTestId('admin-subscriptions-search-input'), { target: { value: 'ada' } });
+    await waitFor(() => expect(lastListParams()).toEqual(expect.objectContaining({ search: 'ada' })));
+
+    const before = listParams().length;
+    fireEvent.click(screen.getByTestId('admin-subscriptions-views-comped-btn'));
+    await act(() => new Promise(resolve => setTimeout(resolve, 500)));
+    expect(listParams().slice(before)).not.toContainEqual(expect.objectContaining({ search: 'ada' }));
+    expect(lastListParams()).toEqual(expect.objectContaining({ source: 'admin_grant' }));
+    expect(lastListParams()).not.toHaveProperty('search');
+    expect(useSubscriptionsTab.getState().params.search).toBe('');
+  });
+
   it('reads the whole view from a shared link', async () => {
     act(() => fakeAdminRouter.reset({ tab: 'subscriptions', subsSource: 'admin_grant', subsPage: 2, subsLimit: 50 }));
     renderTab();

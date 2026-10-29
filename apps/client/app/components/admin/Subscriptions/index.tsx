@@ -102,9 +102,11 @@ const AdminSubscriptions: React.FC = () => {
     setValue: setSearch,
   } = useDebounceValue(useSubscriptionsTab.getState().params.search ?? '');
   useEffect(() => {
+    // A view or clear sets the input and params together; the stale debounced value must not undo it.
+    if (search !== debouncedSearch) return;
     if (debouncedSearch === params.search) return;
     setParams({ search: debouncedSearch, page: 1 });
-  }, [debouncedSearch, params.search, setParams]);
+  }, [search, debouncedSearch, params.search, setParams]);
 
   const filter = toAdminSubscriptionsFilter(params);
   const listQuery = useAdminSubscriptionsList(params);

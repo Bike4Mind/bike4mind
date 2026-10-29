@@ -94,12 +94,14 @@ export function SubscriptionsToolbar({
 
   return (
     <Stack gap={1.25} sx={adminFocusScope} data-testid="admin-subscriptions-toolbar">
-      <AdminSearchInput
-        value={search}
-        onChange={onSearchChange}
-        label="Search name, email, organization or Stripe ID"
-        data-testid="admin-subscriptions-search-input"
-      />
+      <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
+        <AdminSearchInput
+          value={search}
+          onChange={onSearchChange}
+          label="Search name, email, organization or Stripe ID"
+          data-testid="admin-subscriptions-search-input"
+        />
+      </Stack>
       <Stack direction="row" alignItems="center" flexWrap="wrap" gap={0.75} data-testid="admin-subscriptions-filters">
         <FilterChip
           multiple
