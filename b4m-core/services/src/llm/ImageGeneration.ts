@@ -182,7 +182,7 @@ interface IImageGenerationServiceOptions {
   startImageGenerationProcess: (body: ImageGenerationBody) => Promise<void>;
   /** Reserves the estimate before the provider call. Required so the app factory cannot drop the hold. */
   creditHolds: ImageCreditHolds;
-  assertModelAdmission(user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean): Promise<void>;
+  assertModelAdmission: (user: string | IUserDocument, modelId: string, adminRoleWithheld?: boolean) => Promise<void>;
   wsHttpsUrl: string;
   abilityGetter: (user: IUserDocument | undefined) => MongoAbility;
   logEvent: (

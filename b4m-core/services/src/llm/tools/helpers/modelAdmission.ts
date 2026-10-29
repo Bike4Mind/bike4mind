@@ -10,6 +10,9 @@ export async function createToolModelAdmission(context: ToolContext) {
     user: context.user,
     configs,
     freeTierAllowedModels,
-    getEntitlements: async () => context.entitlementKeys ?? [],
+    getEntitlements: async () => {
+      if (!context.getEntitlements) throw new Error('Tool entitlement resolver is not configured');
+      return context.getEntitlements();
+    },
   });
 }

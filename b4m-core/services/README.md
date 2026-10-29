@@ -7,7 +7,9 @@ This directory contains the core business logic services for the B4M application
 ## Media admission adapter migration
 
 `ImageGenerationService`, `ImageEditService`, `CreateVideoJobDeps` and
-`CreateMusicJobDeps` now require `assertModelAdmission(userId, modelId, adminRoleWithheld?)`.
+`CreateMusicJobDeps` require an `assertModelAdmission` callback. The image services accept
+`(user: string | IUserDocument, modelId, adminRoleWithheld?)`; their workers pass the loaded user.
+Video/music job callbacks accept `(userId: string, modelId, adminRoleWithheld?)`.
 Implement it with the shared `createModelAdmission` rule and the caller's current
 entitlements. Preserve a withheld admin role when the third argument is true; it
 is trusted caller metadata, never a request-body option. Propagate refusals before reserving credits or dispatching provider
@@ -20,6 +22,12 @@ identifier `elevenlabs`; its text reasoning model must also be allowed. A refusa
 uses `model_requires_subscription`. Check the allowlist and the account's paid-plan
 entitlement when diagnosing an unexpected refusal; plan-read outages return a
 retryable error instead of an upgrade prompt.
+
+Media tool hosts must supply `getEntitlements: () => Promise<string[]>` through
+`ToolBuilderConfig`, `ToolBuilderDeps` or `generateTools`' object argument. Proactive message
+adapters require the same callback. Resolve the executing user's current entitlements and let
+read failures reject; `entitlementKeys` remains a retrieval snapshot, not a model admission
+source. A missing or failed resolver returns a retryable refusal when plan verification is needed.
 
 ## Internal user notes migration
 

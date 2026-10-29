@@ -53,6 +53,7 @@ function createFakeContext(): ToolContext & {
 } {
   return {
     userId: 'u1',
+    getEntitlements: async () => [],
     user: {} as ToolContext['user'],
     sessionId: 's1',
     logger: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as unknown as ToolContext['logger'],
@@ -106,6 +107,28 @@ describe('audio_generation tool', () => {
     expect(context.onStart).not.toHaveBeenCalled();
     expect(mockSynthesize).not.toHaveBeenCalled();
     expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it('admits a paid caller without precomputed entitlement keys', async () => {
+    vi.mocked(loadFreeTierAllowedModels).mockResolvedValue(new Set(['cheap-text']));
+    const context = createFakeContext();
+    context.getEntitlements = vi.fn(async () => ['plan:paid']);
+    expect(context.entitlementKeys).toBeUndefined();
+    await run(context, { kind: 'speech', text: 'hello world' }, { ttsProvider: 'openai' });
+    expect(context.getEntitlements).toHaveBeenCalledOnce();
+    expect(mockSynthesize).toHaveBeenCalledOnce();
+  });
+
+  it('returns a retryable refusal when the entitlement source fails', async () => {
+    vi.mocked(loadFreeTierAllowedModels).mockResolvedValue(new Set(['cheap-text']));
+    const context = createFakeContext();
+    context.entitlementKeys = [];
+    context.getEntitlements = vi.fn(async () => {
+      throw new Error('database unavailable');
+    });
+    await expect(run(context, { kind: 'speech', text: 'hello world' })).rejects.toMatchObject({ statusCode: 503 });
+    expect(context.onStart).not.toHaveBeenCalled();
+    expect(mockSynthesize).not.toHaveBeenCalled();
   });
 
   it('generates speech, stores it inline, and settles on the resolved model + characters', async () => {

@@ -82,7 +82,7 @@ const makeWallet = (balance: number) => {
 
 const makeService = (
   wallet: ReturnType<typeof makeWallet>,
-  assertModelAdmission: (userId: string, modelId: string) => Promise<void> = async () => {}
+  assertModelAdmission: ConstructorParameters<typeof ImageGenerationService>[0]['assertModelAdmission'] = async () => {}
 ) => {
   const quests = new Map<string, { id: string; sessionId: string; status?: string; errorCode?: string }>();
   const service = new ImageGenerationService({
