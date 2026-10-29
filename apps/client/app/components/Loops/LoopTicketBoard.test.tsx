@@ -4,13 +4,12 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ILoopTicket, ILoopTicketsResponse } from '@client/app/hooks/data/loops';
 
-const { navigate, moveTicket, createTicket } = vi.hoisted(() => ({
-  navigate: vi.fn(),
+const { onViewRun, moveTicket, createTicket } = vi.hoisted(() => ({
+  onViewRun: vi.fn(),
   moveTicket: { mutate: vi.fn(), isPending: false },
   createTicket: { mutate: vi.fn(), isPending: false },
 }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('@client/app/hooks/data/loops', () => ({
   useMoveLoopTicket: () => moveTicket,
   useCreateLoopTicket: () => createTicket,
@@ -51,7 +50,7 @@ const data: ILoopTicketsResponse = {
 const renderBoard = () =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <LoopTicketBoard loop={loop} data={data} />
+      <LoopTicketBoard loop={loop} data={data} onViewRun={onViewRun} />
     </CssVarsProvider>
   );
 
@@ -80,12 +79,10 @@ describe('LoopTicketBoard', () => {
     expect(within(screen.getByTestId('loop-ticket-blocked')).getByText('2 deps')).toBeInTheDocument();
   });
 
-  it('links a ticket with a run to its trace', () => {
+  it('opens the run of a ticket that has one', () => {
     renderBoard();
-    const link = within(screen.getByTestId('loop-ticket-busy')).getByTestId('loop-ticket-view-run-link');
-    expect(link).toHaveAttribute('href', '/agent-executions?expand=e1');
-    fireEvent.click(link);
-    expect(navigate).toHaveBeenCalledWith({ to: '/agent-executions', search: { expand: 'e1' } });
+    fireEvent.click(within(screen.getByTestId('loop-ticket-busy')).getByTestId('loop-ticket-view-run-link'));
+    expect(onViewRun).toHaveBeenCalledWith('e1');
     expect(within(screen.getByTestId('loop-ticket-older')).queryByTestId('loop-ticket-view-run-link')).toBeNull();
   });
 

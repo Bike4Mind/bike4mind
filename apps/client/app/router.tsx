@@ -597,6 +597,9 @@ const loopsRoute = createRoute({
 const loopDetailRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/loops/$id',
+  validateSearch: (search: Record<string, unknown>): { run?: string } => ({
+    run: typeof search.run === 'string' && search.run ? search.run : undefined,
+  }),
   component: () => (
     <LoopsGate loadingFallback={<RouteLoadingFallback />}>
       <Suspense fallback={<RouteLoadingFallback />}>

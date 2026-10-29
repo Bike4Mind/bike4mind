@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from '@tanstack/react-router';
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import {
   Accordion,
   AccordionDetails,
@@ -6,6 +6,9 @@ import {
   AccordionSummary,
   Box,
   CircularProgress,
+  DialogTitle,
+  Drawer,
+  IconButton,
   Link,
   Stack,
   Typography,
@@ -22,11 +25,16 @@ import {
 } from '@client/app/components/Loops/loopUi';
 import { useLoop, useLoopTickets } from '@client/app/hooks/data/loops';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
-import { AGENT_TRACE_ROUTE, buildAgentTraceSearch } from '@client/app/utils/agentTraceLink';
+import CloseIcon from '@mui/icons-material/Close';
+import AgentRunViewer from '@client/app/components/Session/AgentExecution/AgentRunViewer';
 
 export default function LoopDetailPage() {
   const { id = '' } = useParams({ strict: false });
   const navigate = useNavigate();
+  // `?run=<executionId>` drives the live run drawer, so it is deep-linkable and Back closes it.
+  const { run } = useSearch({ strict: false }) as { run?: string };
+  const setRun = (executionId?: string) =>
+    navigate({ to: '/loops/$id', params: { id }, search: executionId ? { run: executionId } : {} });
   // Only mounted inside LoopsGate, so the loops API is never called while EnableLoops is off.
   const { data: loop, isLoading } = useLoop(id, true);
   const { data: tickets } = useLoopTickets(id, true);
@@ -56,15 +64,11 @@ export default function LoopDetailPage() {
             {formatInterval(loop.intervalMinutes)} - last run {lastRunLabel(loop)} - next {nextRunLabel(loop)} -{' '}
             {loop.runCount} runs - {formatCredits(loop.creditsUsed)} (90 days) - {loop.model}
           </Typography>
-          {loop.lastExecutionId && (
+          {(loop.activeExecutionId ?? loop.lastExecutionId) && (
             <Link
+              component="button"
               level="body-sm"
-              onClick={() =>
-                navigate({
-                  to: AGENT_TRACE_ROUTE,
-                  search: buildAgentTraceSearch(loop.lastExecutionId!, loop.sessionId),
-                })
-              }
+              onClick={() => setRun(loop.activeExecutionId ?? loop.lastExecutionId)}
               data-testid="loop-detail-latest-run-link"
             >
               Latest run
@@ -86,8 +90,29 @@ export default function LoopDetailPage() {
             </AccordionDetails>
           </Accordion>
         </AccordionGroup>
-        <LoopTicketBoard loop={loop} data={tickets} />
+        <LoopTicketBoard loop={loop} data={tickets} onViewRun={setRun} />
       </Stack>
+      <Drawer
+        anchor="right"
+        open={!!run}
+        onClose={() => setRun(undefined)}
+        slotProps={{ content: { sx: { width: 'min(720px, 100vw)', p: 2, gap: 1 } } }}
+        data-testid="loop-run-drawer"
+      >
+        <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <DialogTitle>Run</DialogTitle>
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label="Close run"
+            onClick={() => setRun(undefined)}
+            data-testid="loop-run-drawer-close-btn"
+          >
+            <CloseIcon />
+          </IconButton>
+        </Stack>
+        <Box sx={{ overflowY: 'auto' }}>{run && <AgentRunViewer executionId={run} />}</Box>
+      </Drawer>
     </Box>
   );
 }

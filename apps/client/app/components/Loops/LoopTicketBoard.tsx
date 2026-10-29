@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
 import {
   Box,
   Button,
@@ -28,7 +27,6 @@ import {
   type ILoopTicket,
   type ILoopTicketsResponse,
 } from '@client/app/hooks/data/loops';
-import { AGENT_TRACE_ROUTE, buildAgentTraceSearch } from '@client/app/utils/agentTraceLink';
 
 const TITLE_MAX = 300;
 const DESCRIPTION_MAX = 10_000;
@@ -47,25 +45,15 @@ const STATUS_LABEL: Record<WorkItemStatus, string> = {
   closed: 'Done',
 };
 
-function ViewRunLink({ executionId }: { executionId: string }) {
-  const navigate = useNavigate();
-  const search = buildAgentTraceSearch(executionId);
-  return (
-    <Link
-      level="body-xs"
-      href={`${AGENT_TRACE_ROUTE}?${new URLSearchParams({ ...search })}`}
-      onClick={e => {
-        e.preventDefault();
-        navigate({ to: AGENT_TRACE_ROUTE, search });
-      }}
-      data-testid="loop-ticket-view-run-link"
-    >
-      View run
-    </Link>
-  );
-}
-
-function TicketCard({ ticket, stages }: { ticket: ILoopTicket; stages: string[] }) {
+function TicketCard({
+  ticket,
+  stages,
+  onViewRun,
+}: {
+  ticket: ILoopTicket;
+  stages: string[];
+  onViewRun: (executionId: string) => void;
+}) {
   const moveTicket = useMoveLoopTicket();
   return (
     <Card size="sm" variant="outlined" data-testid={`loop-ticket-${ticket.id}`}>
@@ -79,7 +67,16 @@ function TicketCard({ ticket, stages }: { ticket: ILoopTicket; stages: string[] 
             {ticket.dependencies.length} {ticket.dependencies.length === 1 ? 'dep' : 'deps'}
           </Typography>
         )}
-        {ticket.executionId && <ViewRunLink executionId={ticket.executionId} />}
+        {ticket.executionId && (
+          <Link
+            component="button"
+            level="body-xs"
+            onClick={() => onViewRun(ticket.executionId!)}
+            data-testid="loop-ticket-view-run-link"
+          >
+            View run
+          </Link>
+        )}
       </Stack>
       {ticket.status === 'blocked' && ticket.statusReason && (
         <Typography level="body-xs" color="danger" data-testid="loop-ticket-blocked-reason">
@@ -186,8 +183,19 @@ function Strip({ label, testId, tickets }: { label: string; testId: string; tick
   );
 }
 
-/** The loop's tickets: a queued / in progress / blocked summary over one column per stage. */
-export default function LoopTicketBoard({ loop, data }: { loop: ILoop; data?: ILoopTicketsResponse }) {
+/**
+ * The loop's tickets: a queued / in progress / blocked summary over one column per stage.
+ * `onViewRun` opens a ticket's run (the loop page's live run drawer).
+ */
+export default function LoopTicketBoard({
+  loop,
+  data,
+  onViewRun,
+}: {
+  loop: ILoop;
+  data?: ILoopTicketsResponse;
+  onViewRun: (executionId: string) => void;
+}) {
   const [adding, setAdding] = useState(false);
   const all = data?.stages.flatMap(group => group.tickets) ?? [];
   // The scheduler works the oldest ready ticket first; tickets carry no createdAt, so updatedAt stands in.
@@ -222,7 +230,7 @@ export default function LoopTicketBoard({ loop, data }: { loop: ILoop; data?: IL
               {group.stage} ({group.tickets.length})
             </Typography>
             {group.tickets.map(ticket => (
-              <TicketCard key={ticket.id} ticket={ticket} stages={loop.stages} />
+              <TicketCard key={ticket.id} ticket={ticket} stages={loop.stages} onViewRun={onViewRun} />
             ))}
           </Stack>
         ))}
