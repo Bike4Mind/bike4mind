@@ -16,6 +16,7 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
@@ -29,6 +30,9 @@ import {
   userAuditTarget,
 } from '@server/utils/adminAudit';
 import { respond } from '@server/utils/respond';
+
+const ONE_MINUTE_MS = 60_000;
+export const SIGNUP_RISK_REVIEWS_RATE_LIMIT = 30;
 
 // reopen is the undo of approve, offered by the admin tab's undo toast.
 const TRANSITIONS = {
@@ -60,6 +64,9 @@ const domainOf = (email: string | null | undefined) => {
  * per user. Suspending goes through the bulk abuse response routes instead (admin/abuse/bulk-*).
  */
 const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+  .use(
+    rateLimit({ limit: SIGNUP_RISK_REVIEWS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-signup-risk-reviews' })
+  )
   .get(
     asyncHandler(async (req, res) => {
       ensureAdmin(req.user?.isAdmin);

@@ -23,6 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
     h.baseOptions(options);
     const chain = {
+      use: () => chain,
       get: (fn: (req: unknown, res: unknown) => Promise<void>) => {
         h.handlers.get = fn;
         return chain;
@@ -196,7 +197,11 @@ describe('signup risk review queue', () => {
     await h.handlers.post(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ updatedUserIds: [USER_A, USER_C], skippedUserIds: [], failedUserIds: [USER_B] });
+    expect(res._getJSONData()).toEqual({
+      updatedUserIds: [USER_A, USER_C],
+      skippedUserIds: [],
+      failedUserIds: [USER_B],
+    });
     expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ userId: USER_B }));
   });
 
