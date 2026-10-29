@@ -70,6 +70,12 @@ vi.mock('./artifacts/ArtifactRenderer', async () => {
   };
 });
 
+// Pass-through spy so a test can count how many parses a reply's markdown went through.
+vi.mock('react-markdown', async importOriginal => {
+  const actual = await importOriginal<typeof import('react-markdown')>();
+  return { ...actual, default: vi.fn(actual.default) };
+});
+
 const { persistArtifactsMock } = vi.hoisted(() => ({ persistArtifactsMock: vi.fn(() => Promise.resolve()) }));
 vi.mock('@client/app/utils/artifactPersistence', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -793,5 +799,42 @@ describe('empty fences in a reply', () => {
     expect(container.textContent).not.toContain('undefined');
     screen.getAllByTestId('code-block-copy-btn').forEach(button => fireEvent.click(button));
     await waitFor(() => expect(writeText.mock.calls).toEqual([[''], ['']]));
+  });
+});
+
+describe('streaming split is scoped to a running quest', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const text = 'first paragraph\n\nsecond paragraph\n\nthird';
+
+  const renderWithStatus = (status: string | undefined) => {
+    vi.mocked(ReactMarkdown).mockClear();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{ id: `quest-${status}`, sessionId: 'session-1', questMasterReply: text, status } as never}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    return vi
+      .mocked(ReactMarkdown)
+      .mock.calls.map(([props]) => props.children)
+      .filter((children): children is string => typeof children === 'string' && children.includes('third'));
+  };
+
+  it.each([
+    ['stopped', 'stopped'],
+    ['status-less', undefined],
+  ])('renders a %s quest through one ReactMarkdown holding the whole reply', (_label, status) => {
+    const parses = renderWithStatus(status);
+    expect(parses.length).toBeGreaterThan(0);
+    expect(parses.every(children => children.includes('first paragraph'))).toBe(true);
+  });
+
+  it('splits a running quest so the tail parses on its own', () => {
+    const parses = renderWithStatus('running');
+    expect(parses.some(children => !children.includes('first paragraph'))).toBe(true);
   });
 });
