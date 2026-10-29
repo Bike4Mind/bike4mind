@@ -60,6 +60,23 @@ describe('credentialRedactor', () => {
     expect(redact(org, '{"error":"org \\u0065 is unknown"}')).toBe('{"error":"org [redacted] is unknown"}');
   });
 
+  it.each([
+    ['backspace', '\b'],
+    ['tab', '\t'],
+    ['newline', '\n'],
+    ['form feed', '\f'],
+    ['carriage return', '\r'],
+  ])('redacts a Basic password containing a JSON-escaped %s', (_name, control) => {
+    const password = `pass${control}word`;
+    const decoded = `user:${password}`;
+    const auth = { authorization: `Basic ${Buffer.from(decoded).toString('base64')}` };
+    for (const echoed of [password, decoded]) {
+      const body = JSON.stringify({ error: `bad credential ${echoed}` });
+      expect(JSON.parse(redact(auth, body))).toEqual({ error: 'bad credential [redacted]' });
+      expect(redact(auth, `bad credential ${echoed}`)).toBe('bad credential [redacted]');
+    }
+  });
+
   it('reports the longest text a match can span', () => {
     expect(credentialRedactor({ 'x-api-key': 'abcd' })!.longest).toBe(24);
   });

@@ -198,7 +198,7 @@ export interface RemoteOllama {
   fetch: FetchLike;
   hasCredentials(): boolean;
   /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
-  redact: (text: string) => string;
+  redact: (text: string, response: Response) => string;
 }
 
 export class OllamaLocal {
@@ -410,13 +410,15 @@ export class OllamaLocal {
     for (let attempt = 0; ; attempt++) {
       // A fresh splitter per attempt: its state must not carry over from an abandoned reply.
       const sink = prefilled ? splitPrefilledReasoning(report) : report;
-      if (await readReply(body, sink, this.server?.redact)) return;
+      const server = this.server;
+      if (await readReply(body, sink, server ? text => server.redact(text, response) : undefined)) return;
       if (attempt === EMPTY_REPLY_RETRIES)
         throw new Error(
           `${model} ended its reply without writing anything. Send the message again or pick a larger model.`
         );
       const again = await send(sent);
       if (!again.ok || !again.body) throw await ollamaError(again, this.server);
+      response = again;
       body = again.body;
     }
   }

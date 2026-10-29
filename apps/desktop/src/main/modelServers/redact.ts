@@ -5,6 +5,13 @@ const REGEX_SPECIAL = /[\\^$.*+?()[\]{}|]/g;
 const SHORT = 8;
 /** `\uXXXX` is the longest way a JSON encoder writes one character. */
 const MAX_CHAR_FORM = 6;
+const JSON_SHORT_ESCAPES = new Map([
+  [0x08, 'b'],
+  [0x09, 't'],
+  [0x0a, 'n'],
+  [0x0c, 'f'],
+  [0x0d, 'r'],
+]);
 
 export interface CredentialRedactor {
   redact(text: string): string;
@@ -49,7 +56,8 @@ function secretPattern(secret: string): string {
       .toString(16)
       .padStart(4, '0')
       .replace(/[a-f]/g, digit => `[${digit}${digit.toUpperCase()}]`);
-    body += `(?:${literal}|\\\\${literal}|\\\\u${hex})`;
+    const shortEscape = JSON_SHORT_ESCAPES.get(code);
+    body += `(?:${literal}|\\\\${literal}|\\\\u${hex}${shortEscape ? `|\\\\${shortEscape}` : ''})`;
   }
   return secret.length < SHORT ? `(?<![A-Za-z0-9])${body}(?![A-Za-z0-9])` : body;
 }

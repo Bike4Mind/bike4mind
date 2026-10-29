@@ -88,7 +88,7 @@ function capturedFile(out: Outbound, saved: string | null): StoreFile & { conten
   };
 }
 
-type Mode = 'ok' | 'reject' | 'error' | 'hang' | 'echo-401' | 'echo-500' | 'echo-stream';
+type Mode = 'ok' | 'reject' | 'error' | 'hang' | 'echo-401' | 'echo-500' | 'echo-stream' | 'paused-echo-stream';
 
 /** A server or proxy that quotes the credential it was sent back in its error, escaping `/` as some encoders do. */
 const echoText = (req: http.IncomingMessage) =>
@@ -108,6 +108,7 @@ const servers: http.Server[] = [];
 async function fakeServer(kind: ModelServerKind) {
   const seen: Seen[] = [];
   const state = { mode: 'ok' as Mode };
+  const pausedStream = Promise.withResolvers<() => void>();
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', chunk => (body += chunk));
@@ -127,6 +128,23 @@ async function fakeServer(kind: ModelServerKind) {
         return res.end(echoJson({ error: echoText(req) }));
       }
       const route = `${req.method} ${req.url}`;
+      if (
+        state.mode === 'paused-echo-stream' &&
+        (route === 'POST /api/chat' || route === 'POST /v1/chat/completions')
+      ) {
+        const isOllama = route === 'POST /api/chat';
+        res.writeHead(200, { 'content-type': isOllama ? 'application/x-ndjson' : 'text/event-stream' });
+        res.flushHeaders();
+        // The caller can rotate or delete the credential after this request used it, before its error arrives.
+        pausedStream.resolve(() =>
+          res.end(
+            isOllama
+              ? `${echoJson({ error: echoText(req) })}\n`
+              : `data: ${echoJson({ error: { message: echoText(req) } })}\n\n`
+          )
+        );
+        return;
+      }
       if (state.mode === 'echo-stream' && route === 'POST /api/chat')
         return send(200, `${echoJson({ error: echoText(req) })}\n`, 'application/x-ndjson');
       if (state.mode === 'echo-stream' && route === 'POST /v1/chat/completions')
@@ -161,6 +179,7 @@ async function fakeServer(kind: ModelServerKind) {
     address: `http://127.0.0.1:${port}`,
     seen,
     state,
+    pausedStream: pausedStream.promise,
     close: () => {
       server.closeAllConnections();
       return new Promise(resolve => server.close(resolve));
@@ -403,6 +422,53 @@ async function scenario(kind: ModelServerKind, keyring: boolean, first: 'bearer'
 }
 
 describe('a model server credential never leaves main except in its own request headers', () => {
+  describe.each(['ollama', 'openai-compatible'] as const)('%s in-flight credential changes', kind => {
+    it.each(['rotate', 'clear', 'remove'] as const)(
+      'redacts an old credential after %s while a streamed error is pending',
+      async mutation => {
+        const target = await fakeServer(kind);
+        const main = desktopMain(xorCipher(false));
+        await main.registry.start();
+        const added = await main.invoke<ModelServerMutationResult>(IPC_CHANNELS.modelServersAdd, {
+          address: target.address,
+          credential: credential('bearer'),
+          name: 'gpu box',
+          kind,
+          access: 'chat',
+        });
+        if (!added.ok) throw new Error(added.error);
+        const saved = added.servers.find(server => !server.local);
+        if (!saved) throw new Error('The model server was not saved.');
+        const model = `local:srv-${saved.id}:${kind === 'ollama' ? 'qwen2.5:0.5b' : 'm1'}`;
+
+        target.state.mode = 'paused-echo-stream';
+        const pendingChat = main.chat(model);
+        const releaseError = await target.pausedStream;
+        const request = target.seen.at(-1);
+        expect(request?.headers.authorization).toBe(`Bearer ${BEARER}`);
+
+        if (mutation === 'remove') {
+          await main.store.remove(saved.id);
+          expect(await main.store.get(saved.id)).toBeNull();
+        } else {
+          const updated = await main.store.update(saved.id, {
+            credential: mutation === 'rotate' ? credential('header') : { type: 'none' },
+          });
+          expect(main.store.headers(updated)).toEqual(mutation === 'rotate' ? { [HEADER_NAME]: HEADER_VALUE } : null);
+        }
+        releaseError();
+        const result = await pendingChat;
+        main.registry.stop();
+
+        const echoed = 'credential [redacted] is not valid here';
+        expect(result.error?.message).toBe(kind === 'ollama' ? echoed : `gpu box: ${echoed}`);
+        expect(result.events).toEqual([]);
+        expect(main.out.leaks()).toEqual([]);
+        expect(requestLeaks(target.seen)).toEqual([]);
+      }
+    );
+  });
+
   it('Ollama with a keyring: bearer token, then a custom header', { timeout: 60_000 }, async () => {
     const out = await scenario('ollama', true, 'bearer');
     expect(out.records.some(record => record.where === 'model-servers.json' && record.text.includes('"secret"'))).toBe(

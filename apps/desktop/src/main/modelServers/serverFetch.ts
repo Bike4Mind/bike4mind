@@ -5,7 +5,7 @@ import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import type { FetchLike } from '@bike4mind/local-models';
 import { scopeOfIp, transportVerdict } from './addressPolicy';
-import { credentialRedactor } from './redact';
+import { credentialRedactor, type CredentialRedactor } from './redact';
 
 /** Refused before anything was sent: wrong origin, or a transport rule (see addressPolicy). */
 export class ServerTransportError extends Error {
@@ -45,6 +45,12 @@ export interface ServerFetchDeps {
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const NO_BODY = new Set([204, 205, 304]);
+const responseRedactors = new WeakMap<Response, CredentialRedactor>();
+
+/** Uses the credential sent with this response's request, even after rotation or removal. */
+export function redactServerResponse(text: string, response: Response): string {
+  return responseRedactors.get(response)?.redact(text) ?? text;
+}
 
 /**
  * Fetch for one saved server, on Node's http/https rather than Chromium's network stack: certificates
@@ -115,8 +121,8 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
       throw new ServerRedirectError(
         scrub(
           crossOrigin
-            ? `${endpoint.label} redirected to ${target?.origin ?? 'another address'}. Desktop does not follow redirects to another address, so its credentials stay with this server. Check the address.`
-            : `${endpoint.label} answered with a redirect to ${target.pathname}. Check the address, including any path.`
+            ? `${endpoint.label} redirected to another address. Desktop does not follow redirects to another address, so its credentials stay with this server. Check the address.`
+            : `${endpoint.label} answered with a redirect. Check the address, including any path.`
         ),
         crossOrigin
       );
@@ -127,27 +133,31 @@ export function createServerFetch(endpoint: ServerEndpoint, deps: ServerFetchDep
     }
     const empty = NO_BODY.has(status) || init.method === 'HEAD';
     if (empty) response.resume();
-    // Error bodies and status text become error messages, logs and chat history, so a server or proxy
-    // that echoes the credential back must not carry it out of main. A compressed body is passed through:
-    // no consumer asks for one, and the credential cannot be read inside it.
+    // Encoded error bodies cannot be safely scrubbed without decoding; omit them rather than trust
+    // a server-controlled content-encoding header to describe what consumers will actually parse.
     const encoding = (response.headers['content-encoding'] ?? 'identity').trim().toLowerCase();
-    if (status >= 400 && redactor && encoding === 'identity') {
+    if (status >= 300 && redactor) {
       let text: string | null = null;
-      if (!empty) {
+      if (!empty && encoding === 'identity') {
         const read = await readCapped(response, ERROR_BODY_LIMIT);
         text = redactor.redact(read.text);
         // A credential cut at the limit could leave its start behind.
         if (read.capped) text = `${text.slice(0, Math.max(0, text.length - (redactor.longest - 1)))}[truncated]`;
+      } else {
+        response.destroy();
       }
       if (init.signal?.aborted) throw init.signal.reason;
       responseHeaders.delete('content-length');
+      responseHeaders.delete('content-encoding');
       return new Response(text, { status, statusText: scrub(response.statusMessage ?? ''), headers: responseHeaders });
     }
-    return new Response(empty ? null : (Readable.toWeb(response) as ReadableStream<Uint8Array>), {
+    const result = new Response(empty ? null : (Readable.toWeb(response) as ReadableStream<Uint8Array>), {
       status,
-      statusText: response.statusMessage ?? '',
+      statusText: scrub(response.statusMessage ?? ''),
       headers: responseHeaders,
     });
+    if (redactor) responseRedactors.set(result, redactor);
+    return result;
   };
 }
 
