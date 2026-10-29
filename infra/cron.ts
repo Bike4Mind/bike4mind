@@ -23,6 +23,8 @@ import { appUrlForLambdaEnv } from './router';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 import { websocketApi } from './websocket';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { loopSchedulerDeadLetter } from './loopSchedulerDeadLetter';
+import { agentExecutor } from './agentExecutor';
 import './businessMetricAlerts';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
@@ -563,6 +565,45 @@ const deepAgentWakeCron = runsScheduledJobs
       },
     })
   : undefined;
+
+// Loop scheduler - folds finished loop runs back into their loops, then dispatches due live loops
+// as headless agent executions. Idles (claims nothing) while the EnableLoops admin setting is off.
+const loopSchedulerCron =
+  runsScheduledJobs && loopSchedulerDeadLetter
+    ? new sst.aws.Cron('loopSchedulerCron', {
+        schedule: 'rate(5 minutes)',
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/loopScheduler.handler',
+          runtime: 'nodejs24.x',
+          timeout: '2 minutes',
+          // startAgentExecution resolves the executor through the AgentExecutor link.
+          link: [...allSecrets, agentExecutor],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+          },
+          permissions: [
+            loopSchedulerDeadLetter.sendPermission,
+            { actions: ['lambda:InvokeFunction'], resources: [agentExecutor.arn] },
+          ],
+          transform: loopSchedulerDeadLetter.functionTarget,
+          logging: {
+            retention: '1 week',
+          },
+        },
+        transform: {
+          target: {
+            ...loopSchedulerDeadLetter.ruleTarget.target,
+            // SST defaults to a literal {} input; omit it to retain EventBridge's scheduled time.
+            input: undefined,
+          },
+        },
+      })
+    : undefined;
+
+if (loopSchedulerCron && loopSchedulerDeadLetter) {
+  loopSchedulerDeadLetter.allowRules([$util.output(loopSchedulerCron)]);
+}
 
 // Data Lake Research Schedule - fires research configs whose cadence is due, skipping any lake whose
 // pending-proposal queue is at the config's review limit. 15 minutes is plenty for a daily-at-most
@@ -1252,6 +1293,7 @@ export {
   integrationHealthCheckCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,
+  loopSchedulerCron,
   dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   signupIpRetentionCron,
