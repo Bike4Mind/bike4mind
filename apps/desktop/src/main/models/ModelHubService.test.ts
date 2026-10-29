@@ -4,6 +4,7 @@ import {
   HubRateLimitError,
   HuggingFaceHub,
   LocalRuntimeError,
+  ModelNotFoundError,
   RuntimeConnectionError,
   type HardwareProfile,
   type HubGgufBuild,
@@ -1258,6 +1259,8 @@ describe('ModelHubService curated library pulls', () => {
   const readsOf = (runtime: ReturnType<typeof harness>['runtime']) =>
     runtime.inspect.mock.calls.filter(([name]) => name === REF);
 
+  const cancelledCheck = expect.stringMatching(/^Download cancelled while .* It is still installed/);
+
   /** Pulls E4B to completion and resolves with the pull's result. */
   async function pulled(setup: ReturnType<typeof harness>) {
     const result = setup.service.pull(libraryRequest);
@@ -1313,7 +1316,7 @@ describe('ModelHubService curated library pulls', () => {
     await vi.waitFor(() => expect(setup.warn).toHaveBeenCalledTimes(1));
     setup.service.cancel(pullKey(libraryRequest.repo, libraryRequest.buildId));
 
-    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified', message: cancelledCheck } });
     expect(readsOf(setup.runtime)).toHaveLength(1);
     expect(setup.runtime.remove).not.toHaveBeenCalled();
     expect(setup.service.pulls()).toMatchObject([{ phase: 'failed', error: { kind: 'unverified' } }]);
@@ -1333,7 +1336,7 @@ describe('ModelHubService curated library pulls', () => {
     await vi.waitFor(() => expect(readsOf(setup.runtime)).toHaveLength(1));
     setup.service.cancel(pullKey(libraryRequest.repo, libraryRequest.buildId));
 
-    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'unverified', message: cancelledCheck } });
     expect(readsOf(setup.runtime)).toHaveLength(1);
     expect(setup.runtime.remove).not.toHaveBeenCalled();
   });
@@ -1454,6 +1457,134 @@ describe('ModelHubService curated library pulls', () => {
     expect(setup.service.pulls()).toMatchObject([
       { phase: 'failed', error: { message: expect.stringContaining(says) } },
     ]);
+  });
+
+  it.each([
+    ['listed before the pull', async () => [(await harness().runtime.inspect(REF)).model], 'installed before'],
+    ['unknown because the list failed', () => Promise.reject(new Error('busy')), 'could not tell'],
+  ])('never removes a tag %s when Check again finds it unreviewed', async (_label, listed, says) => {
+    const setup = harness();
+    const base = await setup.runtime.inspect(REF);
+    setup.runtime.list.mockImplementationOnce(listed);
+    for (let read = 0; read < 3; read++) setup.runtime.inspect.mockRejectedValueOnce(showTimedOut());
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    setup.runtime.inspect.mockResolvedValue(otherWeights(base));
+
+    expect(await setup.service.checkCurated(LIBRARY.id, E4B.id)).toMatchObject({
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining(says) },
+    });
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+  });
+
+  it('never removes a tag on Check again when no pull this session saw whether it was there', async () => {
+    const setup = harness();
+    setup.runtime.inspect.mockResolvedValue(otherWeights(await setup.runtime.inspect(REF)));
+
+    expect(await setup.service.checkCurated(LIBRARY.id, E4B.id)).toMatchObject({
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining('could not tell') },
+    });
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+  });
+
+  it('runs one check when Check again is clicked in two rows at once', async () => {
+    const setup = harness();
+    const base = await setup.runtime.inspect(REF);
+    for (let read = 0; read < 3; read++) setup.runtime.inspect.mockRejectedValueOnce(showTimedOut());
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    let answer: (() => void) | undefined;
+    setup.runtime.inspect.mockImplementationOnce(
+      () => new Promise<ModelInspection>(resolve => (answer = () => resolve(otherWeights(base))))
+    );
+    const reads = readsOf(setup.runtime).length;
+
+    const first = setup.service.checkCurated(LIBRARY.id, E4B.id);
+    const second = setup.service.checkCurated(LIBRARY.id, E4B.id);
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    answer?.();
+
+    const [one, two] = await Promise.all([first, second]);
+    expect(one).toMatchObject({ ok: false, error: { message: expect.stringContaining('removed what Ollama') } });
+    expect(two).toBe(one);
+    expect(readsOf(setup.runtime)).toHaveLength(reads + 1);
+    expect(setup.runtime.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a model removed while its post-download check was pending as gone, not still installed', async () => {
+    const setup = harness();
+    setup.runtime.inspect.mockRejectedValueOnce(new ModelNotFoundError('ollama', REF));
+
+    expect(await pulled(setup)).toEqual({ ok: true, ref: REF });
+    expect(readsOf(setup.runtime)).toHaveLength(1);
+    expect(setup.service.pulls()).toEqual([]);
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'still lists it',
+      async (): Promise<InstalledModel[]> => [
+        {
+          name: REF,
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities: { tools: false, vision: false, thinking: false, embeddings: false, completion: true },
+        },
+      ],
+    ],
+    ['cannot be read', async (): Promise<InstalledModel[]> => Promise.reject(new Error('list failed'))],
+  ])('keeps a pulled model unverified when its read 404s but Ollama %s', async (_, listAfter) => {
+    const setup = harness();
+    setup.runtime.inspect.mockRejectedValueOnce(new ModelNotFoundError('ollama', REF));
+    setup.runtime.list.mockImplementationOnce(async () => []).mockImplementationOnce(listAfter);
+
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+  });
+
+  it('clears the warning when Check again finds the unverified model already gone', async () => {
+    const setup = harness();
+    for (let read = 0; read < 3; read++) setup.runtime.inspect.mockRejectedValueOnce(showTimedOut());
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    setup.runtime.inspect.mockRejectedValueOnce(new ModelNotFoundError('ollama', REF));
+
+    expect(await setup.service.checkCurated(LIBRARY.id, E4B.id)).toEqual({ ok: true });
+    expect(readsOf(setup.runtime)).toHaveLength(4);
+    expect(setup.service.pulls()).toEqual([]);
+    expect(setup.runtime.remove).not.toHaveBeenCalled();
+  });
+
+  it('leaves an active download of the same model alone on Check again', async () => {
+    const setup = harness();
+    const result = setup.service.pull(libraryRequest);
+    await vi.waitFor(() => expect(setup.service.pulls()).toMatchObject([{ phase: 'downloading' }]));
+
+    await setup.service.checkCurated(LIBRARY.id, E4B.id);
+    expect(setup.service.pulls()).toMatchObject([{ phase: 'downloading' }]);
+    setup.pulls[0].resolve();
+    await expect(result).resolves.toEqual({ ok: true, ref: REF });
+  });
+
+  it('remembers the tag was absent before an unverified pull when the build is pulled again', async () => {
+    const setup = harness();
+    const base = await setup.runtime.inspect(REF);
+    for (let read = 0; read < 3; read++) setup.runtime.inspect.mockRejectedValueOnce(showTimedOut());
+    expect(await pulled(setup)).toMatchObject({ ok: false, error: { kind: 'unverified' } });
+    setup.runtime.list.mockResolvedValue([base.model]);
+    setup.runtime.inspect.mockResolvedValueOnce(otherWeights(base));
+
+    const again = setup.service.pull(libraryRequest);
+    await vi.waitFor(() => expect(setup.pulls).toHaveLength(2));
+    setup.pulls[1].resolve();
+    expect(await again).toMatchObject({
+      ok: false,
+      error: { kind: 'upstream-changed', message: expect.stringContaining('removed what Ollama downloaded') },
+    });
+    expect(setup.runtime.remove).toHaveBeenCalledWith(REF);
   });
 
   it.each([
