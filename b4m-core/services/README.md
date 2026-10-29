@@ -91,12 +91,12 @@ different reasons cannot stack grants. Stronger evidence can release the remaini
 delta. Grant stage records money released, not current identity trust or revocation.
 Identity consumers own verification, identity deduplication, and revocation.
 
-Activity checks use persisted successful chat turns stamped at creation by a
-session-authenticated server invocation for an enrolled account. A retry through
-an API key or an internal caller clears that provenance. Imported, legacy, API-key,
-pending, and failed turns do not qualify. Private message/day thresholds are disabled by zero;
-distinct UTC days must also span the corresponding elapsed whole days. The
-first-party eligibility-check endpoint and Billing status provide a retryable path.
+Activity qualifies on server-accrued heartbeat time, not chat turns: the client pings
+`/api/users/active-session` while the app is open and in use, the server accrues the gap
+between pings into `signupGrant.activity` for the current UTC day, and the day's drip pays
+once that reaches `signupGrantActivityMinActiveSeconds`. The drip pays only from the unlock
+pool. The first-party eligibility-check endpoint and Billing status provide a retryable
+path that pays when the accrued time already qualifies.
 Organization invitation unlocks have their own `signupGrantOrgInviteEnabled` rollout
 flag, disabled by default. Each organization can unlock at most its seat count
 over its lifetime; removing a member or deleting a recipient account does not

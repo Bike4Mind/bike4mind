@@ -41,7 +41,7 @@ export interface SignupGrant {
   activity?: { day: string; ms: number; lastAt: Date };
 }
 
-export const DEFAULT_SIGNUP_ACTIVE_SECONDS = 600;
+const DEFAULT_SIGNUP_ACTIVE_SECONDS = 60;
 
 /** Zero, non-integer and out-of-range values fall back to the default rather than switching the drip off. */
 export function signupActiveSeconds(value: unknown): number {

@@ -2,13 +2,13 @@ import { Stack, Typography } from '@mui/joy';
 import { signupGrantRemaining } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
-import { unlockPathsCopy } from '@client/app/components/Session/newUserWelcomeModel';
+import { advertisedDripCredits, unlockPathsCopy } from '@client/app/components/Session/newUserWelcomeModel';
 
 export default function SignupGrantStatus() {
   const { currentUser } = useUser();
   const activity = useGetSettingsValue('signupGrantActivityEnabled');
   const dailyCredits = Number(useGetSettingsValue('signupGrantActivityDailyCredits')) || 0;
-  const activityEnabled = activity === true || activity === 'true';
+  const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
   const grant = currentUser?.signupGrant;
   if (currentUser?.signupGrantHeldReason === 'budget_exhausted' && (!grant || grant.stage === 'pending_email')) {
     return (
@@ -30,7 +30,10 @@ export default function SignupGrantStatus() {
       </Typography>
       {remaining > 0 && (
         <Typography level="body-sm" data-testid="signup-grant-unlock-paths">
-          {unlockPathsCopy(activityEnabled ? dailyCredits : 0)}
+          {unlockPathsCopy(
+            advertisedDripCredits({ enabled: activity, dailyCredits, unlockCredits: grant.unlockCredits }),
+            minActiveSeconds
+          )}
         </Typography>
       )}
     </Stack>

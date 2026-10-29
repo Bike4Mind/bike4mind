@@ -101,9 +101,32 @@ async function pingEvery60s(userId: string, from: number, to: number) {
 }
 
 describe('active session heartbeat', () => {
-  it('credits nothing on the first ping of a day and pays nothing below the minimum', async () => {
+  it('pays on the second 60s ping at the default 60 second minimum', async () => {
+    delete config.signupGrantActivityMinActiveSeconds;
     const user = await createSignupStageUser();
     expect(await ping(user.id, 0)).toMatchObject({ activeSeconds: 0, paidToday: false, creditsGranted: 0 });
+    expect(await ping(user.id, 60)).toMatchObject({ activeSeconds: 60, paidToday: true, creditsGranted: 1000 });
+    expect(await dripRows(user.id)).toHaveLength(1);
+  });
+
+  it('does not pay on a single ping or a burst inside the 45s gap at the default minimum', async () => {
+    delete config.signupGrantActivityMinActiveSeconds;
+    const user = await createSignupStageUser();
+    expect(await ping(user.id, 0)).toMatchObject({ paidToday: false, creditsGranted: 0 });
+    for (const s of [10, 20, 30, 44]) {
+      expect(await ping(user.id, s)).toMatchObject({ paidToday: false, creditsGranted: 0, activeSeconds: 0 });
+    }
+    expect(await dripRows(user.id)).toHaveLength(0);
+  });
+
+  it('credits nothing on the first ping of a day and pays nothing below the minimum', async () => {
+    const user = await createSignupStageUser();
+    expect(await ping(user.id, 0)).toMatchObject({
+      activeSeconds: 0,
+      paidToday: false,
+      creditsGranted: 0,
+      requiredSeconds: 600,
+    });
     expect(await pingEvery60s(user.id, 60, 540)).toMatchObject({ activeSeconds: 540, paidToday: false });
     expect(await dripRows(user.id)).toHaveLength(0);
   });
@@ -175,7 +198,9 @@ describe('active session heartbeat', () => {
 
   it('does nothing for a user without a grant or before the tranche is released, and when the flag is off', async () => {
     const plain = await User.create({ username: 'plain', name: 'Plain', email: 'plain@example.test' });
-    expect(await ping(plain.id, 0)).toMatchObject({ activeSeconds: 0 });
+    const plainResult = await ping(plain.id, 0);
+    expect(plainResult).toMatchObject({ activeSeconds: 0 });
+    expect(plainResult).not.toHaveProperty('requiredSeconds');
     expect((await User.findById(plain.id))?.signupGrant).toBeUndefined();
     const user = await createSignupStageUser(1);
     config.signupGrantActivityEnabled = 'false';

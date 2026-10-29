@@ -32,7 +32,7 @@ async function qualifiesOnDay(user: IUserDocument, day: string): Promise<boolean
 
 /**
  * Pays the activity drip for the UTC day of `now` unless the account is not eligible, already paid or capped.
- * Shared by the heartbeat and the eligibility route; the ledger id keeps a day to one payout.
+ * Called by the heartbeat and, via unlockSignupGrantFromActivity, the eligibility route; the ledger id keeps a day to one payout.
  */
 export async function payActivityDripForDay(userId: string, now: Date = new Date()) {
   const user = await userRepository.findById(userId);

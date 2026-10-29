@@ -14,7 +14,13 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
 import { APP_NAME, getBrandName } from '@client/config/general';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
-import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCanStart, welcomeCreditsLine } from './newUserWelcomeModel';
+import {
+  STARTER_PROMPTS,
+  advertisedDripCredits,
+  shouldShowNewUserWelcome,
+  welcomeCanStart,
+  welcomeCreditsLine,
+} from './newUserWelcomeModel';
 import { isAwaitingEmailVerification } from '@client/app/utils/onboarding';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
 import SignupGrantStatus from '../subscription/SignupGrantStatus';
@@ -41,7 +47,13 @@ const NewUserWelcome = () => {
   const { data: sessions, isSuccess, isFetching } = useGetOwnSessions('');
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const defaultFreeCredits = useSignupGrantCredits();
-  const dailyDripCredits = Number(useGetSettingsValue('signupGrantActivityDailyCredits')) || 0;
+  const activityEnabled = useGetSettingsValue('signupGrantActivityEnabled');
+  const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
+  const dailyDripCredits = advertisedDripCredits({
+    enabled: activityEnabled,
+    dailyCredits: Number(useGetSettingsValue('signupGrantActivityDailyCredits')) || 0,
+    unlockCredits: currentUser?.signupGrant?.unlockCredits,
+  });
   const balance = useEffectiveCredits();
   const liveBalance = useEffectiveCredits({ live: true });
   const answerCost = useSelectedModelAnswerCost();
@@ -109,6 +121,7 @@ const NewUserWelcome = () => {
     pendingGrant: currentUser?.signupGrant?.signupCredits ?? currentUser?.pendingCreditGrant ?? defaultFreeCredits,
     pendingGrantIsMaximum: !!currentUser?.signupGrant,
     dailyDripCredits,
+    minActiveSeconds,
   });
   // Same credits the line above quotes: the pending grant before verification, else the displayed balance.
   const estimateCredits = awaitingVerification

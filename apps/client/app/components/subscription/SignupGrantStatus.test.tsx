@@ -9,12 +9,18 @@ const h = vi.hoisted(() => ({
   held: undefined as 'budget_exhausted' | undefined,
   activity: true as boolean | string | undefined,
   daily: 1000 as number | string | undefined,
+  minSeconds: undefined as number | undefined,
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { signupGrant: h.grant, signupGrantHeldReason: h.held } }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'signupGrantActivityDailyCredits' ? h.daily : h.activity),
+  useGetSettingsValue: (key: string) =>
+    key === 'signupGrantActivityDailyCredits'
+      ? h.daily
+      : key === 'signupGrantActivityMinActiveSeconds'
+        ? h.minSeconds
+        : h.activity,
 }));
 import SignupGrantStatus from './SignupGrantStatus';
 const theme = extendTheme({ ...getThemeConfig() });
@@ -30,6 +36,7 @@ describe('signup grant status', () => {
     h.activity = true;
     h.daily = 1000;
     h.held = undefined;
+    h.minSeconds = undefined;
     h.grant = {
       stage: 'signup',
       signupCredits: 1000,
@@ -47,10 +54,22 @@ describe('signup grant status', () => {
     show();
     expect(screen.getByTestId('signup-grant-released')).toHaveTextContent('9,000 more credits are still locked');
     const paths = screen.getByTestId('signup-grant-unlock-paths');
-    expect(paths).toHaveTextContent('up to 1,000 credits for each day you keep Bike4Mind open for about 10 minutes');
+    expect(paths).toHaveTextContent(
+      'up to 1,000 credits for each day you have Bike4Mind open and in use for about 1 minute'
+    );
     expect(paths).toHaveTextContent('when you subscribe');
     expect(paths).toHaveTextContent('when you verify a card');
     expect(screen.getByTestId('signup-grant-status')).not.toHaveTextContent('eligibility');
+  });
+  it('derives the minutes from the setting', () => {
+    h.minSeconds = 1800;
+    show();
+    expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent('for about 30 minutes');
+  });
+  it('omits the daily drip when the unlock pool is 0', () => {
+    h.grant = { ...h.grant!, unlockCredits: 0 };
+    show();
+    expect(screen.queryByTestId('signup-grant-unlock-paths')).toBeNull();
   });
   it('has no eligibility-check button', () => {
     show();

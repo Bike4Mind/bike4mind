@@ -1,3 +1,4 @@
+import { signupActiveSeconds } from '@bike4mind/common';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
 
 export interface StarterPrompt {
@@ -50,13 +51,39 @@ interface CreditsLineArgs {
   pendingGrantIsMaximum?: boolean;
   /** Daily activity drip amount; omitted or 0 when the drip is off. */
   dailyDripCredits?: number;
+  /** Raw signupGrantActivityMinActiveSeconds setting; invalid values read as the default. */
+  minActiveSeconds?: unknown;
+}
+
+/** "5 minutes" style phrase for the active-time minimum, rounded to whole minutes, or tenths of an hour from 60 minutes. */
+export function activeTimeCopy(minActiveSeconds: unknown): string {
+  const minutes = Math.round(signupActiveSeconds(minActiveSeconds) / 60);
+  if (minutes < 60) return `about ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return `about ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+}
+
+/**
+ * The drip pays from the unlock pool only, so it is advertised just when the account's enrolled unlock
+ * credits are positive, the feature is on and a daily amount is set. Returns 0 otherwise.
+ */
+export function advertisedDripCredits({
+  enabled,
+  dailyCredits,
+  unlockCredits,
+}: {
+  enabled: unknown;
+  dailyCredits: number;
+  unlockCredits: number | undefined;
+}): number {
+  return (enabled === true || enabled === 'true') && dailyCredits > 0 && (unlockCredits ?? 0) > 0 ? dailyCredits : 0;
 }
 
 /** The self-serve unlock paths we advertise; org invites and admin releases also unlock but are not offered here. */
-export function unlockPathsCopy(dailyDripCredits: number): string {
+export function unlockPathsCopy(dailyDripCredits: number, minActiveSeconds?: unknown): string {
   const drip =
     dailyDripCredits > 0
-      ? `up to ${formatCreditBalance(dailyDripCredits)} for each day you keep Bike4Mind open for about 10 minutes, `
+      ? `up to ${formatCreditBalance(dailyDripCredits)} for each day you have Bike4Mind open and in use for ${activeTimeCopy(minActiveSeconds)} (a hidden tab or 5 minutes without input does not count), `
       : '';
   return `The rest unlocks ${drip}all at once when you subscribe, or all at once when you verify a card.`;
 }
@@ -73,12 +100,13 @@ export function welcomeCreditsLine({
   pendingGrant,
   pendingGrantIsMaximum = false,
   dailyDripCredits = 0,
+  minActiveSeconds,
 }: CreditsLineArgs): string | null {
   if (!enforceCredits) return null;
   if (awaitingVerification) {
     return pendingGrant && pendingGrant > 0
       ? pendingGrantIsMaximum
-        ? `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)} now. ${unlockPathsCopy(dailyDripCredits)}`
+        ? `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)} now. ${unlockPathsCopy(dailyDripCredits, minActiveSeconds)}`
         : `Verify your email to unlock your ${formatCreditBalance(pendingGrant)}.`
       : 'Verify your email to unlock your free credits.';
   }

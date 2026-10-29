@@ -42,7 +42,7 @@ describe('activity signup drip evaluation', () => {
   });
 
   it.each([
-    ['below the active-time minimum', grantedUser({ activity: { day: '2030-03-01', ms: 599_000, lastAt: NOW } })],
+    ['below the active-time minimum', grantedUser({ activity: { day: '2030-03-01', ms: 59_000, lastAt: NOW } })],
     [
       'the accrued time is from another day',
       grantedUser({ activity: { day: '2030-02-28', ms: 900_000, lastAt: NOW } }),
@@ -66,10 +66,10 @@ describe('activity signup drip evaluation', () => {
   });
 
   it.each([['0'], ['abc'], [undefined], ['59'], ['7201'], ['90.5']])(
-    'falls back to 600 seconds for %s rather than disabling the drip',
+    'falls back to 60 seconds for %s rather than disabling the drip',
     async value => {
       settings(value === undefined ? {} : { signupGrantActivityMinActiveSeconds: value });
-      expect(await resolveRequiredActiveSeconds()).toBe(600);
+      expect(await resolveRequiredActiveSeconds()).toBe(60);
     }
   );
 

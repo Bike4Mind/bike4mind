@@ -28,6 +28,7 @@ const response = (data: Record<string, unknown> = {}) => ({
   data: { creditsGranted: 0, paidToday: false, withheld: false, ...data },
 });
 const advance = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+const touch = () => act(() => void window.dispatchEvent(new Event('keydown')));
 const setHidden = (hidden: boolean) =>
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
 
@@ -46,9 +47,19 @@ describe('useSignupGrantHeartbeat', () => {
     vi.useRealTimers();
   });
 
-  it('pings on mount and then every interval', async () => {
+  it('does not ping an untouched tab, then pings once there is input', async () => {
     renderHook(() => useSignupGrantHeartbeat());
-    await advance(0);
+    await advance(HEARTBEAT_INTERVAL_MS * 2);
+    expect(h.post).not.toHaveBeenCalled();
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('pings every interval while in use', async () => {
+    renderHook(() => useSignupGrantHeartbeat());
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
     expect(h.post).toHaveBeenCalledTimes(1);
     expect(h.post).toHaveBeenCalledWith('/api/users/active-session');
     await advance(HEARTBEAT_INTERVAL_MS);
@@ -58,7 +69,8 @@ describe('useSignupGrantHeartbeat', () => {
 
   it('pauses while the tab is hidden and resumes when visible', async () => {
     renderHook(() => useSignupGrantHeartbeat());
-    await advance(0);
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
     setHidden(true);
     await advance(HEARTBEAT_INTERVAL_MS * 3);
     expect(h.post).toHaveBeenCalledTimes(1);
@@ -69,7 +81,8 @@ describe('useSignupGrantHeartbeat', () => {
 
   it('pauses after 5 minutes without input and resumes on input', async () => {
     renderHook(() => useSignupGrantHeartbeat());
-    await advance(0);
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
     await advance(HEARTBEAT_IDLE_MS + HEARTBEAT_INTERVAL_MS);
     const idleCount = h.post.mock.calls.length;
     await advance(HEARTBEAT_INTERVAL_MS * 3);
@@ -82,18 +95,21 @@ describe('useSignupGrantHeartbeat', () => {
   it('stops after the day is paid and refreshes the user', async () => {
     h.post.mockResolvedValueOnce(response({ creditsGranted: 1000, paidToday: true }));
     renderHook(() => useSignupGrantHeartbeat());
-    await advance(0);
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
     await advance(HEARTBEAT_INTERVAL_MS * 3);
     expect(h.post).toHaveBeenCalledTimes(1);
-    expect(h.invalidate).toHaveBeenCalledWith({ queryKey: ['user'] });
+    expect(h.invalidate).toHaveBeenCalledWith({ queryKey: ['identify'] });
   });
 
   it('backs off to 5 minutes while the budget withholds, then keeps trying', async () => {
     h.post.mockResolvedValue(response({ withheld: true }));
     renderHook(() => useSignupGrantHeartbeat());
-    await advance(0);
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
     await advance(HEARTBEAT_INTERVAL_MS * 2);
     expect(h.post).toHaveBeenCalledTimes(1);
+    touch();
     await advance(HEARTBEAT_BACKOFF_MS);
     expect(h.post).toHaveBeenCalledTimes(2);
   });
@@ -101,8 +117,23 @@ describe('useSignupGrantHeartbeat', () => {
   it('idles when another tab pinged recently', async () => {
     localStorage.setItem('b4m-signup-heartbeat-leader', JSON.stringify({ id: 'other', at: Date.now() }));
     renderHook(() => useSignupGrantHeartbeat());
-    await advance(0);
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
     expect(h.post).not.toHaveBeenCalled();
+  });
+
+  it('resumes after UTC midnight once the day was paid', async () => {
+    vi.setSystemTime(new Date('2026-03-01T23:57:30Z'));
+    h.post.mockResolvedValueOnce(response({ creditsGranted: 1000, paidToday: true }));
+    renderHook(() => useSignupGrantHeartbeat());
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(1);
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(1);
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -117,6 +148,7 @@ describe('useSignupGrantHeartbeat', () => {
   ])('does not ping when %s', async (_label, arrange) => {
     arrange();
     renderHook(() => useSignupGrantHeartbeat());
+    touch();
     await advance(HEARTBEAT_INTERVAL_MS * 2);
     expect(h.post).not.toHaveBeenCalled();
   });

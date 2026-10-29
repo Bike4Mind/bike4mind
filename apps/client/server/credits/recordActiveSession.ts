@@ -3,15 +3,16 @@ import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
 import { isActivityDripEnabled, payActivityDripForDay, resolveRequiredActiveSeconds } from './activityUnlock';
 
+// Client interval/idle constants live in app/hooks/useSignupGrantHeartbeat.ts; MAX_CREDIT_MS must exceed its interval.
 const MIN_GAP_MS = 45_000;
 const MAX_CREDIT_MS = 90_000;
 
-export interface HeartbeatResult {
+interface HeartbeatResult {
   creditsGranted: number;
   paidToday: boolean;
   withheld: boolean;
   activeSeconds: number;
-  requiredSeconds: number;
+  requiredSeconds?: number;
 }
 
 /**
@@ -19,23 +20,17 @@ export interface HeartbeatResult {
  * that crosses the minimum. Pings closer than the minimum gap are no-ops with no write.
  */
 export async function recordHeartbeat(userId: string, now: Date = new Date()): Promise<HeartbeatResult> {
-  const requiredSeconds = await resolveRequiredActiveSeconds();
-  const result: HeartbeatResult = {
-    creditsGranted: 0,
-    paidToday: false,
-    withheld: false,
-    activeSeconds: 0,
-    requiredSeconds,
-  };
+  const result: HeartbeatResult = { creditsGranted: 0, paidToday: false, withheld: false, activeSeconds: 0 };
   const clock = signupProtection.grantBudget?.now?.() ?? now;
   const day = clock.toISOString().slice(0, 10);
 
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
   if (!grant || grant.stage !== 'signup') return result;
-  const paid = grant.lastDripDay === day;
-  if (paid) return { ...result, paidToday: true, activeSeconds: requiredSeconds };
+  if (grant.lastDripDay === day) return { ...result, paidToday: true };
   if (!(await isActivityDripEnabled())) return result;
+  const requiredSeconds = await resolveRequiredActiveSeconds();
+  result.requiredSeconds = requiredSeconds;
   const { dailyCredits, maxCredits } = await userService.resolveDripLimits(adminSettingsRepository);
   if (!(dailyCredits > 0) || !(maxCredits > 0) || (grant.dripCredits ?? 0) >= maxCredits) return result;
 

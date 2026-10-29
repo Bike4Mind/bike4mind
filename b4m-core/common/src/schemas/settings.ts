@@ -4152,12 +4152,13 @@ export const settingsMap = {
   signupGrantActivityMinActiveSeconds: makeNumberSetting({
     key: 'signupGrantActivityMinActiveSeconds',
     name: 'Signup Activity Minimum Active Seconds',
-    defaultValue: 600,
+    defaultValue: 60,
     min: 60,
     max: 7200,
     int: true,
+    userReadable: true,
     description:
-      'Active time in a UTC day, counted from heartbeat pings while the app is open and in use, before the activity drip pays. Invalid values fall back to 600.',
+      'Active time in a UTC day, counted from heartbeat pings while the app is open and in use, before the activity drip pays. Invalid values fall back to 60.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4182,7 +4183,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits released from the staged signup remainder for each UTC day of qualifying active time. Zero disables the activity drip.',
+      'Credits released for each UTC day of qualifying active time. Pays only from the unlock pool (Verified Unlock Credits) and pays nothing while that is 0. Zero disables the activity drip.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
