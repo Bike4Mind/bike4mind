@@ -228,7 +228,7 @@ Shortcuts:
 ## 8. Rollout
 
 1. **Tokens and toolkit.** Admin tokens in the Joy theme; the components above in `components/admin/shared` with tests.
-2. **Users first.** Rebuild the users list and user profile on the toolkit; split `FullUsersView` into the profile shell and section cards.
+2. **Users first.** Rebuild the users list and user profile on the toolkit; the old `FullUsersView` is gone, replaced by the profile shell and section cards.
 3. **Every other admin tab.** Organizations, credits, API keys, security, settings and audit log move onto the same page anatomy, one PR per tab.
 4. **Lock it in.** A lint rule against raw Joy `Card`, `Modal` and `Table` in admin code outside `shared/`, and a design-review checkbox in the PR template.
 
