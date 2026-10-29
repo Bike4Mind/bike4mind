@@ -141,6 +141,9 @@ const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models
  * event, so a generation hung behind a live, still-pinging connection is still cut off.
  */
 const KEEPALIVE_SILENCE_CEILING_FACTOR = 2;
+// Once events flow, the ceiling follows max_tokens at this floor rate: thinking is billed but can
+// stream only pings for minutes, so a fixed multiple of the idle limit kills live generations.
+const KEEPALIVE_MIN_TOKENS_PER_SECOND = 50;
 
 /**
  * Largest max_tokens the SDK will accept without streaming. It derives a projected
@@ -335,20 +338,24 @@ export class AnthropicBackend implements ICompletionBackend {
         region: process.env.AWS_REGION || 'us-east-2',
       });
 
+      const stage = process.env.SEED_STAGE_NAME || 'local';
+      const timestamp = new Date();
       const command = new PutMetricDataCommand({
         Namespace: 'Lumina5/LLMStreaming',
+        // CloudWatch cannot sum across a dimension, so the Stage-only series is what the alarm reads.
         MetricData: [
-          {
-            MetricName: 'StreamIdleTimeoutTriggered',
-            Value: 1,
-            Unit: StandardUnit.Count,
-            Timestamp: new Date(),
-            Dimensions: [
-              { Name: 'Model', Value: model },
-              { Name: 'Stage', Value: process.env.SEED_STAGE_NAME || 'local' },
-            ],
-          },
-        ],
+          [
+            { Name: 'Model', Value: model },
+            { Name: 'Stage', Value: stage },
+          ],
+          [{ Name: 'Stage', Value: stage }],
+        ].map(dimensions => ({
+          MetricName: 'StreamIdleTimeoutTriggered',
+          Value: 1,
+          Unit: StandardUnit.Count,
+          Timestamp: timestamp,
+          Dimensions: dimensions,
+        })),
       });
 
       await client.send(command);
@@ -1532,6 +1539,20 @@ export class AnthropicBackend implements ICompletionBackend {
           let isIdleTimeout = false;
           let idleTimeoutMsForError = 0; // Store for error message
           let idleTimeoutKind: LlmStreamTimeoutKind = 'stream_idle';
+          let idleTimeoutKeepalive = false;
+          // The provider billed the prompt once message_start arrived, so the rejection carries it.
+          const streamTimeoutError = () => {
+            const usage = {
+              inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens ?? 0),
+              cacheReadInputTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens ?? 0),
+              cacheCreationInputTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens ?? 0),
+            };
+            const hasUsage = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens > 0;
+            return createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError, {
+              keepalive: idleTimeoutKeepalive,
+              usage: hasUsage ? usage : undefined,
+            });
+          };
 
           // Degeneration state, also read from the catch block. The idle timer
           // cannot cover this case - it resets on every stream event, and a
@@ -1668,25 +1689,37 @@ export class AnthropicBackend implements ICompletionBackend {
                 this.isThinkingEnabled || mayThinkSilently
                   ? THINKING_IDLE_TIMEOUT_MS
                   : (configuredIdleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
+              const firstEventCeilingMs = INITIAL_TIMEOUT_MS * KEEPALIVE_SILENCE_CEILING_FACTOR;
+              const generationCeilingMs = Math.max(
+                idleTimeoutMs * KEEPALIVE_SILENCE_CEILING_FACTOR,
+                Math.ceil(apiParams.max_tokens / KEEPALIVE_MIN_TOKENS_PER_SECOND) * 1000
+              );
 
               let idleTimer: ReturnType<typeof setTimeout> | undefined;
               let eventCount = 0;
               let lastEventType = '';
               let lastEventAt = Date.now();
+              let lastByteAt = lastEventAt;
 
               const resetIdleTimer = () => {
                 if (!enableIdleTimeout) return;
                 if (idleTimer) clearTimeout(idleTimer);
                 // Use shorter timeout for first event (initial connection)
                 const limitMs = eventCount === 0 ? INITIAL_TIMEOUT_MS : idleTimeoutMs;
-                const ceilingRemainingMs = limitMs * KEEPALIVE_SILENCE_CEILING_FACTOR - (Date.now() - lastEventAt);
+                const ceilingMs = eventCount === 0 ? firstEventCeilingMs : generationCeilingMs;
+                const ceilingRemainingMs = ceilingMs - (Date.now() - lastEventAt);
                 const timeoutMs = Math.max(0, Math.min(limitMs, ceilingRemainingMs));
                 idleTimer = setTimeout(() => {
                   // Mark idle timeout for catch block (must happen before abort)
                   isIdleTimeout = true;
+                  const now = Date.now();
                   // Silence since the last real event, which pings may have stretched past limitMs.
-                  idleTimeoutMsForError = Math.round((Date.now() - lastEventAt) / 1000) * 1000;
+                  idleTimeoutMsForError = Math.round((now - lastEventAt) / 1000) * 1000;
                   idleTimeoutKind = eventCount === 0 ? 'first_event' : 'stream_idle';
+                  const lastByteAgoMs = now - lastByteAt;
+                  // Bytes inside the idle limit mean pings were holding the timer off: the ceiling
+                  // fired on a model that was still generating, not on a dead connection.
+                  idleTimeoutKeepalive = eventCount > 0 && lastByteAgoMs < limitMs;
 
                   // WARN, not error: an idle/streaming timeout is expected and
                   // recoverable (user retries); error severity would page LiveOps
@@ -1697,6 +1730,8 @@ export class AnthropicBackend implements ICompletionBackend {
                     lastEventType,
                     limitMs,
                     silentMs: idleTimeoutMsForError,
+                    keepalive: idleTimeoutKeepalive,
+                    lastByteAgoMs,
                     toolCount: options.tools?.length || 0,
                     mcpToolCount: options.tools?.filter(t => (t as { _isMcpTool?: boolean })._isMcpTool).length || 0,
                   });
@@ -1710,7 +1745,10 @@ export class AnthropicBackend implements ICompletionBackend {
               // Start initial timeout. Raw body bytes also count as activity, so the keepalive pings
               // a silently thinking model sends hold the timer off, up to the silence ceiling.
               resetIdleTimer();
-              onStreamBytes = resetIdleTimer;
+              onStreamBytes = () => {
+                lastByteAt = Date.now();
+                resetIdleTimer();
+              };
 
               try {
                 for await (const event of stream as AsyncIterable<RawMessageStreamEvent>) {
@@ -1719,6 +1757,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   eventCount++;
                   lastEventType = event.type;
                   lastEventAt = Date.now();
+                  lastByteAt = lastEventAt;
                   resetIdleTimer();
                   const streamedText: string[] = [];
                   if (event.type === 'content_block_start') {
@@ -1989,7 +2028,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     funcEntries: func.filter(f => f?.name).length,
                   }
                 );
-                reject(createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError));
+                reject(streamTimeoutError());
                 return;
               }
 
@@ -2234,7 +2273,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     toolCount: options.tools?.length || 0,
                     idleTimeoutMs: idleTimeoutMsForError,
                   });
-                  reject(createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError));
+                  reject(streamTimeoutError());
                 } else {
                   // User-initiated abort - resolve gracefully
                   this.logger.debug('Anthropic request was aborted (likely client disconnect)');

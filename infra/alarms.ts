@@ -304,6 +304,37 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: LLM Stream Idle Timeouts
+   *
+   * Our own stream idle watchdog cut a provider stream. Since the keepalive ceiling follows
+   * max_tokens, a steady count here means live generations are still being killed, and each one is
+   * billed by the provider and then retried or sent to a fallback model.
+   * Metric emitted by: b4m-core/llm-adapters/src/anthropicBackend.ts -> emitIdleTimeoutMetric. Reads
+   * its `{ Stage }`-only datum, which sums every model.
+   */
+  new aws.cloudwatch.MetricAlarm('streamIdleTimeouts', {
+    name: `${$app.name}-${$app.stage}-stream-idle-timeouts`,
+    alarmDescription:
+      'LLM streams are being cut by our own idle watchdog while the model is still generating. Each one is billed by the provider and retried. See the ChatCompletion logs for "Stream idle timeout".',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
+    evaluationPeriods: 1,
+    metricName: 'StreamIdleTimeoutTriggered',
+    namespace: 'Lumina5/LLMStreaming',
+    period: 3600, // 1 hour
+    statistic: 'Sum',
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'LLMStreaming',
+      Severity: 'High',
+    },
+  });
+
+  /**
    * Alarm: LiveOps Triage Failure
    *
    * Triggers when triage run fails.
