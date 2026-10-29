@@ -208,6 +208,22 @@ describe('GearsPage pending reward explanations', () => {
     expect(screen.queryByTestId('gear-claim-mementos')).not.toBeInTheDocument();
   });
 
+  it('quotes the admin-set age the server sends with too_new', async () => {
+    state.gears = [
+      gear('mementos', 'skill', {
+        unlocked: true,
+        rewardPending: true,
+        pendingReason: 'too_new',
+        minAccountAgeDays: 2,
+      }),
+    ];
+    renderPage();
+    await openTab(/Explore Features/);
+    expect(screen.getByTestId('gear-pending-note-mementos')).toHaveTextContent(
+      'Claimable for 250 credits once your account is 2 days old.'
+    );
+  });
+
   describe.each([false, true])('detail with mobile=%s', isMobile => {
     it.each(pendingCases)('keeps the $reason explanation when opened', async ({ reason, message }) => {
       state.isMobile = isMobile;

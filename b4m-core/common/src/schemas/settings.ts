@@ -443,6 +443,7 @@ export const SettingKeySchema = z.enum([
   'apiKeyUntrustedRequestsPerDay',
   'apiKeyUntrustedTokensPerMin',
   'apiKeyUntrustedMaxConcurrent',
+  'gearRewardMinAccountAgeDays',
   'usagePatternSignalsEnabled',
   'usagePatternSignalsConfig',
   'thinkingVisibilityFree',
@@ -3715,6 +3716,19 @@ export const settingsMap = {
     name: 'Enable Team Plan',
     defaultValue: false,
     description: 'Whether to enable team plans',
+    category: 'Users',
+  }),
+  // Gears trust gate: an unlocked gear pays out only once the account is this old (anti-farm).
+  // See apps/client/server/services/gears/catalog.ts.
+  gearRewardMinAccountAgeDays: makeNumberSetting({
+    key: 'gearRewardMinAccountAgeDays',
+    name: 'Gear Reward Minimum Account Age (days)',
+    defaultValue: 7,
+    min: 0,
+    max: 365,
+    int: true,
+    description:
+      'Account age, in days, before a verified account can claim Gears credit rewards. 0 lets new accounts claim at once. The Gears page quotes this value.',
     category: 'Users',
   }),
   allowOpenRegistration: makeBooleanSetting({

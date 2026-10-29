@@ -267,7 +267,7 @@ export const PendingRewardNote = ({ gear }: { gear: GearStatus }) => (
     {gear.pendingReason === 'unverified'
       ? `Verify your email to claim ${creditText(gear)}.`
       : gear.pendingReason === 'too_new'
-        ? `Claimable for ${creditText(gear)} once your account is ${GEAR_TRUST_MIN_AGE_DAYS} days old.`
+        ? `Claimable for ${creditText(gear)} once your account is ${gear.minAccountAgeDays ?? GEAR_TRUST_MIN_AGE_DAYS} days old.`
         : `Once someone else opens your artifact link while signed in, you can claim ${creditText(gear)}.`}
   </Typography>
 );
