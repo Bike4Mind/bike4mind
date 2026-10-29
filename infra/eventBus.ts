@@ -92,7 +92,7 @@ const emailEventsDLQ = new sst.aws.Queue('emailEventsDLQ', {
 });
 const emailEventsDeadLetter = createEventBusDeadLetter('emailEventsDLQ', emailEventsDLQ);
 
-const emailSendSubscription = eventBus.subscribe(
+export const emailSendSubscription = eventBus.subscribe(
   'email-send',
   {
     handler: 'apps/workers/src/events/sendEmail.handler',

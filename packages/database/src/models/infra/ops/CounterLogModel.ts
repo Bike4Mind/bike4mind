@@ -9,6 +9,7 @@ import {
   FacetResults,
   parseInternalStaffDomains,
   internalStaffEmailRegex,
+  internalAccountCondition,
   type TopUserResult,
 } from '@bike4mind/common';
 import { dayjs } from '@bike4mind/common';
@@ -142,62 +143,35 @@ function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.Pipeli
 // whole aggregation, while $convert yields null and that single row simply fails to join. Keep any
 // new user join in this file on the same form.
 
+const DAILY_TOP_USERS = 20;
+/**
+ * Credits are fetched after the event ranking, for candidates only, so the event facet
+ * over-fetches: a credits tie-break can then reorder users tied on events at the cut.
+ */
+const DAILY_TOP_USER_CANDIDATES = 50;
+
 class CounterLogRepository extends BaseRepository<ICounterLogDocument> implements ICounterLogRepository {
   constructor(model: ICounterLogModel) {
     super(model);
   }
 
-  private async findDailySpendingUsers(start: Date, end: Date, staffRegex: RegExp | null): Promise<TopUserResult[]> {
-    return CreditTransaction.aggregate<TopUserResult>(
+  /** In-window AI credit spend per user, for the given leaderboard candidates only. */
+  private async findCreditsSpentByUsers(userIds: string[], start: Date, end: Date): Promise<Map<string, number>> {
+    if (userIds.length === 0) return new Map();
+    const spend = await CreditTransaction.aggregate<{ _id: string; creditsSpent: number }>(
       convertPipelineForDocumentDB([
         {
           $match: {
             ownerType: 'User',
+            ownerId: { $in: userIds },
             type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
             createdAt: { $gte: start, $lte: end },
           },
         },
         { $group: { _id: '$ownerId', creditsSpent: { $sum: { $abs: '$credits' } } } },
-        { $match: { creditsSpent: { $gt: 0 } } },
-        { $addFields: { userObjectId: { $convert: { input: '$_id', to: 'objectId', onError: null } } } },
-        {
-          $lookup: {
-            from: 'users',
-            let: { userObjectId: '$userObjectId' },
-            pipeline: [
-              { $match: { $expr: { $eq: ['$_id', '$$userObjectId'] } } },
-              { $project: { _id: 1, email: 1, createdAt: 1 } },
-            ],
-            as: 'user',
-          },
-        },
-        { $unwind: '$user' },
-        ...(staffRegex ? [{ $match: { $nor: [{ 'user.email': { $regex: staffRegex } }] } }] : []),
-        {
-          $lookup: {
-            from: 'counterlogs',
-            let: { userId: '$_id' },
-            pipeline: [
-              { $match: { datetime: { $gte: start, $lte: end } } },
-              { $match: { $expr: { $eq: ['$userId', '$$userId'] } } },
-              { $count: 'count' },
-            ],
-            as: 'events',
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            email: { $ifNull: ['$user.email', null] },
-            creditsSpent: 1,
-            interactions: { $ifNull: [{ $arrayElemAt: ['$events.count', 0] }, 0] },
-            isNew: newAccountExpression('$user.createdAt', end),
-          },
-        },
-        { $sort: { creditsSpent: -1, interactions: -1, _id: 1 } },
-        { $limit: 20 },
       ])
     ).allowDiskUse(true);
+    return new Map(spend.map(({ _id, creditsSpent }) => [String(_id), creditsSpent]));
   }
 
   async findYoungAccountSpend(start: Date, end: Date, limit: number): Promise<YoungAccountSpendSummary> {
@@ -303,6 +277,24 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
     });
   }
 
+  /** Most active users: events first, then in-window credits, then id so equal rows keep a stable order. */
+  private async rankDailyTopUsers(candidates: TopUserResult[], start: Date, end: Date): Promise<TopUserResult[]> {
+    const creditsByUser = await this.findCreditsSpentByUsers(
+      candidates.map(user => user._id),
+      start,
+      end
+    );
+    return candidates
+      .map(user => ({ ...user, creditsSpent: creditsByUser.get(user._id) ?? 0 }))
+      .sort(
+        (first, second) =>
+          second.interactions - first.interactions ||
+          second.creditsSpent - first.creditsSpent ||
+          (first._id < second._id ? -1 : first._id > second._id ? 1 : 0)
+      )
+      .slice(0, DAILY_TOP_USERS);
+  }
+
   async metricsByDate(date: string, startDate?: string): Promise<FacetResults[]> {
     const isWeeklyReport = !!startDate;
     const {
@@ -316,12 +308,13 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
       lastMonthEnd,
     } = startDate ? weeklyReportWindows(startDate, date) : dailyReportWindows(date);
 
-    // Internal-user match from the shared NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS list
-    // (all internal domains, not a hardcoded one) so it can't drift from the
-    // entitlement layer (#172). Null == none configured -> facet matches nothing.
+    // Internal = admin/system/synthetic flag, or an email on the shared
+    // NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS list. The same condition marks internal users,
+    // and its negation is what DAU, WAU and the leaderboard count.
     const internalStaffRegex = internalStaffEmailRegex(
       parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS)
     );
+    const isInternalUser = (userPath: string) => internalAccountCondition(userPath, internalStaffRegex);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const facetStages: any = {
@@ -427,12 +420,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             preserveNullAndEmptyArrays: true,
           },
         },
-        {
-          $match: internalStaffRegex
-            ? { 'user.email': { $regex: internalStaffRegex } }
-            : // None configured: count no internal users.
-              { $expr: false },
-        },
+        { $match: isInternalUser('user') },
         {
           $group: {
             _id: '$userId',
@@ -470,7 +458,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                   as: 'user',
                 },
               },
-              ...(internalStaffRegex ? [{ $match: { $nor: [{ 'user.email': { $regex: internalStaffRegex } }] } }] : []),
+              { $match: { $nor: [isInternalUser('user')] } },
               { $count: 'count' },
             ],
           }),
@@ -771,8 +759,8 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             { $limit: 3 },
           ]
         : [
-            // Event candidates fill the leaderboard after spenders from the separate ledger query.
-            // Exclude non-users and staff before choosing the top twenty by event count.
+            // Ranked by events, then credits (see rankDailyTopUsers). A user with no event in the
+            // window is never a candidate, however much they spent.
             {
               $match: {
                 datetime: { $gte: weekStartDate, $lte: weekEndDate },
@@ -795,9 +783,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             // No preserveNullAndEmptyArrays on purpose: an id with no user document ('SYSTEM', or a
             // deleted account) is not a person and never belongs on the leaderboard.
             { $unwind: '$userDetails' },
-            ...(internalStaffRegex
-              ? [{ $match: { $nor: [{ 'userDetails.email': { $regex: internalStaffRegex } }] } }]
-              : []),
+            { $match: { $nor: [isInternalUser('userDetails')] } },
             {
               $group: {
                 _id: '$userId',
@@ -811,14 +797,12 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 _id: 1,
                 email: 1,
                 interactions: 1,
-                creditsSpent: { $literal: 0 },
                 // Against the window's own end, so a re-rendered past date stays correct. Hours, not days: DST-safe.
                 isNew: newAccountExpression('$userCreatedAt', weekEndDate),
               },
             },
-            // _id breaks exact ties so the same data always renders in the same order.
             { $sort: { interactions: -1, _id: 1 } },
-            { $limit: 20 },
+            { $limit: DAILY_TOP_USER_CANDIDATES },
           ],
       topOrganizations: [
         {
@@ -1115,31 +1099,14 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
     });
 
     // Execute the aggregation with DocumentDB compatibility
-    const [result, spendingUsers] = await Promise.all([
-      executeFacetCompatible(this.model, [], convertedFacetStages),
-      isWeeklyReport
-        ? Promise.resolve([])
-        : this.findDailySpendingUsers(weekStartDate, weekEndDate, internalStaffRegex),
-    ]);
+    const result = await executeFacetCompatible(this.model, [], convertedFacetStages);
 
     // Process the results to match the expected format (similar to the original $project stage)
     if (result && result.length > 0) {
       const facetData = result[0];
-      // Paid API paths may write a ledger row without a counter event. Each query returns its
-      // best twenty, so their bounded union contains the overall best twenty, including zero-spend users.
-      const dailyTopUsers = new Map<string, TopUserResult>(
-        [...(facetData.topUsers ?? []), ...spendingUsers].map((user: TopUserResult) => [user._id, user])
-      );
-      const topUsers = isWeeklyReport
+      const topUsers: TopUserResult[] = isWeeklyReport
         ? facetData.topUsers || []
-        : [...dailyTopUsers.values()]
-            .sort(
-              (first, second) =>
-                (second.creditsSpent ?? 0) - (first.creditsSpent ?? 0) ||
-                second.interactions - first.interactions ||
-                (first._id < second._id ? -1 : first._id > second._id ? 1 : 0)
-            )
-            .slice(0, 20);
+        : await this.rankDailyTopUsers(facetData.topUsers ?? [], weekStartDate, weekEndDate);
 
       // Apply the same transformations as the original $project stage
       const processedResult = [

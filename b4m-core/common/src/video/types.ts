@@ -1,4 +1,5 @@
 import type { GenerationProviderJobHandle } from '../generation';
+import type { VideoModelId } from './catalog';
 
 export const VIDEO_MODES = ['text_to_video', 'image_to_video'] as const;
 export type VideoMode = (typeof VIDEO_MODES)[number];
@@ -47,4 +48,7 @@ export type VideoModelCapabilities = {
   // Admin setting `videoGeneration.enabledModels[id]` overrides this.
   defaultEnabled: boolean;
   deprecationDate?: string;
+  // Set once the provider stops serving the model. The id stays in VIDEO_MODEL_IDS so stored jobs and usage still
+  // parse, but a retired model is never listed or accepted for a new job, whatever the admin override says.
+  retired?: { date: string; replacement: VideoModelId };
 };

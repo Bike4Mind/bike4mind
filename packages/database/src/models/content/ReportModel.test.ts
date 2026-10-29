@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { WEEKLY_REPORT_WINDOW_VERSION, WeeklyReport, weeklyReportRepository } from './ReportModel';
+import { ACTIVITY_REPORT_VERSION } from '@bike4mind/common';
+import { WeeklyReport, weeklyReportRepository } from './ReportModel';
 
 let mongod: MongoMemoryServer;
 
@@ -23,21 +24,15 @@ afterEach(async () => {
 const START = '2026-06-01';
 const END = '2026-06-07';
 
-describe('WeeklyReportRepository window versioning', () => {
-  it('does not serve a stored report written before the current window version', async () => {
-    await WeeklyReport.collection.insertOne({ startDate: START, endDate: END, report: 'one-day report' });
-
-    await expect(weeklyReportRepository.findByDateRange(START, END)).resolves.toBeFalsy();
-  });
-
-  it('overwrites the stale row on regeneration and serves the new one', async () => {
+describe('WeeklyReportRepository report versioning', () => {
+  it('overwrites a row written before the full-week window with the current version', async () => {
     await WeeklyReport.collection.insertOne({ startDate: START, endDate: END, report: 'one-day report' });
 
     await weeklyReportRepository.upsertReport(START, END, 'full-week report', null);
 
     const stored = await weeklyReportRepository.findByDateRange(START, END);
     expect(stored).toEqual(
-      expect.objectContaining({ report: 'full-week report', windowVersion: WEEKLY_REPORT_WINDOW_VERSION })
+      expect.objectContaining({ report: 'full-week report', reportVersion: ACTIVITY_REPORT_VERSION })
     );
     await expect(WeeklyReport.countDocuments({ startDate: START, endDate: END })).resolves.toBe(1);
   });

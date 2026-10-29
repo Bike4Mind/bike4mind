@@ -129,8 +129,10 @@ Claude Sonnet 4 (direct Anthropic API) and Gemini 2.5 Flash have already been re
 GPT-Image-1 and Grok Imagine (Quality) are retiring on 2026-10-23 and 2026-11-02.
 
 ### Video
-- **Veo 3.1 Fast** (Google)
+- **Gemini Omni Flash** (Google)
 - **Grok Imagine Video 1.5** (xAI)
+
+Veo 3.1 Fast was retired by Google on 2026-10-22 and no longer accepts new jobs; use Gemini Omni Flash instead. Clips already made with it stay in your history.
 
 ## Speech-to-Text Models
 

@@ -6,6 +6,7 @@ import { isAxiosError } from 'axios';
 import { htmlErrorTitle, htmlFirstH1 } from '../utils/htmlErrorTitle';
 import { logger } from '../utils/Logger';
 import { StreamLogger } from '../utils/StreamLogger';
+import { replayableThinkingBlocks } from './replayableThinkingBlocks';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
 import {
@@ -231,7 +232,7 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
     thinkingBlocks?: unknown[]
   ) {
     const assistantContent: MessageContentObject[] = [
-      ...((thinkingBlocks || []) as MessageContentObject[]),
+      ...replayableThinkingBlocks(thinkingBlocks),
       {
         type: 'tool_use' as const,
         id: tool.id,

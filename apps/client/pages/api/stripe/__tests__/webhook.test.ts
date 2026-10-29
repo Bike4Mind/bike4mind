@@ -179,11 +179,33 @@ describe('invoice.payment_failed', () => {
   });
 });
 
+// The Stripe subscription fields stripeMirrorFields projects; every real deleted payload carries them.
+const mirrorPayload = {
+  customer: 'cus_1',
+  currency: 'usd',
+  cancel_at_period_end: false,
+  cancel_at: null,
+  trial_end: null,
+  items: {
+    data: [
+      {
+        price: {
+          id: 'price_1',
+          unit_amount: 2000,
+          currency: 'usd',
+          recurring: { interval: 'month', interval_count: 1 },
+        },
+      },
+    ],
+  },
+};
+
 describe('customer.subscription.deleted', () => {
   const deleted = (reason: string | null) => ({
     type: 'customer.subscription.deleted',
     data: {
       object: {
+        ...mirrorPayload,
         id: 'sub_1',
         canceled_at: 1_760_000_000,
         metadata: {},
@@ -215,6 +237,24 @@ describe('customer.subscription.deleted', () => {
     await deliver(deleted('payment_failed'));
 
     expect(mocks.notifyCanceledForNonPayment).not.toHaveBeenCalled();
+  });
+
+  it("writes the subscription's final Stripe mirror with the canceled status", async () => {
+    await deliver(deleted(null));
+
+    expect(mocks.updateByStripeSubscriptionId).toHaveBeenCalledWith('sub_1', {
+      status: 'canceled',
+      canceledAt: new Date(1_760_000_000 * 1000),
+      unitAmount: 2000,
+      currency: 'usd',
+      interval: 'month',
+      intervalCount: 1,
+      cancelAtPeriodEnd: false,
+      cancelAt: null,
+      trialEndsAt: null,
+      stripeCustomerId: 'cus_1',
+      lastSyncedAt: expect.any(Date),
+    });
   });
 });
 
@@ -296,7 +336,13 @@ describe('billing events for Overwatch', () => {
       await deliver({
         type: 'customer.subscription.deleted',
         data: {
-          object: { id: 'sub_1', canceled_at: 1_769_860_800, metadata: {}, cancellation_details: { reason: null } },
+          object: {
+            ...mirrorPayload,
+            id: 'sub_1',
+            canceled_at: 1_769_860_800,
+            metadata: {},
+            cancellation_details: { reason: null },
+          },
         },
       });
     } finally {
@@ -328,6 +374,7 @@ describe('billing events for Overwatch', () => {
       type: 'customer.subscription.deleted',
       data: {
         object: {
+          ...mirrorPayload,
           id: 'sub_1',
           start_date: at('2026-01-01T00:00:00Z'),
           // Requested on Feb 11, effective at the period end on Mar 31.
@@ -346,7 +393,15 @@ describe('billing events for Overwatch', () => {
     mocks.updateByStripeSubscriptionId.mockResolvedValue(null);
     await deliver({
       type: 'customer.subscription.deleted',
-      data: { object: { id: 'sub_1', canceled_at: null, metadata: {}, cancellation_details: { reason: null } } },
+      data: {
+        object: {
+          ...mirrorPayload,
+          id: 'sub_1',
+          canceled_at: null,
+          metadata: {},
+          cancellation_details: { reason: null },
+        },
+      },
     });
     expect(mocks.emitBillingEvent).not.toHaveBeenCalled();
   });

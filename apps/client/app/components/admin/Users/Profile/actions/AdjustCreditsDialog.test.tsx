@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AdjustCreditsDialog } from './AdjustCreditsDialog';
-import { ProfileTestWrapper, buildProfile } from '../profileTestUtils';
+import { LiveProfile, ProfileTestWrapper, buildProfile } from '../profileTestUtils';
 
 const mocks = vi.hoisted(() => ({ update: vi.fn() }));
 
@@ -185,5 +185,59 @@ describe('AdjustCreditsDialog', () => {
     await waitFor(() => expect(mocks.update).toHaveBeenCalled());
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();
+  });
+
+  it('refetches the balance on open and previews, sets and undoes from the fresh figure', async () => {
+    let resolveRefetch: (credits: number) => void = () => undefined;
+    const fetchCredits = vi
+      .fn<() => Promise<number>>()
+      .mockResolvedValueOnce(500)
+      .mockImplementationOnce(() => new Promise(resolve => (resolveRefetch = resolve)));
+    render(
+      <LiveProfile fetchCredits={fetchCredits}>
+        {live => <AdjustCreditsDialog user={live} onClose={vi.fn()} />}
+      </LiveProfile>,
+      { wrapper: ProfileTestWrapper }
+    );
+    await waitFor(() => expect(fetchCredits).toHaveBeenCalledTimes(2));
+
+    typeAmount('800');
+    pickReason();
+    fireEvent.click(confirmButton());
+    expect(mocks.update).not.toHaveBeenCalled();
+
+    resolveRefetch(650);
+    await waitFor(() => expect(screen.getByTestId('adjust-credits-preview-before')).toHaveTextContent('650'));
+    expect(screen.getByTestId('adjust-credits-preview-delta')).toHaveTextContent('+150');
+
+    fireEvent.click(confirmButton());
+    fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
+
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenLastCalledWith({ creditDelta: -150, creditReason: 'Undo: Goodwill credit' })
+    );
+  });
+
+  it('blocks confirm when the balance could not be refreshed', async () => {
+    const fetchCredits = vi
+      .fn<() => Promise<number>>()
+      .mockResolvedValueOnce(500)
+      .mockRejectedValueOnce(new Error('network'));
+    render(
+      <LiveProfile fetchCredits={fetchCredits}>
+        {live => <AdjustCreditsDialog user={live} onClose={vi.fn()} />}
+      </LiveProfile>,
+      { wrapper: ProfileTestWrapper }
+    );
+    await waitFor(() => expect(fetchCredits).toHaveBeenCalledTimes(2));
+    typeAmount('800');
+    pickReason();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('adjust-credits-dialog-hint')).toHaveTextContent(
+        'The current balance could not be loaded.'
+      )
+    );
+    expect(confirmButton()).toBeDisabled();
   });
 });

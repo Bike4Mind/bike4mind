@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import {
+  ACTIVITY_REPORT_VERSION,
   IDailyReportDocument,
   IWeeklyReportDocument,
   IDailyReportRepository,
@@ -20,7 +21,7 @@ class DailyReportRepository extends BaseRepository<IDailyReportDocument> impleme
   async upsertReport(date: string, report: string, aiInsights?: string | null) {
     return this.model.findOneAndUpdate(
       { date },
-      { date, report, aiInsights, updatedAt: new Date() },
+      { date, report, aiInsights, reportVersion: ACTIVITY_REPORT_VERSION, updatedAt: new Date() },
       { upsert: true, new: true }
     );
   }
@@ -31,19 +32,13 @@ const DailyReportSchema = new mongoose.Schema<IDailyReportDocument>(
     date: { type: String, required: true, unique: true },
     report: { type: String, required: true },
     aiInsights: { type: String, default: null },
+    // Optional so existing rows stay valid; a missing value reads as version 0 (stale).
+    reportVersion: { type: Number },
   },
   {
     timestamps: true,
   }
 );
-
-/**
- * Revision of the date windows a stored weekly report was computed with. Rows from an older
- * revision are treated as missing, so they are regenerated and overwritten on the next request.
- * Revision 2: the full startDate..endDate week (rows without the field covered only the last day).
- * Must change whenever CounterLogModel.ts `weeklyReportWindows` changes what a report counts.
- */
-export const WEEKLY_REPORT_WINDOW_VERSION = 2;
 
 // Weekly Report
 class WeeklyReportRepository extends BaseRepository<IWeeklyReportDocument> implements IWeeklyReportRepository {
@@ -52,13 +47,13 @@ class WeeklyReportRepository extends BaseRepository<IWeeklyReportDocument> imple
   }
 
   async findByDateRange(startDate: string, endDate: string) {
-    return this.findOne({ startDate, endDate, windowVersion: WEEKLY_REPORT_WINDOW_VERSION });
+    return this.findOne({ startDate, endDate });
   }
 
   async upsertReport(startDate: string, endDate: string, report: string, aiInsights?: string | null) {
     return this.model.findOneAndUpdate(
       { startDate, endDate },
-      { startDate, endDate, report, aiInsights, windowVersion: WEEKLY_REPORT_WINDOW_VERSION, updatedAt: new Date() },
+      { startDate, endDate, report, aiInsights, reportVersion: ACTIVITY_REPORT_VERSION, updatedAt: new Date() },
       { upsert: true, new: true }
     );
   }
@@ -70,7 +65,8 @@ const WeeklyReportSchema = new mongoose.Schema<IWeeklyReportDocument>(
     endDate: { type: String, required: true },
     report: { type: String, required: true },
     aiInsights: { type: String, default: null },
-    windowVersion: { type: Number },
+    // Optional so existing rows stay valid; a missing value reads as version 0 (stale).
+    reportVersion: { type: Number },
   },
   {
     timestamps: true,
