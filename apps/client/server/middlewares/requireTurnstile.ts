@@ -1,6 +1,6 @@
 import { Request, RequestHandler, Response } from 'express';
 import { Resource } from 'sst';
-import { isDevelopment, isE2EEnabled, isProduction } from '@bike4mind/server-utils/utils/config';
+import { isDeployedStage, isDevelopment, isE2EEnabled, isProduction } from '@bike4mind/server-utils/utils/config';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { isTurnstileTestSecret, verifyTurnstile } from '@bike4mind/server-utils/utils/turnstile';
 import { getTurnstilePolicy, turnstileAllowedHostnames } from '@server/utils/auth/turnstile';
@@ -33,8 +33,10 @@ const FAILED: TurnstileFailure = {
 
 /**
  * Rejects the request with 403 `challenge_failed` unless it carries a valid Turnstile token
- * for `action`. A no-op while the feature is off or unprovisioned. Only a verification outage is
- * governed by the fail-closed setting; a missing or invalid token always fails. The token is never logged.
+ * for `action`. A no-op while the feature is off or unprovisioned. A misconfigured verifier (rejected
+ * secret, no hostname allowlist on a deployed stage) always answers 503 `challenge_unavailable`,
+ * whatever the fail-closed setting; only a verification outage is governed by that setting. A missing
+ * or invalid token always fails. The token is never logged.
  */
 export const requireTurnstile = (action: string, options: RequireTurnstileOptions = {}): RequestHandler => {
   const readToken = options.token ?? (req => req.body?.turnstileToken);
@@ -69,10 +71,15 @@ export const requireTurnstile = (action: string, options: RequireTurnstileOption
       ip,
       expectedAction: action,
       allowedHostnames: turnstileAllowedHostnames(),
+      requireAllowedHostnames: isDeployedStage(),
       allowTestSecret: !production,
     });
     if (result.ok) return next();
 
+    if (result.reason === 'misconfigured') {
+      req.logger?.error('turnstile-misconfigured', { action, errorCodes: result.errorCodes });
+      return fail(req, res, UNAVAILABLE);
+    }
     if (result.reason === 'unavailable' && !policy.failClosed) {
       req.logger?.warn('turnstile-unavailable-fail-open', { ip, action });
       return next();

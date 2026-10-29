@@ -10,6 +10,7 @@ const e2eEnabled = vi.hoisted(() => ({ value: false }));
 const e2eSecret = vi.hoisted(() => ({ value: 'e2e-secret' as string | undefined }));
 const production = vi.hoisted(() => ({ value: false }));
 const development = vi.hoisted(() => ({ value: true }));
+const deployed = vi.hoisted(() => ({ value: false }));
 const TEST_SECRET = '1x0000000000000000000000000000000AA';
 
 vi.mock('@server/utils/auth/turnstile', () => ({
@@ -25,6 +26,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   isE2EEnabled: () => e2eEnabled.value,
   isProduction: () => production.value,
   isDevelopment: () => development.value,
+  isDeployedStage: () => deployed.value,
 }));
 vi.mock('sst', () => ({ Resource: { E2E_CLEANUP_SECRET: e2eSecret } }));
 
@@ -51,6 +53,7 @@ describe('requireTurnstile', () => {
     e2eSecret.value = 'e2e-secret';
     production.value = false;
     development.value = true;
+    deployed.value = false;
     vi.stubEnv('E2E_CLEANUP_SECRET', '');
   });
 
@@ -83,8 +86,51 @@ describe('requireTurnstile', () => {
         ip: '203.0.113.9',
         expectedAction: 'otc-send',
         allowedHostnames: ['app.example.com'],
+        requireAllowedHostnames: false,
       })
     );
+  });
+
+  it.each([true, false])('passes requireAllowedHostnames matching the deployed flag: %s', async isDeployed => {
+    deployed.value = isDeployed;
+    verify.mockResolvedValue({ ok: true });
+    await run();
+    expect(verify.mock.calls[0][0].requireAllowedHostnames).toBe(isDeployed);
+  });
+
+  describe('misconfigured verifier', () => {
+    const misconfigured = { ok: false, reason: 'misconfigured', errorCodes: ['invalid-input-secret'] };
+
+    it.each([false, true])('answers 503 challenge_unavailable with failClosed=%s', async failClosed => {
+      policy.value = { ...policy.value, failClosed };
+      verify.mockResolvedValue(misconfigured);
+      const { next, status, json, logger } = await run();
+      expect(next).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(503);
+      expect(json).toHaveBeenCalledWith(expect.objectContaining({ code: 'challenge_unavailable' }));
+      expect(logger.error).toHaveBeenCalledWith(
+        'turnstile-misconfigured',
+        expect.objectContaining({ action: 'otc-send', errorCodes: ['invalid-input-secret'] })
+      );
+    });
+
+    it('hands challenge_unavailable to a custom failure handler', async () => {
+      verify.mockResolvedValue(misconfigured);
+      const onFailure = vi.fn();
+      const next = vi.fn();
+      const req = {
+        body: { turnstileToken: 'tok' },
+        headers: {},
+        logger: { warn: vi.fn(), error: vi.fn() },
+      } as unknown as Request;
+      await requireTurnstile('otc-send', { onFailure })(req, {} as Response, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(onFailure).toHaveBeenCalledWith(
+        req,
+        expect.anything(),
+        expect.objectContaining({ code: 'challenge_unavailable', status: 503 })
+      );
+    });
   });
 
   it.each(['missing', 'invalid'])('returns 403 challenge_failed for a %s token and never logs it', async reason => {

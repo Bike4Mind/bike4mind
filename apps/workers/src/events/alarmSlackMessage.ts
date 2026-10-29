@@ -96,6 +96,15 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Check which accounts created the keys and whether they are new accounts. Revoke keys from accounts that look automated.',
     links: ['signup-activity'],
   },
+  'turnstile-policy-inactive': {
+    title: 'The sign-in bot challenge is switched off',
+    level: 'page',
+    unit: 'reports',
+    meaning:
+      'The server says the Turnstile challenge is not active on this stage, so sign-ins and signups are not being challenged. The log line names the reason: the secret is not provisioned, the admin toggle is off, or the site key is empty.',
+    action:
+      'Open the Turnstile settings in the admin console and turn the toggle on with a site key, or provision the secret for the stage. The alarm clears an hour after the server stops reporting it.',
+  },
   'ungranted-credit-purchases': {
     title: 'Customer paid but got no credits',
     level: 'page',
