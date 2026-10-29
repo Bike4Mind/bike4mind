@@ -2011,6 +2011,27 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('toolTurns', () => {
+      it('pairs each replayed prompt message, by reference, with the tools its turn offered and called', async () => {
+        const items = [
+          makeItem(3),
+          makeItem(2, {
+            promptMeta: { offeredTools: ['web_search'], functionCalls: [{ id: 'c', name: 'web_search' }] },
+          }),
+          makeItem(1),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [messages, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.toolTurns?.map(t => ({ offeredTools: t.offeredTools, calledTools: t.calledTools }))).toEqual([
+          { offeredTools: undefined, calledTools: [] },
+          { offeredTools: ['web_search'], calledTools: ['web_search'] },
+        ]);
+        for (const toolTurn of meta.toolTurns ?? []) expect(messages).toContain(toolTurn.prompt);
+      });
+    });
+
     // Priority 2 rebuilds tool_use/tool_result pairs from promptMeta.functionCalls when
     // structuredReplies is absent. It was unreachable for as long as the Mongoose subschema
     // dropped functionCalls[].id, so these pin the shape Anthropic requires.

@@ -142,6 +142,7 @@ import {
   isOutputBudgetExhaustedError,
   isStreamEndedWithoutFinishError,
   type OutputBudgetExhaustedError,
+  type ICompletionOptionTools,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
@@ -311,9 +312,12 @@ import {
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 import {
-  insertToolChangeMessage,
-  planDeferredTools,
-  selectDeferrableToolNames,
+  applyToolTimeline,
+  declareDeferredTools,
+  DEFERRED_ANCHOR_TOOL_NAME,
+  hasCoreTool,
+  planToolTimeline,
+  type ToolTimeline,
   undoDeferredTools,
 } from './deferredToolLoading';
 
@@ -3508,7 +3512,7 @@ export class ChatCompletionProcess {
         ? await this.loadSubagentModels(models, modelInfo, entitlementKeys, logger)
         : undefined;
 
-      let allTools = toolBuilder.buildTools({
+      const buildToolsArgs: Parameters<ToolBuilder['buildTools']>[0] = {
         enabledTools,
         servingModel,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
@@ -3552,7 +3556,8 @@ export class ChatCompletionProcess {
         agentStore,
         externalTools,
         toolAvailability,
-      });
+      };
+      let allTools = toolBuilder.buildTools(buildToolsArgs);
 
       // Final denylist pass on the built tool list. The enabledTools filter above
       // can't catch tools injected inside buildTools (e.g. the auto-added
@@ -3805,26 +3810,51 @@ export class ChatCompletionProcess {
       // The built list drops video_generation without a usable config (buildSharedTools), so this is the real offer.
       const videoGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'video_generation') ?? false;
 
-      // Optional tools go out deferred and are added by a history message, so the cached tools+system
+      // Optional tools go out deferred and are added by history messages, so the cached tools+system
       // head is the same whichever of them this caller has. See deferredToolLoading.ts.
-      const deferredToolNames = new Set(
+      let toolTimeline: ToolTimeline | null = null;
+      let removedToolDeclarations: ICompletionOptionTools[] = [];
+      if (
         getSettingsValue('EnableDeferredToolLoading', defaultAdminSettings) === true &&
-          !isResearchMode &&
-          chatSupportsDeferredToolAddition(modelInfo)
-          ? selectDeferrableToolNames(offeredToolNames)
-          : []
-      );
-      const viewRegistryDeferred = navigateViewAvailable && deferredToolNames.has('navigate_view');
+        !isResearchMode &&
+        !promptMode &&
+        chatSupportsDeferredToolAddition(modelInfo) &&
+        hasCoreTool(offeredToolNames)
+      ) {
+        const historyToolTurns = cacheInfo.toolTurns ?? [];
+        toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames);
+        if (toolTimeline.notOffered.length > 0) {
+          // Built by the same gates as an offer; whatever no longer builds is re-written out of history.
+          const notOffered = new Set(toolTimeline.notOffered);
+          const denied = new Set(deniedTools ?? []);
+          removedToolDeclarations = (
+            toolBuilder.buildTools({
+              ...buildToolsArgs,
+              enabledTools: toolTimeline.notOffered,
+              offerOnlyNamedTools: true,
+              mcpToolsByServer: {},
+            }) ?? []
+          ).filter(tool => notOffered.has(tool.toolSchema.name) && !denied.has(tool.toolSchema.name));
+          const declared = new Set(removedToolDeclarations.map(tool => tool.toolSchema.name));
+          const undeclarable = new Set(toolTimeline.notOffered.filter(name => !declared.has(name)));
+          if (undeclarable.size > 0) {
+            toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable);
+          }
+        }
+      }
+      // Guidance for every tool a change adds rides with that addition, whether or not it is offered now.
+      const deferredGuidanceTools = new Set(toolTimeline?.everAdded ?? []);
+      const viewRegistryDeferred = deferredGuidanceTools.has('navigate_view');
 
       const toolPromptMessages = await toolBuilder.buildToolPrompt({
         toolPromptId,
-        hasContentTransform: hasContentTransform && blogDraftAvailable,
-        hasChessEngine: enabledTools.includes('chess_engine'),
-        hasCurrentDateTime: enabledTools.includes('current_datetime'),
+        hasContentTransform: (hasContentTransform && blogDraftAvailable) || deferredGuidanceTools.has('blog_draft'),
+        hasChessEngine: enabledTools.includes('chess_engine') || deferredGuidanceTools.has('chess_engine'),
+        hasCurrentDateTime: enabledTools.includes('current_datetime') || deferredGuidanceTools.has('current_datetime'),
         // Unlike the two lines above, web_search is key-gated (GATED_TOOLS in toolAvailability.ts)
         // and can be dropped from the built schemas while the requested list still carries it, so
         // this reads the offered set for the same reason blog_draft and navigate_view do above.
-        hasWebSearch: offeredToolNames.includes('web_search'),
+        hasWebSearch: offeredToolNames.includes('web_search') || deferredGuidanceTools.has('web_search'),
         webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
         // Same offered-set check that seeds `promptMeta.retrieval.mode` above, so the nudge covers
         // the optional-path turns that fold measures. One caveat for a reader re-running that
@@ -3832,7 +3862,7 @@ export class ChatCompletionProcess {
         // nudged too and land in a different bucket. Whether the section actually shipped is
         // recorded per turn as `retrieval.knowledgeBaseGuidanceInjected`, which is what makes an
         // A/B driven by clearing the setting readable straight off the fold.
-        hasKnowledgeBase: knowledgeToolOffered,
+        hasKnowledgeBase: knowledgeToolOffered || deferredGuidanceTools.has('search_knowledge_base'),
         knowledgeBaseGuidance,
         userTimezone,
         mcpTools: directMcpTools,
@@ -3842,7 +3872,7 @@ export class ChatCompletionProcess {
         processStartTime,
         agentStore,
         extraContextMessages,
-        deferGuidanceFor: deferredToolNames,
+        deferGuidanceFor: deferredGuidanceTools,
       });
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === TOOLS SETUP ===`);
@@ -4932,13 +4962,19 @@ export class ChatCompletionProcess {
         currentUserPromptMessages[0]
       );
       let outboundMessages = turnContext.messages;
-      if (deferredToolNames.size > 0 && options.tools) {
-        const plan = planDeferredTools(options.tools, deferredToolNames, [
-          ...toolPromptMessages.deferredGuidance,
-          ...(viewRegistryDeferred ? [{ tool: 'navigate_view', text: getViewSummaryForLLM({ isAdmin: false }) }] : []),
-        ]);
-        options.tools = plan.tools;
-        outboundMessages = insertToolChangeMessage(outboundMessages, plan.changeMessage);
+      let deferredState: { declaredOnly: Set<string>; guidance: string } | null = null;
+      if (toolTimeline && options.tools) {
+        const guidance = new Map(toolPromptMessages.deferredGuidance.map(entry => [entry.tool, entry.text]));
+        if (viewRegistryDeferred) guidance.set('navigate_view', getViewSummaryForLLM({ isAdmin: false }));
+        options.tools = declareDeferredTools(options.tools, removedToolDeclarations);
+        outboundMessages = applyToolTimeline(outboundMessages, toolTimeline.changes, guidance);
+        deferredState = {
+          declaredOnly: new Set([...removedToolDeclarations.map(t => t.toolSchema.name), DEFERRED_ANCHOR_TOOL_NAME]),
+          guidance: offeredToolNames
+            .map(name => guidance.get(name)?.trim())
+            .filter((text): text is string => Boolean(text))
+            .join('\n\n'),
+        };
       }
       // The adapter's own end-of-array anchor would only add a breakpoint on the volatile current turn.
       const historyAnchorMarked = anchoredMessages !== messages;
@@ -5275,9 +5311,10 @@ export class ChatCompletionProcess {
               : options.tools;
             // A hop that cannot take deferred tools, or would be left with none loaded, gets today's shape.
             const hopRequest =
-              chatSupportsDeferredToolAddition(currentModel) && hopTools?.some(t => !t.toolSchema.defer_loading)
+              !deferredState ||
+              (chatSupportsDeferredToolAddition(currentModel) && hopTools?.some(t => !t.toolSchema.defer_loading))
                 ? { messages: outboundMessages, tools: hopTools }
-                : undoDeferredTools(outboundMessages, hopTools);
+                : undoDeferredTools(outboundMessages, hopTools, deferredState);
 
             await currentLlm.complete(
               currentModel.id,

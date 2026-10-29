@@ -13,7 +13,14 @@ import { ChatModels, getViewSummaryForLLM, type ICacheStrategy, type IMessage } 
 import { AnthropicBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { getConversationContextSystemMessage } from '../conversationContextService';
 import { createHash } from 'node:crypto';
-import { insertToolChangeMessage, planDeferredTools, selectDeferrableToolNames } from './deferredToolLoading';
+import type { HistoryToolTurn } from '@bike4mind/utils';
+import {
+  applyToolTimeline,
+  declareDeferredTools,
+  hasCoreTool,
+  planToolTimeline,
+  type ToolTimeline,
+} from './deferredToolLoading';
 import { ToolBuilder, type ToolBuilderConfig } from './tools/ToolBuilder';
 import { buildViewRegistryAdminMessages } from './viewRegistryPrompt';
 import { buildTaggedContextMessages, markShareablePrefixBoundary } from './systemPromptSources';
@@ -65,13 +72,28 @@ const DENVER_MEMBER: Caller = {
   memento: 'User is a cyclist.',
 };
 
-/** Whether deferred tool loading is on for the turn, as ChatCompletionProcess decides it. */
-type SendOptions = { deferTools?: boolean };
+/** A replayed turn: its prompt, reply, and the tools that turn offered. */
+type PastTurn = { prompt: string; reply: string; offered: string[] };
 
-async function sendFirstTurn(caller: Caller, { deferTools = false }: SendOptions = {}): Promise<Request> {
+/** Whether deferred tool loading is on for the turn (as ChatCompletionProcess decides it), and the history. */
+type SendOptions = { deferTools?: boolean; history?: PastTurn[]; prompt?: string };
+
+async function sendTurn(
+  caller: Caller,
+  { deferTools = false, history = [], prompt = 'hello' }: SendOptions = {}
+): Promise<Request> {
   vi.mocked(getConversationContextSystemMessage).mockResolvedValue(sys(caller.conversationEntities) as never);
   const offered = caller.toolOrder;
-  const deferred = new Set(deferTools ? selectDeferrableToolNames(offered) : []);
+  const historyMessages: IMessage[] = [];
+  const toolTurns: HistoryToolTurn[] = [];
+  for (const past of history) {
+    const promptMessage: IMessage = { role: 'user', content: past.prompt };
+    historyMessages.push(promptMessage, { role: 'assistant', content: past.reply });
+    toolTurns.push({ prompt: promptMessage, offeredTools: past.offered, calledTools: [] });
+  }
+  const timeline: ToolTimeline | null =
+    deferTools && hasCoreTool(offered) ? planToolTimeline(toolTurns, offered) : null;
+  const guided = new Set(timeline?.everAdded ?? []);
   const toolPrompt = await new ToolBuilder({
     user: { id: caller.timezone },
     db: { sessions: {} },
@@ -79,12 +101,12 @@ async function sendFirstTurn(caller: Caller, { deferTools = false }: SendOptions
   } as unknown as ToolBuilderConfig).buildToolPrompt({
     hasContentTransform: false,
     hasChessEngine: false,
-    hasCurrentDateTime: offered.includes('current_datetime'),
-    hasWebSearch: offered.includes('web_search'),
+    hasCurrentDateTime: offered.includes('current_datetime') || guided.has('current_datetime'),
+    hasWebSearch: offered.includes('web_search') || guided.has('web_search'),
     webSearchGuidance: 'web search guidance',
-    hasKnowledgeBase: offered.includes('search_knowledge_base'),
+    hasKnowledgeBase: offered.includes('search_knowledge_base') || guided.has('search_knowledge_base'),
     knowledgeBaseGuidance: 'knowledge base guidance',
-    deferGuidanceFor: deferred,
+    deferGuidanceFor: guided,
     userTimezone: caller.timezone,
     mcpTools: [],
     sessionId: `session-${caller.timezone}`,
@@ -103,7 +125,7 @@ async function sendFirstTurn(caller: Caller, { deferTools = false }: SendOptions
     artifactEmission: [sys('artifact guidance')],
     helpCenter: [sys('help center guidance')],
     abstention: [sys('abstention guidance')],
-    viewRegistry: navigateView && !deferred.has('navigate_view') ? [sys(getViewSummaryForLLM({ isAdmin: false }))] : [],
+    viewRegistry: navigateView && !guided.has('navigate_view') ? [sys(getViewSummaryForLLM({ isAdmin: false }))] : [],
     viewRegistryAdmin: navigateView
       ? buildViewRegistryAdminMessages({ isAdmin: caller.isAdmin, extraContextMessages: extraContext })
       : [],
@@ -121,16 +143,15 @@ async function sendFirstTurn(caller: Caller, { deferTools = false }: SendOptions
     cacheConversationHistory: true,
     cacheTTL: '5m',
   };
-  const plan = planDeferredTools(offered.map(tool), deferred, [
-    ...toolPrompt.deferredGuidance,
-    ...(deferred.has('navigate_view')
-      ? [{ tool: 'navigate_view', text: getViewSummaryForLLM({ isAdmin: false }) }]
-      : []),
-  ]);
-  const messages = insertToolChangeMessage(
-    [...tagged.map(t => t.message), { role: 'user', content: 'hello' }],
-    plan.changeMessage
-  );
+  const baseMessages: IMessage[] = [
+    ...tagged.map(t => t.message),
+    ...historyMessages,
+    { role: 'user', content: prompt },
+  ];
+  const guidance = new Map(toolPrompt.deferredGuidance.map(entry => [entry.tool, entry.text]));
+  if (guided.has('navigate_view')) guidance.set('navigate_view', getViewSummaryForLLM({ isAdmin: false }));
+  const tools = timeline ? declareDeferredTools(offered.map(tool), timeline.notOffered.map(tool)) : offered.map(tool);
+  const messages = timeline ? applyToolTimeline(baseMessages, timeline.changes, guidance) : baseMessages;
 
   const backend = new AnthropicBackend('test-key');
   let request: Request | undefined;
@@ -142,12 +163,7 @@ async function sendFirstTurn(caller: Caller, { deferTools = false }: SendOptions
       },
     },
   };
-  await backend.complete(
-    ChatModels.CLAUDE_4_8_OPUS,
-    messages,
-    { stream: false, tools: plan.tools, cacheStrategy },
-    async () => {}
-  );
+  await backend.complete(ChatModels.CLAUDE_4_8_OPUS, messages, { stream: false, tools, cacheStrategy }, async () => {});
   return request!;
 }
 
@@ -159,8 +175,8 @@ const sharedHead = (request: Request) =>
 
 describe('shareable prompt prefix across callers', () => {
   it('sends byte-identical tools and system up to the shareable breakpoint for two different users', async () => {
-    const tokyo = await sendFirstTurn(TOKYO_ADMIN);
-    const denver = await sendFirstTurn(DENVER_MEMBER);
+    const tokyo = await sendTurn(TOKYO_ADMIN);
+    const denver = await sendTurn(DENVER_MEMBER);
 
     expect(shareableBreakpoint(tokyo)).toBeGreaterThan(0);
     expect(sharedHead(tokyo)).toBe(sharedHead(denver));
@@ -184,16 +200,28 @@ describe('shareable prompt prefix across callers', () => {
 });
 
 // The part of the request the API renders ahead of the shareable breakpoint: deferred definitions
-// are left out of the rendered prefix (tool search docs), so they are dropped from the hash too.
+// are left out of the rendered prefix (tool search docs), but measured live, whether any deferred
+// tool is declared at all does change it.
 const renderedHeadHash = (request: Request) =>
   createHash('sha256')
     .update(
       JSON.stringify({
         tools: request.tools?.filter(block => block.defer_loading !== true),
+        anyDeferred: request.tools?.some(block => block.defer_loading === true) ?? false,
         system: request.system?.slice(0, shareableBreakpoint(request) + 1),
       })
     )
     .digest('hex');
+
+// The adapter turns a string into a text block to carry a breakpoint; both render the same tokens.
+const withoutCacheControl = (value: unknown) =>
+  JSON.stringify(value, (key, inner) =>
+    key === 'cache_control'
+      ? undefined
+      : key === 'content' && typeof inner === 'string'
+        ? [{ type: 'text', text: inner }]
+        : inner
+  );
 
 describe('shareable prompt prefix with deferred tool loading', () => {
   const WEB_USER: Caller = {
@@ -206,8 +234,8 @@ describe('shareable prompt prefix with deferred tool loading', () => {
   };
 
   it('hashes the rendered head the same for users with different optional tools', async () => {
-    const web = await sendFirstTurn(WEB_USER, { deferTools: true });
-    const knowledge = await sendFirstTurn(KNOWLEDGE_USER, { deferTools: true });
+    const web = await sendTurn(WEB_USER, { deferTools: true });
+    const knowledge = await sendTurn(KNOWLEDGE_USER, { deferTools: true });
 
     expect(renderedHeadHash(web)).toBe(renderedHeadHash(knowledge));
     expect(web.tools?.filter(block => block.defer_loading !== true).map(block => block.name)).toEqual([
@@ -216,10 +244,11 @@ describe('shareable prompt prefix with deferred tool loading', () => {
   });
 
   it('declares only the caller own tools and adds them, with their guidance, in the messages', async () => {
-    const web = await sendFirstTurn(WEB_USER, { deferTools: true });
+    const web = await sendTurn(WEB_USER, { deferTools: true });
 
     expect(web.tools?.filter(block => block.defer_loading === true).map(block => block.name)).toEqual([
       'current_datetime',
+      'deferred_tools_anchor',
       'navigate_view',
       'web_search',
     ]);
@@ -236,9 +265,53 @@ describe('shareable prompt prefix with deferred tool loading', () => {
     expect(web.betaHeader).toContain('mid-conversation-tool-changes-2026-07-01');
   });
 
+  it('gives a turn with no optional tools the same head, through the always-declared anchor', async () => {
+    const web = await sendTurn(WEB_USER, { deferTools: true });
+    const coreOnly = await sendTurn({ ...DENVER_MEMBER, toolOrder: ['current_model_details'] }, { deferTools: true });
+
+    expect(renderedHeadHash(coreOnly)).toBe(renderedHeadHash(web));
+    expect(coreOnly.messages?.some(message => message.role === 'system')).toBe(false);
+  });
+
+  it('appends a mid-session addition after the new turn and leaves the earlier messages as sent', async () => {
+    const turn1Tools = ['current_model_details', 'web_search'];
+    const first = await sendTurn({ ...WEB_USER, toolOrder: turn1Tools }, { deferTools: true, prompt: 'u1' });
+    const second = await sendTurn(
+      { ...WEB_USER, toolOrder: [...turn1Tools, 'current_datetime'] },
+      { deferTools: true, history: [{ prompt: 'u1', reply: 'a1', offered: turn1Tools }], prompt: 'u2' }
+    );
+
+    expect(renderedHeadHash(second)).toBe(renderedHeadHash(first));
+    expect(withoutCacheControl(second.messages?.slice(0, first.messages!.length))).toBe(
+      withoutCacheControl(first.messages)
+    );
+    expect(second.messages?.at(-1)?.content).toEqual(
+      expect.arrayContaining([{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'current_datetime' } }])
+    );
+    expect(JSON.stringify(second.messages?.at(-1))).toContain('CURRENT TIME');
+  });
+
+  it('removes a tool no longer offered after the new turn and keeps it declared for the history', async () => {
+    const turn1Tools = ['current_model_details', 'web_search'];
+    const first = await sendTurn({ ...WEB_USER, toolOrder: turn1Tools }, { deferTools: true, prompt: 'u1' });
+    const second = await sendTurn(
+      { ...WEB_USER, toolOrder: ['current_model_details'] },
+      { deferTools: true, history: [{ prompt: 'u1', reply: 'a1', offered: turn1Tools }], prompt: 'u2' }
+    );
+
+    expect(renderedHeadHash(second)).toBe(renderedHeadHash(first));
+    expect(withoutCacheControl(second.messages?.slice(0, first.messages!.length))).toBe(
+      withoutCacheControl(first.messages)
+    );
+    expect(second.messages?.at(-1)?.content).toEqual([
+      { type: 'tool_removal', tool: { type: 'tool_reference', name: 'web_search' } },
+    ]);
+    expect(second.tools?.find(block => block.name === 'web_search')?.defer_loading).toBe(true);
+  });
+
   it('control: with deferral off the same two users get different heads', async () => {
-    const web = await sendFirstTurn(WEB_USER);
-    const knowledge = await sendFirstTurn(KNOWLEDGE_USER);
+    const web = await sendTurn(WEB_USER);
+    const knowledge = await sendTurn(KNOWLEDGE_USER);
 
     expect(renderedHeadHash(web)).not.toBe(renderedHeadHash(knowledge));
     expect(web.messages?.some(message => message.role === 'system')).toBe(false);

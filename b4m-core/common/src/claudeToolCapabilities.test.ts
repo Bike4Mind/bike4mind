@@ -115,7 +115,7 @@ describe('chatSupportsDeferredToolAddition', () => {
     [ChatModels.CLAUDE_5_5_OPUS, ModelBackend.Anthropic, true],
     [ChatModels.CLAUDE_4_8_OPUS, ModelBackend.Anthropic, true],
     ['claude-sonnet-5-5', ModelBackend.Anthropic, true],
-    [ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic, false],
+    [ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic, true],
     [ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic, false],
     [ChatModels.CLAUDE_4_7_OPUS, ModelBackend.Anthropic, false],
     [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, ModelBackend.Bedrock, true],
