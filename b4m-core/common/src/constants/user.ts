@@ -67,6 +67,9 @@ export const TURNSTILE_ACTION_OTC_SEND = 'otc-send';
 /** Shared challenge action for starting a self-serve OAuth sign-in. */
 export const TURNSTILE_ACTION_OAUTH_START = 'oauth-start';
 
+/** Shared challenge action for joining the waitlist. */
+export const TURNSTILE_ACTION_SUBSCRIBE = 'subscribe';
+
 /** Query parameter that carries the solved token to the OAuth start route. */
 export const TURNSTILE_OAUTH_TOKEN_PARAM = 'turnstileToken';
 
