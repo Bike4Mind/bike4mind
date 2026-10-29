@@ -133,6 +133,21 @@ describe('GET /api/admin/subscriptions/export', () => {
     expect(lines[3]).toContain('"stripe",1900,"JPY",4,');
   });
 
+  it('writes the interval Stripe bills, as the Plan column labels it, falling back to the catalog', async () => {
+    mockPage.mockResolvedValueOnce([
+      makeRow(1, { billedInterval: { interval: 'year', intervalCount: 1 } }),
+      makeRow(2, { billedInterval: { interval: 'month', intervalCount: 3 } }),
+      makeRow(3, { billedInterval: null }),
+      makeRow(4, { billedInterval: null, plan: { priceId: 'price_legacy', name: null, interval: null } }),
+    ]);
+    const lines = (await call({})).res._getData().split('\n');
+    expect(lines[0]).toContain('"Plan","Interval","Price id"');
+    expect(lines[1]).toContain('"Team","Yearly","price_team"');
+    expect(lines[2]).toContain('"Team","Every 3 months","price_team"');
+    expect(lines[3]).toContain('"Team","Monthly","price_team"');
+    expect(lines[4]).toContain('"Unknown plan","","price_legacy"');
+  });
+
   it('writes seats and members for an organization owner', async () => {
     mockPage.mockResolvedValueOnce([makeRow(1)]);
     const { res } = await call({});
