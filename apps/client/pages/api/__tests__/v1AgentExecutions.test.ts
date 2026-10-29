@@ -13,8 +13,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { AgentExecutionAckSchema, AgentExecutionStatusResponseSchema, ApiKeyScope } from '@bike4mind/common';
 
-const { mockStart, mockLoadTrace } = vi.hoisted(() => ({
+const { mockStart, mockLoadTrace, mockResolveCallerDefaultModel } = vi.hoisted(() => ({
   mockStart: vi.fn(),
+  mockResolveCallerDefaultModel: vi.fn(async (model: string) => model),
   mockLoadTrace: vi.fn(),
 }));
 
@@ -56,6 +57,10 @@ vi.mock('@bike4mind/utils', () => ({ getSettingsMap: async () => ({}), getSettin
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   resolveDefaultChatModel: async () => ({ model: 'default-model' }),
   isChatModelUsable: () => true,
+}));
+// Passthrough: the free-tier default fallback has its own tests (server/utils/callerModelList.test.ts).
+vi.mock('@server/utils/callerModelList', () => ({
+  resolveCallerDefaultModel: (...a: unknown[]) => mockResolveCallerDefaultModel(...a),
 }));
 
 const { default: startHandler } = await import('@pages/api/v1/agent-executions/index');
@@ -138,6 +143,18 @@ describe('POST /api/v1/agent-executions', () => {
 
     expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ model: 'default-model' }), logger);
     expect(res._getJSONData().model).toBe('default-model');
+  });
+
+  it('starts on the caller-specific default model when it differs from the deployment default', async () => {
+    mockResolveCallerDefaultModel.mockResolvedValueOnce('allowlisted-model');
+    const { req, res } = post({ session_id: 's1', message: 'go' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    expect(mockResolveCallerDefaultModel).toHaveBeenCalledWith('default-model', req.user, logger);
+    expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({ model: 'allowlisted-model' }), logger);
+    expect(res._getJSONData().model).toBe('allowlisted-model');
   });
 
   it('omits quest_id when the dispatch-time Quest write failed', async () => {

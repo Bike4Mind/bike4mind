@@ -81,11 +81,21 @@ describe('account dialogs', () => {
       pickReason('restrict-dialog');
       fireEvent.click(confirmButton('restrict-dialog'));
 
-      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ isModerated: true }));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({
+          isModerated: true,
+          statusChangeReason: 'Abuse / automated signups',
+        })
+      );
       expect(onClose).toHaveBeenCalled();
       expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('Account restricted');
       fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
-      await waitFor(() => expect(mocks.update).toHaveBeenLastCalledWith({ isModerated: false }));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenLastCalledWith({
+          isModerated: false,
+          statusChangeReason: 'Undo: Abuse / automated signups',
+        })
+      );
     });
 
     it('lifts an existing restriction', async () => {
@@ -100,7 +110,12 @@ describe('account dialogs', () => {
       pickReason('restrict-dialog');
       fireEvent.click(confirmButton('restrict-dialog'));
 
-      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ isModerated: false }));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({
+          isModerated: false,
+          statusChangeReason: 'Suspended in error',
+        })
+      );
     });
 
     it('stays open when the write fails', async () => {
@@ -129,11 +144,15 @@ describe('account dialogs', () => {
       fireEvent.click(confirmButton('email-verification-dialog'));
 
       await waitFor(() =>
-        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/verify-email`, undefined)
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/verify-email`, {
+          reason: 'Ownership confirmed by support',
+        })
       );
       fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
       await waitFor(() =>
-        expect(mocks.apiPost).toHaveBeenLastCalledWith(`/api/admin/users/${USER_ID}/unverify-email`, undefined)
+        expect(mocks.apiPost).toHaveBeenLastCalledWith(`/api/admin/users/${USER_ID}/unverify-email`, {
+          reason: 'Undo: Ownership confirmed by support',
+        })
       );
     });
 
@@ -146,7 +165,9 @@ describe('account dialogs', () => {
       fireEvent.click(confirmButton('email-verification-dialog'));
 
       await waitFor(() =>
-        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/unverify-email`, undefined)
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/unverify-email`, {
+          reason: 'Ownership confirmed by support',
+        })
       );
     });
 
@@ -173,12 +194,16 @@ describe('account dialogs', () => {
       fireEvent.click(confirmButton('api-key-trust-dialog'));
 
       await waitFor(() =>
-        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/api-key-trust`, { approved: true })
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/api-key-trust`, {
+          approved: true,
+          reason: 'Known integration',
+        })
       );
       fireEvent.click(await screen.findByTestId('undo-toast-undo-btn'));
       await waitFor(() =>
         expect(mocks.apiPost).toHaveBeenLastCalledWith(`/api/admin/users/${USER_ID}/api-key-trust`, {
           approved: false,
+          reason: 'Undo: Known integration',
         })
       );
     });
@@ -194,7 +219,10 @@ describe('account dialogs', () => {
       fireEvent.click(confirmButton('api-key-trust-dialog'));
 
       await waitFor(() =>
-        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/api-key-trust`, { approved: false })
+        expect(mocks.apiPost).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/api-key-trust`, {
+          approved: false,
+          reason: 'Known integration',
+        })
       );
     });
   });
@@ -357,6 +385,7 @@ describe('account dialogs', () => {
           title: 'Heads up',
           message: 'Please read.',
           receiverId: USER_ID,
+          reason: 'Account notice',
         })
       );
       expect(onClose).toHaveBeenCalled();

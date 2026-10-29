@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { deepAgentHandoffRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import {
   noopRunAct,
@@ -12,7 +13,7 @@ import {
   type WakeDeps,
   type WakeSteps,
 } from '@bike4mind/agents';
-import { insufficientCreditsError, type ModelInfo } from '@bike4mind/common';
+import { insufficientCreditsError, TooManyRequestsError, type ModelInfo } from '@bike4mind/common';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { processWake, WakePayloadSchema } from './wakeHandler';
 import { MISSION_MODEL_REFUSED_BLOCKER, MISSION_NEEDS_CREDITS_BLOCKER, MissionModelRefusedError } from './wakeMetering';
@@ -227,5 +228,72 @@ describe('processWake', () => {
     const handoff = store.handoffs.get('agent-1')!;
     expect(handoff.nextWakeIntervalMs).toBeUndefined();
     expect(handoff.openBlockers).toEqual([MISSION_MODEL_REFUSED_BLOCKER]);
+  });
+
+  describe('when the owner hits the free-tier daily cap', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const seedStore = () => {
+      const store = new FakeStore();
+      store.charters.set('agent-1', charter());
+      store.handoffs.set('agent-1', {
+        agentId: 'agent-1',
+        wakeCount: 3,
+        lastWakeAt: ISO,
+        lastActionSummary: 'did a thing',
+        nextIntendedAction: 'next',
+        nextWakeIntervalMs: 60_000,
+        openBlockers: [],
+        updatedAt: ISO,
+      });
+      return store;
+    };
+
+    const capRefusal = (info: Record<string, unknown>) =>
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: 'daily_free_limit_reached',
+        ...info,
+      });
+
+    const runCappedWake = async (store: FakeStore, error: TooManyRequestsError) => {
+      const steps: WakeSteps = {
+        ...STEPS,
+        async orient() {
+          throw error;
+        },
+      };
+      await processWake({ agentId: 'agent-1' }, new Logger(), { deps: { ...fakeDeps(store), steps } });
+    };
+
+    it('defers the next wake to the cap Retry-After instead of pausing the mission', async () => {
+      const release = vi.spyOn(deepAgentHandoffRepository, 'releaseWakeClaim').mockResolvedValue(undefined as never);
+      const store = seedStore();
+      const before = Date.now();
+
+      await runCappedWake(store, capRefusal({ retryAfter: 3600 }));
+
+      expect(release).toHaveBeenCalledTimes(1);
+      const [agentId, resumeAt] = release.mock.calls[0];
+      expect(agentId).toBe('agent-1');
+      expect((resumeAt as Date).getTime()).toBeGreaterThanOrEqual(before + 3_600_000);
+      expect((resumeAt as Date).getTime()).toBeLessThanOrEqual(Date.now() + 3_600_000);
+
+      const handoff = store.handoffs.get('agent-1')!;
+      expect(handoff.openBlockers).toEqual([]);
+      expect(handoff.nextWakeIntervalMs).toBe(60_000);
+    });
+
+    it('falls back to a one-hour deferral when the refusal carries no Retry-After', async () => {
+      const release = vi.spyOn(deepAgentHandoffRepository, 'releaseWakeClaim').mockResolvedValue(undefined as never);
+      const before = Date.now();
+
+      await runCappedWake(seedStore(), capRefusal({}));
+
+      const [, resumeAt] = release.mock.calls[0];
+      expect((resumeAt as Date).getTime()).toBeGreaterThanOrEqual(before + 3_600_000);
+      expect((resumeAt as Date).getTime()).toBeLessThanOrEqual(Date.now() + 3_600_000);
+    });
   });
 });

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { CurationType, insufficientCreditsError, type CurationOptions } from '@bike4mind/common';
+import {
+  CurationType,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TooManyRequestsError,
+  insufficientCreditsError,
+  type CurationOptions,
+} from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { NotebookCurationService, type NotebookCurationAdapters } from './index';
 
@@ -69,6 +75,26 @@ describe('curation billing', () => {
     expect(
       await service.curateNotebook('s1', 'u1', { ...options, curationType: CurationType.EXECUTIVE_SUMMARY })
     ).toEqual({ success: false, error: 'Not enough credits', retryable: false });
+    expect(adapters.fabFileRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('reports a free-tier daily cap refusal as not retryable and persists nothing', async () => {
+    const adapters = buildDefaultAdapters();
+    const capMessage = 'Daily free limit reached';
+    const service = new NotebookCurationService({
+      ...adapters,
+      llmService: {
+        complete: vi
+          .fn()
+          .mockRejectedValue(
+            new TooManyRequestsError(capMessage, { errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE, retryAfter: 3600 })
+          ),
+      },
+      llmModelId: 'ops-model',
+    } as unknown as NotebookCurationAdapters);
+    expect(
+      await service.curateNotebook('s1', 'u1', { ...options, curationType: CurationType.EXECUTIVE_SUMMARY })
+    ).toEqual({ success: false, error: capMessage, retryable: false });
     expect(adapters.fabFileRepository.create).not.toHaveBeenCalled();
   });
 });

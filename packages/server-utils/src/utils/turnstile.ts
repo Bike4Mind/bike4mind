@@ -5,7 +5,7 @@ export const TURNSTILE_TIMEOUT_MS = 2000;
 export const TURNSTILE_MAX_TOKEN_LENGTH = 2048;
 
 export type TurnstileResult =
-  { ok: true } | { ok: false; reason: 'missing' | 'invalid' | 'unavailable'; errorCodes?: string[] };
+  { ok: true } | { ok: false; reason: 'missing' | 'invalid' | 'unavailable' | 'misconfigured'; errorCodes?: string[] };
 
 export type VerifyTurnstileInput = {
   token: unknown;
@@ -14,6 +14,11 @@ export type VerifyTurnstileInput = {
   expectedAction: string;
   /** Lowercase hostnames the widget may have been solved on; empty skips the hostname check. */
   allowedHostnames?: string[];
+  /**
+   * Fail with `misconfigured` instead of skipping the hostname check when `allowedHostnames` is empty.
+   * Callers pass true on deployed stages.
+   */
+  requireAllowedHostnames?: boolean;
   /**
    * Skip the action and hostname checks when `secret` is one of Cloudflare's public test secrets,
    * whose siteverify answers never carry our action or host. Callers must pass false in production.
@@ -51,15 +56,29 @@ export function isTurnstileTestSecret(secret: string): boolean {
   return TURNSTILE_TEST_SECRETS.has(secret.trim());
 }
 
+// siteverify codes meaning our own request or secret was wrong, see
+// https://developers.cloudflare.com/turnstile/get-started/server-side-validation/#error-codes
+export const TURNSTILE_CONFIGURATION_ERROR_CODES: ReadonlySet<string> = new Set([
+  'missing-input-secret',
+  'invalid-input-secret',
+  'bad-request',
+]);
+
 /**
- * Verifies a Turnstile token with Cloudflare siteverify. Tokens are single-use, so a duplicate or
- * expired token comes back as `invalid`. A network failure, timeout or non-2xx answer is
- * `unavailable` so the caller can choose to fail open or closed.
+ * Verifies a Turnstile token with Cloudflare siteverify. Failures come in three classes:
+ * - `unavailable`: network failure, timeout, non-2xx, malformed answer or a Cloudflare
+ *   internal-error. The caller may fail open or closed.
+ * - `misconfigured`: our secret or request was rejected, or no hostname allowlist where one is
+ *   required. The caller must always fail.
+ * - `invalid`: the token itself is bad (duplicate, expired, wrong action or hostname).
  */
 export async function verifyTurnstile(input: VerifyTurnstileInput): Promise<TurnstileResult> {
   const { token, secret, ip, expectedAction, allowedHostnames = [] } = input;
   if (typeof token !== 'string' || token.length === 0) return { ok: false, reason: 'missing' };
   if (token.length > TURNSTILE_MAX_TOKEN_LENGTH) return { ok: false, reason: 'invalid' };
+  if (input.requireAllowedHostnames === true && allowedHostnames.length === 0) {
+    return { ok: false, reason: 'misconfigured', errorCodes: ['hostname-allowlist-empty'] };
+  }
 
   const body = new URLSearchParams({ secret, response: token });
   if (ip) body.set('remoteip', ip);
@@ -79,13 +98,10 @@ export async function verifyTurnstile(input: VerifyTurnstileInput): Promise<Turn
 
   const errorCodes = data['error-codes'];
   if (data.success !== true) {
-    // A rejected secret or malformed request is our misconfiguration, not the caller's fault.
-    if (
-      errorCodes?.some(code =>
-        ['internal-error', 'missing-input-secret', 'invalid-input-secret', 'bad-request'].includes(code)
-      )
-    )
-      return { ok: false, reason: 'unavailable', errorCodes };
+    if (errorCodes?.some(code => TURNSTILE_CONFIGURATION_ERROR_CODES.has(code))) {
+      return { ok: false, reason: 'misconfigured', errorCodes };
+    }
+    if (errorCodes?.includes('internal-error')) return { ok: false, reason: 'unavailable', errorCodes };
     return { ok: false, reason: 'invalid', errorCodes };
   }
   if (input.allowTestSecret === true && isTurnstileTestSecret(secret)) return { ok: true };

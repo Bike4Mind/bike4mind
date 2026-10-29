@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
+import type { ModelServerView } from '@shared/modelServers';
 import {
   pullKey,
   type CuratedBuildView,
@@ -44,8 +45,56 @@ window.matchMedia ??= ((query: string) => ({
 })) as typeof window.matchMedia;
 
 const REPO = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
-const RUNNING: ModelRuntimeStatus = { reachable: true, version: '0.40.11', url: 'http://127.0.0.1:11434', error: null };
-const DOWN: ModelRuntimeStatus = { reachable: false, version: null, url: 'http://127.0.0.1:11434', error: 'refused' };
+const COMPUTER = { serverId: 'local', serverName: 'This computer', management: 'allowed' } as const;
+const RUNNING: ModelRuntimeStatus = {
+  reachable: true,
+  version: '0.40.11',
+  url: 'http://127.0.0.1:11434',
+  error: null,
+  ...COMPUTER,
+};
+const DOWN: ModelRuntimeStatus = {
+  reachable: false,
+  version: null,
+  url: 'http://127.0.0.1:11434',
+  error: 'refused',
+  ...COMPUTER,
+};
+
+function server(id: string, name: string, extra: Partial<ModelServerView> = {}): ModelServerView {
+  return {
+    id,
+    name,
+    local: id === 'local',
+    kind: 'ollama',
+    address: id === 'local' ? 'http://127.0.0.1:11434' : `http://192.168.1.${id.length}:11434`,
+    access: 'manage',
+    auth: { type: 'none' },
+    credentialsPersisted: true,
+    credentialsMissing: false,
+    unencrypted: id !== 'local',
+    health: { state: 'online', version: '0.40.11', latencyMs: 3, checkedAt: null, error: null },
+    models: [],
+    ...extra,
+  };
+}
+
+const THIS_COMPUTER = server('local', 'This computer');
+const GPU_BOX = server('gpu', 'gpu box');
+const SHARED_BOX = server('shared', 'shared box', { access: 'chat' });
+
+function remoteStatus(view: ModelServerView, extra: Partial<ModelRuntimeStatus> = {}): ModelRuntimeStatus {
+  return {
+    reachable: true,
+    version: '0.40.11',
+    url: view.address,
+    error: null,
+    serverId: view.id,
+    serverName: view.name,
+    management: view.access === 'manage' ? 'allowed' : 'chat-only',
+    ...extra,
+  };
+}
 const capabilities = { tools: true, vision: false, thinking: false, embeddings: false, completion: true };
 
 function card(id: string, extra: Partial<HubModelView> = {}) {
@@ -219,9 +268,14 @@ function libraryPull(fit: ModelFit = FITS): CuratedPullResult {
 interface Bridge {
   status: ModelRuntimeStatus;
   installed: InstalledModelsResult;
+  /** Per saved server; this computer reads `status` and `installed`. */
+  remote: Record<string, { status: ModelRuntimeStatus; installed: InstalledModelsResult }>;
+  servers: ModelServerView[];
   search: HubSearchResult;
   detail: HubDetailResult;
   pulls: ModelPull[];
+  /** Holds the next installed list, as read when asked, until it settles. */
+  installedGate?: Promise<void>;
   curated: CuratedList;
   curatedFailures: number;
   curatedPull: CuratedPullResult;
@@ -231,15 +285,18 @@ interface Bridge {
 let bridge: Bridge;
 let pushToken: ((status: HfTokenStatus) => void) | null = null;
 let pushPulls: (pulls: ModelPull[]) => void = () => {};
-let pushInstalledChanged: () => void = () => {};
+let pushInstalled: (serverId: string) => void = () => {};
+let pushServers: (servers: ModelServerView[]) => void = () => {};
 let pushCuratedChanged: () => void = () => {};
 const calls = {
   pull: vi.fn(),
   cancelPull: vi.fn(),
+  resumePull: vi.fn(),
   remove: vi.fn(),
   search: vi.fn(),
   getDetail: vi.fn(),
   getStatus: vi.fn(),
+  listInstalled: vi.fn(),
   getCuratedPull: vi.fn(),
   checkCurated: vi.fn(),
   listCurated: vi.fn(),
@@ -255,6 +312,8 @@ beforeEach(() => {
   bridge = {
     status: RUNNING,
     installed: { ok: true, models: [] },
+    remote: {},
+    servers: [THIS_COMPUTER],
     search: { ok: true, models: [card(REPO)], nextCursor: null },
     detail: { ok: true, model: view() },
     pulls: [],
@@ -267,6 +326,7 @@ beforeEach(() => {
   window.localStorage.clear();
   calls.getHfToken.mockImplementation(async () => bridge.token);
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
+  calls.resumePull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.remove.mockResolvedValue({ ok: true });
   calls.setHfToken.mockImplementation(async () => {
     bridge.token = { ...bridge.token, set: true };
@@ -278,12 +338,26 @@ beforeEach(() => {
   });
   (window as unknown as { b4m: unknown }).b4m = {
     shell: { openExternal: vi.fn() },
-    models: {
-      getStatus: async () => {
-        calls.getStatus();
-        return bridge.status;
+    modelServers: {
+      list: async () => bridge.servers,
+      onChanged: (listener: (servers: ModelServerView[]) => void) => {
+        pushServers = listener;
+        return () => {};
       },
-      listInstalled: async () => bridge.installed,
+    },
+    models: {
+      getStatus: async (serverId?: string) => {
+        calls.getStatus(serverId);
+        return (serverId && bridge.remote[serverId]?.status) || bridge.status;
+      },
+      listInstalled: async (serverId?: string) => {
+        calls.listInstalled(serverId);
+        const result = (serverId && bridge.remote[serverId]?.installed) || bridge.installed;
+        const gate = bridge.installedGate;
+        bridge.installedGate = undefined;
+        await gate;
+        return result;
+      },
       search: async (request: unknown) => {
         calls.search(request);
         return bridge.search;
@@ -293,19 +367,20 @@ beforeEach(() => {
         return bridge.detail;
       },
       listPulls: async () => bridge.pulls,
-      listCurated: async () => {
-        calls.listCurated();
+      listCurated: async (serverId?: string) => {
+        calls.listCurated(serverId);
         if (bridge.curatedFailures > 0) {
           bridge.curatedFailures -= 1;
           throw new Error('ipc failed');
         }
         return bridge.curated;
       },
-      getCuratedPull: async (entryId: string, buildId: string) => {
-        calls.getCuratedPull(entryId, buildId);
+      getCuratedPull: async (entryId: string, buildId: string, serverId?: string) => {
+        calls.getCuratedPull(entryId, buildId, ...(serverId === undefined ? [] : [serverId]));
         return bridge.curatedPull;
       },
-      checkCurated: calls.checkCurated,
+      checkCurated: (entryId: string, buildId: string, serverId?: string) =>
+        calls.checkCurated(entryId, buildId, ...(serverId === undefined ? [] : [serverId])),
       checkCuratedList: async () => {
         calls.checkCuratedList();
       },
@@ -315,6 +390,7 @@ beforeEach(() => {
       },
       pull: calls.pull,
       cancelPull: calls.cancelPull,
+      resumePull: calls.resumePull,
       dismissPull: calls.dismissPull,
       remove: calls.remove,
       getHfToken: calls.getHfToken,
@@ -324,15 +400,15 @@ beforeEach(() => {
         pushPulls = listener;
         return () => {};
       },
+      onInstalledChanged: (listener: (serverId: string) => void) => {
+        pushInstalled = listener;
+        return () => {};
+      },
       onHfTokenChanged: (listener: (status: HfTokenStatus) => void) => {
         pushToken = listener;
         return () => {
           pushToken = null;
         };
-      },
-      onInstalledChanged: (listener: () => void) => {
-        pushInstalledChanged = listener;
-        return () => {};
       },
     },
   };
@@ -633,6 +709,8 @@ describe('ModelsScreen curated', () => {
   /** Main's entry for an E4B pull that failed; `ref` is null when it failed before downloading. */
   const failedE4B = (error: ModelHubError, ref: string | null = E4B_REF): ModelPull => ({
     key: pullKey(E4B_REF, E4B.id),
+    serverId: 'local',
+    serverName: 'This computer',
     repo: E4B_REF,
     buildId: E4B.id,
     label: E4B.quant,
@@ -824,7 +902,7 @@ describe('ModelsScreen curated', () => {
       ],
     };
     expect(inside('models-curated-picks', 'models-build-installed-chip')).toHaveLength(0);
-    await act(async () => pushInstalledChanged());
+    await act(async () => pushInstalled('local'));
     await flush();
 
     expect(calls.listCurated.mock.calls.length).toBeGreaterThan(callsBefore);
@@ -857,6 +935,8 @@ describe('ModelsScreen curated', () => {
     bridge.pulls = [
       {
         key: pullKey(E4B_REF, E4B.id),
+        serverId: 'local',
+        serverName: 'This computer',
         repo: E4B_REF,
         buildId: E4B.id,
         label: E4B.quant,
@@ -894,6 +974,8 @@ describe('ModelsScreen curated', () => {
     bridge.pulls = [
       {
         key: `${E4B_REF}#qat-q4-0`,
+        serverId: 'local',
+        serverName: 'This computer',
         repo: E4B_REF,
         buildId: 'qat-q4-0',
         label: 'Q4_0',
@@ -1062,13 +1144,25 @@ describe('ModelsScreen installed', () => {
     expect(calls.remove).not.toHaveBeenCalled();
     expect(q('models-remove-dialog-in-use')?.textContent).toBe('Ollama has it loaded right now.');
     await click(q('models-remove-dialog-confirm-btn'));
-    expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b');
+    expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', undefined);
   });
 
+  const onComputer = (name: string) => ({ serverId: 'local', name });
   it.each([
-    [{ active: 'qwen2.5:0.5b', conversations: ['qwen2.5:0.5b'] }, 'The open conversation uses this model.'],
-    [{ active: null, conversations: ['qwen2.5:0.5b', 'qwen2.5:0.5b', 'llama'] }, '2 conversations use this model.'],
-  ])('warns before removing a model a conversation uses: %j', async (inUse, text) => {
+    [{ active: onComputer('qwen2.5:0.5b'), conversations: [onComputer('qwen2.5:0.5b')] }, 'The open conversation'],
+    [
+      {
+        active: null,
+        conversations: [
+          onComputer('qwen2.5:0.5b'),
+          onComputer('qwen2.5:0.5b'),
+          { serverId: 'gpu', name: 'qwen2.5:0.5b' },
+          onComputer('llama'),
+        ],
+      },
+      '2 conversations use this model.',
+    ],
+  ])('warns before removing a model a conversation on the same server uses: %j', async (inUse, text) => {
     bridge.installed = {
       ok: true,
       models: [
@@ -1389,6 +1483,8 @@ describe('ModelsScreen explore', () => {
       pushPulls([
         {
           key: pullKey(REPO, 'qwen2.5-0.5b-instruct-q4_k_m'),
+          serverId: 'local',
+          serverName: 'This computer',
           repo: REPO,
           buildId: 'qwen2.5-0.5b-instruct-q4_k_m',
           label: 'Q4_K_M',
@@ -1443,6 +1539,8 @@ describe('ModelsScreen explore', () => {
       pushPulls([
         {
           key: `${REPO}#q`,
+          serverId: 'local',
+          serverName: 'This computer',
           repo: REPO,
           buildId: 'q',
           label: 'Q4_K_M',
@@ -1561,6 +1659,372 @@ describe('ModelsScreen explore', () => {
     await click(q('models-explore-search-btn'));
     expect(calls.search).toHaveBeenLastCalledWith({ query: 'nothing-here' });
     expect(q('models-explore-empty')?.textContent).toBe('No GGUF models match "nothing-here".');
+  });
+});
+
+describe('ModelsScreen servers', () => {
+  const qwen = {
+    name: 'qwen2.5:0.5b',
+    sizeBytes: 397_000_000,
+    quantization: 'Q4_K_M',
+    family: 'qwen2',
+    parameterSize: '494M',
+    modifiedAt: null,
+    capabilities,
+    loaded: false,
+    fit: null,
+  };
+
+  beforeEach(() => {
+    bridge.servers = [THIS_COMPUTER, GPU_BOX, SHARED_BOX];
+    bridge.remote = {
+      gpu: { status: remoteStatus(GPU_BOX), installed: { ok: true, models: [qwen] } },
+      shared: { status: remoteStatus(SHARED_BOX), installed: { ok: true, models: [qwen] } },
+    };
+  });
+
+  // The screen remembers the server across visits, and so across tests.
+  afterEach(async () => {
+    if (q('models-server-select')) await pickServer('local');
+  });
+
+  async function pickServer(id: string) {
+    await click(q('models-server-select'));
+    await click(q(`models-server-option-${id}`));
+  }
+
+  it('offers no switcher until a model server is saved', async () => {
+    bridge.servers = [THIS_COMPUTER];
+    await mount();
+    expect(q('models-server-select')).toBeNull();
+  });
+
+  it('lists, pulls to and removes from a server set to Chat and manage', async () => {
+    await mount();
+    expect(q('models-server-select')?.textContent).toContain('This computer');
+    await pickServer('gpu');
+
+    expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
+    expect(calls.listInstalled).toHaveBeenLastCalledWith('gpu');
+    expect(q('models-runtime-status')?.textContent).toContain('on gpu box at 192.168.1.3:11434');
+    expect(q('models-installed-summary')?.textContent).toContain('on gpu box');
+    await click(q('models-installed-remove-btn'));
+    expect(q('models-remove-dialog')?.textContent).toContain('from Ollama on gpu box');
+    await click(q('models-remove-dialog-confirm-btn'));
+    expect(calls.remove).toHaveBeenCalledWith('qwen2.5:0.5b', 'gpu');
+
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-server')?.textContent).toContain('Desktop cannot see how much free space gpu box has');
+    await click(q('models-pull-dialog-confirm-btn'));
+    expect(calls.pull).toHaveBeenCalledWith(expect.objectContaining({ repo: REPO, serverId: 'gpu' }));
+  });
+
+  it('shows no pull or remove controls for a Chat only server', async () => {
+    await mount();
+    await pickServer('shared');
+
+    expect(q('models-manage-note')?.textContent).toContain('shared box is set to Chat only');
+    expect(all('models-installed-row')).toHaveLength(1);
+    expect(q('models-installed-remove-btn')).toBeNull();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-build-row')).not.toBeNull();
+    expect(q('models-build-pull-btn')).toBeNull();
+  });
+
+  it('says which server is down and keeps the others usable', async () => {
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX, {
+      reachable: false,
+      version: null,
+      error: 'Could not reach gpu box: connection refused',
+    });
+    await mount();
+    await pickServer('gpu');
+    expect(q('models-runtime-status')?.dataset.state).toBe('down');
+    expect(q('models-runtime-status')?.textContent).toContain('Could not reach gpu box: connection refused');
+    expect(q('models-runtime-download-link')).toBeNull();
+    expect(q('models-installed-runtime-down')?.textContent).toContain('gpu box is not reachable');
+
+    await pickServer('local');
+    expect(q('models-runtime-status')?.dataset.state).toBe('running');
+  });
+
+  it('shows a pull to a server as paused with Resume, and asks to keep the app open while it runs', async () => {
+    await mount();
+    const remotePull: ModelPull = {
+      key: `gpu/${REPO}#q`,
+      serverId: 'gpu',
+      serverName: 'gpu box',
+      repo: REPO,
+      buildId: 'q',
+      label: 'Q4_K_M',
+      ref: `hf.co/${REPO}:Q4_K_M`,
+      phase: 'downloading',
+      completedBytes: 100_000_000,
+      totalBytes: 400_000_000,
+      expectedBytes: 400_000_000,
+      error: null,
+    };
+    act(() => pushPulls([remotePull]));
+    expect(q('models-pull-row')?.textContent).toContain('to gpu box');
+    expect(q('models-pull-keep-open')).not.toBeNull();
+    expect(q('models-pull-resume-btn')).toBeNull();
+
+    act(() =>
+      pushPulls([
+        {
+          ...remotePull,
+          phase: 'paused',
+          error: { kind: 'connection-lost', message: 'Paused: lost the connection to gpu box.' },
+        },
+      ])
+    );
+    await flush();
+    expect(q('models-pull-status')?.textContent).toBe('Paused at 100 MB of 400 MB (25%)');
+    expect(q('models-pull-paused-note')?.textContent).toContain('lost the connection to gpu box');
+    expect(q('models-pull-keep-open')).toBeNull();
+    await click(q('models-pull-resume-btn'));
+    expect(calls.resumePull).toHaveBeenCalledWith(`gpu/${REPO}#q`);
+  });
+
+  const llama = { ...qwen, name: 'llama3.2:1b' };
+  const rowNames = () => all('models-installed-row').map(row => row.dataset.name);
+
+  it('reloads only the shown server models when a pull or removal on it finishes', async () => {
+    await mount();
+    await pickServer('gpu');
+    expect(rowNames()).toEqual(['qwen2.5:0.5b']);
+    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
+    calls.getStatus.mockClear();
+    calls.listInstalled.mockClear();
+
+    act(() => pushInstalled('local'));
+    await flush();
+    expect(calls.listInstalled).not.toHaveBeenCalled();
+
+    act(() => pushInstalled('gpu'));
+    await flush();
+    expect(calls.listInstalled.mock.calls).toEqual([['gpu']]);
+    expect(calls.getStatus).not.toHaveBeenCalled();
+    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
+  });
+
+  it('re-checks a server shown as down when a resumed pull to it finishes', async () => {
+    await mount();
+    await pickServer('gpu');
+    const pull: ModelPull = {
+      key: `gpu/${REPO}#q`,
+      serverId: 'gpu',
+      serverName: 'gpu box',
+      repo: REPO,
+      buildId: 'q',
+      label: 'Q4_K_M',
+      ref: `hf.co/${REPO}:Q4_K_M`,
+      phase: 'paused',
+      completedBytes: 100_000_000,
+      totalBytes: 400_000_000,
+      expectedBytes: 400_000_000,
+      error: { kind: 'connection-lost', message: 'Paused: lost the connection to gpu box.' },
+    };
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX, { reachable: false, version: null, error: 'refused' });
+    act(() => pushPulls([pull]));
+    await flush();
+    expect(q('models-runtime-status')?.dataset.state).toBe('down');
+
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX);
+    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
+    act(() => pushPulls([{ ...pull, phase: 'downloading', error: null }]));
+    act(() => pushPulls([]));
+    act(() => pushInstalled('gpu'));
+    await flush();
+    await flush();
+    expect(q('models-runtime-status')?.dataset.state).toBe('running');
+    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
+  });
+
+  it('keeps the newer models list when an older request answers last', async () => {
+    await mount();
+    await pickServer('gpu');
+    let release: () => void = () => {};
+    bridge.installedGate = new Promise(resolve => (release = resolve));
+    act(() =>
+      pushPulls([
+        {
+          key: `gpu/${REPO}#q`,
+          serverId: 'gpu',
+          serverName: 'gpu box',
+          repo: REPO,
+          buildId: 'q',
+          label: 'Q4_K_M',
+          ref: null,
+          phase: 'failed',
+          completedBytes: 0,
+          totalBytes: null,
+          expectedBytes: 1,
+          error: { kind: 'connection-lost', message: 'Lost the connection to gpu box.' },
+        },
+      ])
+    );
+    await flush();
+    expect(calls.listInstalled).toHaveBeenLastCalledWith('gpu');
+
+    bridge.remote.gpu.installed = { ok: true, models: [qwen, llama] };
+    act(() => pushInstalled('gpu'));
+    await flush();
+    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
+
+    release();
+    await flush();
+    expect(rowNames()).toEqual(['qwen2.5:0.5b', 'llama3.2:1b']);
+  });
+
+  const changeServers = async (servers: ModelServerView[]) => {
+    bridge.servers = servers;
+    act(() => pushServers(servers));
+    await flush();
+    await flush();
+  };
+
+  it.each([
+    ['Chat only', { access: 'chat' }, 'chat-only'],
+    ['OpenAI-compatible', { kind: 'openai-compatible' }, 'unsupported'],
+  ] as const)(
+    'closes both confirmations when the server becomes %s without reopening them later',
+    async (_label, patch, management) => {
+      await mount();
+      await pickServer('gpu');
+      await click(q('models-installed-remove-btn'));
+      expect(q('models-remove-dialog')).not.toBeNull();
+
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management });
+      await changeServers([THIS_COMPUTER, { ...GPU_BOX, ...patch }, SHARED_BOX]);
+      expect(q('models-remove-dialog')).toBeNull();
+
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX);
+      await changeServers([THIS_COMPUTER, GPU_BOX, SHARED_BOX]);
+      expect(q('models-remove-dialog')).toBeNull();
+      expect(q('models-installed-remove-btn')).not.toBeNull();
+      expect(calls.remove).not.toHaveBeenCalled();
+
+      await openExplore();
+      await click(q('models-explore-result-row'));
+      await click(q('models-build-pull-btn'));
+      expect(q('models-pull-dialog')).not.toBeNull();
+
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management });
+      await changeServers([THIS_COMPUTER, { ...GPU_BOX, ...patch }, SHARED_BOX]);
+      expect(q('models-pull-dialog')).toBeNull();
+
+      bridge.remote.gpu.status = remoteStatus(GPU_BOX);
+      await changeServers([THIS_COMPUTER, GPU_BOX, SHARED_BOX]);
+      expect(q('models-pull-dialog')).toBeNull();
+      expect(q('models-build-pull-btn')).not.toBeNull();
+      expect(calls.pull).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['failed', 'paused'] as const)('re-checks only the selected server when a pull becomes %s', async phase => {
+    await mount();
+    await pickServer('gpu');
+    calls.getStatus.mockClear();
+    calls.listInstalled.mockClear();
+    const pull: ModelPull = {
+      key: `shared/${REPO}#q`,
+      serverId: 'shared',
+      serverName: 'shared box',
+      repo: REPO,
+      buildId: 'q',
+      label: 'Q4_K_M',
+      ref: `hf.co/${REPO}:Q4_K_M`,
+      phase,
+      completedBytes: 100,
+      totalBytes: 400,
+      expectedBytes: 400,
+      error: { kind: 'connection-lost', message: 'Lost the connection.' },
+    };
+
+    act(() => pushPulls([pull]));
+    await flush();
+    expect(calls.getStatus).not.toHaveBeenCalled();
+    expect(calls.listInstalled).not.toHaveBeenCalled();
+
+    act(() => pushPulls([pull, { ...pull, key: `gpu/${REPO}#q`, serverId: 'gpu', serverName: 'gpu box' }]));
+    await flush();
+    expect(calls.getStatus.mock.calls).toEqual([['gpu']]);
+    expect(calls.listInstalled.mock.calls).toEqual([['gpu']]);
+  });
+
+  it('falls back to this computer when the selected server is removed, closing its Remove confirmation', async () => {
+    await mount();
+    await pickServer('gpu');
+    await click(q('models-installed-remove-btn'));
+    expect(q('models-remove-dialog')?.textContent).toContain('on gpu box');
+
+    await changeServers([THIS_COMPUTER, SHARED_BOX]);
+
+    expect(q('models-remove-dialog')).toBeNull();
+    expect(calls.getStatus).toHaveBeenLastCalledWith('local');
+    expect(q('models-server-select')?.textContent).toContain('This computer');
+    expect(q('models-runtime-status')?.textContent).toContain('running at');
+    expect(q('models-installed-empty')?.textContent).toContain('No local models yet');
+    expect(calls.remove).not.toHaveBeenCalled();
+  });
+
+  it('closes an open download dialog when its server is removed, and sends nothing', async () => {
+    await mount();
+    await pickServer('gpu');
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-server')?.textContent).toContain('gpu box');
+
+    await changeServers([THIS_COMPUTER, SHARED_BOX]);
+
+    expect(q('models-pull-dialog-confirm-btn')).toBeNull();
+    expect(calls.pull).not.toHaveBeenCalled();
+  });
+
+  it('titles the Curated picks neutrally and drops this-computer text and fit badges for a saved server', async () => {
+    await mount(undefined, 'curated');
+    await pickServer('local');
+    expect(q('models-curated-picks')?.textContent).toContain('For this computer');
+    expect(q('models-curated-machine')?.textContent).toContain('This computer has');
+    expect(all('models-fit-badge').length).toBeGreaterThan(0);
+
+    await pickServer('gpu');
+    expect(q('models-curated-picks')?.textContent).toContain('Curated picks');
+    expect(q('models-curated-picks')?.textContent).not.toContain('For this computer');
+    expect(q('models-curated-machine')?.textContent).not.toContain('This computer');
+    expect(all('models-fit-badge')).toHaveLength(0);
+  });
+
+  it('hides the controls and re-checks the server when Settings sets it to Chat only', async () => {
+    await mount();
+    await pickServer('gpu');
+    expect(q('models-installed-remove-btn')).not.toBeNull();
+    const checks = calls.getStatus.mock.calls.length;
+
+    bridge.remote.gpu.status = remoteStatus(GPU_BOX, { management: 'chat-only' });
+    await changeServers([THIS_COMPUTER, { ...GPU_BOX, access: 'chat' }, SHARED_BOX]);
+
+    expect(q('models-installed-remove-btn')).toBeNull();
+    expect(q('models-manage-note')?.textContent).toContain('gpu box is set to Chat only');
+    expect(calls.getStatus.mock.calls.length).toBeGreaterThan(checks);
+    expect(calls.getStatus).toHaveBeenLastCalledWith('gpu');
+  });
+
+  it("names the server's own Ollama key in the access steps", async () => {
+    bridge.detail = { ok: true, model: view({ gated: 'auto', needsAccess: true }) };
+    await mount();
+    await pickServer('gpu');
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    expect(q('models-access-server-key')?.textContent).toContain('public key of Ollama on gpu box');
+    expect(q('models-access-server-key')?.textContent).toContain('/usr/share/ollama/.ollama/id_ed25519.pub');
+    await click(q('models-build-pull-btn'));
+    expect(document.body.textContent).toContain('added the Ollama key of gpu box to the Hugging Face account');
   });
 });
 
