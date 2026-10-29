@@ -44,6 +44,9 @@ export default function HeldSignupGrantsTab() {
   });
   const undo = useMutation({
     mutationFn: async (batchId: string) => (await api.post<UndoResult>(`${ENDPOINT}/undo`, { batchId })).data,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+    },
   });
   const rows = query.data?.data ?? [];
   const busy = release.isPending || undo.isPending;
@@ -75,7 +78,7 @@ export default function HeldSignupGrantsTab() {
             variant="outlined"
             sx={{ ml: 2 }}
             data-testid="held-signup-grants-undo-btn"
-            disabled={busy || !paid.length}
+            disabled={busy || !paid.length || undo.data?.batchId === release.data.batchId}
             onClick={() => undo.mutate(release.data.batchId)}
           >
             Undo

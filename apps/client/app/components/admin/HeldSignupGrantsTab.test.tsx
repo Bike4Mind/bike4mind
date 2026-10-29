@@ -58,6 +58,8 @@ describe('HeldSignupGrantsTab', () => {
       expect(postMock).toHaveBeenLastCalledWith('/api/admin/held-signup-grants/undo', { batchId: 'batch-1' })
     );
     expect(await screen.findByTestId('held-signup-grants-undo-result')).toHaveTextContent('Reversed 1 of 1');
+    expect(screen.getByTestId('held-signup-grants-undo-btn')).toBeDisabled();
+    expect(getMock).toHaveBeenCalledTimes(3);
   });
 
   it('disables Next without a cursor', async () => {
