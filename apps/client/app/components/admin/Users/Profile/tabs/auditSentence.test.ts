@@ -49,6 +49,19 @@ describe('describeAuditEntry', () => {
     ).toBe('Made a manager of Acme');
   });
 
+  it.each([
+    ['member', [{ field: 'role', before: 'manager', after: 'member' }], 'Made a member of Acme'],
+    ['an unrecognised role', [{ field: 'role', before: 'member', after: 'owner' }], 'Changed role in Acme'],
+    ['a missing role change', undefined, 'Changed role in Acme'],
+  ])('words a role change to %s', (_label, changes, expected) => {
+    const entry = makeAuditEntry({
+      action: 'org.member.role_changed',
+      details: { organizationName: 'Acme' },
+      changes,
+    });
+    expect(describeAuditEntry(entry)).toBe(expected);
+  });
+
   it('falls back to the stored summary', () => {
     expect(describeAuditEntry(makeAuditEntry({ action: 'user.misc', summary: 'did a thing' }))).toBe('Did a thing');
   });

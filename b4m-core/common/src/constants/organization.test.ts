@@ -138,6 +138,13 @@ describe('organizationSeatUsage', () => {
     expect(organizationSeatUsage({ users: [{}, {}], seats: 10 })).toEqual({ used: 3, seats: 10, full: false });
   });
 
+  it('is not full one seat below capacity', () => {
+    expect(organizationSeatUsage({ users: new Array(8).fill({}), seats: 10 })).toMatchObject({
+      used: 9,
+      full: false,
+    });
+  });
+
   it('is full once owner plus members reach the paid seats', () => {
     expect(organizationSeatUsage({ users: new Array(9).fill({}), seats: 10 })).toMatchObject({ used: 10, full: true });
     expect(organizationSeatUsage({ users: new Array(12).fill({}), seats: 10 }).full).toBe(true);

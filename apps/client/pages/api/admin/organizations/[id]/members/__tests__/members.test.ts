@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, Handler>>,
   guards: {} as Record<string, (req: Request, res: Response, next: () => void) => void>,
   options: {} as Record<string, unknown>,
+  adminPermissions: {} as Record<string, unknown>,
+  txRuns: 0,
   findById: vi.fn(),
   update: vi.fn(),
   addMember: vi.fn(),
@@ -38,13 +40,26 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
+vi.mock('@server/middlewares/adminApi', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/middlewares/adminApi')>();
+  return {
+    ...actual,
+    adminApi: (options: { adminPermissions: Record<string, unknown> }) => {
+      mocks.adminPermissions[Object.keys(options.adminPermissions).join(',')] = options.adminPermissions;
+      return actual.adminApi(options as Parameters<typeof actual.adminApi>[0]);
+    },
+  };
+});
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: mocks.findById, update: mocks.update },
   userRepository: {},
   groupRepository: {},
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
-  withTransaction: async (fn: () => Promise<unknown>) => fn(),
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    mocks.txRuns += 1;
+    return fn();
+  },
 }));
 vi.mock('@bike4mind/services', () => ({
   organizationService: { addMember: mocks.addMember, revokeAccess: mocks.revokeAccess },
@@ -98,6 +113,7 @@ const call = async (
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.txRuns = 0;
   mocks.findById.mockResolvedValue(buildOrg());
   mocks.addMember.mockResolvedValue({ user: { id: USER, email: 'ada@example.com', level: 'PaidUser' } });
   mocks.revokeAccess.mockImplementation(async () => buildOrg({ users: [] }));
@@ -109,6 +125,29 @@ describe('admin org membership routes', () => {
   it('declares first-party JWT-only authentication behind users:moderate', () => {
     expect(mocks.options.POST).toMatchObject({ auth: 'jwtOnly' });
     expect(mocks.options['DELETE,PATCH']).toMatchObject({ auth: 'jwtOnly' });
+    expect(mocks.adminPermissions.POST).toEqual({ POST: 'users:moderate' });
+    expect(mocks.adminPermissions['DELETE,PATCH']).toEqual({ DELETE: 'users:moderate', PATCH: 'users:moderate' });
+  });
+
+  describe('when the audit write fails', () => {
+    beforeEach(() => {
+      mocks.audit.mockRejectedValue(new Error('audit down'));
+    });
+
+    it.each([
+      ['add', 'POST', 'POST', { userId: USER, reason: 'Customer request' }, buildOrg({ users: [] })],
+      ['remove', 'DELETE,PATCH', 'DELETE', { reason: 'Left the team' }, buildOrg()],
+      ['role change', 'DELETE,PATCH', 'PATCH', { role: 'manager', reason: 'Team lead changed' }, buildOrg()],
+    ])('fails the %s from inside the transaction so it rolls back', async (_label, key, method, body, org) => {
+      mocks.findById.mockResolvedValue(org);
+
+      await expect(call(key, method, body)).rejects.toThrow('audit down');
+
+      expect(mocks.txRuns).toBe(1);
+      expect(mocks.audit).toHaveBeenCalledTimes(1);
+      expect(mocks.keptShares).not.toHaveBeenCalled();
+      expect(mocks.logEvent).not.toHaveBeenCalled();
+    });
   });
 
   it('refuses a delegated admin, whose org authority the services do not recognise', async () => {

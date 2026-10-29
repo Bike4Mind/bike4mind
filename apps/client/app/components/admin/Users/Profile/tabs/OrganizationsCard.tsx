@@ -70,7 +70,7 @@ export const OrganizationsCard: React.FC<{ user: AdminUserProfile; onAudit?: () 
         </Stack>
       );
     }
-    if (orgs.isError) {
+    if (orgs.isError && !orgs.data) {
       return <ErrorState message="Organizations could not be loaded." onRetry={() => void orgs.refetch()} />;
     }
     if (list.length === 0) return <EmptyState title="Not in any organization" action={addButton} />;

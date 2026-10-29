@@ -8,7 +8,8 @@ export type OrgMemberRoleChoice = 'manager' | 'member';
 
 /**
  * Audited org membership writes for one user (pages/api/admin/organizations/[id]/members). Failures
- * toast here and rethrow, so an ActionDialog stays open and an undo reports its own failure.
+ * toast here and rethrow an Error with the same message, so an ActionDialog stays open and an undo
+ * reports the friendly text instead of the raw request error.
  */
 export const useAdminUserOrgMembership = (userId: string) => {
   const cache = useQueryClient();
@@ -20,8 +21,10 @@ export const useAdminUserOrgMembership = (userId: string) => {
     try {
       await request();
     } catch (error) {
-      if (!isStepUpCancelled(error)) toast.error(adminUpdateErrorMessage(error, failure));
-      throw error;
+      if (isStepUpCancelled(error)) throw error;
+      const message = adminUpdateErrorMessage(error, failure);
+      toast.error(message);
+      throw new Error(message, { cause: error });
     }
     // The active-org pointer can move with membership, so the user queries refresh as well.
     await Promise.all([

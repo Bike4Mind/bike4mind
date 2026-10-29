@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { OrganizationsCard } from './OrganizationsCard';
 import { ProfileTestWrapper, buildProfile } from '../profileTestUtils';
 import type { AdminUserProfile } from '../userProfileModel';
@@ -41,6 +42,11 @@ const orgs = [
 
 const renderCard = (user: AdminUserProfile = buildProfile()) =>
   render(<OrganizationsCard user={user} />, { wrapper: ProfileTestWrapper });
+
+const CaptureClient = ({ onClient }: { onClient: (client: QueryClient) => void }) => {
+  onClient(useQueryClient());
+  return null;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -102,6 +108,27 @@ describe('OrganizationsCard', () => {
     renderCard();
 
     expect(await screen.findByText('Organizations could not be loaded.')).toBeInTheDocument();
+  });
+
+  it('keeps a loaded list visible when a refetch fails', async () => {
+    let client: QueryClient | undefined;
+    render(
+      <>
+        <CaptureClient onClient={c => (client = c)} />
+        <OrganizationsCard user={buildProfile()} />
+      </>,
+      { wrapper: ProfileTestWrapper }
+    );
+    expect(await screen.findByTestId(`user-profile-org-${ACME}-row`)).toBeInTheDocument();
+
+    mocks.get.mockRejectedValue(new Error('boom'));
+    await act(async () => {
+      await client?.refetchQueries({ queryKey: ['organizations'] });
+    });
+
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('Organizations could not be loaded.')).not.toBeInTheDocument();
+    expect(screen.getByTestId(`user-profile-org-${ACME}-row`)).toBeInTheDocument();
   });
 
   it('shows a delegated admin only the active org, since the list would be their own', async () => {
