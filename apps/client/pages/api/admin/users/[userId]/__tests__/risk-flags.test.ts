@@ -77,25 +77,29 @@ describe('GET /api/admin/users/[userId]/risk-flags', () => {
 
   it('reads successful sign-ins separately and excludes false-positive moderation incidents', async () => {
     await call().promise;
-    expect(mocks.listUserSignIns).toHaveBeenCalledWith(USER_ID, [], expect.objectContaining({ successOnly: true }));
+    expect(mocks.listUserSignIns).toHaveBeenCalledWith(USER_ID, [], { limit: 200, successOnly: true });
+    const priorCall = mocks.listUserSignIns.mock.calls.find(([, , page]) => page.cursor);
+    expect(priorCall?.[2]).toMatchObject({ successOnly: true, cursor: { id: 'f'.repeat(24) } });
+    const windowStart = Date.now() - 7 * 24 * HOUR;
+    expect(Math.abs(priorCall?.[2].cursor.occurredAt.getTime() - windowStart)).toBeLessThan(60_000);
     expect(mocks.findIncidents).toHaveBeenCalledWith(
       { userId: USER_ID, reviewStatus: { $ne: 'false_positive' } },
       expect.anything()
     );
   });
 
-  it('still fires new IP when failed rows crowd the combined page but the success read has the priors', async () => {
+  it('still fires new IP when failed rows and recent successes fill their pages but the prior read has the priors', async () => {
     const success = (id: string, at: Date, ip: string) => ({ id, at, result: 'success', event: 'login_success', ip });
-    mocks.listUserSignIns.mockImplementation(async (_u: unknown, _l: unknown, page: { successOnly?: boolean }) =>
-      page.successOnly
-        ? {
-            entries: [
-              success('n', ago(HOUR), '198.51.100.7'),
-              ...['a', 'b', 'c'].map((id, i) => success(id, ago((30 + i) * 24 * HOUR), '203.0.113.1')),
-            ],
-            nextCursor: null,
-          }
-        : { entries: [failedSignIn(0)], nextCursor: null }
+    const recent = success('n', ago(HOUR), '198.51.100.7');
+    mocks.listUserSignIns.mockImplementation(
+      async (_u: unknown, _l: unknown, page: { successOnly?: boolean; cursor?: unknown }) => ({
+        entries: page.cursor
+          ? ['a', 'b', 'c'].map((id, i) => success(id, ago((30 + i) * 24 * HOUR), '203.0.113.1'))
+          : page.successOnly
+            ? [recent]
+            : [failedSignIn(0), recent],
+        nextCursor: null,
+      })
     );
     const { res, promise } = call();
     await promise;

@@ -110,7 +110,7 @@ describe('evaluateCreditSpike', () => {
     expect(flag).toMatchObject({ id: 'credit_spike', severity: 'warn' });
     expect(flag?.evidence[0]).toEqual({ label: 'Credits spent, last 7 days', value: '210' });
   });
-  it('links to the usage timeline, which is what the spike measures', () => {
+  it('links to the usage timeline, not the credit timeline of balance moves the spike does not count', () => {
     expect(evaluateCreditSpike(series(10, 30, 30), NOW)?.timeline?.types).toEqual(['usage']);
   });
   it('does not fire just below the multiplier', () => {

@@ -4,12 +4,15 @@ import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
 import { respond } from '@server/utils/respond';
-import { evaluateUserRisk } from '@server/utils/userRiskFlags';
+import { evaluateUserRisk, RISK_RULE_CONFIG } from '@server/utils/userRiskFlags';
 import { listUserSignIns } from '@server/utils/userSignIns';
 
 const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
 const SIGN_IN_LIMIT = 200;
 const MODERATION_LIMIT = 50;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Highest possible ObjectId, so a cursor at an instant includes every row at that instant.
+const MAX_OBJECT_ID = 'f'.repeat(24);
 
 /**
  * Rule-based risk flags for one user. JWT-only: the evidence includes IP addresses, so an API key must
@@ -26,10 +29,17 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
 
   const now = new Date();
   const loginRecords = user.loginRecords ?? [];
-  const [signIns, successSignIns, spend, moderationIncidents] = await Promise.all([
+  const newSignInWindowStart = new Date(now.getTime() - RISK_RULE_CONFIG.newSignIn.windowDays * DAY_MS);
+  const [signIns, recentSuccesses, priorSuccesses, spend, moderationIncidents] = await Promise.all([
     listUserSignIns(user.id, loginRecords, { limit: SIGN_IN_LIMIT }),
-    // Separate success-only read so a burst of failed rows cannot push the earlier successes out of the page.
+    // Success-only reads, split at the new-sign-in window, so neither failed rows nor a burst of recent
+    // successes can push the earlier successes the new IP/device rule compares against out of the page.
     listUserSignIns(user.id, loginRecords, { limit: SIGN_IN_LIMIT, successOnly: true }),
+    listUserSignIns(user.id, loginRecords, {
+      limit: SIGN_IN_LIMIT,
+      successOnly: true,
+      cursor: { occurredAt: newSignInWindowStart, id: MAX_OBJECT_ID },
+    }),
     creditTransactionRepository.summarizeAiSpend(user.id, CreditHolderType.User, now),
     imageModerationIncidentRepository.find(
       { userId: user.id, reviewStatus: { $ne: 'false_positive' } },
@@ -37,8 +47,11 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
     ),
   ]);
 
-  const seen = new Set(signIns.entries.map(e => e.id));
-  const allSignIns = [...signIns.entries, ...successSignIns.entries.filter(e => !seen.has(e.id))];
+  const allSignIns = [
+    ...new Map(
+      [...signIns.entries, ...recentSuccesses.entries, ...priorSuccesses.entries].map(e => [e.id, e])
+    ).values(),
+  ];
   const flags = evaluateUserRisk({ signIns: allSignIns, dailyCredits: spend.dailyCredits, moderationIncidents }, now);
 
   Logger.info('[Admin] Evaluated user risk flags', { count: flags.length });
