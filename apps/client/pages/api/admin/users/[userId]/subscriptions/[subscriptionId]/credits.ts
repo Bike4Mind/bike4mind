@@ -57,6 +57,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
     if (!subscription) {
       throw new NotFoundError('Subscription not found');
     }
+    if (creditsPerCycle === null && subscription.customCreditsPerCycle == null) {
+      throw new BadRequestError('This subscription has no credits override to clear.');
+    }
 
     // details.credits is the signed change in the effective per-cycle rate, derived as the admin
     // subscriptions listing derives it, so a raise counts toward the grant thresholds.

@@ -21,9 +21,23 @@ const STATUS_DISPLAY: Readonly<Record<string, SubscriptionStatusDisplay>> = {
   paused: { label: 'Paused', tone: 'neutral' },
 };
 
-export const subscriptionStatusDisplay = (status: string): SubscriptionStatusDisplay =>
-  STATUS_DISPLAY[status] ?? { label: status, tone: 'neutral' };
+const CANCELING: SubscriptionStatusDisplay = { label: 'Canceling', tone: 'warn' };
+
+/** The fields that decide a status chip; a list row and a profile subscription both carry them. */
+export type SubscriptionStatusFields = {
+  status: string;
+  cancelAt?: Date | string | null;
+  cancelAtPeriodEnd?: boolean;
+};
+
+export const isCancelScheduled = (row: SubscriptionStatusFields): boolean =>
+  !isTerminalSubscriptionStatus(row.status) && (!!row.cancelAt || !!row.cancelAtPeriodEnd);
+
+export const subscriptionStatusDisplay = (row: SubscriptionStatusFields): SubscriptionStatusDisplay => {
+  if ((row.status === 'active' || row.status === 'trialing') && isCancelScheduled(row)) return CANCELING;
+  return STATUS_DISPLAY[row.status] ?? { label: row.status, tone: 'neutral' };
+};
 
 /** The "Comped" chip shown next to the status chip; a comp that has ended is just Canceled. */
-export const showsCompedChip = (row: Pick<AdminSubscriptionRow, 'source' | 'status'>): boolean =>
+export const showsCompedChip = (row: Pick<AdminSubscriptionRow, 'source' | 'status' | 'subscriptionId'>): boolean =>
   isCompSubscription(row) && !isTerminalSubscriptionStatus(row.status);

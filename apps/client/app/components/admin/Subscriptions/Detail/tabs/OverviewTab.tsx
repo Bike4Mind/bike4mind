@@ -26,7 +26,7 @@ type OverviewTabProps = {
 };
 
 const StatusFact: React.FC<{ row: AdminSubscriptionRow; testId?: string }> = ({ row, testId }) => {
-  const status = subscriptionStatusDisplay(row.status);
+  const status = subscriptionStatusDisplay(row);
   return <StatusChip tone={status.tone} label={status.label} dot data-testid={testId} />;
 };
 

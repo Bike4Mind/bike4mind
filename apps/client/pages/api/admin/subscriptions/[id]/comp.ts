@@ -20,7 +20,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { Subscription, subscriptionRepository } from '@server/models/Subscription';
 import { subscriptionPlanCatalog } from '@server/admin/subscriptionsList/adminSubscriptionsQuery';
 import { toAdminSubscriptionRows, type SubscriptionDoc } from '@server/admin/subscriptionsList/listAdminSubscriptions';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@server/utils/adminAudit';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
 
@@ -82,9 +87,9 @@ const planReopen = async (subscription: ISubscription): Promise<Mutation> => {
   if (others.some(row => resolveSubscriptionSource(row) === SubscriptionSource.AdminGrant)) {
     throw new ConflictError('This owner already has another live comp.');
   }
-  const isUserOwned = subscription.ownerType === SubscriptionOwnerType.User;
-  if (isUserOwned && others.some(row => row.status === 'active' && row.priceId === subscription.priceId)) {
-    throw new ConflictError('This user already has an active subscription on the same plan.');
+  // Mirrors the grant paths, which refuse a second active row on the same plan for user and org owners alike.
+  if (others.some(row => row.status === 'active' && row.priceId === subscription.priceId)) {
+    throw new ConflictError('This owner already has an active subscription on the same plan.');
   }
   return {
     update: { status: 'active', canceledAt: null },
@@ -141,6 +146,29 @@ const resolveOwner = async (subscription: ISubscription): Promise<OwnerContext> 
   };
 };
 
+const COMP_CHANGED_CONCURRENTLY_MESSAGE = 'This subscription changed; reload and try again.';
+
+/**
+ * Applies the update only if the row still holds the state the mutation was planned from, so a
+ * concurrent change between the read and this write turns into a 409 instead of a lost update.
+ */
+const applyGuardedUpdate = async (
+  id: string,
+  subscription: ISubscription,
+  change: AdminCompChange,
+  mutation: Mutation
+) => {
+  const filter: Record<string, unknown> = {
+    _id: id,
+    source: subscription.source ?? { $exists: false },
+    subscriptionId: subscription.subscriptionId,
+    status: subscription.status,
+  };
+  if (change.action === 'setEndsAt') filter.periodEndsAt = subscription.periodEndsAt;
+  const updated = await Subscription.findOneAndUpdate(filter, { $set: mutation.update }, { new: true }).lean();
+  if (!updated) throw new ConflictError(COMP_CHANGED_CONCURRENTLY_MESSAGE);
+};
+
 const readRow = async (id: string) => {
   const doc = await Subscription.findById(id).lean<SubscriptionDoc>();
   if (!doc) throw new NotFoundError('Subscription not found');
@@ -167,12 +195,20 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       throw new ConflictError('Only comped subscriptions can be changed here.');
     }
 
-    const mutation = await planMutation(subscription, parsed.data, new Date());
     const owner = await resolveOwner(subscription);
+    if (owner.actingUserId && isSelfOrImpersonator(req.user, owner.actingUserId)) {
+      await denySelfAdminAction(req, {
+        action: 'user.subscription.denied',
+        attempted: 'billing.comp.changed',
+        target: owner.target,
+      });
+    }
+
+    const mutation = await planMutation(subscription, parsed.data, new Date());
 
     // The write and its strict audit commit together, so an audit failure rolls the change back.
     await withTransaction(async () => {
-      await subscriptionRepository.update({ id, ...mutation.update });
+      await applyGuardedUpdate(id, subscription, parsed.data, mutation);
       await recordAdminActionFromRequest(req, {
         action: 'billing.comp.changed',
         target: owner.target,

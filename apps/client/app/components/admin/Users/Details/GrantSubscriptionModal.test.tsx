@@ -7,19 +7,30 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 
-const mocks = vi.hoisted(() => ({ mutateAsync: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+  userSubscriptions: vi.fn(),
+  seatLimits: vi.fn(),
+}));
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGrantSubscription: () => ({ mutateAsync: mocks.mutateAsync, isPending: false }),
+  useGetUserSubscriptions: mocks.userSubscriptions,
 }));
 vi.mock('@client/app/hooks/data/stripe', () => ({
   useGetSubscriptionPlans: () => ({ data: SUBSCRIPTION_PLANS.map(plan => ({ id: plan.priceId, active: true })) }),
 }));
 vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({
-  useTeamSeatLimits: () => ({ minSeats: 2, maxSeats: 10 }),
+  useTeamSeatLimits: mocks.seatLimits,
   useTeamCreditsPerSeat: () => 1000,
 }));
-vi.mock('./UserSelector', () => ({ default: () => null }));
+vi.mock('./UserSelector', () => ({
+  default: ({ onChange }: { onChange: (id: string | null) => void }) => (
+    <button type="button" data-testid="user-selector-pick-btn" onClick={() => onChange('billing-owner')}>
+      Pick billing owner
+    </button>
+  ),
+}));
 
 import GrantSubscriptionModal from './GrantSubscriptionModal';
 
@@ -33,8 +44,8 @@ const plan = SUBSCRIPTION_PLANS[0];
 
 const renderModal = () => {
   const onClose = vi.fn();
-  render(<GrantSubscriptionModal user={user} open onClose={onClose} />, { wrapper: TestWrapper });
-  return { onClose };
+  const view = render(<GrantSubscriptionModal user={user} open onClose={onClose} />, { wrapper: TestWrapper });
+  return { onClose, view };
 };
 
 const choose = async (selectTestId: string, optionName: RegExp | string) => {
@@ -47,7 +58,14 @@ const pickPreset = () => fireEvent.click(screen.getByTestId('grant-subscription-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mutateAsync.mockResolvedValue({ success: true, message: 'ok' });
+  mocks.userSubscriptions.mockReturnValue({ data: { individualSubscriptions: [], teamSubscriptions: [] } });
+  mocks.seatLimits.mockReturnValue({ minSeats: 2, maxSeats: 10 });
 });
+
+const fillTeamGrant = async () => {
+  await choose('grant-subscription-type-select', 'Team Plan');
+  fireEvent.change(screen.getByTestId('grant-subscription-org-name-input'), { target: { value: 'Acme' } });
+};
 
 describe('GrantSubscriptionModal', () => {
   it('blocks the commit until a plan is chosen, then until a reason is given, each explained in place', async () => {
@@ -72,7 +90,7 @@ describe('GrantSubscriptionModal', () => {
     const credits = `+${(plan.credits * 3).toLocaleString()} credits`;
     expect(screen.getByTestId('grant-subscription-preview-after')).toHaveTextContent(plan.name);
     expect(screen.getByTestId('grant-subscription-preview-after')).toHaveTextContent(credits);
-    expect(screen.getByTestId('grant-subscription-preview-before')).toHaveTextContent('250 credits');
+    expect(screen.getByTestId('grant-subscription-preview-before')).toHaveTextContent('No plan');
 
     pickPreset();
     const confirm = screen.getByTestId('grant-subscription-dialog-confirm-btn');
@@ -114,6 +132,46 @@ describe('GrantSubscriptionModal', () => {
         reason: 'Pilot or partner access',
       })
     );
+  });
+
+  it("previews the user's current plan as the before state", () => {
+    mocks.userSubscriptions.mockReturnValue({
+      data: { individualSubscriptions: [{ id: 's1', planName: 'Pro' }], teamSubscriptions: [] },
+    });
+    renderModal();
+    expect(screen.getByTestId('grant-subscription-preview-before')).toHaveTextContent('Pro');
+  });
+
+  it('sends the selected billing owner with a team grant', async () => {
+    renderModal();
+    await fillTeamGrant();
+    fireEvent.click(screen.getByTestId('user-selector-pick-btn'));
+    pickPreset();
+    fireEvent.click(screen.getByTestId('grant-subscription-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mocks.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ billingOwnerId: 'billing-owner' }))
+    );
+  });
+
+  it('blocks a team grant when the seat settings put the minimum above the maximum', async () => {
+    mocks.seatLimits.mockReturnValue({ minSeats: 5, maxSeats: 3 });
+    renderModal();
+    await fillTeamGrant();
+    pickPreset();
+    expect(screen.getByTestId('grant-subscription-dialog-confirm-btn')).toBeDisabled();
+    expect(screen.getByTestId('grant-subscription-dialog-hint')).toHaveTextContent('at least 5 seats');
+  });
+
+  it('resets the form when closed', async () => {
+    const { onClose, view } = renderModal();
+    await fillTeamGrant();
+    fireEvent.click(screen.getByTestId('grant-subscription-dialog-cancel-btn'));
+    expect(onClose).toHaveBeenCalled();
+
+    view.rerender(<GrantSubscriptionModal user={user} open onClose={onClose} />);
+    expect(screen.queryByTestId('grant-subscription-org-name-input')).not.toBeInTheDocument();
+    expect(screen.getByTestId('grant-subscription-dialog-hint')).toHaveTextContent('Select a plan to grant.');
   });
 
   it('stays open when the grant is rejected', async () => {

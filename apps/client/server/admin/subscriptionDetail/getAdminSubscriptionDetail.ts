@@ -99,6 +99,6 @@ export async function getAdminSubscriptionDetail(id: string): Promise<AdminSubsc
     ownerCredits: owner ? (owner.currentCredits ?? 0) : null,
     otherSubscriptions,
     seats: isUserOwned ? null : await seatsOf(doc, owner),
-    actingUserId: isUserOwned ? doc.ownerId : (owner?.userId ?? null),
+    actingUserId: isUserOwned ? (owner ? doc.ownerId : null) : (owner?.userId ?? null),
   };
 }

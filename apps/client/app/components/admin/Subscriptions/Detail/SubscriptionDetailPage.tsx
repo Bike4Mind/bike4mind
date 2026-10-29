@@ -59,7 +59,13 @@ export const SubscriptionDetailPage: React.FC<SubscriptionDetailPageProps> = ({ 
     }
     if (detail.isLoading) return <DetailSkeleton />;
     if (!detail.data) {
-      return <ErrorState message="This subscription could not be loaded." onRetry={() => void detail.refetch()} />;
+      return (
+        <ErrorState
+          message="This subscription could not be loaded."
+          onRetry={() => void detail.refetch()}
+          retrying={detail.isFetching}
+        />
+      );
     }
     return <SubscriptionDetailView detail={detail.data} tab={tab} onTabChange={onTabChange} navigation={navigation} />;
   };
@@ -69,7 +75,8 @@ export const SubscriptionDetailPage: React.FC<SubscriptionDetailPageProps> = ({ 
       data-testid="subscription-detail-page"
       sx={{ minHeight: '100vh', overflowY: 'auto', bgcolor: 'admin.canvas' }}
     >
-      <UndoToastProvider>
+      {/* Keyed so an undo offered on one subscription never carries over to the next. */}
+      <UndoToastProvider key={subscriptionId}>
         <Box sx={{ maxWidth: 1280, mx: 'auto', px: { xs: 2, sm: 4 }, pt: 2.5, pb: 12 }}>{renderBody()}</Box>
       </UndoToastProvider>
     </Sheet>

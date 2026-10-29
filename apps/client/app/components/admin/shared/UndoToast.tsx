@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
 import { Button, Snackbar, Stack, Typography } from '@mui/joy';
+import { getErrorMessage } from '@client/app/utils/error';
 import { adminFocusScope } from './adminStyles';
 
 export const UNDO_TOAST_DURATION_MS = 30_000;
@@ -43,7 +44,7 @@ export const UndoToastProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       await toast.onUndo();
       setToast(current => (current?.id === toast.id ? null : current));
     } catch (error) {
-      setUndoError(error instanceof Error ? error.message : 'Undo failed. Check the admin log before retrying.');
+      setUndoError(getErrorMessage(error));
     } finally {
       setUndoing(false);
     }

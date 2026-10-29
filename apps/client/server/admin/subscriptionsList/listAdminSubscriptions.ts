@@ -47,6 +47,8 @@ export type SubscriptionDoc = {
   periodStartsAt: Date;
   periodEndsAt: Date;
   canceledAt?: Date | null;
+  cancelAt?: Date | null;
+  cancelAtPeriodEnd?: boolean;
   createdAt: Date;
   unitAmount?: number | null;
   currency?: string | null;
@@ -205,6 +207,7 @@ export async function toAdminSubscriptionRows(
     periodStartsAt: doc.periodStartsAt.toISOString(),
     periodEndsAt: doc.periodEndsAt.toISOString(),
     canceledAt: isoOrNull(doc.canceledAt),
+    cancelAt: isoOrNull(doc.cancelAt ?? (doc.cancelAtPeriodEnd ? doc.periodEndsAt : null)),
     createdAt: doc.createdAt.toISOString(),
   }));
 }

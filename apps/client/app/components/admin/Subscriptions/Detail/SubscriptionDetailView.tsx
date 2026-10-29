@@ -3,14 +3,14 @@ import { Box, Link, Stack, Typography } from '@mui/joy';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { SubscriptionDetailHeader } from './SubscriptionDetailHeader';
 import { SubscriptionDetailStats } from './SubscriptionDetailStats';
-import { SubscriptionDetailTabs } from './SubscriptionDetailTabs';
+import { SubscriptionDetailTabs, subscriptionDetailPanelId, subscriptionDetailTabId } from './SubscriptionDetailTabs';
 import { OverviewTab } from './tabs/OverviewTab';
 import { SubscriptionAdminLogTab } from './tabs/SubscriptionAdminLogTab';
 import { ExtendCompDialog } from './actions/ExtendCompDialog';
 import { EndCompDialog } from './actions/EndCompDialog';
 import { EditCreditsPerCycleDialog } from './actions/EditCreditsPerCycleDialog';
 import { RemoveSubscriptionDialog } from './actions/RemoveSubscriptionDialog';
-import { SUBSCRIPTION_DETAIL_TAB_LABELS, type SubscriptionDetailTab } from './subscriptionDetailSearch';
+import type { SubscriptionDetailTab } from './subscriptionDetailSearch';
 import { ownerDisplayName, type SubscriptionAction } from './subscriptionDetailModel';
 import type { SubscriptionNavigation } from './useSubscriptionNavigation';
 
@@ -110,7 +110,8 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
         <SubscriptionDetailTabs value={tab} onChange={onTabChange} />
         <Box
           role="tabpanel"
-          aria-label={SUBSCRIPTION_DETAIL_TAB_LABELS[tab]}
+          id={subscriptionDetailPanelId(tab)}
+          aria-labelledby={subscriptionDetailTabId(tab)}
           sx={{ pt: 2.5 }}
           data-testid={`subscription-detail-panel-${tab}`}
         >

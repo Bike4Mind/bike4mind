@@ -170,7 +170,13 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        details: expect.objectContaining({ ownerId: 'owner-1', seats: 5, initialCredits: 1000, credits: 1000 }),
+        details: expect.objectContaining({
+          ownerId: 'owner-1',
+          seats: 5,
+          initialCredits: 1000,
+          credits: 1000,
+          subscriptionId: mockSubCreate.mock.calls[0][0].subscriptionId,
+        }),
       })
     );
   });

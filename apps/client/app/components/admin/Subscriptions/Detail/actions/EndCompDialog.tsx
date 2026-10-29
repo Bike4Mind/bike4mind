@@ -9,8 +9,8 @@ export const EndCompDialog: React.FC<SubscriptionDialogProps> = ({ detail, onClo
   const { subscription } = detail;
   const change = useAdminSubscriptionCompChange(subscription.id);
   const showUndo = useUndoToast();
-  const before = subscriptionStatusDisplay(subscription.status);
-  const after = subscriptionStatusDisplay('canceled');
+  const before = subscriptionStatusDisplay(subscription);
+  const after = subscriptionStatusDisplay({ status: 'canceled' });
   const name = ownerDisplayName(subscription);
 
   const handleConfirm = async (reason: string) => {

@@ -36,7 +36,8 @@ export const RemoveSubscriptionDialog: React.FC<RemoveSubscriptionDialogProps> =
       confirmLabel="Remove subscription record"
       tone="danger"
       blockedReason={blockedReason}
-      typedConfirm={{ expected: name, noun: 'owner name' }}
+      // ActionDialog trims what the admin types, so a stored name with stray whitespace must be trimmed too.
+      typedConfirm={{ expected: name.trim(), noun: 'owner name' }}
       onConfirm={handleConfirm}
       data-testid="remove-subscription-dialog"
     />

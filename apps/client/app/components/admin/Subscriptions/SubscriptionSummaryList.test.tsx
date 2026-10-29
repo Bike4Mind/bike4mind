@@ -38,8 +38,10 @@ const canceledTeam = {
     status: 'canceled',
     source: 'stripe',
     effectiveCreditsPerCycle: 4000,
-    canceledAt: '2026-10-01T12:00:00.000Z',
-    periodEndsAt: '2026-10-15T12:00:00.000Z',
+    // Requested in September, took effect at the period end.
+    canceledAt: '2026-09-20T12:00:00.000Z',
+    cancelAt: '2026-10-01T12:00:00.000Z',
+    periodEndsAt: '2026-10-01T12:00:00.000Z',
   },
 };
 
@@ -69,6 +71,31 @@ describe('SubscriptionSummaryList', () => {
     expect(rows[1]).toHaveTextContent('Canceled');
     expect(rows[1]).toHaveTextContent('Ended Oct 1, 2026');
     expect(within(rows[1]).queryByTestId('subscription-summary-comped')).not.toBeInTheDocument();
+  });
+
+  it('labels a live row with a scheduled cancel as Canceling and dates it by its period end', () => {
+    const canceling = {
+      id: 'sub-canceling',
+      status: 'active',
+      source: 'stripe',
+      planName: 'Pro',
+      canceledAt: '2026-10-01T00:00:00.000Z',
+      periodEndsAt: '2026-11-15T00:00:00.000Z',
+      cancelAtPeriodEnd: true,
+    };
+    mockResult({ data: { individualSubscriptions: [canceling], teamSubscriptions: [] } });
+    renderList();
+
+    const [row] = screen.getAllByTestId('subscription-summary-row-link');
+    expect(within(row).getByTestId('subscription-summary-status')).toHaveTextContent('Canceling');
+    expect(row).toHaveTextContent('Ends Nov 15, 2026');
+  });
+
+  it('treats a legacy grant row without a source as comped', () => {
+    const legacy = { ...individual, source: undefined, subscriptionId: 'admin_granted_123' };
+    mockResult({ data: { individualSubscriptions: [legacy], teamSubscriptions: [] } });
+    renderList();
+    expect(screen.getByTestId('subscription-summary-comped')).toBeInTheDocument();
   });
 
   it('shows the empty state when the user has no subscriptions', () => {

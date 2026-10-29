@@ -57,7 +57,7 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
   const { subscription } = detail;
   const name = ownerDisplayName(subscription);
   const link = ownerLink(subscription);
-  const status = subscriptionStatusDisplay(subscription.status);
+  const status = subscriptionStatusDisplay(subscription);
   const available = subscriptionActionAvailability(detail);
 
   return (

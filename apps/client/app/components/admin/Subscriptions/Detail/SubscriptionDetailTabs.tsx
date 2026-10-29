@@ -7,6 +7,9 @@ import {
   type SubscriptionDetailTab,
 } from './subscriptionDetailSearch';
 
+export const subscriptionDetailTabId = (tab: SubscriptionDetailTab) => `subscription-detail-tab-${tab}`;
+export const subscriptionDetailPanelId = (tab: SubscriptionDetailTab) => `subscription-detail-panel-${tab}`;
+
 /** The detail page's tab strip; the selected tab lives in the URL as `?tab=` (the route owns it). */
 export const SubscriptionDetailTabs: React.FC<{
   value: SubscriptionDetailTab;
@@ -36,6 +39,9 @@ export const SubscriptionDetailTabs: React.FC<{
         <Tab
           key={tab}
           value={tab}
+          id={subscriptionDetailTabId(tab)}
+          // Only the selected tab's panel is rendered, so only it has a panel to point at.
+          aria-controls={tab === value ? subscriptionDetailPanelId(tab) : undefined}
           indicatorInset
           data-testid={`subscription-detail-tab-${tab}`}
           sx={{

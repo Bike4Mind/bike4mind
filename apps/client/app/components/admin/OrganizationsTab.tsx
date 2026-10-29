@@ -24,6 +24,7 @@ import {
   Table,
   Typography,
 } from '@mui/joy';
+import { useNavigate } from '@tanstack/react-router';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
@@ -61,7 +62,6 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import { ORGS_PAGE_LIMIT_OPTIONS, organizationsPageToClampTo } from './organizationsTabSearch';
 import { useOpenOrganizationId, useOrganizationsParams, useOrganizationsTabUrlSync } from './useOrganizationsTabParams';
-import { useNavigate } from '@tanstack/react-router';
 
 /**
  * Adjust Seats modal, extracted so it can fetch pending invites for the org

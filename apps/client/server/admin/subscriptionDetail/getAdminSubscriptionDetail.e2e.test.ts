@@ -111,4 +111,13 @@ describe('getAdminSubscriptionDetail', () => {
     expect(detail?.actingUserId).toBeNull();
     expect(detail?.subscription.owner).toBeNull();
   });
+
+  it('reports no acting user for a user row whose owner account is gone', async () => {
+    const row = await seedSubscription(new mongoose.Types.ObjectId().toHexString());
+
+    const detail = await getAdminSubscriptionDetail(String(row._id));
+
+    expect(detail?.ownerCredits).toBeNull();
+    expect(detail?.actingUserId).toBeNull();
+  });
 });

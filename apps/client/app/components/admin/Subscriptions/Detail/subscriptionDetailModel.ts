@@ -100,7 +100,7 @@ export const compExtensionBase = (row: Pick<AdminSubscriptionRow, 'periodEndsAt'
 
 export const INTERVAL_LABELS: Readonly<Record<string, string>> = { monthly: 'Monthly', yearly: 'Yearly' };
 
-export const sourceLabel = (row: Pick<AdminSubscriptionRow, 'source'>): string =>
+export const sourceLabel = (row: Pick<AdminSubscriptionRow, 'source' | 'subscriptionId'>): string =>
   isCompSubscription(row) ? 'Comp' : 'Stripe';
 
 /**

@@ -45,6 +45,7 @@ export const buildRow = (overrides: Partial<AdminSubscriptionRow> = {}): AdminSu
   periodStartsAt: '2026-10-01T00:00:00.000Z',
   periodEndsAt: '2026-12-01T00:00:00.000Z',
   canceledAt: null,
+  cancelAt: null,
   createdAt: '2026-10-01T00:00:00.000Z',
   ...overrides,
 });
@@ -68,6 +69,27 @@ export const buildDetail = (
     ...rest,
   };
 };
+
+export const ORG_ID = '3'.repeat(24);
+
+/** A comped organization whose billing owner, not the org, is the user the per-user routes act as. */
+export const buildOrgDetail = (): AdminSubscriptionDetail =>
+  buildDetail({
+    subscription: {
+      ownerType: 'Organization',
+      ownerId: ORG_ID,
+      owner: {
+        kind: 'Organization',
+        id: ORG_ID,
+        name: 'Acme',
+        stripeCustomerId: null,
+        seats: 5,
+        memberCount: 3,
+        billingOwnerId: 'billing-owner',
+      },
+    },
+    actingUserId: 'billing-owner',
+  });
 
 /** A live Stripe-billed row. */
 export const STRIPE_ROW: Partial<AdminSubscriptionRow> = { source: 'stripe', subscriptionId: 'sub_123' };

@@ -37,7 +37,11 @@ export const EditCreditsPerCycleDialog: React.FC<SubscriptionDialogProps> = ({ d
   const blockedReason = (() => {
     if (actingUserId === null) return NO_ACTOR_HINT;
     if (!useDefault && parsed === null) return CREDITS_HINT;
-    if (nextOverride === credits.customPerCycle) return 'That is already the rate for this subscription.';
+    // With no override, confirming the plan default would only freeze today's default as an override.
+    const unchanged =
+      nextOverride === credits.customPerCycle ||
+      (credits.customPerCycle === null && nextOverride === credits.defaultPerCycle);
+    if (unchanged) return 'That is already the rate for this subscription.';
     return null;
   })();
 

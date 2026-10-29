@@ -5,7 +5,13 @@ import { ExtendCompDialog } from './ExtendCompDialog';
 import { EndCompDialog } from './EndCompDialog';
 import { EditCreditsPerCycleDialog, parseCreditsPerCycle } from './EditCreditsPerCycleDialog';
 import { RemoveSubscriptionDialog } from './RemoveSubscriptionDialog';
-import { OWNER_ID, STRIPE_ROW, SubscriptionTestWrapper, buildDetail } from '../subscriptionDetailTestUtils';
+import {
+  OWNER_ID,
+  STRIPE_ROW,
+  SubscriptionTestWrapper,
+  buildDetail,
+  buildOrgDetail,
+} from '../subscriptionDetailTestUtils';
 
 const mocks = vi.hoisted(() => ({ comp: vi.fn(), credits: vi.fn(), remove: vi.fn() }));
 
@@ -150,6 +156,23 @@ describe('EditCreditsPerCycleDialog', () => {
     );
   });
 
+  it('blocks confirming the prefilled plan default when there is no override', () => {
+    open(EditCreditsPerCycleDialog, buildDetail());
+    expect(screen.getByTestId('edit-credits-per-cycle-input')).toHaveValue('1000');
+    pickReason('edit-credits-per-cycle-dialog');
+    expect(screen.getByTestId('edit-credits-per-cycle-dialog-confirm-btn')).toBeDisabled();
+    expect(screen.getByTestId('edit-credits-per-cycle-dialog-hint')).toHaveTextContent('already the rate');
+  });
+
+  it("acts as an organization's billing owner", async () => {
+    const { onClose } = open(EditCreditsPerCycleDialog, buildOrgDetail());
+    fireEvent.change(screen.getByTestId('edit-credits-per-cycle-input'), { target: { value: '750' } });
+    pickReason('edit-credits-per-cycle-dialog');
+    confirm('edit-credits-per-cycle-dialog');
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.credits.mock.calls[0][0]).toMatchObject({ userId: 'billing-owner' });
+  });
+
   it('blocks a non-positive or fractional amount in place', () => {
     open(EditCreditsPerCycleDialog, buildDetail());
     fireEvent.change(screen.getByTestId('edit-credits-per-cycle-input'), { target: { value: '0' } });
@@ -190,6 +213,27 @@ describe('RemoveSubscriptionDialog', () => {
     await waitFor(() => expect(onRemoved).toHaveBeenCalled());
     expect(mocks.remove.mock.calls[0][0]).toMatchObject({ userId: OWNER_ID, subscriptionId: 'admin_grant_1' });
     expect(screen.queryByTestId('undo-toast-undo-btn')).not.toBeInTheDocument();
+  });
+
+  it('matches an owner name stored with surrounding whitespace', async () => {
+    const detail = buildDetail();
+    if (detail.subscription.owner?.kind === 'User') detail.subscription.owner.name = 'Ada Lovelace ';
+    const { onRemoved } = openRemove(detail);
+    pickReason('remove-subscription-dialog');
+    fireEvent.change(screen.getByTestId('remove-subscription-dialog-typed-input'), {
+      target: { value: 'Ada Lovelace' },
+    });
+    confirm('remove-subscription-dialog');
+    await waitFor(() => expect(onRemoved).toHaveBeenCalled());
+  });
+
+  it("removes an organization's row as its billing owner", async () => {
+    const { onRemoved } = openRemove(buildOrgDetail());
+    pickReason('remove-subscription-dialog');
+    fireEvent.change(screen.getByTestId('remove-subscription-dialog-typed-input'), { target: { value: 'Acme' } });
+    confirm('remove-subscription-dialog');
+    await waitFor(() => expect(onRemoved).toHaveBeenCalled());
+    expect(mocks.remove.mock.calls[0][0]).toMatchObject({ userId: 'billing-owner' });
   });
 
   it('refuses a live Stripe row', () => {

@@ -1,6 +1,6 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
-import { useGrantSubscription } from '@client/app/hooks/data/subscriptions';
+import { useGetUserSubscriptions, useGrantSubscription } from '@client/app/hooks/data/subscriptions';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { Typography, Stack, FormControl, FormLabel, Select, Option, Input, IconButton, Box } from '@mui/joy';
@@ -32,6 +32,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
 
   const grantSubscription = useGrantSubscription();
   const plans = useGetSubscriptionPlans();
+  const currentSubscriptions = useGetUserSubscriptions(user.id);
 
   const availableIndividualPlans = useMemo(() => {
     if (!plans.data) return [];
@@ -86,11 +87,22 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
 
   const blockedReason = ((): string | null => {
     if (subscriptionType === 'individual') return priceId ? null : 'Select a plan to grant.';
-    return organizationName.trim() ? null : 'Enter an organization name.';
+    if (!organizationName.trim()) return 'Enter an organization name.';
+    // Only reachable when the seat settings are misconfigured with a minimum above the maximum.
+    if (seats < minSeats) return `Team grants need at least ${minSeats} seats.`;
+    return null;
   })();
 
   const isIndividual = subscriptionType === 'individual';
   const afterPlan = isIndividual ? (selectedPlan?.name ?? 'No plan') : `Team plan, ${seats} seats`;
+  // Named like the profile's subscription summary, so before and after are both plans.
+  const beforePlan = ((): string => {
+    const { data } = currentSubscriptions;
+    if (!data) return '-';
+    const [individual] = data.individualSubscriptions;
+    if (individual) return individual.planName ?? 'Individual plan';
+    return data.teamSubscriptions.length > 0 ? 'Team plan' : 'No plan';
+  })();
 
   return (
     <ActionDialog
@@ -220,7 +232,7 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
         </FormControl>
 
         <ChangePreview
-          before={isIndividual ? `${(user.currentCredits ?? 0).toLocaleString()} credits` : 'No plan'}
+          before={beforePlan}
           after={
             <>
               {afterPlan}

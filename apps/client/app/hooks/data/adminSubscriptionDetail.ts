@@ -11,6 +11,7 @@ import type {
   AdminSubscriptionDetail,
 } from '@client/app/utils/adminSubscriptionDetail';
 import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
+import { ADMIN_GRANTS_KEY } from './adminOrganizations';
 
 const ADMIN_LOG_PAGE_SIZE = 50;
 const MAX_RETRIES = 3;
@@ -84,10 +85,15 @@ export const useAdminSubscriptionCompChange = (id: string) => {
   return useMutation({
     mutationFn: async (body: AdminCompChangeRequest): Promise<AdminCompChangeResponse> =>
       (await api.post<AdminCompChangeResponse>(`${subscriptionPath(id)}/comp`, body)).data,
-    onSuccess: () => {
+    onSuccess: ({ subscription }) => {
+      // Show the new row at once; the invalidation below then refreshes the derived fields.
+      queryClient.setQueryData<AdminSubscriptionDetail>(adminSubscriptionDetailKey(id), current =>
+        current ? { ...current, subscription } : current
+      );
       // Covers this detail and its admin log too (see the key comment above).
       void queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
+      void queryClient.invalidateQueries({ queryKey: ADMIN_GRANTS_KEY });
     },
     onError: error => {
       toast.error(getErrorMessage(error));

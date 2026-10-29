@@ -2,38 +2,57 @@ import React from 'react';
 import { Link } from '@tanstack/react-router';
 import { Box, Skeleton, Stack, Typography } from '@mui/joy';
 import dayjs from 'dayjs';
-import { SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { useGetUserSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { isTerminalSubscriptionStatus } from '@client/app/utils/adminSubscriptionDetail';
 import { ErrorState } from '../shared/ErrorState';
 import { StatusChip } from '../shared/StatusChip';
-import { showsCompedChip, subscriptionStatusDisplay } from './Detail/subscriptionStatus';
+import {
+  isCancelScheduled,
+  showsCompedChip,
+  subscriptionStatusDisplay,
+  type SubscriptionStatusDisplay,
+  type SubscriptionStatusFields,
+} from './Detail/subscriptionStatus';
 
 type SummaryRow = {
   id: string;
   planName: string;
   organizationName: string | null;
-  status: string;
+  statusDisplay: SubscriptionStatusDisplay;
   isComped: boolean;
   dateLabel: string;
   creditsPerCycle: number | null;
 };
 
-type SourceFields = { source?: SubscriptionSource | string; status: string };
+type DateFields = SubscriptionStatusFields & {
+  periodEndsAt: Date | string;
+  canceledAt: Date | string | null;
+};
 
 const formatDate = (date: Date | string): string => dayjs(date).format('MMM D, YYYY');
 
-const dateLabel = (row: { status: string; periodEndsAt: Date | string; canceledAt: Date | string | null }): string => {
-  if (row.canceledAt) return `Ended ${formatDate(row.canceledAt)}`;
-  if (isTerminalSubscriptionStatus(row.status)) return `Ended ${formatDate(row.periodEndsAt)}`;
+// canceledAt is when the cancel was requested, so it is the end date only for a row cut short before its period end.
+const endedAt = (row: DateFields): Date | string => {
+  if (row.cancelAt) return row.cancelAt;
+  if (row.canceledAt && dayjs(row.canceledAt).isBefore(row.periodEndsAt)) return row.canceledAt;
+  return row.periodEndsAt;
+};
+
+const dateLabel = (row: DateFields): string => {
+  if (isTerminalSubscriptionStatus(row.status)) return `Ended ${formatDate(endedAt(row))}`;
+  if (isCancelScheduled(row)) return `Ends ${formatDate(row.cancelAt ?? row.periodEndsAt)}`;
   return `Renews ${formatDate(row.periodEndsAt)}`;
 };
 
-const isComped = ({ source, status }: SourceFields): boolean =>
-  showsCompedChip({ source: source === SubscriptionSource.AdminGrant ? 'admin_grant' : 'stripe', status });
+const isComped = (row: { source?: string; subscriptionId?: string; status: string }): boolean =>
+  showsCompedChip({
+    source: row.source === 'admin_grant' ? 'admin_grant' : 'stripe',
+    subscriptionId: row.subscriptionId ?? '',
+    status: row.status,
+  });
 
 const SummaryRowLink: React.FC<{ row: SummaryRow }> = ({ row }) => {
-  const statusDisplay = subscriptionStatusDisplay(row.status);
+  const { statusDisplay } = row;
   return (
     <Link
       to="/admin/subscriptions/$subscriptionId"
@@ -99,7 +118,7 @@ export const SubscriptionSummaryList: React.FC<{ userId: string }> = ({ userId }
       id: subscription.id,
       planName: subscription.planName ?? 'Individual plan',
       organizationName: null,
-      status: subscription.status,
+      statusDisplay: subscriptionStatusDisplay(subscription),
       isComped: isComped(subscription),
       dateLabel: dateLabel(subscription),
       creditsPerCycle: subscription.effectiveCreditsPerCycle ?? null,
@@ -108,7 +127,7 @@ export const SubscriptionSummaryList: React.FC<{ userId: string }> = ({ userId }
       id: subscription.id,
       planName: 'Team plan',
       organizationName: organization.name,
-      status: subscription.status,
+      statusDisplay: subscriptionStatusDisplay(subscription),
       isComped: isComped(subscription),
       dateLabel: dateLabel(subscription),
       creditsPerCycle: subscription.effectiveCreditsPerCycle ?? null,

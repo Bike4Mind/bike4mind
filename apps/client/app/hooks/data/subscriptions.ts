@@ -6,6 +6,7 @@ import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants'
 import { ISubscription, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { ADMIN_GRANTS_KEY } from './adminOrganizations';
 import { type OrgSubscriptionSubscribeRequest } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -258,6 +259,7 @@ export const useGrantSubscription = () => {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
+      queryClient.invalidateQueries({ queryKey: ADMIN_GRANTS_KEY });
       toast.success(data.message);
     },
     onError: err => {
@@ -276,6 +278,8 @@ export const useGetUserSubscriptions = (userId: string) => {
       const { data } = await api.get<{
         individualSubscriptions: Array<
           IUserSubscription & {
+            cancelAtPeriodEnd?: boolean;
+            cancelAt?: Date | null;
             planName?: string;
             planCredits?: number;
             effectiveCreditsPerCycle?: number;
@@ -340,7 +344,8 @@ export const useRemoveSubscription = () => {
 };
 
 /**
- * Hook for admins to update credits per billing cycle for a subscription
+ * Hook for admins to update credits per billing cycle for a subscription. Success shows nothing: the
+ * caller confirms with an UndoToast.
  */
 export const useUpdateSubscriptionCredits = () => {
   const queryClient = useQueryClient();
@@ -368,13 +373,12 @@ export const useUpdateSubscriptionCredits = () => {
       });
       return data;
     },
-    onSuccess: (data, variables) => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions', variables.userId] });
       queryClient.invalidateQueries({ queryKey: ['users', variables.userId] });
-      toast.success(data.message);
     },
     onError: err => {
       toast.error(getErrorMessage(err));

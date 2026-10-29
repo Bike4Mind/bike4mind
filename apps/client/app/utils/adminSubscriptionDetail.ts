@@ -16,8 +16,13 @@ export const TERMINAL_SUBSCRIPTION_STATUS_VALUES: readonly string[] = ['canceled
 export const isTerminalSubscriptionStatus = (status: string): boolean =>
   TERMINAL_SUBSCRIPTION_STATUS_VALUES.includes(status);
 
+// Must stay in sync with resolveSubscriptionSource in packages/server-utils/src/lib/subscriptions/types.ts: a
+// pre-migration row has no `source` (the list maps it to 'stripe') and is a comp only by this id prefix.
+export const LEGACY_COMP_SUBSCRIPTION_ID_PREFIX = 'admin_granted_';
+
 /** Comps live only in Mongo, so a comp is extended, ended or reopened here and never at Stripe. */
-export const isCompSubscription = (row: Pick<AdminSubscriptionRow, 'source'>): boolean => row.source === 'admin_grant';
+export const isCompSubscription = (row: Pick<AdminSubscriptionRow, 'source' | 'subscriptionId'>): boolean =>
+  row.source === 'admin_grant' || row.subscriptionId.startsWith(LEGACY_COMP_SUBSCRIPTION_ID_PREFIX);
 
 /** Furthest a comp end date may be set, in months from now. */
 export const COMP_MAX_MONTHS_AHEAD = 60;

@@ -42,10 +42,12 @@ const mockModelFindById = vi.fn();
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     findById: (...a: unknown[]) => mockFindById(...a),
-    update: (...a: unknown[]) => mockUpdate(...a),
     findNonTerminalSubscriptionsByOwner: (...a: unknown[]) => mockFindNonTerminal(...a),
   },
-  Subscription: { findById: (...a: unknown[]) => ({ lean: () => mockModelFindById(...a) }) },
+  Subscription: {
+    findById: (...a: unknown[]) => ({ lean: () => mockModelFindById(...a) }),
+    findOneAndUpdate: (...a: unknown[]) => ({ lean: () => mockUpdate(...a) }),
+  },
 }));
 
 const mockToRows = vi.fn();
@@ -57,11 +59,16 @@ vi.mock('@server/admin/subscriptionsList/adminSubscriptionsQuery', () => ({ subs
 const mockRecordAdminAction = vi.fn();
 vi.mock('@server/utils/adminAudit', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+  const { ForbiddenError } = await import('@bike4mind/common');
   return {
     ...actual,
     recordAdminActionFromRequest: (...a: unknown[]) => {
       insideTransactionAtAudit = inTransaction;
       return mockRecordAdminAction(...a);
+    },
+    denySelfAdminAction: async (req: unknown, { action, attempted, target }: Record<string, unknown>) => {
+      await mockRecordAdminAction(req, { action, target, details: { attemptedAction: attempted } });
+      throw new ForbiddenError('Admins cannot perform this action on their own account.');
     },
   };
 });
@@ -90,17 +97,28 @@ const compRow = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-function call(options: { isAdmin?: boolean; body?: Record<string, unknown>; id?: string } = {}) {
+function call(options: { isAdmin?: boolean; body?: Record<string, unknown>; id?: string; adminId?: string } = {}) {
   const { req, res } = createMocks({
     method: 'POST',
     query: { id: options.id ?? ID },
     body: { reason: REASON, ...(options.body ?? { action: 'end' }) },
   });
-  Object.assign(req, { user: { isAdmin: options.isAdmin ?? true, id: 'admin-1' }, logger: { info: vi.fn() } });
+  Object.assign(req, {
+    user: { isAdmin: options.isAdmin ?? true, id: options.adminId ?? 'admin-1' },
+    logger: { info: vi.fn() },
+  });
   return { res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
 
 const isoIn = (days: number) => new Date(Date.now() + days * DAY).toISOString();
+
+const guardFor = (status: string, extra: Record<string, unknown> = {}) => ({
+  _id: ID,
+  source: 'admin_grant',
+  subscriptionId: 'admin_grant_1',
+  status,
+  ...extra,
+});
 
 describe('POST /api/admin/subscriptions/[id]/comp', () => {
   beforeEach(() => {
@@ -110,7 +128,7 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
     mockUserFindById.mockResolvedValue({ id: 'u1', email: 'u1@example.com' });
     mockOrgFindById.mockResolvedValue({ id: 'o1', name: 'Acme', userId: 'boss-1' });
     mockFindNonTerminal.mockResolvedValue([]);
-    mockUpdate.mockResolvedValue(undefined);
+    mockUpdate.mockResolvedValue({ _id: ID });
     mockRecordAdminAction.mockResolvedValue(null);
     mockModelFindById.mockResolvedValue({ _id: ID });
     mockToRows.mockResolvedValue([{ id: ID, status: 'canceled' }]);
@@ -160,13 +178,37 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  describe('self-target guard', () => {
+    it('403s and records a denied entry when the admin owns the comp', async () => {
+      await expect(call({ adminId: 'u1' }).run()).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.subscription.denied',
+          details: { attemptedAction: 'billing.comp.changed' },
+        })
+      );
+    });
+
+    it('403s when the admin owns the comped organization', async () => {
+      mockFindById.mockResolvedValue(compRow({ ownerType: 'Organization', ownerId: 'o1' }));
+      await expect(call({ adminId: 'boss-1' }).run()).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+  });
+
   describe('setEndsAt', () => {
     it('extends the comp and audits the before/after inside the transaction', async () => {
       const periodEndsAt = isoIn(90);
       const { res, run } = call({ body: { action: 'setEndsAt', periodEndsAt } });
       await run();
 
-      expect(mockUpdate).toHaveBeenCalledWith({ id: ID, periodEndsAt: new Date(periodEndsAt) });
+      expect(mockUpdate).toHaveBeenCalledWith(
+        guardFor('active', { periodEndsAt: CURRENT_END }),
+        { $set: { periodEndsAt: new Date(periodEndsAt) } },
+        { new: true }
+      );
       expect(insideTransactionAtAudit).toBe(true);
       expect(mockRecordAdminAction).toHaveBeenCalledWith(
         expect.anything(),
@@ -183,13 +225,30 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
       expect(res._getJSONData()).toEqual({ subscription: { id: ID, status: 'canceled' } });
     });
 
-    it('words an earlier date as a move, and allows a past date', async () => {
-      const periodEndsAt = isoIn(-5);
+    it('words an earlier date as a move', async () => {
+      const periodEndsAt = isoIn(5);
       await call({ body: { action: 'setEndsAt', periodEndsAt } }).run();
       expect(mockRecordAdminAction).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ summary: `moved comp end date to ${periodEndsAt.slice(0, 10)}` })
       );
+    });
+
+    // Undoing an extend on a comp that had already lapsed restores a past end date.
+    it('allows a past date', async () => {
+      const { res, run } = call({ body: { action: 'setEndsAt', periodEndsAt: isoIn(-5) } });
+      await run();
+      expect(res._getStatusCode()).toBe(200);
+    });
+
+    it('409s and writes no audit when the row changed after it was read', async () => {
+      mockUpdate.mockResolvedValue(null);
+      await expect(call({ body: { action: 'setEndsAt', periodEndsAt: isoIn(90) } }).run()).rejects.toMatchObject({
+        statusCode: 409,
+        message: 'This subscription changed; reload and try again.',
+      });
+      expect(mockRecordAdminAction).not.toHaveBeenCalled();
+      expect(mockSendToClient).not.toHaveBeenCalled();
     });
 
     it('400s past the maximum horizon', async () => {
@@ -220,7 +279,11 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
       mockFindById.mockResolvedValue(compRow({ ownerType: 'Organization', ownerId: 'o1' }));
       await call({ body: { action: 'end' } }).run();
 
-      expect(mockUpdate).toHaveBeenCalledWith({ id: ID, status: 'canceled', canceledAt: expect.any(Date) });
+      expect(mockUpdate).toHaveBeenCalledWith(
+        guardFor('active'),
+        { $set: { status: 'canceled', canceledAt: expect.any(Date) } },
+        { new: true }
+      );
       expect(mockRecordAdminAction).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -265,7 +328,11 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
 
     it('reactivates an ended comp and clears canceledAt', async () => {
       await call({ body: { action: 'reopen' } }).run();
-      expect(mockUpdate).toHaveBeenCalledWith({ id: ID, status: 'active', canceledAt: null });
+      expect(mockUpdate).toHaveBeenCalledWith(
+        guardFor('canceled'),
+        { $set: { status: 'active', canceledAt: null } },
+        { new: true }
+      );
       expect(mockRecordAdminAction).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -299,6 +366,18 @@ describe('POST /api/admin/subscriptions/[id]/comp', () => {
         { id: 'c'.repeat(24), source: 'stripe', subscriptionId: 'sub_9', status: 'active', priceId: 'price_a' },
       ]);
       await expect(call({ body: { action: 'reopen' } }).run()).rejects.toMatchObject({ statusCode: 409 });
+    });
+
+    it('409s when an organization already has an active row on the same plan', async () => {
+      mockFindById.mockResolvedValue(compRow({ status: 'canceled', ownerType: 'Organization', ownerId: 'o1' }));
+      mockFindNonTerminal.mockResolvedValue([
+        { id: 'c'.repeat(24), source: 'stripe', subscriptionId: 'sub_9', status: 'active', priceId: 'price_a' },
+      ]);
+      await expect(call({ body: { action: 'reopen' } }).run()).rejects.toMatchObject({
+        statusCode: 409,
+        message: 'This owner already has an active subscription on the same plan.',
+      });
+      expect(mockUpdate).not.toHaveBeenCalled();
     });
 
     it('allows a different live plan beside the reopened comp', async () => {

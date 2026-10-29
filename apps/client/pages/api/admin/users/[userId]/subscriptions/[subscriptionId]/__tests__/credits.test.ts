@@ -241,6 +241,17 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
         );
       });
 
+      it('400s and writes no audit entry when there is no override to clear', async () => {
+        mockFindByStripeSubId.mockResolvedValue({ id: 'sub-1', ownerType: 'User', ownerId: 'u1', priceId: 'p' });
+
+        await expect(call({ body: { creditsPerCycle: null, reason: 'Undo the edit' } }).run()).rejects.toMatchObject({
+          statusCode: 400,
+          message: 'This subscription has no credits override to clear.',
+        });
+        expect(mockClearCustomCredits).not.toHaveBeenCalled();
+        expect(mockRecordAdminAction).not.toHaveBeenCalled();
+      });
+
       it('computes a team default from seats when clearing', async () => {
         mockFindByStripeSubId.mockResolvedValue({
           id: 'sub-1',
