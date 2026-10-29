@@ -3,6 +3,7 @@ import { isAbliteratedModel } from '@bike4mind/local-models';
 import { describe, expect, it, vi } from 'vitest';
 import bundled from '../../../../../catalog/model-hub/curated-v2.json';
 import { loadCuratedManifest } from './loadCuratedManifest';
+import { ollamaBlocked } from './ModelHubService';
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const strict = () => HubManifestSchema.parse(bundled);
@@ -47,6 +48,16 @@ describe('the bundled curated list', () => {
         expect(weights, label).toMatch(SHA256);
         expect(build.runtimeMin?.ollama, label).toMatch(/^\d+\.\d+\.\d+$/);
       }
+  });
+
+  // Ollama before 0.30.0 leaves the draft out of /api/show, so the post-pull check would delete the model.
+  it('needs an Ollama that shows the draft for every build that pins one', () => {
+    const drafted = strict().entries.flatMap(entry => entry.builds.filter(build => pins(build)?.draft));
+    expect(drafted.length).toBeGreaterThan(0);
+    for (const build of drafted) {
+      expect(ollamaBlocked(build, '0.24.0'), build.id).not.toBeNull();
+      expect(ollamaBlocked(build, '0.30.0'), build.id).toBeNull();
+    }
   });
 
   it('declares vision and tools on every pick', () => {
