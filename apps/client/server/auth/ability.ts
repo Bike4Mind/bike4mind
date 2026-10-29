@@ -96,7 +96,7 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
     allow('clone', Session, ownDocumentPermission);
 
     // QuestMasterPlan read access follows read access to its associated Session (via notebookId)
-    allow(Permission.read, QuestMasterPlan, {
+    allow<MongoQuery>(Permission.read, QuestMasterPlan, {
       notebookId: {
         $in: Session.find({
           userId: user.id,
