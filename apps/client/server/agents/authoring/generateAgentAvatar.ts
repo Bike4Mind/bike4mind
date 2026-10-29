@@ -316,6 +316,7 @@ export async function generateAgentAvatar(
     throw error;
   }
   const generationId = randomUUID();
+  // Settle before moderation/storage checks: the provider has already billed for the image.
   await reservation.settle(usdToCreditsStochastic(usdCost), {
     type: 'image_generation_usage',
     model: imageModelId,
