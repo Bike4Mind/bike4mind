@@ -223,6 +223,21 @@ describe('GET /api/users/counterLogs - report failures and versioning', () => {
     });
   });
 
+  describe('current week', () => {
+    it('generates the whole week range from now and does not persist it', async () => {
+      const { req, res } = mocks({ startDate: '2026-08-10', endDate: '2026-08-16', weeklyReport: 'true' });
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(serviceMocks.generateDailyReport).toHaveBeenCalledWith(
+        expect.objectContaining({ startDate: '2026-08-10', endDate: '2026-08-16' }),
+        expect.anything()
+      );
+      expect(res._getJSONData().reports[0].report).toBe('formatted weekly report');
+      expect(databaseMocks.upsertWeekly).not.toHaveBeenCalled();
+    });
+  });
+
   describe('response cache lifetime', () => {
     it('caches a range ending today for 5 minutes', async () => {
       await getDaily(TODAY);

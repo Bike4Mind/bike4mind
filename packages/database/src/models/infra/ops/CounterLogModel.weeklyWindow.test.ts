@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../../__test__/createMongoServer';
@@ -34,7 +34,7 @@ async function seedUser(email: string) {
   return _id.toString();
 }
 
-function logAt(userId: string, iso: string) {
+function logAt(userId: string, iso: string, metadata?: Record<string, unknown>) {
   return {
     userId,
     userName: userId,
@@ -43,6 +43,7 @@ function logAt(userId: string, iso: string) {
     counterName: 'Model Started',
     counterValue: 1,
     datetime: new Date(iso),
+    ...(metadata && { metadata }),
   };
 }
 
@@ -145,10 +146,73 @@ describe('CounterLogRepository.metricsByDate - weekly report window', () => {
     expect(result.lastWeekPeakDay).toEqual({ date: '2026-05-27', totalEvents: 2 });
   });
 
+  it('takes the peak hour and usage by source from the whole week', async () => {
+    const alice = await seedUser('alice@example.com');
+    await CounterLog.insertMany([
+      logAt(alice, '2026-06-01T14:00:00.000Z', { source: 'web' }),
+      logAt(alice, '2026-06-01T14:10:00.000Z', { source: 'web' }),
+      logAt(alice, '2026-06-03T09:00:00.000Z', { source: 'web' }),
+      logAt(alice, '2026-06-06T11:00:00.000Z', { source: 'cli' }),
+      logAt(alice, '2026-06-07T14:30:00.000Z'),
+      logAt(alice, '2026-06-07T14:40:00.000Z'),
+      logAt(alice, '2026-06-08T14:00:00.000Z', { source: 'api' }),
+    ]);
+
+    const [result] = await counterLogRepository.metricsByDate(WEEK_END, WEEK_START);
+
+    expect(result.peakTime).toEqual({ hour: 14, avgEvents: 2 });
+    expect(result.usageBySource).toEqual([
+      { _id: 'web', count: 3 },
+      { _id: 'cli', count: 1 },
+    ]);
+  });
+
   it('rejects a range whose end precedes its start', async () => {
     await expect(counterLogRepository.metricsByDate(WEEK_START, WEEK_END)).rejects.toThrow(
       'Invalid weekly report range'
     );
+  });
+});
+
+describe('CounterLogRepository.metricsByDate - week still in progress', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('compares only the elapsed span of this week with the same span of earlier weeks', async () => {
+    // Wednesday noon: 2.5 days of the 2026-06-01 week have elapsed.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-03T12:00:00.000Z'));
+    const alice = await seedUser('alice@example.com');
+    await CounterLog.insertMany([
+      // This week: the last two are after now or beyond the elapsed span
+      logAt(alice, '2026-06-01T09:00:00.000Z'),
+      logAt(alice, '2026-06-03T10:00:00.000Z'),
+      logAt(alice, '2026-06-03T13:00:00.000Z'),
+      logAt(alice, '2026-06-06T10:00:00.000Z'),
+      // Last week
+      logAt(alice, '2026-05-25T08:00:00.000Z'),
+      logAt(alice, '2026-05-27T08:00:00.000Z'),
+      logAt(alice, '2026-05-27T13:00:00.000Z'),
+      logAt(alice, '2026-05-31T23:59:59.999Z'),
+      // Earlier weeks of the baseline, at offsets inside and beyond the span
+      logAt(alice, '2026-05-04T10:00:00.000Z'),
+      logAt(alice, '2026-05-12T12:00:00.000Z'),
+      logAt(alice, '2026-05-20T11:00:00.000Z'),
+      logAt(alice, '2026-05-20T13:00:00.000Z'),
+      logAt(alice, '2026-05-30T00:00:00.000Z'),
+      // The 4 weeks before the baseline
+      logAt(alice, '2026-04-06T00:00:00.000Z'),
+      logAt(alice, '2026-04-07T00:00:00.000Z'),
+      logAt(alice, '2026-04-30T00:00:00.000Z'),
+    ]);
+
+    const [result] = await counterLogRepository.metricsByDate(WEEK_END, WEEK_START);
+
+    expect(countOf(result.thisWeek)).toBe(2);
+    expect(countOf(result.lastWeek)).toBe(2);
+    expect(countOf(result.thisMonth)).toBe(5);
+    expect(countOf(result.lastMonth)).toBe(2);
   });
 });
 
