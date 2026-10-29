@@ -106,7 +106,13 @@ export async function resumeCardVerificationSetup(
         { idempotencyKey: `card-verification:customer:${verificationId}` }
       );
   if (customer.deleted) throw new CardVerificationRefused('unavailable');
-  if (customer.livemode !== record.livemode) throw new CardVerificationRefused('unavailable');
+  if (
+    customer.livemode !== record.livemode ||
+    customer.metadata?.verificationId !== verificationId ||
+    customer.metadata?.purpose !== 'card_verification' ||
+    customer.metadata?.environment !== record.environment
+  )
+    throw new CardVerificationRefused('not_found');
   await CardVerification.updateOne({ verificationId }, { $set: { customerId: customer.id } });
   const intent = record.setupIntentId
     ? await deps.stripe.setupIntents.retrieve(record.setupIntentId)
@@ -119,7 +125,15 @@ export async function resumeCardVerificationSetup(
         },
         { idempotencyKey: `card-verification:setup:${verificationId}` }
       );
-  if (!intent.client_secret || intent.livemode !== record.livemode) throw new CardVerificationRefused('unavailable');
+  if (
+    !intent.client_secret ||
+    intent.livemode !== record.livemode ||
+    reference(intent.customer) !== customer.id ||
+    intent.metadata?.verificationId !== verificationId ||
+    intent.metadata?.purpose !== 'card_verification' ||
+    intent.metadata?.environment !== record.environment
+  )
+    throw new CardVerificationRefused('not_found');
   await CardVerification.updateOne({ verificationId }, { $set: { setupIntentId: intent.id } });
   return { verificationId, clientSecret: intent.client_secret };
 }
@@ -178,7 +192,8 @@ export async function completeCardVerification(
     try {
       approved = !!supported && !intent.last_setup_error && (await deps.guards.approveRisk(intent));
     } catch (error) {
-      if (!record.saveCard) await removeVerificationCard(verificationId, userId, deps);
+      await CardVerification.updateOne({ verificationId, state: 'pending' }, { $set: { state: 'refused' } });
+      await removeVerificationCard(verificationId, userId, deps);
       throw error;
     }
     if (!approved) {

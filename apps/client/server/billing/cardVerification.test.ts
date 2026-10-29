@@ -161,6 +161,17 @@ describe('no-charge verification lifecycle', () => {
 
   it('creates only an on-session card setup, snapshots the amount and explicit consent', async () => {
     const f = fixture();
+    f.stripe.customers.create.mockImplementation(async () => ({
+      ...f.customer,
+      metadata: {
+        ...f.customer.metadata,
+        verificationId: state.record!.verificationId,
+      },
+    }));
+    f.stripe.setupIntents.create.mockImplementation(async () => ({
+      ...f.intent,
+      metadata: { ...f.intent.metadata, verificationId: state.record!.verificationId },
+    }));
     await beginCardVerification({ userId: 'u', ip: 'ip', asn: 'asn', turnstileToken: 'token' }, false, f.deps);
     expect(CardVerification.create).toHaveBeenCalledWith(expect.objectContaining({ credits: 17, saveCard: false }));
     expect(f.stripe.setupIntents.create).toHaveBeenCalledWith(
@@ -187,6 +198,19 @@ describe('no-charge verification lifecycle', () => {
     expect(f.stripe.setupIntents.create).not.toHaveBeenCalled();
   });
 
+  it('does not return a client secret for a customer or setup with mismatched ownership', async () => {
+    const f = fixture();
+    f.intent.customer = 'cus_other';
+    await expect(resumeCardVerificationSetup(f.record.verificationId, f.record.userId, f.deps)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    f.intent.customer = f.record.customerId;
+    f.customer.metadata.verificationId = 'other-verification';
+    await expect(resumeCardVerificationSetup(f.record.verificationId, f.record.userId, f.deps)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+
   it('does not grant on a risk outage and still detaches by default', async () => {
     const f = fixture();
     f.guards.approveRisk.mockRejectedValue(new Error('synthetic risk outage'));
@@ -195,6 +219,8 @@ describe('no-charge verification lifecycle', () => {
     );
     expect(grantVerifiedCardCredits).not.toHaveBeenCalled();
     expect(f.stripe.paymentMethods.detach).toHaveBeenCalledTimes(1);
+    expect(state.record?.state).toBe('refused');
+    expect(await completeCardVerification(f.record.verificationId, f.record.userId, f.deps)).toBe('refused');
   });
 
   it('validates ownership without disclosing or detaching another account card', async () => {
