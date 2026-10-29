@@ -378,7 +378,7 @@ describe('GET /api/work-items/ready and /graph', () => {
     const { res, result } = call('ready', 'get', {});
     await result;
 
-    expect(repo.listReadyForUser).toHaveBeenCalledWith('u1');
+    expect(repo.listReadyForUser).toHaveBeenCalledWith('u1', undefined);
     expect(res._getJSONData()).toMatchObject({ data: [{ id: OID_A }], truncated: false });
   });
 
@@ -427,6 +427,14 @@ describe('loop tickets through the work-items routes', () => {
 
     await call('collection', 'get', { query: { loopId: LOOP } }).result;
     expect(repo.listForUser.mock.calls[1][1]).toMatchObject({ loopId: LOOP });
+  });
+
+  it('returns ready tickets of the caller loop from /ready?loopId=, and 404s a foreign loop', async () => {
+    repo.listReadyForUser.mockResolvedValue({ data: [], truncated: false });
+    await call('ready', 'get', { query: { loopId: LOOP } }).result;
+    expect(repo.listReadyForUser).toHaveBeenCalledWith('u1', LOOP);
+
+    await expect(call('ready', 'get', { query: { loopId: OID_A } }).result).rejects.toThrow(/not found/i);
   });
 
   it('creates a ticket in the first stage and makes the live loop due', async () => {

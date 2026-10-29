@@ -102,9 +102,10 @@ export function buildLoopTicketTools({ userId, loopId }: LoopTicketScope): Recor
             userId,
             {
               loopId: loop.id,
-              ...(WORK_ITEM_STATUSES.includes(params.status as WorkItemStatus) && {
-                status: [params.status as WorkItemStatus],
-              }),
+              // Closed tickets only on request, so they don't crowd open work out of the page.
+              status: WORK_ITEM_STATUSES.includes(params.status as WorkItemStatus)
+                ? [params.status as WorkItemStatus]
+                : WORK_ITEM_STATUSES.filter(status => status !== 'closed'),
             },
             { page: 1, limit: LIST_LIMIT },
             { by: 'createdAt', direction: 'asc' }

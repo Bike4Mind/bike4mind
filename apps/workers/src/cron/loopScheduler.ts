@@ -103,7 +103,7 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
       $inc: { runCount: 1 },
       $unset: { statusReason: '' },
     });
-    if (ticket) await makeDueIfReady(loop);
+    if (ticket) await makeDueIfReady(loop, now);
     return;
   }
 
@@ -132,13 +132,20 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   });
   // A separate conditional write, so an owner's pause landing mid-tick is never overwritten.
   if (folded) await loopRepository.markErroredIfFailing(loop.id, MAX_CONSECUTIVE_FAILURES);
-  if (ticket) await makeDueIfReady(loop);
+  if (ticket) await makeDueIfReady(loop, now);
 }
 
 /** Claims the loop's next ready ticket for this run; null means a plain goal run. */
 async function claimNextTicket(loop: ILoop): Promise<IWorkItem | null> {
   const next = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
-  return next && workItemRepository.claimForRun(next.id);
+  return next && workItemRepository.claimForRun(next.id, loop.id);
+}
+
+/** Best effort: a failed release must not hide the dispatch error or skip the lease release. */
+async function releaseTicket(ticket: IWorkItem, logger: Logger): Promise<void> {
+  await workItemRepository
+    .releaseClaim(ticket.id)
+    .catch(error => logger.warn(`[Loops] Could not release ticket ${ticket.id}`, { error }));
 }
 
 async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<void> {
@@ -166,16 +173,13 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
   } catch (error) {
     // Nothing was started, so the loop may retry next tick. Once an execution exists the lease is left
     // to run out instead, so a failed markDispatched doesn't free the loop for an immediate second run.
-    if (ticket) await workItemRepository.releaseClaim(ticket.id);
+    if (ticket) await releaseTicket(ticket, logger);
     await loopRepository.releaseLease(loop.id);
     throw error;
   }
 
   const executionId = result.ok || result.reason === 'dispatch_failed' ? result.executionId : undefined;
-  if (ticket) {
-    if (executionId) await workItemRepository.setExecution(ticket.id, executionId);
-    else await workItemRepository.releaseClaim(ticket.id);
-  }
+  if (ticket && !executionId) await releaseTicket(ticket, logger);
 
   if (result.ok) {
     await loopRepository.markDispatched(
@@ -183,6 +187,8 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
       result.executionId,
       new Date(now.getTime() + loop.intervalMinutes * MINUTE_MS)
     );
+    // Linked after markDispatched so a failure here can't leave the loop free for an overlapping run.
+    if (ticket) await workItemRepository.setExecution(ticket.id, result.executionId);
     logger.info(`[Loops] Dispatched loop ${loop.id}`, { executionId: result.executionId });
     return;
   }
@@ -192,6 +198,7 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
     // pending (a rejected invoke); either way track it rather than risk an overlapping run.
     // Reconcile folds it once terminal or stale, and the loop retries right after.
     await loopRepository.markDispatched(loop.id, result.executionId, now);
+    if (ticket) await workItemRepository.setExecution(ticket.id, result.executionId);
     logger.warn(`[Loops] Dispatch of loop ${loop.id} unconfirmed; tracking ${result.executionId}`);
     return;
   }
