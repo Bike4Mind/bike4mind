@@ -112,6 +112,12 @@ const BACKEND_LOGOS: Record<string, string> = {
 // Function to get backend logo path
 const getBackendLogo = (backend: string): string | null => BACKEND_LOGOS[backend] || null;
 
+// Shared by the accessible and locked sections so one query filters both the same way.
+const modelMatchesSearch = (candidate: ModelInfo, searchLower: string) =>
+  !searchLower ||
+  candidate.name.toLowerCase().includes(searchLower) ||
+  !!candidate.description?.toLowerCase().includes(searchLower);
+
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
 
@@ -794,10 +800,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds, model);
 
     const searchLower = debouncedSearchQuery.toLowerCase();
-    const matchesSearch = (candidate: ModelInfo) =>
-      !searchLower ||
-      candidate.name.toLowerCase().includes(searchLower) ||
-      !!candidate.description?.toLowerCase().includes(searchLower);
+    const matchesSearch = (candidate: ModelInfo) => modelMatchesSearch(candidate, searchLower);
     const searchFiltered = deduped.filter(matchesSearch);
 
     // Pinned sections can still show their exact ids when an enabled active twin wins the
@@ -925,7 +928,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
         candidate.type === 'text' &&
         !isModelDeprecated(candidate) &&
         !EXCLUDED_MODEL_IDS.includes(candidate.id) &&
-        (!searchLower || candidate.name.toLowerCase().includes(searchLower))
+        modelMatchesSearch(candidate, searchLower)
     );
     return sortModelsForPicker(shown);
   }, [showsTextModels, lockedModels, debouncedSearchQuery]);
@@ -1501,7 +1504,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
       {/* Models Grid */}
       {/* No access to any models */}
-      {!hasVisibleModels && !debouncedSearchQuery && (
+      {!hasVisibleModels && lockedPickerModels.length === 0 && !debouncedSearchQuery && (
         <Box sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-md" sx={{ color: 'text.primary', fontWeight: 500, mb: 1 }}>
             You don&apos;t have access to any AI models.
@@ -1513,7 +1516,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       )}
 
       {/* No models found for search query */}
-      {!hasVisibleModels && debouncedSearchQuery && (
+      {!hasVisibleModels && lockedPickerModels.length === 0 && debouncedSearchQuery && (
         <Box data-testid="model-selection-no-results" sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
             No models found for &quot;{searchQuery}&quot;
@@ -1641,10 +1644,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               <AccordionDetails>{expandedBackends.has(backend) && renderProviderContent(backend)}</AccordionDetails>
             </Accordion>
           ))}
-
-          <LockedModelsSection models={lockedPickerModels} onUpgrade={isBillingEnabled ? handleUpgrade : undefined} />
         </Box>
       )}
+
+      <LockedModelsSection models={lockedPickerModels} onUpgrade={isBillingEnabled ? handleUpgrade : undefined} />
     </Box>
   );
 };

@@ -887,4 +887,17 @@ describe('ModelSelection locked (paid-only) models', () => {
 
     expect(screen.queryByTestId('locked-models-section')).toBeNull();
   });
+
+  it('keeps matching locked rows when a search matches no accessible model', async () => {
+    locked.models = [paidModel, { ...paidModel, id: 'paid-opus', name: 'Claude Opus X', description: '' }];
+    renderSelection({});
+
+    fireEvent.change(screen.getByTestId('model-search-input').querySelector('input') as HTMLInputElement, {
+      target: { value: 'opus' },
+    });
+
+    await waitFor(() => expect(screen.queryByTestId('locked-model-row-paid-text-model')).toBeNull());
+    expect(screen.getByTestId('locked-model-row-paid-opus')).toBeInTheDocument();
+    expect(screen.queryByTestId('model-selection-no-results')).toBeNull();
+  });
 });
