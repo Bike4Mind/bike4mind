@@ -12040,6 +12040,103 @@
           ]
         }
       },
+      "generateAgentAvatarResponse200": {
+        "type": "object",
+        "properties": {
+          "portrait_url": {
+            "type": "string",
+            "description": "URL of the generated portrait: a signed storage URL valid for one hour, or the provider temporary URL if storage failed."
+          },
+          "generation_prompt": {
+            "type": "string",
+            "description": "The visual prompt the portrait was generated from."
+          }
+        },
+        "required": [
+          "portrait_url",
+          "generation_prompt"
+        ]
+      },
+      "generateAgentAvatarRequest": {
+        "type": "object",
+        "properties": {
+          "image_model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "An image model id. Omit to use the deployment image model. An unknown or non-image model is rejected with a 400."
+          }
+        },
+        "additionalProperties": false,
+        "example": {}
+      },
+      "generateAgentDescriptionResponse200": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "The generated description. It is returned, not saved to the agent."
+          }
+        },
+        "required": [
+          "description"
+        ]
+      },
+      "generateAgentSystemPromptResponse200": {
+        "type": "object",
+        "properties": {
+          "system_prompt": {
+            "type": "string",
+            "description": "The generated system prompt, already saved to the agent."
+          }
+        },
+        "required": [
+          "system_prompt"
+        ]
+      },
+      "enhanceAgentFieldResponse200": {
+        "type": "object",
+        "properties": {
+          "enhanced_value": {
+            "type": "string",
+            "description": "The enhanced text. It is returned, not saved to the agent."
+          }
+        },
+        "required": [
+          "enhanced_value"
+        ]
+      },
+      "enhanceAgentFieldRequest": {
+        "type": "object",
+        "properties": {
+          "field_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "The personality field being enhanced, for example `quirk` or `coreValues`. At most 100 characters."
+          },
+          "current_value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "The text to enhance. It stays the basis of the result. At most 2000 characters."
+          },
+          "agent_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Overrides the agent's stored name in the prompt. At most 200 characters."
+          }
+        },
+        "required": [
+          "field_name",
+          "current_value"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "field_name": "quirk",
+          "current_value": "Hums while thinking"
+        }
+      },
       "getClaudeMarketplaceResponse200": {
         "type": "object",
         "properties": {
@@ -20729,17 +20826,16 @@
             }
           },
           "429": {
-            "description": "Per-user rate limit exceeded.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
+            "description": "Rate limit exceeded: the key's own limits, or this endpoint's per-key read limit.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
                 "schema": {
                   "type": "string"
                 }
@@ -20778,6 +20874,13 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -29816,7 +29919,7 @@
             }
           },
           "422": {
-            "description": "The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).",
+            "description": "The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, or `unsupported_input_role` for an input role the model does not take), an unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -33376,6 +33479,66 @@
                 "description": "Unix epoch (seconds) when the day window resets.",
                 "schema": {
                   "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded, or the account used up its tokens-per-minute allowance (`errorCode: \"token_rate_limit_exceeded\"`; `Retry-After` says when the window drains).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -40972,6 +41135,1880 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.delete(\n    \"https://your-deployment.example.com/api/v1/agents/<id>\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/agents/{id}/generate-avatar": {
+      "post": {
+        "operationId": "generateAgentAvatar",
+        "summary": "Generate an agent avatar",
+        "description": "Generates a portrait for an agent you own from its name, description and personality, stores it, and saves it as the agent portrait. Requires `agents:write`: the assistants run models on the deployment, which is management of the agent.",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/generateAgentAvatarRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored portrait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateAgentAvatarResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`image_model` is not an available image model (`errorCode: unknown_model`), no image model is configured, or the generated image would exceed the caller storage quota (`errorCode: storage_limit_exceeded`). Nothing is written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: \"token_rate_limit_exceeded\"`, with a `Retry-After` for when the window drains, or `\"concurrency_limit_exceeded\"`).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The image provider failed, refused the prompt, or the generated image was flagged by content moderation. Nothing is written; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "agents:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/agents/<id>/generate-avatar\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/agents/<id>/generate-avatar\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/agents/<id>/generate-avatar\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/agents/{id}/generate-description": {
+      "post": {
+        "operationId": "generateAgentDescription",
+        "summary": "Generate an agent description",
+        "description": "Writes a description for an agent you own from its personality, identity and capabilities. The description is returned and not saved: send it back with `updateAgent` to keep it. Requires `agents:write`: the assistants run models on the deployment, which is management of the agent.",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The generated description.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateAgentDescriptionResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: \"token_rate_limit_exceeded\"`, with a `Retry-After` for when the window drains, or `\"concurrency_limit_exceeded\"`).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model or image provider failed to produce a result. Nothing is written; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "agents:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/agents/<id>/generate-description\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/agents/<id>/generate-description\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/agents/<id>/generate-description\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/agents/{id}/generate-system-prompt": {
+      "post": {
+        "operationId": "generateAgentSystemPrompt",
+        "summary": "Generate an agent system prompt",
+        "description": "Writes a system prompt for an agent you own from its metadata and saves it as the agent system prompt, replacing the current one. Generations for one agent are rate limited by an admin-set interval. Requires `agents:write`: the assistants run models on the deployment, which is management of the agent.",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The saved system prompt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateAgentSystemPromptResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The assistant cannot run: the feature is disabled or not configured on this deployment. Nothing is written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded, this agent system prompt was generated more recently than the admin-set interval allows, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: \"token_rate_limit_exceeded\"`, with a `Retry-After` for when the window drains, or `\"concurrency_limit_exceeded\"`).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model or image provider failed to produce a result. Nothing is written; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "agents:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/agents/<id>/generate-system-prompt\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/agents/<id>/generate-system-prompt\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/agents/<id>/generate-system-prompt\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/agents/{id}/enhance-field": {
+      "post": {
+        "operationId": "enhanceAgentField",
+        "summary": "Enhance an agent personality field",
+        "description": "Rewrites one personality field of an agent you own into a richer version that keeps the original idea. The result is returned and not saved: send it back with `updateAgent` to keep it. Unknown body fields are rejected. Requires `agents:write`: the assistants run models on the deployment, which is management of the agent.",
+        "tags": [
+          "Agents"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/enhanceAgentFieldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The enhanced text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/enhanceAgentFieldResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No model is available to run the enhancement on this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: \"token_rate_limit_exceeded\"`, with a `Retry-After` for when the window drains, or `\"concurrency_limit_exceeded\"`).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model or image provider failed to produce a result. Nothing is written; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "agents:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/agents/<id>/enhance-field\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"field_name\": \"quirk\",\n  \"current_value\": \"Hums while thinking\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/agents/<id>/enhance-field\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"field_name\": \"quirk\",\n  \"current_value\": \"Hums while thinking\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/agents/<id>/enhance-field\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"field_name\": \"quirk\",\n        \"current_value\": \"Hums while thinking\"\n    },\n)"
           }
         ]
       }

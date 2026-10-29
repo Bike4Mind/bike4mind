@@ -30,10 +30,13 @@ export interface PermissionServiceOptions {
   logger: { warn(message: string): void };
 }
 
-const DESKTOP_USER: RuleSource = { id: 'desktop-user', label: 'Desktop rules' };
+export const DESKTOP_USER_RULES_LABEL = 'Desktop rules';
+export const DESKTOP_PROJECT_RULES_LABEL = 'Desktop project rules';
+
+const DESKTOP_USER: RuleSource = { id: 'desktop-user', label: DESKTOP_USER_RULES_LABEL };
 
 function desktopProject(directory: string): RuleSource {
-  return { id: `desktop-project:${directory}`, label: 'Desktop project rules', path: directory };
+  return { id: `desktop-project:${directory}`, label: DESKTOP_PROJECT_RULES_LABEL, path: directory };
 }
 
 function views(lists: PermissionRuleLists, native: boolean): PermissionRuleView[] {
@@ -141,6 +144,18 @@ export class PermissionService {
     if (valid.length === 0) return;
     await this.options.store.addUserAllows(valid);
     this.invalidate();
+  }
+
+  async revokeAllow(scope: PermissionScope, rule: string): Promise<boolean> {
+    const stored = await this.options.store.read();
+    const lists =
+      scope.kind === 'user'
+        ? stored.user
+        : (stored.projects[resolve(scope.directory)] ?? { allow: [], ask: [], deny: [] });
+    if (!lists.allow.includes(rule)) return false;
+    await this.options.store.setLists(scope, { ...lists, allow: lists.allow.filter(entry => entry !== rule) });
+    this.invalidate();
+    return true;
   }
 
   private async compile(scope: PermissionScopeKey): Promise<PermissionRuleSet> {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -764,5 +764,34 @@ describe('artifact card ids agree with the rows persistence writes', () => {
     expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
     rerender(reply(partialReply, 'done'));
     expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+  });
+});
+
+describe('empty fences in a reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('draws and copies empty fences without the word undefined', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const { container } = render(
+      <CssVarsProvider theme={appTheme}>
+        <ReplyCompleteContext.Provider value>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: createCodeComponent() }}>
+            {'```\n```\n\n```ts\n```'}
+          </ReactMarkdown>
+        </ReplyCompleteContext.Provider>
+      </CssVarsProvider>
+    );
+
+    const codes = container.querySelectorAll('pre code');
+    expect(codes).toHaveLength(2);
+    codes.forEach(code => expect(code.textContent).toBe(''));
+    expect(container.textContent).not.toContain('undefined');
+    screen.getAllByTestId('code-block-copy-btn').forEach(button => fireEvent.click(button));
+    await waitFor(() => expect(writeText.mock.calls).toEqual([[''], ['']]));
   });
 });

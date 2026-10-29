@@ -1,31 +1,27 @@
 import type { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { getWafLogsInsightsOverview } from '@server/security/wafLogsInsights';
 import { parseRangeParam } from '@server/security/wafApiHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
-  async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
+const handler = adminApi<Request, Response>({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req: Request, res: Response) => {
+  const stage = resolveStage();
 
-    const stage = resolveStage();
-
-    const { range, error } = parseRangeParam(req);
-    if (!range) {
-      return res.status(400).json({ error });
-    }
-
-    // Debug mode is gated to non-production to prevent leaking internal metadata.
-    const debug = stage !== 'production' && req.query.debug === 'true';
-
-    const overview = await getWafLogsInsightsOverview({ stage, range, debug });
-    return res.status(200).json(overview);
+  const { range, error } = parseRangeParam(req);
+  if (!range) {
+    return res.status(400).json({ error });
   }
-);
+
+  // Debug mode is gated to non-production to prevent leaking internal metadata.
+  const debug = stage !== 'production' && req.query.debug === 'true';
+
+  const overview = await getWafLogsInsightsOverview({ stage, range, debug });
+  return res.status(200).json(overview);
+});
 
 export const config = {
   api: {

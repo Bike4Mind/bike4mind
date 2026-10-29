@@ -87,11 +87,14 @@ describe('PrMonitor binding', () => {
     await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
     expect(await monitor.dismiss(SESSION)).toEqual({ ok: true });
     expect(out.last()?.binding).toBeNull();
+    expect(out.last()?.dismissed).toBe(true);
     monitor.observeToolEnd(SESSION, shellCall('git push', `remote:   ${REF.url}`));
     await monitor.idle();
     expect((await store.get(SESSION))?.dismissed).toBe(true);
     await monitor.bindManual(SESSION, REF.url);
+    await monitor.idle();
     expect((await store.get(SESSION))?.dismissed).toBe(false);
+    expect(out.last()?.dismissed).toBeUndefined();
   });
 
   it('refuses to dismiss while auto-merge is armed', async () => {

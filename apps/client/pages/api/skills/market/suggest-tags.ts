@@ -4,6 +4,7 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { toSnapshot } from '@server/skillMarket/market';
 import { getOperationsClassifierLlm } from '@server/skillMarket/classifySkill';
 import { suggestListingTags } from '@server/skillMarket/suggestTags';
@@ -20,7 +21,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
-      limit: req => (req.user?.isAdmin ? Infinity : 30),
+      limit: async req =>
+        (await resolveUserRateLimitPerMin(req.user, req)) > 0 ? (req.user?.isAdmin ? Infinity : 30) : 0,
       windowMs: HOUR_MS,
       bucket: 'skill-market-suggest-tags',
     })

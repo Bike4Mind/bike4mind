@@ -1,9 +1,9 @@
 import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 interface BulkOperation {
   id: string;
@@ -19,11 +19,10 @@ const MAX_AUDITED_CHANGED_FIELDS = 50;
 const toAuditText = (value: unknown) =>
   value === undefined || value === null ? undefined : String(value).slice(0, 200);
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const { operations } = req.body as { operations: BulkOperation[] };
 
   if (!Array.isArray(operations) || operations.length === 0) {

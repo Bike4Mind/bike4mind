@@ -4,7 +4,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import BlockIcon from '@mui/icons-material/Block';
 import { useComplianceModal } from '../ComplianceModal';
 import GrantSubscriptionModal from '../Details/GrantSubscriptionModal';
-import { UserActivityTabPanel } from '../Activity/UserViewTabs';
 import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
@@ -27,7 +26,11 @@ import { UserProfileHeader } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
 import { OverviewTab } from './tabs/OverviewTab';
-import { AdminLogTab, ApiKeysTab, CreditsTab, SignInsTab } from './tabs/recordTabs';
+import { CreditsTab } from './tabs/credits/CreditsTab';
+import { ApiKeysTab } from './tabs/keys/ApiKeysTab';
+import { ActivityTab } from './tabs/ActivityTab';
+import { AdminLogTab } from './tabs/AdminLogTab';
+import { SignInsTab } from './tabs/SignInsTab';
 import { USER_PROFILE_TAB_LABELS, type UserProfileTab } from './userProfileSearch';
 import { displayName, type AdminUserProfile } from './userProfileModel';
 
@@ -196,9 +199,16 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   const panel = () => {
     switch (tab) {
       case 'overview':
-        return <OverviewTab user={user} onAction={setAction} onViewActivity={() => onTabChange('activity')} />;
+        return (
+          <OverviewTab
+            user={user}
+            onAction={setAction}
+            onViewActivity={() => onTabChange('activity')}
+            onViewCredits={() => onTabChange('credits')}
+          />
+        );
       case 'activity':
-        return <UserActivityTabPanel userId={user.id} />;
+        return <ActivityTab userId={user.id} onOpenCredits={() => onTabChange('credits')} />;
       case 'credits':
         return <CreditsTab user={user} onAdjust={() => setAction('credits')} />;
       case 'keys':

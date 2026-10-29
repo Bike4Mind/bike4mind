@@ -23,6 +23,7 @@ export function SectionCard({ title, action, children, body = 'facts', 'data-tes
     >
       <Stack
         direction="row"
+        flexWrap="wrap"
         gap={1}
         alignItems="center"
         sx={{ px: 2, minHeight: 50, py: 1, borderBottom: '1px solid', borderColor: 'admin.border' }}

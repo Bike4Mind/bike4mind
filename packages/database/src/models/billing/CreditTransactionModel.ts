@@ -13,9 +13,21 @@ import {
   COMPLETION_SOURCES,
   AI_USAGE_TRANSACTION_TYPES,
   UNCLASSIFIED_SOURCE,
+  CREDIT_ADD_TRANSACTION_TYPES,
+  type CreditTransactionType,
 } from '@bike4mind/common';
 
 export type ICreditTransactionDocument = ICreditTransaction & IMongoDocument;
+
+/** Transaction types that move a balance other than by usage; see the partial index below. */
+export const CREDIT_BALANCE_EVENT_TYPES = [
+  'purchase',
+  'subscription',
+  'generic_add',
+  'generic_deduct',
+  'transfer_credit',
+  'received_credit',
+] as const;
 
 /**
  * IMPORTANT: When adding a new transaction type, you MUST update:
@@ -116,9 +128,25 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
 // Indexes for faster queries
 CreditTransactionSchema.index({ userId: 1, createdAt: -1 });
 CreditTransactionSchema.index({ stripePaymentIntentId: 1 }, { unique: true, sparse: true });
-CreditTransactionSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
+// Carries the _id tiebreak so findLedgerPage's keyset sort walks the index instead of sorting in memory.
+// Built, and the old { ownerId, ownerType, createdAt } index dropped, by the
+// 20260921235957_replace-credit-transaction-owner-index migration.
+CreditTransactionSchema.index(
+  { ownerId: 1, ownerType: 1, createdAt: -1, _id: -1 },
+  { name: 'ownerId_ownerType_createdAt_id' }
+);
 CreditTransactionSchema.index({ ownerType: 1, createdAt: -1, type: 1 });
 CreditTransactionSchema.index({ stripeDisputeId: 1 }, { unique: true, sparse: true });
+// Serves the admin user timeline's credit events (userTimeline.ts). Partial on the non-usage types so a
+// page never walks a heavy user's usage rows; a query must repeat the same `type: { $in }` to use it.
+// Built by the 20260921235947 ensure migration.
+CreditTransactionSchema.index(
+  { ownerId: 1, ownerType: 1, createdAt: -1, _id: -1 },
+  {
+    name: 'credit_tx_owner_balance_events',
+    partialFilterExpression: { type: { $in: [...CREDIT_BALANCE_EVENT_TYPES] } },
+  }
+);
 CreditTransactionSchema.index({ stripeRefundId: 1 }, { unique: true, sparse: true });
 CreditTransactionSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
 
@@ -134,6 +162,29 @@ const ADMIN_ADJUSTMENT_FILTER = {
   type: { $in: ['generic_add', 'generic_deduct'] },
   reason: 'admin_adjustment',
 };
+
+/** Position of one ledger row in the {createdAt, _id} newest-first order. */
+export type LedgerCursorPosition = { createdAt: Date; id: string };
+
+export type AiSpendSummary = {
+  spent: { last24h: number; last7d: number; last30d: number };
+  topModel30d: { model: string; credits: number } | null;
+  /** Spend per UTC day with activity, 'YYYY-MM-DD' ascending; days with no spend are absent. */
+  dailyCredits: Array<{ day: string; credits: number }>;
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const AI_SPEND_DAILY_WINDOW_DAYS = 90;
+
+/** Rows strictly older than `position` in newest-first order (the next page after it). */
+const olderThan = ({ createdAt, id }: LedgerCursorPosition) => ({
+  $or: [{ createdAt: { $lt: createdAt } }, { createdAt, _id: { $lt: new mongoose.Types.ObjectId(id) } }],
+});
+
+/** Rows strictly newer than `position` in newest-first order. */
+const newerThan = ({ createdAt, id }: LedgerCursorPosition) => ({
+  $or: [{ createdAt: { $gt: createdAt } }, { createdAt, _id: { $gt: new mongoose.Types.ObjectId(id) } }],
+});
 
 export class CreditTransactionRepository
   extends BaseRepository<ICreditTransactionDocument>
@@ -254,7 +305,7 @@ export class CreditTransactionRepository
     from: Date,
     to: Date
   ): Promise<Array<{ day: string; netCredits: number }>> {
-    // Rides the {ownerId, ownerType, createdAt} index; usage rows are numerous, so sum server-side.
+    // Rides the {ownerId, ownerType, createdAt, _id} index; usage rows are numerous, so sum server-side.
     // Bounded at both ends so the sum and the balance snapshot describe the same instant.
     const rows = await this.model.aggregate<{ _id: string; netCredits: number }>([
       { $match: { ownerId, ownerType, createdAt: { $gte: from, $lte: to } } },
@@ -297,6 +348,131 @@ export class CreditTransactionRepository
     ]);
 
     return { data, total };
+  }
+
+  /**
+   * One keyset page of an owner's ledger, newest first by {createdAt, _id}. Pass the last row of the
+   * previous page as `after` to continue strictly past it. Rides the {ownerId, ownerType, createdAt, _id}
+   * index; the _id tiebreak keeps rows sharing a timestamp from being skipped or repeated.
+   */
+  async findLedgerPage(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    options: { types?: CreditTransactionType[]; after?: LedgerCursorPosition; limit: number }
+  ): Promise<ICreditTransactionDocument[]> {
+    const query: Record<string, unknown> = { ownerId, ownerType };
+    if (options.types && options.types.length > 0) query.type = { $in: options.types };
+    if (options.after) Object.assign(query, olderThan(options.after));
+    return this.model.find(query).sort({ createdAt: -1, _id: -1 }).limit(options.limit).exec();
+  }
+
+  /**
+   * Net signed credits of every row of this owner strictly newer than `position`: the amount the
+   * balance moved after that row, so `balance - result` is the balance right after it. Signs follow
+   * the transaction type (add types positive, all others negative) because writers disagree on the
+   * sign of stored deduct rows.
+   */
+  async sumSignedCreditsNewerThan(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    position: LedgerCursorPosition
+  ): Promise<number> {
+    const [row] = await this.model.aggregate<{ total: number }>([
+      { $match: { ownerId, ownerType, ...newerThan(position) } },
+      {
+        $group: {
+          _id: null,
+          total: {
+            $sum: {
+              $cond: [
+                { $in: ['$type', [...CREDIT_ADD_TRANSACTION_TYPES]] },
+                { $abs: '$credits' },
+                { $multiply: [-1, { $abs: '$credits' }] },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+    return row?.total ?? 0;
+  }
+
+  /** AI spend (magnitudes) over rolling 24h/7d/30d windows, the 30-day top model and per-UTC-day sums. */
+  async summarizeAiSpend(ownerId: string, ownerType: CreditHolderType, now: Date): Promise<AiSpendSummary> {
+    const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const dailyFrom = new Date(dayStart.getTime() - (AI_SPEND_DAILY_WINDOW_DAYS - 1) * DAY_MS);
+    const from24h = new Date(now.getTime() - DAY_MS);
+    const from7d = new Date(now.getTime() - 7 * DAY_MS);
+    const from30d = new Date(now.getTime() - 30 * DAY_MS);
+    const spendWithin = (from: Date) => ({
+      $sum: { $cond: [{ $gte: ['$createdAt', from] }, { $abs: '$credits' }, 0] },
+    });
+
+    const [result] = await this.model.aggregate<{
+      totals: Array<{ last24h: number; last7d: number; last30d: number }>;
+      byModel: Array<{ _id: string; credits: number }>;
+      daily: Array<{ _id: string; credits: number }>;
+    }>([
+      {
+        $match: {
+          ownerId,
+          ownerType,
+          type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+          createdAt: { $gte: dailyFrom, $lte: now },
+        },
+      },
+      {
+        $facet: {
+          totals: [
+            {
+              $group: {
+                _id: null,
+                last24h: spendWithin(from24h),
+                last7d: spendWithin(from7d),
+                last30d: spendWithin(from30d),
+              },
+            },
+          ],
+          byModel: [
+            { $match: { createdAt: { $gte: from30d }, model: { $type: 'string' } } },
+            { $group: { _id: '$model', credits: { $sum: { $abs: '$credits' } } } },
+            { $sort: { credits: -1, _id: 1 } },
+            { $limit: 1 },
+          ],
+          daily: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                credits: { $sum: { $abs: '$credits' } },
+              },
+            },
+            { $sort: { _id: 1 } },
+          ],
+        },
+      },
+    ]);
+
+    const totals = result?.totals[0];
+    const top = result?.byModel[0];
+    return {
+      spent: { last24h: totals?.last24h ?? 0, last7d: totals?.last7d ?? 0, last30d: totals?.last30d ?? 0 },
+      topModel30d: top ? { model: top._id, credits: top.credits } : null,
+      dailyCredits: (result?.daily ?? []).map(({ _id, credits }) => ({ day: _id, credits })),
+    };
+  }
+
+  /** Newest completed purchase or subscription grant: the owner's last top-up, or null. */
+  async findLatestTopUp(ownerId: string, ownerType: CreditHolderType): Promise<ICreditTransactionDocument | null> {
+    return this.model
+      .findOne({
+        ownerId,
+        ownerType,
+        type: { $in: ['purchase', 'subscription'] },
+        // Only purchases carry a status; a pending or failed one granted nothing.
+        $or: [{ status: 'completed' }, { status: { $exists: false } }, { status: null }],
+      })
+      .sort({ createdAt: -1, _id: -1 })
+      .exec();
   }
 
   async apiKeyUsageForOwner(ownerId: string, ownerType: CreditHolderType, days: number = 30): Promise<IApiKeyUsage[]> {

@@ -32,11 +32,10 @@ export interface RateTierUser {
 }
 
 /**
- * Fail-safe floor if a tier setting somehow resolves to `undefined`. The
- * schema's `.prefault` makes this practically unreachable, but coalescing to
- * the most-restrictive tier default (never `0`/`Infinity`) guarantees we fail
- * CLOSED rather than accidentally disabling the limit. Mirrors the Free-tier
- * default in `settings.ts`.
+ * Floor applied when the tier or its setting cannot be resolved: the Free-tier
+ * default (never `Infinity`), so a read failure never disables the limiter. It
+ * does not honor an admin-set Free limit of 0, because the tier is unknown then
+ * and blocking would lock out paid users during an outage.
  */
 const FALLBACK_RATE_LIMIT_PER_MIN = 10;
 
@@ -93,6 +92,29 @@ export function ladderRateTier(
 }
 
 /**
+ * Per-process cache of the tier settings read. This runs on every request to per-keystroke helpers
+ * (rapid-reply, optimize-input, semantic search), so it bypasses the shared 5-minute settings cache
+ * with its own short TTL: an admin's 0 (block) or its lift reaches every process within the TTL.
+ */
+const TIER_SETTINGS_CACHE_TTL_MS = 15_000;
+const tierSettingsCache = new Map<string, { settings: Record<string, string>; expiresAt: number }>();
+
+/** Test-only: drop the in-process cache so a mocked setting in one test cannot leak into the next. */
+export const __resetTierSettingsCache = (): void => tierSettingsCache.clear();
+
+async function readTierSettings(settingKey: SettingKey): Promise<Record<string, string>> {
+  const now = Date.now();
+  const cached = tierSettingsCache.get(settingKey);
+  if (cached && cached.expiresAt > now) return cached.settings;
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { skipCache: true, names: [settingKey] }
+  );
+  tierSettingsCache.set(settingKey, { settings, expiresAt: now + TIER_SETTINGS_CACHE_TTL_MS });
+  return settings;
+}
+
+/**
  * Resolve the requests-per-minute limit for a user, reading the tier's tunable
  * admin setting. Returns `Infinity` for bypass tiers (admins/developers) and in
  * development, so the middleware skips enforcement. Token/compute spend is
@@ -102,7 +124,7 @@ export function ladderRateTier(
  * Accepts `undefined` because callers pass `req.user`, which the base Express
  * type models as optional even though these routes run behind auth (the
  * non-optional `req.user` augmentation is client-package-local). A missing user
- * is a can't-happen post-auth; we fail CLOSED to the most-restrictive limit.
+ * is a can't-happen post-auth; we fail CLOSED to the fallback floor.
  */
 export async function resolveUserRateLimitPerMin(
   user: RateTierUser | undefined,
@@ -118,13 +140,15 @@ export async function resolveUserRateLimitPerMin(
     const tier = await resolveUserRateTier(user, req);
     if (tier === 'bypass') return Infinity;
 
-    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    return getSettingsValue(TIER_SETTING_KEY[tier], settings) ?? FALLBACK_RATE_LIMIT_PER_MIN;
+    const settingKey = TIER_SETTING_KEY[tier];
+    const settings = await readTierSettings(settingKey);
+    // `??` keeps an explicit 0, which the middleware treats as "block".
+    return getSettingsValue(settingKey, settings) ?? FALLBACK_RATE_LIMIT_PER_MIN;
   } catch (error) {
     // This runs in the rate-limit middleware, BEFORE the handler. A transient
     // subscription/settings read failure must not turn every request into a 500
-    // - apply the most-restrictive floor so the limiter stays ON (fail closed).
-    Logger.globalInstance.warn('[rateTier] resolution failed; applying Free-tier floor', { error });
+    // - apply the fallback floor so the limiter stays ON (fail closed).
+    Logger.globalInstance.warn('[rateTier] resolution failed; applying fallback floor', { error });
     return FALLBACK_RATE_LIMIT_PER_MIN;
   }
 }

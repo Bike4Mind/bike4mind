@@ -8,6 +8,7 @@ import type { LocalModelFootprint } from './localContext';
 import { HardwareProbe, localContextSizing } from './localContextSizing';
 import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
 import { createThinkFilter } from './thinkFilter';
+import { ServerCredentialsError } from '../modelServers/errors';
 
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
@@ -146,6 +147,70 @@ describe('OllamaLocal', () => {
       { type: 'content', text: 'hello' },
       { type: 'content', stopReason: 'stop' },
     ]);
+  });
+
+  it("sends every call for a saved server through that server's fetch, keyed by its runtime id", async () => {
+    const globalFetch = vi.fn();
+    vi.stubGlobal('fetch', globalFetch);
+    const chatFetch = vi.fn();
+    const serverFetch = (contextLength: number) =>
+      vi.fn(async (input: string, _init?: RequestInit) => {
+        if (input.endsWith('/api/tags')) return Response.json({ models: [{ name: 'qwen3:8b' }] });
+        if (input.endsWith('/api/show'))
+          return Response.json({
+            capabilities: ['completion', 'tools'],
+            model_info: { 'qwen3.context_length': contextLength },
+          });
+        return new Response(
+          `${JSON.stringify({ message: { content: 'remote hi' }, done: true, done_reason: 'stop' })}\n`
+        );
+      });
+    const oneFetch = serverFetch(2048);
+    const twoFetch = serverFetch(4096);
+    const remote = (runtimeId: string, baseUrl: string, fetch: ReturnType<typeof serverFetch>) =>
+      new OllamaLocal(chatFetch, undefined, {
+        runtimeId,
+        baseUrl,
+        label: runtimeId,
+        fetch,
+        hasCredentials: () => false,
+      });
+    const one = remote('srv-aaa111', 'https://one.example.test', oneFetch);
+    const two = remote('srv-bbb222', 'http://127.0.0.2:11434', twoFetch);
+
+    const [oneModel] = await one.models();
+    const [twoModel] = await two.models();
+    expect(oneModel).toMatchObject({ id: 'local:srv-aaa111:qwen3:8b', contextWindow: 2048 });
+    expect(twoModel).toMatchObject({ id: 'local:srv-bbb222:qwen3:8b', contextWindow: 4096 });
+
+    const events: unknown[] = [];
+    await one.stream({ model: oneModel.id, messages: [{ role: 'user', content: 'hi' }] }, event => events.push(event));
+    expect(events).toContainEqual({ type: 'content', text: 'remote hi' });
+    expect(oneFetch.mock.calls.map(([url]) => url)).toContain('https://one.example.test/api/chat');
+    expect(oneFetch.mock.calls.every(([url]) => url.startsWith('https://one.example.test/'))).toBe(true);
+    expect(globalFetch).not.toHaveBeenCalled();
+    expect(chatFetch).not.toHaveBeenCalled();
+
+    await expect(one.stream({ model: twoModel.id, messages: [] }, () => undefined)).rejects.toThrow(
+      'Invalid local model id.'
+    );
+    await expect(one.stream({ model: 'local:ollama:qwen3:8b', messages: [] }, () => undefined)).rejects.toThrow(
+      'Invalid local model id.'
+    );
+  });
+
+  it('asks for new credentials when a saved server answers 401', async () => {
+    const fetch = vi.fn(async () => new Response('{"error":"unauthorized"}', { status: 401 }));
+    const server = new OllamaLocal(undefined, undefined, {
+      runtimeId: 'srv-aaa111',
+      baseUrl: 'https://one.example.test',
+      label: 'gpu box',
+      fetch,
+      hasCredentials: () => true,
+    });
+    const error = await server.listModels().catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ServerCredentialsError);
+    expect((error as Error).message).toContain('gpu box');
   });
 
   it('streams chat through the fetch it is given and keeps the short calls on global fetch', async () => {

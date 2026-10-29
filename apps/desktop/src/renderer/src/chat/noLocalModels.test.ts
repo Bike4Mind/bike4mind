@@ -25,6 +25,18 @@ describe('noLocalModels', () => {
     expect(noLocalModels({ models: [model], loading: false, runtime: down })).toMatchObject({ fix: null });
   });
 
+  it('does not block while a saved server offers a model, even with Ollama on this computer down', () => {
+    const remote: ChatModelOption = {
+      id: localModelId('srv-abc123', 'qwen2.5:0.5b'),
+      name: 'qwen2.5:0.5b',
+      server: { id: 'abc123', name: 'gpu box' },
+    };
+    expect(noLocalModels({ models: [remote], loading: false, runtime: down })).toBeNull();
+    expect(
+      noLocalModels({ models: [{ ...remote, unavailable: 'gpu box is unreachable' }], loading: false, runtime: down })
+    ).toMatchObject({ fix: null });
+  });
+
   it('treats an unreadable status with an empty list as not running', () => {
     expect(noLocalModels({ models: [], loading: false, runtime: null })?.fix).toBeNull();
   });

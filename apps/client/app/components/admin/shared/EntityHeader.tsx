@@ -4,7 +4,18 @@ import { Box, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 
-function CopyValue({ value, label, mono }: { value: string; label: string; mono?: boolean }) {
+/** A value with a copy button; `label` names it for the button ("Copy key prefix"). */
+export function CopyValue({
+  value,
+  label,
+  mono,
+  'data-testid': testId,
+}: {
+  value: string;
+  label: string;
+  mono?: boolean;
+  'data-testid'?: string;
+}) {
   const [result, setResult] = useState<'idle' | 'copied' | 'error'>('idle');
   const copy = async () => {
     try {
@@ -33,7 +44,7 @@ function CopyValue({ value, label, mono }: { value: string; label: string; mono?
           variant="plain"
           aria-label={`Copy ${label}`}
           onClick={() => void copy()}
-          data-testid={`admin-entity-copy-${label}-btn`}
+          data-testid={testId ?? `admin-entity-copy-${label}-btn`}
           sx={{ '--IconButton-size': '22px', minHeight: 22, minWidth: 22, color: 'admin.inkMuted' }}
         >
           {result === 'copied' ? (

@@ -1,6 +1,7 @@
 import { IUserDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/apiClient';
 import { takeLegacyRefreshToken, useAccessToken } from '@client/app/hooks/useAccessToken';
+import axios from 'axios';
 
 /**
  * The single place the app exchanges the HttpOnly refresh cookie.
@@ -140,16 +141,29 @@ async function exchange(): Promise<RefreshedSession> {
     // `cookie: true` so the server migrates it onto a cookie instead of logging the user out.
     const legacy = takeLegacyRefreshToken();
 
-    const { data } = await api.post<RefreshedSession>(
-      '/api/auth/refreshToken',
-      legacy ? { token: legacy, cookie: true } : {},
-      {
+    const response = await api
+      .post<RefreshedSession>('/api/auth/refreshToken', legacy ? { token: legacy, cookie: true } : {}, {
         // skipAuthRefresh: a 401 here means "no session", not "refresh me". Letting the 401
         // interceptor react would recurse straight back into this function.
         skipAuthRefresh: true,
         timeout: REFRESH_TIMEOUT_MS,
-      }
-    );
+      })
+      .catch(async error => {
+        // A reload has no in-memory impersonation flag; the parked cookie is the recovery credential.
+        if (!axios.isAxiosError(error) || error.response?.data?.code !== 'impersonation_return_required') throw error;
+        const restored = await fetch('/api/auth/returnToAdmin', {
+          method: 'POST',
+          credentials: 'same-origin',
+          signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
+        }).catch(() => {
+          throw error;
+        });
+        if (!restored.ok) throw error;
+        const session = (await restored.json()) as RefreshedSession;
+        window.location.replace('/new');
+        return { data: session };
+      });
+    const { data } = response;
 
     applySession(data);
     const sid = decodeSid(data.accessToken);

@@ -139,23 +139,18 @@ describe('POST /api/auth/refreshToken — tokenVersion kill switch', () => {
     );
   });
 
-  it('re-stamps impersonatedBy from the refresh token onto the migrated session', async () => {
-    // Regression: a refreshed access token during impersonation must keep carrying
-    // impersonatedBy, otherwise logout.ts's "don't revoke the real customer" guard
-    // silently stops applying after one refresh.
+  it('rejects legacy impersonation tokens rather than migrating without a fixed deadline', async () => {
     mockVerifyRefreshToken.mockReturnValue({ userId: 'customer-1', tokenVersion: 0, impersonatedBy: 'admin-9' });
     mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0 });
 
     const { req, res } = createMocks({ method: 'POST', body: { refresh_token: 'impersonated-token' } });
 
-    await handler(req as any, res as any);
-
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockIssueSession).toHaveBeenCalledWith(
-      'customer-1',
-      expect.objectContaining({ impersonatedBy: 'admin-9' }),
-      expect.anything()
+    await expect(handler(req as never, res as never)).rejects.toThrow(
+      'Legacy support session expired. Return to admin.'
     );
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect(res.getHeader('Set-Cookie')).toBeUndefined();
   });
 });
 

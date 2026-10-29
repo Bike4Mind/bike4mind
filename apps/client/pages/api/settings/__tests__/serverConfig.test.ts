@@ -5,8 +5,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // heavy DB/service deps; the two compute* helpers are thin delegations this test verifies.
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ get: (fn: unknown) => fn }) }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
-vi.mock('sst', () => ({ Resource: {} }));
+const mockConfig = vi.hoisted(() => ({}) as Record<string, unknown>);
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mockConfig }));
+vi.mock('sst', () => ({
+  Resource: {
+    websocket: { url: 'wss://example.test' },
+    appFilesBucket: { name: 'app-files' },
+    fabFileBucket: { name: 'fab-files' },
+  },
+}));
+vi.mock('@server/utils/deploymentMediaOrigins', () => ({ resolveWhatsNewUpstreamOrigin: () => '' }));
 
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: { name: 'apiKeys' },
@@ -33,7 +41,7 @@ vi.mock('@bike4mind/server-utils/embeddings/effectiveEmbeddingModel', () => ({
   resolveEffectiveEmbeddingModel: (...a: unknown[]) => resolveEffectiveEmbeddingModel(...a),
 }));
 
-import { computeToolAvailability, computeEffectiveEmbeddingModel } from '../serverConfig';
+import handler, { computeToolAvailability, computeEffectiveEmbeddingModel } from '../serverConfig';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -120,5 +128,25 @@ describe('computeEffectiveEmbeddingModel (wire adapter over the shared resolver)
     await computeEffectiveEmbeddingModel('user-1', null as unknown as undefined);
 
     expect(resolveEffectiveEmbeddingModel).toHaveBeenCalledWith('user-1', {});
+  });
+});
+
+describe('turnstileSecretConfigured', () => {
+  it.each([
+    ['a real key', 'real-key', true],
+    ['undefined', undefined, false],
+    ['an empty string', '', false],
+    ['the not-configured placeholder', 'not-configured', false],
+  ])('reports %s as %s', async (_label, secret, expected) => {
+    mockConfig.TURNSTILE_SECRET_KEY = secret;
+    getEffectiveLLMApiKeys.mockResolvedValue({});
+    resolveEffectiveEmbeddingModel.mockResolvedValue('m');
+    const json = vi.fn();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)({ user: { id: 'u' } }, { json });
+
+    const payload = json.mock.calls[0][0];
+    expect(payload.turnstileSecretConfigured).toBe(expected);
+    expect(JSON.stringify(payload)).not.toContain('real-key');
   });
 });

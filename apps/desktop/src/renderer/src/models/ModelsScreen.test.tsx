@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import type { ModelsInUse } from './InstalledTab';
 import { ModelsScreen } from './ModelsScreen';
+import { DOWN_RECHECK_MS } from './useModelHub';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -249,6 +250,77 @@ describe('ModelsScreen installed', () => {
     await click(q('models-explore-result-row'));
     expect(q('models-detail-runtime-down')).not.toBeNull();
     expect(q('models-build-pull-btn')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('checks again on its own while Ollama looks down, and lists its models once it answers', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bridge.status = { ...DOWN, error: 'timed out after 1500ms' };
+      await mount();
+      expect(q('models-runtime-status')?.dataset.state).toBe('down');
+
+      bridge.status = RUNNING;
+      bridge.installed = {
+        ok: true,
+        models: [
+          {
+            name: 'qwen2.5:0.5b',
+            sizeBytes: 1,
+            quantization: null,
+            family: null,
+            parameterSize: null,
+            modifiedAt: null,
+            capabilities,
+            loaded: false,
+          },
+        ],
+      };
+      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS));
+      await flush();
+      expect(q('models-runtime-status')?.dataset.state).toBe('running');
+      expect(all('models-installed-row').map(row => row.dataset.name)).toEqual(['qwen2.5:0.5b']);
+
+      const checks = calls.getStatus.mock.calls.length;
+      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS * 3));
+      expect(calls.getStatus.mock.calls.length).toBe(checks);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps checking after consecutive down responses', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bridge.status = DOWN;
+      await mount();
+      const checks = calls.getStatus.mock.calls.length;
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        // IPC deserializes a fresh status object for each response.
+        bridge.status = { ...DOWN };
+        await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS));
+        expect(calls.getStatus).toHaveBeenCalledTimes(checks + attempt);
+        expect(q('models-runtime-status')?.dataset.state).toBe('down');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops checking when the screen closes while Ollama is down', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bridge.status = DOWN;
+      await mount();
+      const checks = calls.getStatus.mock.calls.length;
+
+      act(() => root?.unmount());
+      root = null;
+      await act(() => vi.advanceTimersByTimeAsync(DOWN_RECHECK_MS * 3));
+      expect(calls.getStatus).toHaveBeenCalledTimes(checks);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

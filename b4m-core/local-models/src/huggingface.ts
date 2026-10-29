@@ -807,6 +807,7 @@ export class HuggingFaceHub {
 
   /** One page of GGUF repos matching `query`. */
   async search(options: HubSearchOptions = {}): Promise<HubSearchPage> {
+    options.signal?.throwIfAborted();
     const requested = Number.isFinite(options.limit) ? Math.trunc(options.limit ?? 0) : DEFAULT_HUB_SEARCH_LIMIT;
     const limit = Math.min(Math.max(requested, 1), MAX_HUB_SEARCH_LIMIT);
     const params = new URLSearchParams({ filter: 'gguf', sort: SORT_PARAMS[options.sort ?? 'downloads'] });
@@ -841,6 +842,7 @@ export class HuggingFaceHub {
     assertRepoId(repo);
     const requested = options.revision ?? 'main';
     assertRevision(requested);
+    options.signal?.throwIfAborted();
     const cacheKey = `${this.#cacheScope}\nmodel\n${repo}\n${requested}`;
     const cached = options.refresh ? undefined : cacheGet<HubModelDetail>(cacheKey);
     if (cached) return cached;
@@ -1047,11 +1049,15 @@ export class HuggingFaceHub {
       } catch (error) {
         throw this.#connectionError(shown, error, context.signal);
       }
-      if (response.status === 429 && retries < MAX_RATE_LIMIT_RETRIES) {
+      if (response.status === 429 && this.#maxRateLimitWaitMs > 0 && retries < MAX_RATE_LIMIT_RETRIES) {
         const delay = retryAfterMs(response.headers) ?? RATE_LIMIT_BACKOFF_MS * 2 ** retries;
         if (waitedMs + delay <= this.#maxRateLimitWaitMs) {
           await response.body?.cancel().catch(() => undefined);
-          await sleep(delay, context.signal);
+          try {
+            await sleep(delay, signal);
+          } catch (error) {
+            throw this.#connectionError(shown, error, context.signal);
+          }
           waitedMs += delay;
           retries++;
           hop--;

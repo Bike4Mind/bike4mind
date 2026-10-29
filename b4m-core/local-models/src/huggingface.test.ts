@@ -284,6 +284,21 @@ describe('HuggingFaceHub cache', () => {
     expect(calls).toBe(2);
   });
 
+  it('honors cancellation even when search and model answers are cached', async () => {
+    const server = await serve({
+      'GET /api/models': json(searchPage),
+      ...repoRoutes(repo, qwenSha, qwenInfo, qwenTree),
+    });
+    const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
+    await hub.search();
+    await hub.getModel(repo);
+    const signal = AbortSignal.abort();
+
+    await expect(hub.search({ signal })).rejects.toBe(signal.reason);
+    await expect(hub.getModel(repo, { signal })).rejects.toBe(signal.reason);
+    expect(server.requests).toHaveLength(3);
+  });
+
   it('hands out copies, so a caller that edits a result does not change the next one', async () => {
     const server = await serve({ 'GET /api/models': json(searchPage) });
     const hub = new HuggingFaceHub({ endpoint: server.baseUrl });
@@ -344,6 +359,29 @@ describe('HuggingFaceHub rate limit backoff', () => {
   it('does not wait at all when Retry-After is longer than the cap', async () => {
     const { fetch, hub } = hubWith([limited('30')]);
     expect(await caught(hub.search())).toMatchObject({ name: 'HubRateLimitError', retryAfterMs: 30_000 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['0', 'Thu, 01 Jan 1970 00:00:00 GMT'])(
+    'does not retry with retries disabled even for Retry-After %s',
+    async header => {
+      const { fetch, hub } = hubWith([limited(header)], { maxRateLimitWaitMs: 0 });
+      await expect(hub.search()).rejects.toBeInstanceOf(HubRateLimitError);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('honors the request deadline during backoff without sending another request', async () => {
+    const fetch = vi.fn(async (_input: string, options?: RequestInit) => {
+      options?.signal?.throwIfAborted();
+      return limited('3')();
+    });
+    const hub = new HuggingFaceHub({ fetch, requestTimeoutMs: 30 });
+    const started = performance.now();
+
+    await expect(hub.search()).rejects.toBeInstanceOf(RuntimeConnectionError);
+
+    expect(performance.now() - started).toBeLessThan(1000);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 

@@ -54,6 +54,20 @@ const handler = baseApi().use(
       )
     );
 
+    // After the commit, outside its session (see cleanUpDeletedFileReferences). A projectId-scoped
+    // revoke drops one project's grant only, so it leaves the user's own references alone.
+    if (type === 'files' && !body.projectId) {
+      await sharingService.cleanUpRevokedFileReferences(id, body.userId, {
+        db: { users: userRepository, fabFiles: fabFileRepository, sessions: sessionRepository },
+        // Imported at call time, like the session routes: the resolver's graph reaches the Mongoose models.
+        resolveAttachmentLakeAccess: async user =>
+          (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(user, req.logger, {
+            requireCompleteView: true,
+          })(),
+        logger: req.logger,
+      });
+    }
+
     return res.json(document);
   }
 );

@@ -75,6 +75,10 @@ import {
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
 } from './agents.contract';
 import {
   getClaudeBundleZipContract,
@@ -170,6 +174,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
   getClaudeMarketplaceContract,
   getClaudePluginZipContract,
   getClaudeBundleZipContract,

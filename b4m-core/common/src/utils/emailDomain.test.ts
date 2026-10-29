@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   emailDomainCandidates,
   emailDomainOf,
+  isDomainInDomains,
   isEmailInDomains,
   normalizeEmailDomain,
   partitionDomainList,
@@ -61,6 +62,21 @@ describe('isEmailInDomains', () => {
     expect(isEmailInDomains('x@notkashre.com', domains)).toBe(false);
     expect(isEmailInDomains('x@kashre.com.evil.io', domains)).toBe(false);
     expect(isEmailInDomains('x@com', domains)).toBe(false);
+  });
+});
+
+describe('isDomainInDomains', () => {
+  const domains = new Set(['kashre.com']);
+
+  it('matches the domain itself and its subdomains', () => {
+    expect(isDomainInDomains('kashre.com', domains)).toBe(true);
+    expect(isDomainInDomains('a.np.kashre.com', domains)).toBe(true);
+  });
+
+  it('does not match a parent, a lookalike or a bare TLD', () => {
+    expect(isDomainInDomains('np.kashre.com', new Set(['a.np.kashre.com']))).toBe(false);
+    expect(isDomainInDomains('notkashre.com', domains)).toBe(false);
+    expect(isDomainInDomains('com', new Set(['com']))).toBe(false);
   });
 });
 

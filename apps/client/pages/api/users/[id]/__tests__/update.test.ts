@@ -486,6 +486,41 @@ describe('PUT /api/users/:id/update - admin branch requires the admin scope', ()
   });
 });
 
+describe('PUT /api/users/:id/update - setting a balance to zero', () => {
+  it('forwards currentCredits: 0 with its reason when the target holds credits', async () => {
+    mockUserFindById.mockReturnValue({ id: 'u1', currentCredits: 100 });
+    const { promise } = run({
+      user: ADMIN,
+      userId: 'u1',
+      body: { currentCredits: 0, creditReason: 'Zeroed after abuse review' },
+    });
+    await promise;
+
+    expect(mockAdminUpdateUser).toHaveBeenCalledWith(
+      ADMIN.id,
+      expect.objectContaining({ currentCredits: 0, creditReason: 'Zeroed after abuse review' }),
+      expect.anything()
+    );
+  });
+
+  it('drops currentCredits: 0 when the balance is already zero, so no reason is demanded', async () => {
+    mockUserFindById.mockReturnValue({ id: 'u1', currentCredits: 0 });
+    const { promise } = run({ user: ADMIN, userId: 'u1', body: { currentCredits: 0 } });
+    await promise;
+
+    const params = mockAdminUpdateUser.mock.calls[0][1] as Record<string, unknown>;
+    expect(params.currentCredits).toBeUndefined();
+  });
+
+  it('rejects a zero balance change without a reason', async () => {
+    mockUserFindById.mockReturnValue({ id: 'u1', currentCredits: 100 });
+    const { promise } = run({ user: ADMIN, userId: 'u1', body: { currentCredits: 0 } });
+
+    await expect(promise).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+});
+
 describe('PUT /api/users/:id/update - admin unknown-field discard', () => {
   it('reports unknown fields instead of silently dropping them', async () => {
     const { res, promise } = run({

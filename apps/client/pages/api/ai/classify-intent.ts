@@ -1,5 +1,7 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
@@ -46,144 +48,148 @@ const RequestSchema = z.object({
 const handler = baseApi()
   .use(
     rateLimit({
-      limit: process.env.NODE_ENV === 'development' ? 200 : 60,
+      limit: blockedAtZeroTierLimit(process.env.NODE_ENV === 'development' ? 200 : 60),
       windowMs: 60 * 1000,
     })
   )
-  .post(async (req, res) => {
-    // Before the cache probe: a cache hit returns ahead of model admission.
-    assertAiAccessAllowed(req.user);
-    const userId = req.user.id;
-    const parsed = RequestSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'invalid request', issues: parsed.error.issues });
-    }
-
-    const orchestrationDefaults = await adminSettingsRepository.getSettingsValue('orchestrationDefaults').catch(err => {
-      req.logger.warn('[classify-intent] Failed to load orchestrationDefaults; using built-in defaults', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return undefined;
-    });
-    const classifierConfig = orchestrationDefaults?.intentClassifier ?? IntentClassifierConfigSchema.parse({});
-
-    if (!classifierConfig.enabled) {
-      return res.status(200).json({
-        skipped: true,
-        reason: 'disabled',
-        shadowMode: classifierConfig.shadowMode,
-      });
-    }
-
-    const dbAdapters = {
-      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-      getSettingsByNames,
-    };
-    const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
-    const availableModels = await getAvailableModels(apiKeyTable);
-
-    const input = {
-      userId,
-      message: parsed.data.message,
-      hasFileAttachments: parsed.data.hasFileAttachments,
-      hasAgentMention: parsed.data.hasAgentMention,
-    };
-    // Cache-only probe: an empty cascade can make no provider call, so a hit is served without
-    // any billing work and a miss throws ("cascade is empty") into the metered path below.
-    const cachedDecision = await classifyIntent(input, {
-      apiKeyTable,
-      availableModels,
-      logger: req.logger,
-      config: classifierConfig,
-      resolveCascade: () => [],
-    }).catch(() => null);
-    if (cachedDecision?.cacheHit) {
-      const { usage: _usage, ...decision } = cachedDecision;
-      return res.status(200).json({ decision, shadowMode: classifierConfig.shadowMode });
-    }
-
-    const cascade = [classifierConfig.primaryModel, ...classifierConfig.fallbackModels];
-    // The platform chooses the cascade, so picker entitlements do not apply. Catalog availability
-    // and pricing still do: an unpriced model would otherwise bypass the hold with a $0 ceiling.
-    const admission = await createModelAdmission(req.user, availableModels, true);
-    const presentCascade = cascade.filter(modelId => availableModels.some(model => model.id === modelId));
-    const admittedCascade: string[] = [];
-    for (const modelId of presentCascade) {
-      if (await admission.admits(modelId)) admittedCascade.push(modelId);
-    }
-    // A refused candidate must not prevent a valid fallback from answering. When every present
-    // candidate is refused, retain the admission error rather than reporting a provider outage.
-    if (presentCascade.length > 0 && admittedCascade.length === 0) await admission.assert(presentCascade[0]);
-    const runnableCascade = presentCascade.length > 0 ? admittedCascade : cascade;
-
-    // Hold the worst case: every cascade model runs, each with its best-effort retry.
-    const messages = buildIntentClassifierMessages(input);
-    const modelCeilingUsd = (modelId: string) => {
-      const modelInfo = availableModels.find(m => m.id === modelId);
-      if (!modelInfo) return 0;
-      // The Gemini adapter adds thinking headroom to the classifier's visible-output cap.
-      const heldMaxTokens = usesGeminiThinkingOutputCap(modelInfo)
-        ? geminiThinkingOutputCap(modelInfo, INTENT_CLASSIFIER_MAX_TOKENS).maxOutputTokens
-        : INTENT_CLASSIFIER_MAX_TOKENS;
-      return completionCeilingUsd(modelInfo, messages, heldMaxTokens) * INTENT_CLASSIFIER_CALLS_PER_MODEL;
-    };
-    const ceilingUsd = runnableCascade.reduce((sum, modelId) => sum + modelCeilingUsd(modelId), 0);
-    const reservation = await reserveCompletionCredits(req, ceilingUsd, 'intent classification');
-
-    // A call with no reported usage (an early-exit abort drops it) is charged its own ceiling.
-    const settleUsage = async (usage: IntentClassifierCallUsage[], model: string) => {
-      const usd = usage.reduce((sum, call) => {
-        const modelInfo = availableModels.find(m => m.id === call.modelId);
-        if (!modelInfo) return sum;
-        return hasReportedUsage(call)
-          ? sum + completionUsd(modelInfo, call)
-          : sum + modelCeilingUsd(call.modelId) / INTENT_CLASSIFIER_CALLS_PER_MODEL;
-      }, 0);
-      if (usd <= 0) {
-        await reservation.refund();
-        return;
+  .post(
+    withRequestCompletionQuota(async (req, res) => {
+      // Before the cache probe: a cache hit returns ahead of model admission.
+      assertAiAccessAllowed(req.user);
+      const userId = req.user.id;
+      const parsed = RequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'invalid request', issues: parsed.error.issues });
       }
-      await settleCompletion(reservation, req, {
-        model,
-        provider: availableModels.find(m => m.id === model)?.backend ?? 'unknown',
-        usd,
-        inputTokens: usage.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
-        outputTokens: usage.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
-        cacheReadInputTokens: usage.reduce((sum, call) => sum + (call.cacheReadInputTokens ?? 0), 0),
-        cacheCreationInputTokens: usage.reduce((sum, call) => sum + (call.cacheCreationInputTokens ?? 0), 0),
-      });
-    };
 
-    let result: Awaited<ReturnType<typeof classifyIntent>>;
-    try {
-      result = await classifyIntent(input, {
+      const orchestrationDefaults = await adminSettingsRepository
+        .getSettingsValue('orchestrationDefaults')
+        .catch(err => {
+          req.logger.warn('[classify-intent] Failed to load orchestrationDefaults; using built-in defaults', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return undefined;
+        });
+      const classifierConfig = orchestrationDefaults?.intentClassifier ?? IntentClassifierConfigSchema.parse({});
+
+      if (!classifierConfig.enabled) {
+        return res.status(200).json({
+          skipped: true,
+          reason: 'disabled',
+          shadowMode: classifierConfig.shadowMode,
+        });
+      }
+
+      const dbAdapters = {
+        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+        getSettingsByNames,
+      };
+      const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
+      const availableModels = await getAvailableModels(apiKeyTable);
+
+      const input = {
+        userId,
+        message: parsed.data.message,
+        hasFileAttachments: parsed.data.hasFileAttachments,
+        hasAgentMention: parsed.data.hasAgentMention,
+      };
+      // Cache-only probe: an empty cascade can make no provider call, so a hit is served without
+      // any billing work and a miss throws ("cascade is empty") into the metered path below.
+      const cachedDecision = await classifyIntent(input, {
         apiKeyTable,
         availableModels,
         logger: req.logger,
         config: classifierConfig,
-        resolveCascade: () => runnableCascade,
-      });
-    } catch (err) {
-      if (err instanceof CascadeExhaustedError) {
-        // Failed attempts that reached a provider still cost money.
-        await settleUsage(err.usage, err.usage[err.usage.length - 1]?.modelId ?? 'unknown');
-        req.logger.error('[classify-intent] cascade exhausted', { attempts: err.attempts });
-        return res.status(503).json({ error: 'cascade exhausted', attempts: err.attempts });
+        resolveCascade: () => [],
+      }).catch(() => null);
+      if (cachedDecision?.cacheHit) {
+        const { usage: _usage, ...decision } = cachedDecision;
+        return res.status(200).json({ decision, shadowMode: classifierConfig.shadowMode });
       }
-      await reservation.refund();
-      const msg = err instanceof Error ? err.message : String(err);
-      req.logger.error('[classify-intent] failed', { error: msg });
-      return res.status(500).json({ error: msg });
-    }
 
-    const { usage, ...decision } = result;
-    await settleUsage(usage, decision.classifierModel);
+      const cascade = [classifierConfig.primaryModel, ...classifierConfig.fallbackModels];
+      // The platform chooses the cascade, so picker entitlements do not apply. Catalog availability
+      // and pricing still do: an unpriced model would otherwise bypass the hold with a $0 ceiling.
+      const admission = await createModelAdmission(req.user, availableModels, true);
+      const presentCascade = cascade.filter(modelId => availableModels.some(model => model.id === modelId));
+      const admittedCascade: string[] = [];
+      for (const modelId of presentCascade) {
+        if (await admission.admits(modelId)) admittedCascade.push(modelId);
+      }
+      // A refused candidate must not prevent a valid fallback from answering. When every present
+      // candidate is refused, retain the admission error rather than reporting a provider outage.
+      if (presentCascade.length > 0 && admittedCascade.length === 0) await admission.assert(presentCascade[0]);
+      const runnableCascade = presentCascade.length > 0 ? admittedCascade : cascade;
 
-    return res.status(200).json({
-      decision,
-      shadowMode: classifierConfig.shadowMode,
-    });
-  });
+      // Hold the worst case: every cascade model runs, each with its best-effort retry.
+      const messages = buildIntentClassifierMessages(input);
+      const modelCeilingUsd = (modelId: string) => {
+        const modelInfo = availableModels.find(m => m.id === modelId);
+        if (!modelInfo) return 0;
+        // The Gemini adapter adds thinking headroom to the classifier's visible-output cap.
+        const heldMaxTokens = usesGeminiThinkingOutputCap(modelInfo)
+          ? geminiThinkingOutputCap(modelInfo, INTENT_CLASSIFIER_MAX_TOKENS).maxOutputTokens
+          : INTENT_CLASSIFIER_MAX_TOKENS;
+        return completionCeilingUsd(modelInfo, messages, heldMaxTokens) * INTENT_CLASSIFIER_CALLS_PER_MODEL;
+      };
+      const ceilingUsd = runnableCascade.reduce((sum, modelId) => sum + modelCeilingUsd(modelId), 0);
+      const reservation = await reserveCompletionCredits(req, ceilingUsd, 'intent classification');
+
+      // A call with no reported usage (an early-exit abort drops it) is charged its own ceiling.
+      const settleUsage = async (usage: IntentClassifierCallUsage[], model: string) => {
+        const usd = usage.reduce((sum, call) => {
+          const modelInfo = availableModels.find(m => m.id === call.modelId);
+          if (!modelInfo) return sum;
+          return hasReportedUsage(call)
+            ? sum + completionUsd(modelInfo, call)
+            : sum + modelCeilingUsd(call.modelId) / INTENT_CLASSIFIER_CALLS_PER_MODEL;
+        }, 0);
+        if (usd <= 0) {
+          await reservation.refund();
+          return;
+        }
+        await settleCompletion(reservation, req, {
+          model,
+          provider: availableModels.find(m => m.id === model)?.backend ?? 'unknown',
+          usd,
+          inputTokens: usage.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
+          outputTokens: usage.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
+          cacheReadInputTokens: usage.reduce((sum, call) => sum + (call.cacheReadInputTokens ?? 0), 0),
+          cacheCreationInputTokens: usage.reduce((sum, call) => sum + (call.cacheCreationInputTokens ?? 0), 0),
+        });
+      };
+
+      let result: Awaited<ReturnType<typeof classifyIntent>>;
+      try {
+        result = await classifyIntent(input, {
+          apiKeyTable,
+          availableModels,
+          logger: req.logger,
+          config: classifierConfig,
+          resolveCascade: () => runnableCascade,
+        });
+      } catch (err) {
+        if (err instanceof CascadeExhaustedError) {
+          // Failed attempts that reached a provider still cost money.
+          await settleUsage(err.usage, err.usage[err.usage.length - 1]?.modelId ?? 'unknown');
+          req.logger.error('[classify-intent] cascade exhausted', { attempts: err.attempts });
+          return res.status(503).json({ error: 'cascade exhausted', attempts: err.attempts });
+        }
+        await reservation.refund();
+        const msg = err instanceof Error ? err.message : String(err);
+        req.logger.error('[classify-intent] failed', { error: msg });
+        return res.status(500).json({ error: msg });
+      }
+
+      const { usage, ...decision } = result;
+      await settleUsage(usage, decision.classifierModel);
+
+      return res.status(200).json({
+        decision,
+        shadowMode: classifierConfig.shadowMode,
+      });
+    })
+  );
 
 export const config = {
   api: {

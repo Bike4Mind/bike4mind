@@ -617,8 +617,6 @@ export const SidebarNav = ({
             '& input::placeholder': { color: 'admin.inkMuted', opacity: 1 },
             '& .MuiInput-startDecorator': { color: 'admin.inkMuted' },
             '&:hover': { borderColor: tokens.borderStrong },
-            '&:focus-within': { outline: '2px solid var(--joy-palette-admin-accent)', outlineOffset: 2 },
-            '&::before': { display: 'none' },
           }}
         />
       </Box>

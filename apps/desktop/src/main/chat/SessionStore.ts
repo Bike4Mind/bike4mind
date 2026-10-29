@@ -838,44 +838,68 @@ export class SessionStore {
   }
 
   /** Grant one more folder to a Code session alone. No-op for a Chat session, which has no project. */
-  async addContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      if (!session.project) return null;
-      if (session.project.contextDirectories.includes(directory)) return false;
-      session.project.contextDirectories.push(directory);
-      return true;
-    });
+  async addContextDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        if (!session.project) return null;
+        if (session.project.contextDirectories.includes(directory)) return false;
+        session.project.contextDirectories.push(directory);
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Grant a folder to this conversation alone, for a session with no project to hold it as a
    * context directory. Reached only from a folder the user shared: a `request_directory` card they clicked, the picker, or `/add-dir`.
    */
-  async addGrantedDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      const granted = session.grantedDirectories ?? [];
-      if (granted.includes(directory)) return false;
-      session.grantedDirectories = [...granted, directory];
-      return true;
-    });
+  async addGrantedDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const granted = session.grantedDirectories ?? [];
+        if (granted.includes(directory)) return false;
+        session.grantedDirectories = [...granted, directory];
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**
    * Take a folder back from this conversation, whichever list it was granted into: a session's
    * chips draw both, and one remove control must revoke either.
    */
-  async removeContextDirectory(id: string, directory: string): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
-      const granted = session.grantedDirectories ?? [];
-      if (!session.project && !granted.includes(directory)) return null;
-      if (session.project) {
-        session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
-      }
-      const kept = granted.filter(entry => entry !== directory);
-      if (kept.length > 0) session.grantedDirectories = kept;
-      else delete session.grantedDirectories;
-      return true;
-    });
+  async removeContextDirectory(
+    id: string,
+    directory: string,
+    expectedScope = this.scopeKey()
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const granted = session.grantedDirectories ?? [];
+        if (!granted.includes(directory) && !session.project?.contextDirectories.includes(directory)) return null;
+        if (session.project) {
+          session.project.contextDirectories = session.project.contextDirectories.filter(entry => entry !== directory);
+        }
+        const kept = granted.filter(entry => entry !== directory);
+        if (kept.length > 0) session.grantedDirectories = kept;
+        else delete session.grantedDirectories;
+        return true;
+      },
+      expectedScope
+    );
   }
 
   /**

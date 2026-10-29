@@ -160,17 +160,25 @@ describe('optionalJwtAuth', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('admits an enrolled session, and an impersonation session, under enforcement', async () => {
+  it('admits an enrolled session under enforcement', async () => {
     enforcement.enforced = true;
-    for (const user of [
-      { id: 'u1', mfa: { totpEnabled: true } },
-      { id: 'u1', impersonatedBy: 'admin-1' },
-    ]) {
-      queueAuthResult(null, user);
-      const { req, res, next } = make({ authorization: 'Bearer good.token' });
-      await run(req, res, next);
-      expect(req.user).toEqual(user);
-    }
+    const user = { id: 'u1', mfa: { totpEnabled: true } };
+    queueAuthResult(null, user);
+    const { req, res, next } = make({ authorization: 'Bearer good.token' });
+    await run(req, res, next);
+    expect(req.user).toEqual(user);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('degrades impersonation to anonymous with enforceMFA=%s', async enforced => {
+    enforcement.enforced = enforced;
+    queueAuthResult(null, { id: 'u1', impersonatedBy: 'admin-1', mfa: { totpEnabled: true } });
+    const { req, res, next } = make({ authorization: 'Bearer support.token' });
+    await run(req, res, next);
+    expect(req.user).toBeUndefined();
+    expect(req.ability).toBeUndefined();
+    expect(mockAbility).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledOnce();
   });
 
   it('degrades to anonymous when the enforcement read fails', async () => {

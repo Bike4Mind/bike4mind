@@ -35,6 +35,8 @@ const AuthSessionSchema = new Schema<IAuthSessionDocument>(
     device: { type: AuthSessionDeviceSchema, default: undefined },
     createdVia: { type: String, required: true },
     impersonatedBy: { type: String, default: null },
+    impersonationExpiresAt: { type: Date, default: null },
+    impersonationWriteEnabled: { type: Boolean, default: false },
     clientId: { type: String, default: null },
     lastUsedAt: { type: Date, required: true },
     expiresAt: { type: Date, required: true },

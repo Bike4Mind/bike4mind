@@ -48,6 +48,7 @@ async function loadWafResources(): Promise<void> {
     cloudwatch: { MetricAlarm: resources.alarm, LogMetricFilter: resources.filter },
     sns: { Topic: resources.resource, TopicSubscription: resources.resource, getTopicOutput: resources.topicLookup },
     lambda: { Permission: resources.resource },
+    ssm: { Parameter: resources.resource },
     sqs: { Queue: resources.resource, QueuePolicy: resources.resource },
   });
   vi.stubGlobal('sst', { Linkable: resources.resource, aws: { Function: resources.resource } });

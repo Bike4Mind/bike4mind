@@ -48,10 +48,10 @@ vi.mock('@bike4mind/services', () => ({
 
 import '@pages/api/modals';
 
-function mocks(isAdmin: boolean, query: Record<string, string> = {}) {
+function mocks(isAdmin: boolean, query: Record<string, string> = {}, adminPermissions?: string[]) {
   const { req, res } = createMocks({ method: 'GET', query });
   (req as any).ability = { can: () => true };
-  (req as any).user = { id: 'user-1', isAdmin };
+  (req as any).user = { id: 'user-1', isAdmin, adminPermissions };
   return { req, res };
 }
 
@@ -87,5 +87,18 @@ describe('GET /api/modals - non-admin publication-state filter', () => {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const startDateUpperBound = mockRefs.findFilter.$and[0].$or[2].startDate.$lte;
     expect(tomorrow <= startDateUpperBound).toBe(false);
+  });
+});
+
+describe('GET /api/modals - delegated settings:manage', () => {
+  beforeEach(() => {
+    mockRefs.findFilter = undefined;
+    mockRefs.modals = [];
+  });
+
+  it('keeps the publication filter for a settings:manage delegate (drafts stay admin-only)', async () => {
+    const { req, res } = mocks(false, {}, ['settings:manage']);
+    await mockRefs.getHandler!(req, res);
+    expect(mockRefs.findFilter.enabled).toBe(true);
   });
 });

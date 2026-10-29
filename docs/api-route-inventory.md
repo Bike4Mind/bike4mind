@@ -34,14 +34,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-935 routes: 52 contracted, 9 aliases of another route, 199 with no static caller in `apps/client/app`.
+937 routes: 52 contracted, 9 aliases of another route, 199 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [...unmatchedApiPath] | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 221 | 0 | 207 | 5 | 0 | 9 | 30 |
+| admin | 223 | 0 | 207 | 7 | 0 | 9 | 30 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -257,6 +257,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/model-deprecation-status` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/ModelLifecycleTab.tsx` |
 | `/api/admin/model-discovery` | GET, POST | jwt+key | `admin:*` | no | - | 2: `components/admin/DiscoveryRunDetailModal.tsx`, `components/admin/DiscoveryStatusCard.tsx` |
 | `/api/admin/model-logs` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/useModelLogs.ts` |
+| `/api/admin/model-logs/[id]` | GET | jwt | `admin:*` | no | - | 1: `hooks/useModelLogs.ts` |
 | `/api/admin/model-metrics` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/ModelMetrics/hooks/useModelMetrics.ts` |
 | `/api/admin/model-prices` | GET, POST | jwt+key | `admin:*` | no | - | 1: `components/admin/CreditAnalysis/components/ModelPricingCatalog.tsx` |
 | `/api/admin/moderation-incidents` | GET | jwt+key | `admin:*` | no | - | 0 |
@@ -335,6 +336,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/sessions/[id]` | GET | jwt+key | `admin:*` | no | - | 0 |
 | `/api/admin/sessions/[id]/quests` | GET | jwt+key | `admin:*` | no | - | 0 |
 | `/api/admin/signup-anomaly` | GET | jwt | - | no | - | 1: `components/admin/Users/index.tsx` |
+| `/api/admin/signup-domain-holds` | GET, POST | jwt | `admin:*` | no | - | 1: `components/admin/SignupDomainHoldsTab.tsx` |
 | `/api/admin/slack-app/create` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/CreateSlackAppModal.tsx` |
 | `/api/admin/slack-app/manifest-status` | GET | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
 | `/api/admin/slack-app/reconnect` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/SlackWorkspacesTab.tsx` |
@@ -1625,6 +1627,7 @@ a path built in a way the generator misreads, or a string that is not an API cal
 
 | Path | Caller |
 | --- | --- |
+| `/api/admin/users/:param/:param` | `components/admin/Users/Profile/actions/accountDialogs.tsx` |
 | `/api/research/tasks/:param` | `hooks/data/researchTasks.ts` |
 | `/api/sessions/:param/tags/generate` | `components/layouts/Notebook/Sidenav/TagModal.tsx` |
 | `/api/webhooks/deliveries/:param` | `hooks/data/useWebhookDeliveries.ts` |

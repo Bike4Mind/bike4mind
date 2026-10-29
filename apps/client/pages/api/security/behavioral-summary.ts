@@ -1,3 +1,4 @@
+import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import {
@@ -253,60 +254,62 @@ const handler = baseApi()
     })
   )
   .get(
-    asyncHandler(async (req, res) => {
-      const user = req.user;
+    asyncHandler(
+      withRequestCompletionQuota(async (req, res) => {
+        const user = req.user;
 
-      // Only the session itself is a 401. An emailless account (OAuth signup with no
-      // provider-verified email) is fully authenticated, and this card sits in the same
-      // Security panel as user-summary/user-recent - it must not read as a session error.
-      if (!user || !user.username || !user.id) {
-        return res.status(401).json({ error: 'User not authenticated' });
-      }
-      assertAiAccessAllowed(user);
+        // Only the session itself is a 401. An emailless account (OAuth signup with no
+        // provider-verified email) is fully authenticated, and this card sits in the same
+        // Security panel as user-summary/user-recent - it must not read as a session error.
+        if (!user || !user.username || !user.id) {
+          return res.status(401).json({ error: 'User not authenticated' });
+        }
+        assertAiAccessAllowed(user);
 
-      try {
-        const safeUser = {
-          id: user.id as string,
-          email: user.email ?? undefined,
-          username: user.username as string,
-          isAdmin: user.isAdmin === true,
-        };
+        try {
+          const safeUser = {
+            id: user.id as string,
+            email: user.email ?? undefined,
+            username: user.username as string,
+            isAdmin: user.isAdmin === true,
+          };
 
-        // Cache key is per-user, so an admin's blocklist-bearing summary is never replayed
-        // to a non-admin.
-        const cacheKey = CacheKeys.securityBehavioralSummary(safeUser.id);
+          // Cache key is per-user, so an admin's blocklist-bearing summary is never replayed
+          // to a non-admin.
+          const cacheKey = CacheKeys.securityBehavioralSummary(safeUser.id);
 
-        const summary = await cacheService.getCachedData<SecurityBehavioralSummary>(
-          cacheKey,
-          () => generateSecurityBehavioralSummary(safeUser),
-          {
-            db: { caches: cacheRepository },
-            expiry: 5 * 60 * 1000, // cache for 5 minutes
-            logger,
-          }
-        );
+          const summary = await cacheService.getCachedData<SecurityBehavioralSummary>(
+            cacheKey,
+            () => generateSecurityBehavioralSummary(safeUser),
+            {
+              db: { caches: cacheRepository },
+              expiry: 5 * 60 * 1000, // cache for 5 minutes
+              logger,
+            }
+          );
 
-        return res.status(200).json(summary);
-      } catch (error) {
-        logger.error('Security behavioral assessment failed', {
-          userId: req.user?.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
+          return res.status(200).json(summary);
+        } catch (error) {
+          logger.error('Security behavioral assessment failed', {
+            userId: req.user?.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
 
-        const fallback: SecurityBehavioralSummary = {
-          summary:
-            'We encountered an error while generating your AI security summary. Based on currently available telemetry, your account does not show obvious signs of compromise.',
-          securityScore: 80,
-          riskLevel: 'low',
-          recommendations: [
-            'Enable two-factor authentication for your account.',
-            'Review recent login attempts on the Security tab for any unfamiliar devices or IP addresses.',
-          ],
-        };
+          const fallback: SecurityBehavioralSummary = {
+            summary:
+              'We encountered an error while generating your AI security summary. Based on currently available telemetry, your account does not show obvious signs of compromise.',
+            securityScore: 80,
+            riskLevel: 'low',
+            recommendations: [
+              'Enable two-factor authentication for your account.',
+              'Review recent login attempts on the Security tab for any unfamiliar devices or IP addresses.',
+            ],
+          };
 
-        return res.status(200).json(fallback);
-      }
-    })
+          return res.status(200).json(fallback);
+        }
+      })
+    )
   );
 
 export const config = {

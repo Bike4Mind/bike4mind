@@ -5,11 +5,13 @@ Use these internal Joy components for admin screens. Colors come from
 
 `DataTable` receives the **complete filtered result**, then sorts and paginates it
 locally. It preserves server ordering until the first sort. Do not pass a single
-server page as though it were the complete result. Infinite requester lists can
-use `serverPagination` with a one-based page, page size, total and controlled
-callbacks. In that mode pass only the fetched page; local sorting and selection
-are disabled because they cannot safely operate on an incomplete result. The
-caller owns server ordering, filter resets and out-of-range page recovery. Pass
+server page as though it were the complete result. Server-paged lists pass
+`pagination` with a one-based page, page size, total and controlled callbacks,
+plus only the fetched page. In that mode local sorting is off, because it cannot
+safely operate on an incomplete result: pass `sort` and `onSortChange` to sort on
+the server. Selection stays on; a caller that offers "select all matching" must
+resolve it on the server. The caller owns filter resets; an empty page past the
+end offers a way back to the first page. Pass
 `pageResetKey` (e.g. the serialized filter state) so a changed filter opens on the
 first page.
 

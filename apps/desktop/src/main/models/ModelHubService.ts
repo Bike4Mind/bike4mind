@@ -298,6 +298,7 @@ export class ModelHubService {
       entry.view = { ...entry.view, label: build.label, expectedBytes: build.sizeBytes };
 
       const health = await this.#deps.runtime.health();
+      if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       if (!health.ok)
         return this.#fail(key, entry, hubError('runtime-unavailable', 'Ollama is not running. Start it, then retry.'));
       // The registry serves the first file whose name ends with the tag; only its manifest proves which one.

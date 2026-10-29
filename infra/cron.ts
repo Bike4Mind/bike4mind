@@ -159,7 +159,13 @@ const youngAccountSpendAlert =
             retention: '1 week',
           },
         },
-        transform: youngAccountSpendAlertDeadLetter.ruleTarget,
+        transform: {
+          target: {
+            ...youngAccountSpendAlertDeadLetter.ruleTarget.target,
+            // SST defaults to a literal {} input; omit it to retain EventBridge's scheduled time.
+            input: undefined,
+          },
+        },
       })
     : undefined;
 
@@ -471,7 +477,7 @@ const cloudSecurityScanCron = runsScheduledJobs
       schedule: 'rate(1 day)',
       function: {
         vpc: lambdaVpc,
-        handler: 'apps/client/server/security/cloudScan.handler',
+        handler: 'apps/workers/src/security/cloudScan.handler',
         runtime: 'nodejs24.x',
         timeout: '5 minutes',
         link: [...allSecrets],

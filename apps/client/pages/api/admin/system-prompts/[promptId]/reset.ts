@@ -1,20 +1,18 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { systemPromptRepository } from '@bike4mind/database';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(
   /**
    * POST /api/admin/system-prompts/[promptId]/reset
    * Reset a system prompt to its code default
    * Deletes the DB override and preserves the final version in history.
    */
   async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { promptId } = req.query as { promptId: string };
 
     if (typeof promptId !== 'string') {

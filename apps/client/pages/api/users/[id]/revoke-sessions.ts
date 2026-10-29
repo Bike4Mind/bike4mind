@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ApiKeyScope } from '@bike4mind/common';
 
 /**
@@ -20,6 +20,9 @@ import { ApiKeyScope } from '@bike4mind/common';
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const targetId = req.query.id!;
+    // Optional for API-key callers that predate it; the admin profile always sends one.
+    const rawReason = (req.body as { reason?: unknown } | undefined)?.reason;
+    const reason = rawReason === undefined ? undefined : parseAdminActionReason(rawReason);
     const tokenVersion = await userService.adminRevokeUserSessions(
       req.user.id,
       { id: targetId },
@@ -62,6 +65,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         displayName: target?.name || target?.username || target?.email || targetId,
       },
       summary: 'signed the user out of every session',
+      reason,
       details: { tokenVersion, revokedDevices },
     });
     return res.status(200).json({ message: 'Sessions revoked', userId: targetId, tokenVersion });

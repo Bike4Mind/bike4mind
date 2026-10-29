@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isTurnstileSecretConfigured, verifyTurnstile } from './turnstile';
+import { isTurnstileSecretConfigured, isTurnstileTestSecret, verifyTurnstile } from './turnstile';
 
 const respond = (body: unknown, ok = true) => vi.fn().mockResolvedValue({ ok, json: async () => body });
 const base = { secret: 's', expectedAction: 'otc-send', ip: '203.0.113.9' };
@@ -101,6 +101,76 @@ describe('verifyTurnstile', () => {
     expect(await verifyTurnstile({ ...base, token: 'tok', fetchImpl: respond({}, false) })).toMatchObject({
       reason: 'unavailable',
     });
+  });
+});
+
+describe('verifyTurnstile with a Cloudflare test secret', () => {
+  const PASS_SECRET = '1x0000000000000000000000000000000AA';
+  const testBase = { ...base, secret: PASS_SECRET, token: 'XXXX.DUMMY.TOKEN.XXXX', allowTestSecret: true };
+
+  it.each([
+    ['no action or hostname', { success: true }],
+    ['the test action and host', { success: true, action: 'test', hostname: 'localhost' }],
+  ])('accepts a passing answer with %s', async (_label, body) => {
+    const result = await verifyTurnstile({
+      ...testBase,
+      fetchImpl: respond(body),
+      allowedHostnames: ['app.example.com'],
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('still rejects a failed answer', async () => {
+    const fetchImpl = respond({ success: false, 'error-codes': ['invalid-input-response'] });
+    expect(await verifyTurnstile({ ...testBase, fetchImpl })).toMatchObject({ ok: false, reason: 'invalid' });
+  });
+
+  it('keeps the action and hostname checks when test secrets are not allowed', async () => {
+    const fetchImpl = respond({ success: true, action: 'test', hostname: 'localhost' });
+    expect(await verifyTurnstile({ ...testBase, allowTestSecret: false, fetchImpl })).toEqual({
+      ok: false,
+      reason: 'invalid',
+      errorCodes: ['action-mismatch'],
+    });
+  });
+
+  it('keeps the strict checks when allowTestSecret is omitted', async () => {
+    const { allowTestSecret: _omitted, ...strict } = testBase;
+    const fetchImpl = respond({ success: true, action: 'test', hostname: 'localhost' });
+    expect(await verifyTurnstile({ ...strict, fetchImpl })).toMatchObject({ errorCodes: ['action-mismatch'] });
+  });
+
+  it('keeps the action and hostname checks for a real secret even when test secrets are allowed', async () => {
+    const real = { ...base, token: 'tok', allowTestSecret: true };
+    expect(await verifyTurnstile({ ...real, fetchImpl: respond({ success: true }) })).toMatchObject({
+      errorCodes: ['action-mismatch'],
+    });
+    const wrongHost = respond({ success: true, action: 'otc-send', hostname: 'localhost' });
+    expect(
+      await verifyTurnstile({ ...real, fetchImpl: wrongHost, allowedHostnames: ['app.example.com'] })
+    ).toMatchObject({ errorCodes: ['hostname-mismatch'] });
+  });
+});
+
+const TEST_SECRETS = [
+  '1x0000000000000000000000000000000AA',
+  '2x0000000000000000000000000000000AA',
+  '3x0000000000000000000000000000000AA',
+];
+
+describe('isTurnstileTestSecret', () => {
+  it('matches each published test secret exactly, ignoring surrounding whitespace', () => {
+    for (const secret of TEST_SECRETS) expect(isTurnstileTestSecret(` ${secret} `)).toBe(true);
+  });
+
+  it.each([
+    '',
+    '0x4AAA',
+    '1x0000000000000000000000000000000AAA',
+    '0x0000000000000000000000000000000AA',
+    '1x0000000000000000000000000000000aa',
+  ])('rejects %s', secret => {
+    expect(isTurnstileTestSecret(secret)).toBe(false);
   });
 });
 

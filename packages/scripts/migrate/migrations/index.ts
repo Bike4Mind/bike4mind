@@ -11,11 +11,15 @@
  */
 
 // 2. Import the file here:
+// Backdated so the fail-closed OAuth backfill cannot block these indexes.
+import EnsureAdminUserNoteIndexes from './20260921235898_ensure-admin-user-note-indexes';
 // Backdated below the fail-closed OAuth backfill; $setOnInsert makes an old-id rerun safe.
 import SeedStagedSignupSettings from './20260921235967_seed-staged-signup-settings';
 import EnsureQuestSignupActivityIndex from './20260921235966_ensure-quest-signup-activity-index';
 import EnsureUserSignupGrantOrgIndex from './20260921235968_ensure-user-signup-grant-org-index';
 import RedropShareTokenScalarIndex from './20260921235975_redrop-share-token-scalar-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureCreditTransactionBalanceEventIndex from './20260921235947_ensure-credit-transaction-balance-event-index';
 import BackfillStorageLimitOverrides from './20260921235964_backfill-storage-limit-overrides';
 import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
@@ -178,6 +182,7 @@ import EnsureLakeSkippedFileIndexes from './20260921235989_ensure-lake-skipped-f
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import ReplaceReleaseNoteStatusIndex from './20260921235998_replace-release-note-status-index';
+import ReplaceCreditTransactionOwnerIndex from './20260921235957_replace-credit-transaction-owner-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 // Renumbered from 20260921235999 to 20260921235994 to resolve an id collision with
 // UnsetStoredDefaultForcedRetrievalFloor below, which merged into main first.
@@ -244,6 +249,10 @@ import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organ
 import BackfillFreeCreditClaimEmail from './20260921235965_backfill-free-credit-claim-email';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import RestoreLegacyXlsMimeType from './20260921235946_restore-legacy-xls-mime-type';
+import EnsureUserAdminListIndexes from './20260921236000_ensure-user-admin-list-indexes';
+import EnsureAdminSavedViewIndexes from './20260921236100_ensure-admin-saved-view-indexes';
+import EnsureSubscriptionAdminListIndexes from './20260921236200_ensure-subscription-admin-list-indexes';
+import EnsureSubscriptionMirrorIndexes from './20260921236300_ensure-subscription-mirror-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -261,6 +270,7 @@ import EnsureBusinessMetricStateTtl from './20260921235899_ensure-business-metri
 
 // 3. Reference the imported variable here:
 const coreMigrations: MigrationFile[] = [
+  EnsureAdminUserNoteIndexes,
   EnsureAccountCreationIndexes,
   EnsureBusinessMetricStateTtl,
   AddMementosToUsers,
@@ -386,6 +396,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureLakeSkippedFileIndexes,
   EnsureOAuthGrantClientUserIndex,
   ReplaceReleaseNoteStatusIndex,
+  ReplaceCreditTransactionOwnerIndex,
   EnsureFabFileOwnedKeysetIndex,
   EnsureFabFileFilePathIndex,
   EnsureFabFileDerivedFromIndex,
@@ -425,6 +436,11 @@ const coreMigrations: MigrationFile[] = [
   EnsureQuestSignupActivityIndex,
   EnsureUserSignupGrantOrgIndex,
   RedropShareTokenScalarIndex,
+  EnsureUserAdminListIndexes,
+  EnsureCreditTransactionBalanceEventIndex,
+  EnsureAdminSavedViewIndexes,
+  EnsureSubscriptionAdminListIndexes,
+  EnsureSubscriptionMirrorIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

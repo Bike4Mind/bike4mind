@@ -9,7 +9,9 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 
 /** Theme, a fresh QueryClient and the UndoToast provider every profile dialog and view needs. */
 export const ProfileTestWrapper = ({ children }: { children: ReactNode }) => {
-  const [queryClient] = useState(() => new QueryClient({ defaultOptions: { mutations: { retry: false } } }));
+  const [queryClient] = useState(
+    () => new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  );
   return (
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={appTheme}>
