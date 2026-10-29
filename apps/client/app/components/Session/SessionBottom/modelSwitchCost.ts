@@ -38,15 +38,20 @@ export function getModelSwitchCostNotice({
   answeredModelId,
   previousInputTokens,
   previousInputModelId,
+  providerInputTokens,
 }: {
   selectedModel: ModelInfo | undefined;
   answeredModelId: string | undefined;
   previousInputTokens: number | undefined;
   previousInputModelId: string | undefined;
+  /** The provider's count of the last prompt, in the answering model's tokens; preferred over the estimate. */
+  providerInputTokens?: number;
 }): number | null {
   if (!selectedModel || !answeredModelId || !previousInputTokens) return null;
   if (selectedModel.id === answeredModelId) return null;
-  const credits = modelSwitchCacheCredits(selectedModel, previousInputTokens, previousInputModelId);
+  const credits = providerInputTokens
+    ? modelSwitchCacheCredits(selectedModel, providerInputTokens, answeredModelId)
+    : modelSwitchCacheCredits(selectedModel, previousInputTokens, previousInputModelId);
   if (credits === null || credits < MODEL_SWITCH_NOTICE_MIN_CREDITS) return null;
   return roundNoticeCredits(credits);
 }

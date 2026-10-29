@@ -223,6 +223,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         answeredModelId: contextUsage?.answeredModelId,
         previousInputTokens: contextUsage?.actualInputTokens,
         previousInputModelId: contextUsage?.inputModelId,
+        providerInputTokens: contextUsage?.providerInputTokens,
       }),
     [modelInfo, model, contextUsage]
   );
