@@ -413,12 +413,23 @@ export type ModelCatalog = {
   models: ModelInfo[];
   /** Retired/superseded ids a session may still be pinned to. See SupersededModelInfo. */
   supersededModels: SupersededModelInfo[];
+  /**
+   * Paid-only models a free account is shown as upgradable. Display only: the model picker is the one
+   * reader, and selection, defaults and fallbacks all read `models`, which never holds a locked model.
+   */
+  lockedModels: ModelInfo[];
 };
 
 export const getModelCatalog = async (): Promise<ModelCatalog> => {
   try {
     const response = await api.get('/api/models');
-    return { models: response.data.models, supersededModels: response.data.supersededModels ?? [] };
+    const listed: ModelInfo[] = response.data.models;
+    return {
+      // The server never sends a locked model here; dropping one anyway keeps it out of every selection path.
+      models: listed.filter(model => !model.access?.locked),
+      supersededModels: response.data.supersededModels ?? [],
+      lockedModels: response.data.lockedModels ?? [],
+    };
   } catch (error: unknown) {
     const axiosError = error as AxiosError;
     perfLogger.log('[Client] Error fetching LLM models:', axiosError);

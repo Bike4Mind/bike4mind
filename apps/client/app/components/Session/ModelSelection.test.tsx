@@ -23,6 +23,8 @@ const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
 // Text models appended to the accessible list per test; reset in afterEach below.
 const extraTextModels = vi.hoisted(() => [] as ModelInfo[]);
 const favoriteModelIds = vi.hoisted(() => new Set<string>());
+// Paid-only models served in /api/models' lockedModels; reset in the locked-models describe.
+const locked = vi.hoisted(() => ({ models: [] as ModelInfo[], billingEnabled: true, openView: vi.fn() }));
 const adminSettings = vi.hoisted(() => ({
   recommendedModelIds: [] as string[],
   DefaultAPIModel: undefined as string | undefined,
@@ -48,6 +50,15 @@ const imageModel = {
 
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ isLoading: false, error: null }),
+  useLockedModels: () => ({ data: locked.models }),
+}));
+
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? locked.billingEnabled : undefined),
+}));
+
+vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
+  useBillingView: () => ({ openView: locked.openView }),
 }));
 
 vi.mock('@client/app/hooks/useAccessibleModels', () => ({
@@ -809,5 +820,71 @@ describe('ModelSelection older models', () => {
     renderSelection({});
     fireEvent.click(screen.getByTestId('older-models-toggle-OpenAI'));
     expect(screen.queryByTestId('model-card-gpt-expired')).not.toBeInTheDocument();
+  });
+});
+
+describe('ModelSelection locked (paid-only) models', () => {
+  const paidModel = {
+    id: 'paid-text-model',
+    name: 'Paid Text Model',
+    type: 'text',
+    contextWindow: 200000,
+    max_tokens: 8192,
+    access: { locked: true, reason: 'requires_paid_plan' },
+  } as ModelInfo;
+
+  beforeEach(() => {
+    locked.models = [paidModel];
+    locked.billingEnabled = true;
+    locked.openView.mockClear();
+  });
+
+  afterEach(() => {
+    locked.models = [];
+  });
+
+  it('renders a locked row that cannot select the model', () => {
+    const setModel = vi.fn();
+    const onSelectionComplete = vi.fn();
+    renderSelection({ setModel, onSelectionComplete });
+
+    const row = screen.getByTestId(`locked-model-row-${paidModel.id}`);
+    expect(row).toHaveAttribute('aria-disabled', 'true');
+    expect(within(row).getByText('Paid Text Model')).toBeInTheDocument();
+    expect(within(row).queryByRole('button')).toBeNull();
+    // Not offered as a selectable card anywhere in the picker either.
+    expect(screen.queryByTestId(`model-card-${paidModel.id}`)).toBeNull();
+
+    fireEvent.click(row);
+
+    expect(setModel).not.toHaveBeenCalled();
+    expect(onSelectionComplete).not.toHaveBeenCalled();
+  });
+
+  it('opens the billing plans and closes the picker from the upgrade CTA', () => {
+    const setModel = vi.fn();
+    const onSelectionComplete = vi.fn();
+    renderSelection({ setModel, onSelectionComplete });
+
+    fireEvent.click(screen.getByTestId('locked-models-upgrade-btn'));
+
+    expect(locked.openView).toHaveBeenCalledWith('plans');
+    expect(onSelectionComplete).toHaveBeenCalledOnce();
+    expect(setModel).not.toHaveBeenCalled();
+  });
+
+  it('hides the CTA when billing is off, but still explains the locked rows', () => {
+    locked.billingEnabled = false;
+    renderSelection({});
+
+    expect(screen.getByTestId('locked-models-section')).toBeInTheDocument();
+    expect(screen.queryByTestId('locked-models-upgrade-btn')).toBeNull();
+  });
+
+  it('renders no locked group when the caller has no locked models', () => {
+    locked.models = [];
+    renderSelection({});
+
+    expect(screen.queryByTestId('locked-models-section')).toBeNull();
   });
 });

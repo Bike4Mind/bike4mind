@@ -121,6 +121,35 @@ describe('getCallerModelList free-tier gate', () => {
     expect(await listedIds()).toEqual(['priced', 'image-model']);
   });
 
+  it('moves paid-only text models to lockedModels, marked locked, for a free user', async () => {
+    const list = await callerList(makeUser());
+
+    expect(list.lockedModels.map(model => model.id)).toEqual(['free']);
+    expect(list.lockedModels.every(model => model.access?.locked === true)).toBe(true);
+    expect(list.lockedModels[0].access?.reason).toBe('requires_paid_plan');
+    expect(list.models.some(model => model.access)).toBe(false);
+  });
+
+  it.each([
+    ['a plan:paid user', makeUser(), () => mocks.getUserEntitlements.mockResolvedValue(['base', 'plan:paid'])],
+    ['an admin', makeUser({ isAdmin: true }), () => undefined],
+    ['an anonymous caller', null, () => undefined],
+    ['any caller when the gate is off', makeUser(), () => mocks.loadFreeTierAllowedModels.mockResolvedValue(undefined)],
+  ])('locks nothing for %s', async (_label, user, arrange) => {
+    arrange();
+
+    expect((await callerList(user)).lockedModels).toEqual([]);
+  });
+
+  it('never points an upgrade offer at a locked model', async () => {
+    mocks.getSupersededModels.mockReturnValue([{ id: 'old', replacementId: 'free' } as unknown as SupersededModelInfo]);
+
+    const list = await callerList(makeUser());
+
+    expect(list.lockedModels.map(model => model.id)).toContain('free');
+    expect(list.supersededModels).toEqual([]);
+  });
+
   it('lists everything for a user holding plan:paid', async () => {
     mocks.getUserEntitlements.mockResolvedValue(['base', 'plan:paid']);
 

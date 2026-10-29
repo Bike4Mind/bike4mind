@@ -654,6 +654,9 @@ export type ModelName = z.infer<typeof supportedModels>;
 /** Whether a model's rates came from a ModelPrice catalog row or the adapter's literal fallback. */
 export type ModelPriceSource = UsagePriceSource;
 
+/** Why a listed model is shown to a caller but not selectable by them. */
+export type ModelAccessLock = { locked: true; reason: 'requires_paid_plan' };
+
 export type ModelInfo = {
   id: ModelName;
   type: 'text' | 'image' | 'speech-to-text' | 'video';
@@ -768,6 +771,12 @@ export type ModelInfo = {
   disabled?: boolean;
   /** Human-readable reason surfaced in the picker (tooltip) and the server-side rejection when `disabled` is true. */
   disabledReason?: string;
+  /**
+   * Set only on the `lockedModels` entries of GET /api/models: a model this caller can see but not select
+   * until they upgrade. Unlike `disabled`, the model works for other accounts. Locked models never appear
+   * in `models`, so nothing that picks from that list can select one.
+   */
+  access?: ModelAccessLock;
   /**
    * Which backend constructor serves this model. Present only on models the
    * catalog resolved; getLlmByModel dispatches on it and falls back to the

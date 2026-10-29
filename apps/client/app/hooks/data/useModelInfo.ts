@@ -35,6 +35,15 @@ export function useSupersededModels() {
   return useQuery({ ...catalogQuery(isFullyAuthenticated), select: catalog => catalog.supersededModels });
 }
 
+/**
+ * Paid-only models the picker shows a free account as locked. Never feed these to a selection, default or
+ * fallback path: those read useModelInfo / useAccessibleModels, which cannot contain one.
+ */
+export function useLockedModels() {
+  const isFullyAuthenticated = useIsFullyAuthenticated();
+  return useQuery({ ...catalogQuery(isFullyAuthenticated), select: catalog => catalog.lockedModels });
+}
+
 /** Model list straight from the cache, for non-React call sites. Undefined until first fetch. */
 export function getCachedModels(queryClient: QueryClient): ModelInfo[] | undefined {
   return queryClient.getQueryData<ModelCatalog>(MODEL_CATALOG_QUERY_KEY)?.models;
