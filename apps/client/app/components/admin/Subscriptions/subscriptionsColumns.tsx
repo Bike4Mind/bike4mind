@@ -115,7 +115,11 @@ function Seats({ row }: { row: AdminSubscriptionRow }) {
         component="span"
         level="body-sm"
         title={over ? 'More members than paid seats' : undefined}
-        sx={{ color: over ? 'admin.status.warn.foreground' : 'admin.ink', fontWeight: over ? 600 : 400 }}
+        sx={{
+          color: over ? 'admin.status.warn.foreground' : 'admin.ink',
+          fontWeight: over ? 600 : 400,
+          whiteSpace: 'nowrap',
+        }}
       >
         {`${used.toLocaleString()} / ${paid.toLocaleString()}`}
       </Typography>
@@ -185,13 +189,13 @@ export function subscriptionsColumns({
     {
       id: 'customer',
       label: 'Customer',
-      width: '12rem',
+      width: '11rem',
       render: row => <Customer row={row} />,
     },
     {
       id: 'plan',
       label: 'Plan',
-      width: '7.5rem',
+      width: '6.5rem',
       render: row => {
         const interval = planIntervalLabel(row);
         return (
@@ -224,11 +228,11 @@ export function subscriptionsColumns({
     {
       id: 'status',
       label: 'Status',
-      width: '8.5rem',
+      width: '9.75rem',
       render: row => {
         const status = subscriptionStatusDisplay(row);
         return (
-          <Stack direction="row" alignItems="center" gap={0.5} flexWrap="wrap">
+          <Stack direction="row" alignItems="center" gap={0.5} flexWrap="nowrap">
             <StatusChip
               dot
               tone={status.tone}
@@ -257,7 +261,7 @@ export function subscriptionsColumns({
       id: 'seats',
       label: 'Seats',
       numeric: true,
-      width: '6.5rem',
+      width: '7.5rem',
       render: row => <Seats row={row} />,
     },
     {
@@ -278,7 +282,7 @@ export function subscriptionsColumns({
       id: 'started',
       label: 'Started',
       sortable: true,
-      width: '7.5rem',
+      width: '7rem',
       render: row => (
         <Stack direction="row" alignItems="center" gap={0.75}>
           <Muted title={formatUtc(row.createdAt)}>{formatRelativeDay(row.createdAt, now)}</Muted>
