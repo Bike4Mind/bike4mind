@@ -164,7 +164,7 @@ Each tile: label, value, comparison line ("+12% vs prev 28d", signed, tabular), 
 ### 4.3 Active users (J1, J2)
 
 - Chart: line, DAU / WAU / MAU over the range. Primary series `accent` (MAU), WAU and DAU in the guide's comparison style (`inkMuted`, dashed for the previous period when compare is on). Takeaway caption under the title, e.g. "MAU up 12% vs previous 28 days".
-- Secondary toggle in the card action: "By surface" stacks DAU by `UsageEvent.source` (web, cli, desktop, api, agent; `system` excluded).
+- Secondary toggle in the card action: "By surface" stacks DAU by `UsageEvent.source` (web, cli, desktop, api, agent, plus "unclassified" for older rows with no `source`; `system` excluded).
 - Drill-down: clicking a day opens the users list for users active that day (needs the new `activeOn` filter, issue 7).
 
 ### 4.4 Signups: real vs suspected (J3)
@@ -287,7 +287,7 @@ Ordered by value; confirmed bugs first. All issues: labels `admin-ux` and `UI/UX
 
 - Ship order: 1-5 are independent bug fixes and can go in parallel, today, against the current page. 6 is the critical path for everything new.
 - First visible value: issue 8 (a correct DAU/WAU/MAU and real-vs-suspected signups over 90 days and 12 months).
-- If D1 is accepted, issues 2 and 3 can be trimmed to the minimum that keeps the Slack cron correct, since the tabs go away in 8.
+- With D1 accepted, issues 2 and 3 can be trimmed to the minimum that keeps the Slack cron correct, since the tabs go away in 8.
 
 ---
 
