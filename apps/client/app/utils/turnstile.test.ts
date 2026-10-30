@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { getTurnstileToken, MAX_CHALLENGE_ATTEMPTS, TurnstileCancelledError, TurnstileError } from './turnstile';
+import {
+  getTurnstileToken,
+  MAX_CHALLENGE_ATTEMPTS,
+  TURNSTILE_BROWSER_REJECTED_MESSAGE,
+  TURNSTILE_RETRY_MESSAGE,
+  TurnstileCancelledError,
+  TurnstileError,
+  turnstileFailureMessage,
+} from './turnstile';
 
 type RenderOptions = {
   callback: (t: string) => void;
@@ -612,5 +620,24 @@ describe('Turnstile script loading', () => {
     window.turnstile = { render, remove: vi.fn() } as unknown as typeof window.turnstile;
     turnstileScript()!.dispatchEvent(new Event('load'));
     await expect(pending).resolves.toBe('tok-1');
+  });
+});
+
+describe('turnstileFailureMessage', () => {
+  it.each(['300030', '600010'])('sends a browser Cloudflare judged bot-like (%s) to a regular browser', code => {
+    expect(turnstileFailureMessage(new TurnstileError('error', MAX_CHALLENGE_ATTEMPTS, code))).toBe(
+      TURNSTILE_BROWSER_REJECTED_MESSAGE
+    );
+  });
+
+  it.each([
+    ['a challenge timeout code', new TurnstileError('error', 3, '110600')],
+    ['a widget error without a code', new TurnstileError('error', 3)],
+    ['our own timeout', new TurnstileError('timeout', 1)],
+    ['an expired token', new TurnstileError('expired', 1)],
+    ['a script error', new TurnstileError('script-error', 2)],
+    ['a non-Turnstile error', new Error('boom')],
+  ])('asks for a refresh on %s', (_label, error) => {
+    expect(turnstileFailureMessage(error)).toBe(TURNSTILE_RETRY_MESSAGE);
   });
 });
