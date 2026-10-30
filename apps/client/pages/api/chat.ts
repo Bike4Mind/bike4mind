@@ -15,7 +15,7 @@ import {
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
+import { adminRoleWithheldFor, requesterScopedUsers } from '@server/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
@@ -254,6 +254,12 @@ async function handleChat(
       // wait=false: hand off to the always-on ChatCompletion (HTTP, 202 ACK).
       await dispatchQuest(params, req.logger);
     },
+  };
+  // wait=true runs tools inline: one that re-reads the owner by id must see the same role as req.user.
+  // Kept out of the literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  chatCompletionOptions.db = {
+    ...chatCompletionOptions.db,
+    users: requesterScopedUsers(req, chatCompletionOptions.db.users),
   };
 
   // Create the quest (this is immediate)

@@ -5,6 +5,7 @@ import {
   SupportedFabFileMimeTypes,
   extensionFromMimeType,
   isImageServeable,
+  fabFileResponseSchema,
 } from '@bike4mind/common';
 import {
   FabFile,
@@ -19,6 +20,7 @@ import { fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
@@ -138,14 +140,14 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           audience: 'browser',
         });
 
-        return res.json({
+        return respond(res, fabFileResponseSchema, {
           ...responseFile,
           fileUrl: presignedUrl,
           fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
         });
       }
 
-      return res.json(responseFile);
+      return respond(res, fabFileResponseSchema, responseFile);
     })
   );
 

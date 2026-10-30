@@ -1,5 +1,5 @@
 import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
-import { ApiKeyScope, IFabFile, KnowledgeType } from '@bike4mind/common';
+import { ApiKeyScope, IFabFile, KnowledgeType, fabFileResponseSchema } from '@bike4mind/common';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
 import { updateFileForUser } from '@server/files/updateFileForUser';
 import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
@@ -112,7 +113,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES
     const responseFile = holdsApiKeyScope(req, FILES_READ_SCOPES)
       ? await signBrowserFileResponse(updatedFabFile)
       : { ...updatedFabFile, fileUrl: undefined, fileUrlExpireAt: undefined };
-    return res.json(responseFile);
+    return respond(res, fabFileResponseSchema, responseFile);
   })
   /**
    * Delete FabFile by ID

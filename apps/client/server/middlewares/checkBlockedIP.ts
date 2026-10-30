@@ -14,7 +14,7 @@ export const checkBlockedIP = (): RequestHandler => {
 
       if (blockedIP) {
         const errorMessage =
-          'Your IP address has been temporarily blocked for 10 minutes due to repeated failed login attempts. Please try again after the block expires or contact support if you believe this is an error.';
+          'Your IP address has been temporarily blocked due to repeated failed login attempts. Please try again after the block expires or contact support if you believe this is an error.';
 
         // Check if this is an API request (JSON) or web request (redirect)
         const acceptsJson = req.headers.accept?.includes('application/json');
@@ -32,7 +32,7 @@ export const checkBlockedIP = (): RequestHandler => {
           });
         }
 
-        return res.redirect(`/login?error=${encodeURIComponent(errorMessage)}`);
+        return res.redirect('/login?error=ip_blocked');
       }
 
       next();

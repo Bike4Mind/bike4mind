@@ -1,6 +1,13 @@
 import React, { useId, useState } from 'react';
 import { FormControl, FormLabel, Input } from '@mui/joy';
-import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, SegmentedControl, useUndoToast } from '../../../shared';
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  ChangePreview,
+  SegmentedControl,
+  undoAdminReason,
+  useUndoToast,
+} from '../../../shared';
 import {
   CREDIT_ADJUSTMENT_MODES,
   CREDIT_AMOUNT_HINT,
@@ -54,7 +61,7 @@ export const AdjustCreditsDialog: React.FC<ProfileDialogProps> = ({ user, onClos
     const { delta, after } = adjustment;
     showUndo({
       message: `Balance set to ${formatCredits(after)} (${formatCreditDelta(delta)})`,
-      onUndo: () => update({ creditDelta: -delta, creditReason: `Undo: ${reason}`.slice(0, 500) }),
+      onUndo: () => update({ creditDelta: -delta, creditReason: undoAdminReason(reason) }),
       onViewAudit: onAudit,
     });
   };

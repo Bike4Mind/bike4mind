@@ -23,6 +23,7 @@ const {
   mockProcess,
   mockWriteStaticCompletion,
   mockInvokeOptions,
+  mockOptionsFindUser,
   mockSseChunk,
   processState,
 } = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ const {
   mockProcess: vi.fn(),
   mockWriteStaticCompletion: vi.fn(),
   mockInvokeOptions: vi.fn(),
+  mockOptionsFindUser: vi.fn(),
   mockSseChunk: vi.fn(),
   processState: { terminalError: undefined as Error | undefined },
 }));
@@ -71,7 +73,7 @@ vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => (
 }));
 
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
-  getDefaultChatCompletionOptions: () => ({}),
+  getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
 }));
 
@@ -281,6 +283,17 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - owner admin role', () 
 
   it('keeps the admin role when the token carries no such claim', async () => {
     expect((await turnWith(undefined)).isAdmin).toBe(true);
+  });
+
+  it.each([
+    ['withholds', true, false],
+    ['keeps', undefined, true],
+  ])('%s the admin role from a tool that re-reads the owner by id', async (_, adminRoleWithheld, expected) => {
+    await turnWith(adminRoleWithheld);
+    const { users } = (mockInvokeOptions.mock.calls[0][0] as { db: { users: { findById: (id: string) => unknown } } })
+      .db;
+    mockOptionsFindUser.mockResolvedValueOnce({ id: 'user-1', isAdmin: true });
+    expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(expected);
   });
 });
 

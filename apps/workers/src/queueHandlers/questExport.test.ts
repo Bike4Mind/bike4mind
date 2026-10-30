@@ -535,12 +535,27 @@ describe('questExport queue multiplex', () => {
 });
 
 beforeEach(() => {
+  h.findUserById.mockReset().mockImplementation(async id => ({ id, _id: id }));
   h.metadata
     .mockReset()
     .mockRejectedValue(Object.assign(new Error('missing'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } }));
   h.upload.mockReset().mockResolvedValue(undefined);
   h.signedUrl.mockReset().mockResolvedValue('https://download.test/export.zip');
   h.progress.mockReset().mockResolvedValue(undefined);
+});
+
+describe('quest export signup review hold', () => {
+  it('exports existing data without generating an AI summary for a pending requester', async () => {
+    h.findUserById.mockImplementation(async id => ({ id, _id: id, riskScore: { reviewState: 'pending' as const } }));
+    h.availableModels.mockClear();
+    h.createZipBuffer.mockClear();
+
+    await runExport(h.OWNER_ID);
+
+    expect(h.availableModels).not.toHaveBeenCalled();
+    expect(h.createZipBuffer).toHaveBeenCalledWith(expect.any(String), expect.any(Array), expect.any(String), null);
+    expect(h.upload).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('quest export replay', () => {

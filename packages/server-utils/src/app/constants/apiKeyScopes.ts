@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import type { PremiumApiKeyScope } from '@bike4mind/common';
 import { premiumApiKeyScopes } from '../../premium-generated/premiumApiKeyScopes.generated';
+import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from './apiKeyScopeEndpoints.generated';
 
 export interface ApiKeyScopeOption {
   value: ApiKeyScopeValue;
@@ -32,187 +33,82 @@ export interface ApiKeyScopeOption {
  * collect and its endpoint lands in Phase B. Embed keys are minted through the
  * dedicated embed flow (epic #41 Phase E), not here.
  *
- * Built-in rows only; USER_API_KEY_SCOPES adds the rows premium overlays contribute.
+ * Built-in rows only; USER_API_KEY_SCOPES adds the rows premium overlays contribute. Each row's
+ * `endpoints` here are hand-written supplements only; see withDerivedEndpoints for the rest.
  */
-const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
+const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.READ_NOTEBOOKS,
     label: 'Read Notebooks',
     description: 'View notebooks and sessions',
-    endpoints: [
-      'GET /api/sessions',
-      'GET /api/sessions/:id',
-      'GET /api/v1/quests/:id',
-      'GET /api/v1/quests/:id/files',
-      'GET /api/v1/artifacts',
-      'GET /api/v1/artifacts/:id',
-      'GET /api/v1/artifacts/:id/versions',
-      'GET /api/v1/artifacts/:id/versions/:version',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.WRITE_NOTEBOOKS,
     label: 'Write Notebooks',
     description: 'Create and modify notebooks',
-    endpoints: [
-      'POST /api/v1/sessions',
-      'GET /api/sessions/:id',
-      'PUT /api/sessions/:id',
-      'DELETE /api/sessions/:id',
-      'POST /api/v1/artifacts',
-      'GET /api/v1/artifacts',
-      'GET /api/v1/artifacts/:id',
-      'PATCH|DELETE /api/v1/artifacts/:id',
-      'GET /api/v1/artifacts/:id/versions',
-      'GET /api/v1/artifacts/:id/versions/:version',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.READ_FILES,
     label: 'Read Files',
     description: 'Download and view files',
-    endpoints: ['GET /api/v1/files', 'GET /api/v1/files/:id'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.WRITE_FILES,
     label: 'Write Files',
     description: 'Upload and modify files',
-    endpoints: [
-      'POST /api/v1/files',
-      'PATCH|DELETE /api/v1/files/:id',
-      'POST /api/files/createFabFile (datalake:write to tag into a lake)',
-    ],
+    endpoints: ['POST /api/files/createFabFile (datalake:write to tag into a lake)'],
   },
   {
     value: ApiKeyScope.AI_GENERATE,
     label: 'AI Generate',
     description: 'Use AI generation features',
-    endpoints: [
-      'POST /api/v1/sessions',
-      'POST /api/v1/image-generations',
-      'POST /api/v1/image-edits',
-      'POST /api/v1/video-generations',
-      'GET /api/v1/video-generations',
-      'GET /api/v1/video-generations/:id',
-      'POST /api/v1/video-generations/:id/cancel',
-      'GET /api/v1/video-models',
-      'POST /api/v1/music-generations',
-      'GET /api/v1/music-generations',
-      'GET /api/v1/music-generations/:id',
-      'POST /api/v1/music-generations/:id/cancel',
-      'GET /api/v1/music-models',
-      'POST /api/v1/embeddings',
-      'POST /api/v1/text-refinements',
-      'POST /api/v1/decisions',
-      'GET /api/v1/decision-models',
-      'GET /api/v1/voice/voices',
-      'POST /api/v1/voice/sessions',
-      'POST /api/v1/voice/sessions/:id/end',
-      'POST /api/v1/transcriptions/uploads',
-      'POST /api/v1/transcriptions',
-      'GET /api/v1/quests/:id',
-      'GET /api/v1/quests/:id/files',
-      'GET /api/v1/credits',
-      'GET /api/v1/models',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.AI_DECIDE,
     label: 'AI Decide',
     description: 'Answer yes/no, pick-one and rating questions with probabilities',
-    endpoints: ['POST /api/v1/decisions', 'GET /api/v1/decision-models', 'GET /api/v1/credits'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.AI_CHAT,
     label: 'AI Chat',
     description: 'Use AI chat features',
-    endpoints: [
-      'POST /api/ai/llm',
-      'GET /api/v1/quests/:id',
-      'GET /api/v1/quests/:id/files',
-      'GET /api/v1/credits',
-      'GET /api/v1/models',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.READ_PROJECTS,
     label: 'Read Projects',
     description: 'View projects',
-    endpoints: [
-      'GET /api/projects',
-      'GET /api/projects/:id',
-      'GET /api/projects/:id/files',
-      'GET /api/projects/:id/sessions',
-      'GET /api/projects/:id/invites',
-      'GET /api/v1/projects',
-      'GET /api/v1/projects/:id',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.WRITE_PROJECTS,
     label: 'Write Projects',
     description: 'Create, modify, share and delete projects',
-    endpoints: [
-      'POST /api/projects',
-      'PUT /api/projects/:id',
-      'DELETE /api/projects/:id',
-      'POST|DELETE /api/projects/:id/files',
-      'POST|DELETE /api/projects/:id/sessions',
-      'POST /api/projects/:id/invites',
-      'DELETE /api/projects/:id/members',
-      'POST|DELETE /api/projects/:id/systemPrompts',
-      'POST /api/projects/:id/systemPrompts/toggle',
-      'DELETE /api/projects/removeNonExistintFiles',
-      'POST /api/v1/projects',
-      'GET /api/v1/projects',
-      'GET /api/v1/projects/:id',
-      'PATCH|DELETE /api/v1/projects/:id',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.READ_AGENTS,
     label: 'Read Agents',
     description: 'View agents',
-    endpoints: [
-      'GET /api/agents',
-      'GET /api/agents/:id',
-      'GET /api/agents/:id/missions',
-      'GET /api/v1/agents',
-      'GET /api/v1/agents/:id',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.WRITE_AGENTS,
     label: 'Write Agents',
     description: 'Create, modify, fund and delete agents, and run the agent-authoring assistants',
-    endpoints: [
-      'POST /api/agents',
-      'PUT /api/agents/:id',
-      'DELETE /api/agents/:id',
-      'POST /api/agents/create-from-context',
-      'POST /api/agents/:id/missions',
-      'POST /api/agents/:id/transfer-credits',
-      'GET /api/agents/:id/embed-keys',
-      'POST /api/agents/:id/generate-avatar',
-      'POST /api/agents/:id/generate-description',
-      'POST /api/agents/:id/generate-system-prompt',
-      'POST /api/agents/:id/enhance-field',
-      'POST /api/v1/agents',
-      'GET /api/v1/agents',
-      'GET /api/v1/agents/:id',
-      'PATCH|DELETE /api/v1/agents/:id',
-      'POST /api/v1/agents/:id/generate-avatar',
-      'POST /api/v1/agents/:id/generate-description',
-      'POST /api/v1/agents/:id/generate-system-prompt',
-      'POST /api/v1/agents/:id/enhance-field',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.ME_READ,
     label: 'Account: Read',
     // Keep in sync with the me:read consent label in app/routes/oauth/consentScopes.ts.
     description: "Read the key owner's own name, plan tier, subscription, credit balance, and entitlements",
-    endpoints: ['GET /api/v1/me', 'GET /api/v1/credits'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.SKILLS_READ,
@@ -220,33 +116,21 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     // Confined, so it is minted from the Skill Market's "Use in Claude Code" dialog, not the New-Key modals.
     description:
       "Read the Claude Code plugin marketplace of an organization's approved Skill Market listings, and browse and read listings",
-    endpoints: [
-      'GET /api/v1/skills/market/claude-marketplace.json',
-      'GET /api/v1/skills/market/:id/claude-plugin.zip',
-      'GET /api/v1/skills/market/listings',
-      'GET /api/v1/skills/market/listings/:id',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.SKILLS_WRITE,
     label: 'Skill Market: Write',
     description:
       'Publish your skills to the Skill Market, submit new versions, manage and withdraw your listings, and browse and import listings. Unlike skills:read, it is not confined: it also reaches API routes that declare no scope',
-    endpoints: [
-      'GET|POST /api/v1/skills/market/listings',
-      'GET /api/v1/skills/market/listings/mine',
-      'GET|DELETE /api/v1/skills/market/listings/:id',
-      'POST /api/v1/skills/market/listings/:id/versions',
-      'POST /api/v1/skills/market/listings/:id/import',
-      'POST /api/v1/skills/market/versions/:vid/rescan',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.SKILLS_REVIEW,
     label: 'Skill Market: Review',
     description:
       "Review your organizations' held Skill Market versions: list the review queue and approve or reject (org admins only)",
-    endpoints: ['GET /api/v1/skills/market/review-queue', 'POST /api/v1/skills/market/versions/:vid/review'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.MARKETING_REPORTS_READ,
@@ -264,19 +148,19 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.EMBED_CHAT,
     label: 'Embedded Agent Chat',
     description: 'Chat with a single bound agent from an embedded widget on an allow-listed site',
-    endpoints: ['POST /api/embed/chat'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.HEARTH_READ,
     label: 'Hearth: Read',
     description: 'List Hearth channels and replay their events without advancing any cursor',
-    endpoints: ['GET /api/hearth/channels', 'POST /api/hearth/catchup'],
+    endpoints: ['POST /api/hearth/catchup (advance: false)'],
   },
   {
     value: ApiKeyScope.HEARTH_WRITE,
     label: 'Hearth: Write',
     description: 'Append Hearth events, create channels, and advance actor cursors',
-    endpoints: ['POST /api/hearth/events', 'POST /api/hearth/channels', 'POST /api/hearth/catchup'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.OPTIHASHI_READ,
@@ -294,42 +178,27 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.DATALAKE_READ,
     label: 'Data Lakes: Read',
     description: 'List and browse data lakes the key owner can already reach',
-    endpoints: [
-      'GET /api/v1/data-lakes',
-      'GET /api/v1/data-lakes/:id',
-      'GET /api/v1/data-lakes/:id/files/:file_id',
-      'GET /api/data-lakes',
-      'GET /api/data-lakes/:id',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.DATALAKE_QUERY,
     label: 'Data Lakes: Query',
     description:
       'Run a retrieval query against a lake, and read lakes to support it. Spends credits - not part of the Read-only preset',
-    endpoints: ['POST /api/data-lakes/semantic-search', 'POST /api/data-lakes/rlm-answer'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.DATALAKE_WRITE,
     label: 'Data Lakes: Write',
     description: 'Create and update lakes, and attach, retag, or remove their files',
-    endpoints: ['POST /api/data-lakes', 'PUT /api/data-lakes/:id', 'POST /api/data-lakes/:id/files/:fabFileId'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.DATALAKE_SHARE,
     label: 'Data Lakes: Share',
     description:
       'Change who can reach a lake - its visibility and its ownership. Not implied by write: grant only to keys that must re-share',
-    endpoints: [
-      'POST /api/data-lakes/:id/visibility',
-      'POST /api/data-lakes/:id/transfer-ownership',
-      'DELETE /api/data-lakes/:id/transfer-ownership',
-      'POST /api/data-lakes/ownership-offers/:offerId/accept',
-      'POST /api/data-lakes/ownership-offers/:offerId/decline',
-      'DELETE /api/organizations/:id',
-      'DELETE /api/organizations/:id/members',
-      'DELETE /api/organizations/:id/members/:userId',
-    ],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.OVERWATCH_READ,
@@ -363,6 +232,46 @@ const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     ],
   },
 ];
+
+/**
+ * Routes every non-confined key may call whatever its scopes, because the route declares no scope at
+ * all. Not exhaustive: these are the ones a scope's own list would otherwise be expected to name (the
+ * notebook list a `notebooks:read` key relies on). Shown once in the Scopes tab, never under a scope;
+ * apiKeyScopeEndpoints.test.ts pins that each still has no scope door.
+ */
+export const OPEN_TO_ANY_KEY_ENDPOINTS: readonly string[] = ['GET /api/sessions'];
+
+const ENDPOINT_ENTRY = /^([A-Z|]+) (\/api\/\S+)/;
+
+/** `GET /x/:id` and `GET|PUT /x/:fileId` alike, one key per method, param names ignored. */
+export const endpointKeys = (entry: string): string[] => {
+  const match = ENDPOINT_ENTRY.exec(entry);
+  return match ? match[1].split('|').map(method => `${method} ${match[2].replace(/:\w+/g, ':')}`) : [];
+};
+
+const DERIVED_BY_VALUE: Readonly<Partial<Record<string, readonly string[]>>> = DERIVED_API_KEY_SCOPE_ENDPOINTS;
+
+/**
+ * `row` with its generated routes (apiKeyScopeEndpoints.generated.ts: every core route a key holding
+ * only that scope gets through) ahead of its hand-written `endpoints`. The hand entries hold only what
+ * the generator cannot see - overlay routes, prose, access a key gets on some requests only - or a
+ * qualifier on a generated route, which then replaces that method's generated entry.
+ */
+export function withDerivedEndpoints(row: ApiKeyScopeOption): ApiKeyScopeOption {
+  const derived = DERIVED_BY_VALUE[row.value] ?? [];
+  if (derived.length === 0) return row;
+  const handKeys = new Set(row.endpoints.flatMap(endpointKeys));
+  const kept = derived.flatMap(entry => {
+    const [, methods, routePath] = ENDPOINT_ENTRY.exec(entry)!;
+    const left = methods
+      .split('|')
+      .filter(method => !endpointKeys(`${method} ${routePath}`).some(k => handKeys.has(k)));
+    return left.length > 0 ? [`${left.join('|')} ${routePath}`] : [];
+  });
+  return { ...row, endpoints: [...kept, ...row.endpoints] };
+}
+
+const BUILT_IN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = HAND_WRITTEN_USER_API_KEY_SCOPES.map(withDerivedEndpoints);
 
 export interface MergeContributedScopesOptions {
   onReject?: (reason: string) => void;
@@ -577,22 +486,18 @@ export const NON_MINTABLE_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.CC_BRIDGE,
 ]);
 
-/**
- * Scopes that are provisioned by admins only and must never appear in the user-facing
- * key creation UI. The ingest and automation scopes are excluded from USER_API_KEY_SCOPES by design.
- */
-export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
+const HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.OVERWATCH_INGEST_WRITE,
     label: 'Overwatch: Ingest',
     description: 'Server-to-server event ingestion for Overwatch analytics',
-    endpoints: ['POST /api/overwatch/v1/events'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.QA_INGEST,
     label: 'QA: Ingest',
     description: 'CI ingest of end-to-end test runs for the admin status page',
-    endpoints: ['POST /api/qa/uploads', 'POST /api/qa/runs'],
+    endpoints: [],
   },
   {
     value: ApiKeyScope.RELEASE_NOTES_WRITE,
@@ -600,9 +505,23 @@ export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     description:
       "Release-note automation: find a release note and set its video, and upload its What's New media. The key's user must be a platform admin",
     endpoints: [
-      'GET /api/admin/release-notes',
       'PATCH /api/admin/release-notes/:id (video only)',
       'POST /api/files/createFabFile (purpose: modal-media only)',
     ],
   },
 ];
+
+/**
+ * Scopes that are provisioned by admins only and must never appear in the user-facing
+ * key creation UI. The ingest and automation scopes are excluded from USER_API_KEY_SCOPES by design.
+ */
+export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] =
+  HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES.map(withDerivedEndpoints);
+
+/** Each built-in row's hand-written supplements, before withDerivedEndpoints; for the catalogue tests. */
+export const HAND_WRITTEN_API_KEY_SCOPE_ENDPOINTS: ReadonlyMap<ApiKeyScopeValue, readonly string[]> = new Map(
+  [...HAND_WRITTEN_USER_API_KEY_SCOPES, ...HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES].map(row => [
+    row.value,
+    row.endpoints,
+  ])
+);

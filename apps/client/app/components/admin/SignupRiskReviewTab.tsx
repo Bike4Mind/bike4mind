@@ -283,7 +283,7 @@ export const SignupRiskReviewTab: React.FC = () => {
       <AdminPageHeader
         title="Risk review"
         count={rows.length}
-        description="New accounts whose signup risk score reached the review threshold, highest first. Approve the ones that look legitimate; later rescores never flag them again. Suspend the rest."
+        description="These accounts have AI access on hold pending review; they can still sign in and access their data. Approve legitimate accounts to lift the review hold. Later rescores keep the approval. Suspend abusive accounts."
       />
       {reviews.data?.truncated && (
         <Alert color="warning" data-testid="signup-risk-truncated">
@@ -393,7 +393,7 @@ export const SignupRiskReviewTab: React.FC = () => {
           if (!decision.isPending) setApproving(null);
         }}
         title={approving && approving.length > 1 ? `Approve ${plural(approving.length, 'account')}` : 'Approve account'}
-        description="They leave this queue, and later rescores keep the approval. Undo is offered for 30 seconds."
+        description="This lifts the signup review hold on AI access and removes them from this queue. Separate admin restrictions still apply. Later rescores keep the approval. Undo restores the review hold and is offered for 30 seconds."
         reasonPresets={ADMIN_REASON_PRESETS.signupRiskApproval}
         confirmLabel={
           approving && approving.length > 1 ? `Approve ${plural(approving.length, 'account')}` : 'Approve account'

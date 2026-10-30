@@ -1,3 +1,4 @@
+import { escapeSlackLine } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { CloudWatchLogsDecodedData, CloudWatchLogsLogEvent } from 'aws-lambda';
 import { postMessageToSlack } from './slack';
@@ -89,8 +90,8 @@ export class NotificationDeduplicator {
     }
 
     if (shouldNotify) {
-      const message = `${tierMessage}\n*User:* ${username} (${email})\n*User ID:* ${userId}\n*Current Credits:* ${currentCredits}${
-        organization ? `\n*Organization:* ${organization.name} (${organization.id})` : ''
+      const message = `${tierMessage}\n*User:* ${escapeSlackLine(username)} (${escapeSlackLine(email)})\n*User ID:* ${userId}\n*Current Credits:* ${currentCredits}${
+        organization ? `\n*Organization:* ${escapeSlackLine(organization.name)} (${organization.id})` : ''
       }`;
 
       await postMessageToSlack(slackWebhookUrl, message);

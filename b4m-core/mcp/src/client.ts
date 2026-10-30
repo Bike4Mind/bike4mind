@@ -1,4 +1,4 @@
-import { Tool } from '@anthropic-ai/sdk/resources/messages';
+import type { Tool } from '@anthropic-ai/sdk/resources/messages';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';

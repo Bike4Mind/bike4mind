@@ -46,6 +46,7 @@ import {
 import CheckIcon from '@mui/icons-material/Check';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { cardSurfaceSx, hairlineBorderColor, tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
+import { ScopeEndpointList } from '@client/app/components/profile/ScopeEndpointList';
 import AddIcon from '@mui/icons-material/Add';
 import RotateLeftIcon from '@mui/icons-material/RotateLeft';
 import BlockIcon from '@mui/icons-material/Block';
@@ -68,7 +69,7 @@ import {
   listAgentsContract,
   listDataLakesContract,
 } from '@bike4mind/common';
-import type { ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { OPEN_TO_ANY_KEY_ENDPOINTS, type ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
@@ -1315,6 +1316,9 @@ ai_response = response.json()`,
               Each API key can have different permissions (scopes). Make sure your key has the right scopes for the
               endpoints you want to access.
             </Typography>
+            <Typography level="body-xs" data-testid="api-keys-scopes-open-endpoints" sx={{ color: 'text.secondary' }}>
+              Every key can also call {OPEN_TO_ANY_KEY_ENDPOINTS.join(', ')}, whatever its scopes.
+            </Typography>
 
             <Stack spacing={2} className="project-api-keys-documentation-scope-list">
               {scopeDescriptions.map(item => (
@@ -1346,9 +1350,7 @@ ai_response = response.json()`,
                         {item.description}
                       </Typography>
                     </Stack>
-                    <Typography level="body-xs" sx={{ color: theme => alpha(theme.palette.text.primary, 0.5) }}>
-                      <strong>Endpoints:</strong> {item.endpoints.join(', ')}
-                    </Typography>
+                    <ScopeEndpointList scope={item.value} endpoints={item.endpoints} />
                   </CardContent>
                 </Card>
               ))}

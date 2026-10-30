@@ -15,6 +15,7 @@ export const ADMIN_REASON_PRESETS = {
   reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
   restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
+  profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
@@ -27,6 +28,12 @@ export const ADMIN_REASON_PRESETS = {
   mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
   sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
   impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
+  waitlistInvite: [
+    'Approved from the waitlist queue',
+    'Pilot or partner access',
+    'Sales-approved trial',
+    'Internal testing',
+  ],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
@@ -54,6 +61,9 @@ export const composeAdminReason = ({ preset, note }: AdminReasonDraft): string =
   if (!preset) return trimmedNote;
   return trimmedNote ? `${preset}${PRESET_SEPARATOR}${trimmedNote}` : preset;
 };
+
+/** The reason an undo carries: the original one, marked, and still within the shared maximum. */
+export const undoAdminReason = (reason: string): string => `Undo: ${reason}`.slice(0, ADMIN_ACTION_REASON_MAX_LENGTH);
 
 export const isAdminReasonComplete = (draft: AdminReasonDraft): boolean =>
   isValidAdminActionReason(composeAdminReason(draft));
