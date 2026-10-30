@@ -156,7 +156,7 @@ describe('LoopEventLog directives', () => {
     const replies = screen.getAllByTestId('loop-log-directive-reply').map(reply => reply.textContent);
     expect(replies[0]).toContain('Worker pushed back: Tests catch bugs');
     expect(replies[1]).toContain('You overruled: Do it anyway');
-    fireEvent.click(screen.getByRole('button', { name: 'View run' }));
+    fireEvent.click(screen.getByTestId('loop-log-directive-view-run-btn'));
     expect(onViewRun).toHaveBeenCalledWith('exec-w');
   });
 

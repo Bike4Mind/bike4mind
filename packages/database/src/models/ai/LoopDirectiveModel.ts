@@ -28,7 +28,7 @@ export class LoopDirectiveRepository extends BaseRepository<ILoopDirective> impl
   async listOpenForLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]> {
     const results = await this.loopDirectiveModel
       .find({ userId, loopId, state: { $in: ['open', 'accepted'] } })
-      // 'accepted' > 'open' lexically, so unanswered directives come first and are never starved by accepted ones.
+      // 'open' > 'accepted' lexically, so unanswered directives come first and are never starved by accepted ones.
       .sort({ state: -1, createdAt: 1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());

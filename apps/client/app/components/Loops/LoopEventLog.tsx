@@ -168,7 +168,12 @@ function DirectiveRow({
             {reply.note ? `: ${reply.note}` : ''} - {relativeTimeFormat(new Date(reply.at))}
           </Typography>
           {reply.by === 'worker' && reply.executionId && (
-            <Button size="sm" variant="plain" onClick={() => onViewRun(reply.executionId!)}>
+            <Button
+              size="sm"
+              variant="plain"
+              onClick={() => onViewRun(reply.executionId!)}
+              data-testid="loop-log-directive-view-run-btn"
+            >
               View run
             </Button>
           )}
