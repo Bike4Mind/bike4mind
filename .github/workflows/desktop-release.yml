@@ -5,9 +5,6 @@ on:
     branches: [main]
     paths:
       - 'apps/desktop/**'
-      # Notes and READMEs under apps/desktop never reach a build; desktop_affected.py
-      # already ignores them, so skip the run instead of starting one that decides no.
-      - '!apps/desktop/**/*.md'
       - '.github/workflows/desktop-release.yml'
       - 'scripts/desktop_release_version.py'
       - 'scripts/test_desktop_release_version.py'
