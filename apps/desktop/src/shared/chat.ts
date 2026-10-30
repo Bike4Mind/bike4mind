@@ -665,6 +665,7 @@ export interface ChatMessage {
   rounds?: ChatReplyRound[];
   /** What the whole reply cost, summed over its requests, on assistant messages. Never sent to the model. */
   usage?: ChatUsage;
+  contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
   /**
    * Provider-shaped reasoning blocks (Anthropic extended thinking). Opaque: they are replayed
    * verbatim into the next request, because dropping them breaks thinking-plus-tools turns.
@@ -1266,6 +1267,7 @@ export type ChatStreamEvent =
       content: string;
       stopReason?: string;
       usage?: ChatUsage;
+      contextSnapshot?: import('./contextBreakdown').ContextSnapshot;
       toolCalls?: ChatToolCall[];
       /** The reply's round structure; see ChatMessage.rounds. Absent when no tool ever ran. */
       rounds?: ChatReplyRound[];

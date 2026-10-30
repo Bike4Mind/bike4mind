@@ -218,6 +218,11 @@ describe('ChatService usage reporting', () => {
     const id = await runTwoRoundTurn();
     const reply = (await store.get(id))?.messages.at(-1);
 
+    expect(reply?.contextSnapshot).toMatchObject({ model: 'test-model', inputTokens: 4950 });
+    expect(reply?.contextSnapshot?.overhead.some(slice => slice.id === 'system-tools')).toBe(true);
+    const done = events.find(event => event.type === 'done');
+    expect(done && 'contextSnapshot' in done ? done.contextSnapshot : null).toEqual(reply?.contextSnapshot);
+
     expect(reply?.rounds?.map(round => round.usage)).toEqual([
       { inputTokens: 900, cacheCreationInputTokens: 4000, outputTokens: 100, creditsUsed: 5, usdCost: 0.05 },
       { inputTokens: 50, cacheReadInputTokens: 4900, outputTokens: 40, creditsUsed: 2, usdCost: 0.02 },
@@ -234,7 +239,7 @@ describe('ChatService usage reporting', () => {
     await service.send(id, 'and again?');
     await vi.waitUntil(() => post.mock.calls.length === 3, { timeout: 3000, interval: 5 });
     expect(JSON.stringify(wireOf(2).messages.slice(1))).not.toMatch(
-      /"(usage|usdCost|creditsUsed|cacheRead\w*|cacheCreation\w*)"/
+      /"(usage|contextSnapshot|usdCost|creditsUsed|cacheRead\w*|cacheCreation\w*)"/
     );
   });
 
