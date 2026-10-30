@@ -87,6 +87,12 @@ export interface LocalModelEntry {
   capabilities: LocalModelCapabilities;
   loaded: boolean;
   fit: ModelFit | null;
+  /** The context the server runs it with, when the server says (vLLM's --max-model-len). */
+  contextLength?: number;
+  /** Other names the server answers to for this same model. */
+  aliases?: string[];
+  /** A LoRA adapter's base model. */
+  baseModel?: string;
 }
 
 export type InstalledModelsResult = { ok: true; models: LocalModelEntry[] } | { ok: false; error: ModelHubError };

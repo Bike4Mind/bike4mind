@@ -917,6 +917,8 @@ export interface ChatModelOption {
   supportsTools?: boolean;
   /** A saved model server's model, grouped under it in the picker. Absent for hosted models and this computer's. */
   server?: { id: string; name: string };
+  /** A LoRA adapter's base model on the same server, shown with it in the picker. */
+  baseModel?: string;
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
 }

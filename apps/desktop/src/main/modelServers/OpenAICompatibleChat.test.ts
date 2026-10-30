@@ -112,6 +112,14 @@ describe('OpenAICompatibleChat', () => {
     await collect(client, request);
     await collect(client, request);
     expect(bodies.map(body => 'tools' in body)).toEqual([true, false, false]);
+    expect(client.toolsHint()).toMatch(/llama box refuses tool calls.*--jinja/);
+  });
+
+  it('does not probe a server that is not vLLM until it refuses tools', async () => {
+    const fetch = vi.fn<FetchLike>();
+    await chat(fetch).recheckTools('qwen2.5-0.5b');
+    await chat(fetch, null).recheckTools('qwen2.5-0.5b');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('refuses a model id that belongs to another server', async () => {

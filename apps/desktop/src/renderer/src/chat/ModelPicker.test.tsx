@@ -279,6 +279,18 @@ describe('ModelPicker twin rows', () => {
     });
   });
 
+  it("names a LoRA adapter's base on its row", () => {
+    const server = { id: 'v', name: 'gpu vllm' };
+    expect(
+      Object.fromEntries(
+        rowDetails([
+          { id: 'local:srv-v:qwen-small', name: 'qwen-small', server },
+          { id: 'local:srv-v:sql-lora', name: 'sql-lora', server, baseModel: 'qwen-small' },
+        ])
+      )
+    ).toEqual({ 'local:srv-v:qwen-small': undefined, 'local:srv-v:sql-lora': 'LoRA on qwen-small' });
+  });
+
   it('shows the ids that tell twins apart, and filters on them', () => {
     mount([...twins, ...MODELS]);
     const details = () =>

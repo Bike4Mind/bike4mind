@@ -1,5 +1,10 @@
 import { createParser } from 'eventsource-parser';
-import { OpenAICompatibleRuntime, type FetchLike, type OpenAICompatibleProduct } from '@bike4mind/local-models';
+import {
+  OpenAICompatibleRuntime,
+  type FetchLike,
+  type InstalledModel,
+  type OpenAICompatibleProduct,
+} from '@bike4mind/local-models';
 import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
@@ -16,9 +21,27 @@ export interface OpenAICompatibleServer {
   hasCredentials(): boolean;
   /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
   redact: (text: string, response: Response) => string;
+  /** Tools went off or came back on, so the server's view and the model list changed. */
+  toolsChanged?: () => void;
 }
 
 const PROPS_TIMEOUT_MS = 5_000;
+/** Long enough for a busy server to produce the probe's one token. */
+const TOOLS_PROBE_TIMEOUT_MS = 20_000;
+const PROBE_TOOL = {
+  type: 'function',
+  function: { name: 'ping', description: 'Replies pong.', parameters: { type: 'object', properties: {} } },
+};
+
+/** Why tools are off and how to turn them on, for the server's settings row and the chat it happened in. */
+export function toolsOffHint(label: string, product: OpenAICompatibleProduct | null): string {
+  const after = 'and Desktop turns them back on at its next check, within a minute.';
+  if (product === 'vllm')
+    return `${label} was started without tool calling, so its chats run without tools. Restart vLLM with --enable-auto-tool-choice and a --tool-call-parser for the model, ${after}`;
+  if (product === 'llama-server')
+    return `${label} refuses tool calls, so its chats run without tools. Restart llama-server with --jinja, ${after}`;
+  return `${label} refuses tool calls, so its chats run without tools. Turn tool calling on there, ${after}`;
+}
 
 type Block = {
   type?: unknown;
@@ -116,8 +139,16 @@ function tokenCount(value: unknown): number | undefined {
 export class OpenAICompatibleChat implements LocalChat {
   private readonly runtime: OpenAICompatibleRuntime;
   private readonly contexts = new Map<string, number>();
-  /** Models the server refused tools for; asked without them from then on. */
-  private readonly noTools = new Set<string>();
+  /**
+   * The server refused a request that declared tools, so chats go without them until a recheck sees tools
+   * accepted again. Tool flags are server-wide on vLLM and llama-server, so this is too.
+   */
+  private toolsOff = false;
+  /** Whether a vLLM server has been asked once if it takes tools, before any chat found out. */
+  private toolsAsked = false;
+  private probing: Promise<void> | null = null;
+  /** Conversations already told that tools are off. */
+  private readonly told = new Set<string>();
 
   constructor(private readonly server: OpenAICompatibleServer) {
     this.runtime = new OpenAICompatibleRuntime({
@@ -132,6 +163,7 @@ export class OpenAICompatibleChat implements LocalChat {
   /** Rejects when the server cannot be listed, so the caller can mark it down. */
   async listModels(): Promise<ChatModelOption[]> {
     const models = await this.runtime.list();
+    this.learnContexts(models);
     return models
       .filter(model => !model.capabilities.embeddings || model.capabilities.completion)
       .map(model => ({
@@ -140,6 +172,8 @@ export class OpenAICompatibleChat implements LocalChat {
         backend: localBackend(this.server.runtimeId),
         ...(model.capabilities.vision ? { supportsVision: true } : {}),
         ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name) } : {}),
+        ...(model.baseModel ? { baseModel: model.baseModel } : {}),
+        ...(this.toolsOff ? { supportsTools: false } : {}),
       }));
   }
 
@@ -147,10 +181,36 @@ export class OpenAICompatibleChat implements LocalChat {
     const name = this.modelName(modelId);
     const known = this.contexts.get(name);
     if (known !== undefined) return known;
-    const measured = this.server.product === 'llama-server' ? await this.llamaServerContext(signal) : undefined;
-    const tokens = measured ?? LOCAL_CONTEXT_TARGET_TOKENS;
-    if (measured !== undefined) this.contexts.set(name, tokens);
-    return tokens;
+    if (this.server.product === 'llama-server') {
+      const measured = await this.llamaServerContext(signal);
+      if (measured !== undefined) this.contexts.set(name, measured);
+    } else if (this.server.product !== 'lmstudio') {
+      this.learnContexts(await this.runtime.list().catch(() => []));
+    }
+    return this.contexts.get(name) ?? LOCAL_CONTEXT_TARGET_TOKENS;
+  }
+
+  /** Why chats on this server run without tools; null while they have them. */
+  toolsHint(): string | null {
+    return this.toolsOff ? toolsOffHint(this.server.label, this.server.product) : null;
+  }
+
+  /**
+   * Asks the server whether it takes tools now, with a one-token request that declares one. Only asks while
+   * tools are off, which costs a refusal that never reaches the model, and once on a vLLM server that has
+   * not been asked, which starts without tool calling unless told to.
+   */
+  recheckTools(model: string | undefined): Promise<void> {
+    if (!model || this.probing) return this.probing ?? Promise.resolve();
+    if (!this.toolsOff && (this.server.product !== 'vllm' || this.toolsAsked)) return Promise.resolve();
+    this.probing = this.probeTools(model)
+      .then(verdict => {
+        if (verdict === null) return;
+        this.toolsAsked = true;
+        this.setToolsOff(verdict === 'refused');
+      })
+      .finally(() => (this.probing = null));
+    return this.probing;
   }
 
   async growFor(): Promise<number | undefined> {
@@ -160,10 +220,12 @@ export class OpenAICompatibleChat implements LocalChat {
   async stream(
     request: CompletionRequest,
     onEvent: (event: CompletionStreamEvent) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    _onTrimmed?: (dropped: number) => void,
+    onNotice?: (message: string) => void
   ): Promise<void> {
     const model = this.modelName(request.model);
-    const tools = this.noTools.has(model)
+    const tools = this.toolsOff
       ? []
       : (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
     const post = (withTools: boolean) =>
@@ -182,8 +244,12 @@ export class OpenAICompatibleChat implements LocalChat {
       });
     let response = await post(true);
     if (!response.ok && tools.length > 0 && (await refusedTools(response))) {
-      this.noTools.add(model);
+      this.setToolsOff(true);
       response = await post(false);
+    }
+    if (this.toolsOff && onNotice && request.sessionId && !this.told.has(request.sessionId)) {
+      this.told.add(request.sessionId);
+      onNotice(toolsOffHint(this.server.label, this.server.product));
     }
     if (!response.ok || !response.body) throw await this.httpError(response);
     await this.readStream(response.body, onEvent, text => this.server.redact(text, response));
@@ -266,6 +332,45 @@ export class OpenAICompatibleChat implements LocalChat {
     onEvent({ type: 'content', stopReason: stopReason ?? 'stop', ...(usage ? { usage } : {}) });
   }
 
+  private learnContexts(models: readonly InstalledModel[]): void {
+    for (const model of models) {
+      if (model.contextLength === undefined) continue;
+      for (const name of [model.name, ...(model.aliases ?? [])]) this.contexts.set(name, model.contextLength);
+    }
+  }
+
+  private setToolsOff(off: boolean): void {
+    if (this.toolsOff === off) return;
+    this.toolsOff = off;
+    if (!off) this.told.clear();
+    this.server.toolsChanged?.();
+  }
+
+  private async probeTools(model: string): Promise<'accepted' | 'refused' | null> {
+    try {
+      const response = await this.server.fetch(`${this.server.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.timeout(TOOLS_PROBE_TIMEOUT_MS),
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1,
+          tools: [PROBE_TOOL],
+        }),
+      });
+      if (response.ok) {
+        await response.body?.cancel();
+        return 'accepted';
+      }
+      if (await refusedTools(response)) return 'refused';
+      await response.body?.cancel();
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   private async llamaServerContext(signal?: AbortSignal): Promise<number | undefined> {
     try {
       const timeout = AbortSignal.timeout(PROPS_TIMEOUT_MS);
@@ -301,7 +406,10 @@ export class OpenAICompatibleChat implements LocalChat {
   }
 }
 
-/** llama-server without --jinja, and some proxies, refuse a request that declares tools. */
+/**
+ * llama-server without --jinja (500), vLLM without --enable-auto-tool-choice (400, `"auto" tool choice requires
+ * --enable-auto-tool-choice and --tool-call-parser to be set`), and some proxies refuse a request that declares tools.
+ */
 async function refusedTools(response: Response): Promise<boolean> {
   if (response.status !== 400 && response.status !== 500) return false;
   return /\btools?\b/i.test(await response.clone().text());

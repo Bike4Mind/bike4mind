@@ -75,7 +75,9 @@ export function rowDetails(models: readonly ChatModelOption[]): Map<string, stri
   return new Map(
     models.map(model => {
       if (model.unavailable !== undefined) return [model.id, model.unavailable];
-      const provider = providerLabel(model);
+      const provider =
+        [providerLabel(model), model.baseModel && `LoRA on ${model.baseModel}`].filter(Boolean).join(' - ') ||
+        undefined;
       if ((counts.get(rowKey(model)) ?? 0) < 2) return [model.id, provider];
       return [model.id, provider ? `${provider} - ${model.id}` : model.id];
     })

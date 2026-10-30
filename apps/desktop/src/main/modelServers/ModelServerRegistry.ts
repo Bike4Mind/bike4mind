@@ -62,6 +62,8 @@ export const PICKER_CHECK_WAIT_MS = 2_000;
 
 interface ServerClient extends LocalChat {
   listModels(): Promise<ChatModelOption[]>;
+  toolsHint?(): string | null;
+  recheckTools?(model: string | undefined): Promise<void>;
 }
 
 interface Entry {
@@ -539,6 +541,9 @@ export class ModelServerRegistry {
         `MODEL SERVERS: listing ${entry.record.id} failed: ${err instanceof Error ? err.name : 'unknown'}`
       );
     }
+    // Each check is how tools come back after the server restarts with tool calling on. Not awaited: the probe
+    // generates a token, and a change reaches Settings and the picker through toolsChanged.
+    void entry.client.recheckTools?.(entry.record.models[0]);
   }
 
   private stale(entry: Entry): boolean {
@@ -579,6 +584,7 @@ export class ModelServerRegistry {
             fetch,
             hasCredentials,
             redact: redactServerResponse,
+            toolsChanged: () => this.emit(),
           });
     const runtime: LocalRuntime =
       record.kind === 'ollama'
@@ -598,7 +604,9 @@ export class ModelServerRegistry {
 
   private view(entry: Entry): ModelServerView {
     const { record } = entry;
+    const toolsHint = entry.client.toolsHint?.();
     return {
+      ...(toolsHint ? { toolsHint } : {}),
       id: record.id,
       name: record.name,
       local: false,
