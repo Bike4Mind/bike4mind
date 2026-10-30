@@ -80,7 +80,8 @@ export default function PreferenceArenaImportBox() {
           />
           <FormHelperText>
             A JSON array of up to 500 pairs. Add goldChoice (a or b) only to gold questions; gold pairs must have a
-            clear winner, since a Tie on a gold pair counts as a miss.
+            clear winner, since a Tie on a gold pair counts as a miss. Imports only add pairs: re-importing a file adds
+            duplicates that skew win rates, so retire duplicates instead.
           </FormHelperText>
         </FormControl>
         {errors.length > 0 && (

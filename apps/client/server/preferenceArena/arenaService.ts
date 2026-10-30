@@ -274,6 +274,7 @@ export function createArenaService(deps: ArenaServiceDeps) {
     return { creditsAwarded: settled?.creditsAwarded ?? 0 };
   }
 
+  // Append-only: no dedupe, so re-importing a file duplicates pairs; admins retire duplicates.
   async function importPairs(adminUserId: string, imports: ArenaPairImport[]): Promise<number> {
     return pairs.insertMany(imports.map(pair => ({ ...pair, active: true, createdBy: adminUserId })));
   }
