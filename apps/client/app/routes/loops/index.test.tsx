@@ -50,6 +50,7 @@ const loop = (overrides: Record<string, unknown> = {}) => ({
   runCount: 3,
   consecutiveFailures: 0,
   creditsUsed: 1234,
+  creditsToday: 0,
   blockedTickets: 0,
   ...overrides,
 });
@@ -98,6 +99,24 @@ describe('LoopsPage', () => {
     fireEvent.click(r.getByTestId('loop-pause-btn'));
     expect(mutations.update.mutate).toHaveBeenCalledWith({ id: 'l1', status: 'paused' });
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('shows spend today against the budget, or alone without one', () => {
+    loopsState.data = [loop({ creditsToday: 5, budgetCreditsPerDay: 10 }), loop({ id: 'l2', creditsToday: 5 })];
+    renderPage();
+    expect(row().getByTestId('loops-row-spend-today')).toHaveTextContent('5 / 10 credits');
+    expect(row('l2').getByTestId('loops-row-spend-today')).toHaveTextContent('5 credits');
+  });
+
+  it('offers pause on a loop the scheduler paused, but not on an owner pause', () => {
+    loopsState.data = [
+      loop({ status: 'paused', autoResume: 'budget', statusReason: 'Daily budget reached; resumes 00:00 UTC' }),
+      loop({ id: 'l2', status: 'paused' }),
+    ];
+    renderPage();
+    fireEvent.click(row().getByTestId('loop-pause-btn'));
+    expect(mutations.update.mutate).toHaveBeenCalledWith({ id: 'l1', status: 'paused' });
+    expect(row('l2').queryByTestId('loop-pause-btn')).not.toBeInTheDocument();
   });
 
   it('shows a past nextRunAt as due', () => {

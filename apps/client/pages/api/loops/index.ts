@@ -7,7 +7,7 @@ import {
   workItemRepository,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { ILoop, ILoopWithUsage } from '@bike4mind/common';
+import { ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { getOrCreateSession } from '@server/managers/sessionCrud';
@@ -32,17 +32,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
     await assertLoopsEnabled();
     const loops = await loopRepository.listForUser(req.user!.id);
     const ids = loops.map(loop => loop.id);
-    const [credits, blocked] = await Promise.all([
-      agentExecutionRepository.sumCreditsByLoop(
-        ids,
-        loops.map(loop => loop.sessionId)
-      ),
+    const sessionIds = loops.map(loop => loop.sessionId);
+    const [credits, creditsToday, blocked] = await Promise.all([
+      agentExecutionRepository.sumCreditsByLoop(ids, sessionIds),
+      agentExecutionRepository.sumCreditsByLoop(ids, sessionIds, startOfUtcDay(new Date())),
       workItemRepository.countBlockedByLoop(req.user!.id, ids),
     ]);
     res.json(
       loops.map((loop): ILoopWithUsage => ({
         ...loop,
         creditsUsed: credits[loop.id] ?? 0,
+        creditsToday: creditsToday[loop.id] ?? 0,
         blockedTickets: blocked[loop.id] ?? 0,
       }))
     );

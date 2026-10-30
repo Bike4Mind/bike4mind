@@ -22,6 +22,7 @@ import LoopTicketBoard from '@client/app/components/Loops/LoopTicketBoard';
 import {
   formatCredits,
   formatInterval,
+  formatSpendToday,
   lastRunLabel,
   LoopStatusChip,
   nextRunLabel,
@@ -75,7 +76,8 @@ export default function LoopDetailPage() {
           )}
           <Typography level="body-sm">
             {formatInterval(loop.intervalMinutes)} - last run {lastRunLabel(loop)} - next {nextRunLabel(loop)} -{' '}
-            {loop.runCount} runs - {formatCredits(loop.creditsUsed)} (90 days) - {loop.model}
+            {loop.runCount} runs - {formatCredits(loop.creditsUsed)} (90 days) -{' '}
+            <span data-testid="loop-detail-spend-today">{formatSpendToday(loop)} today</span> - {loop.model}
           </Typography>
           {(loop.activeExecutionId ?? loop.lastExecutionId) && (
             <Link

@@ -7,6 +7,7 @@ import LoopActions from '@client/app/components/Loops/LoopActions';
 import LoopFormModal from '@client/app/components/Loops/LoopFormModal';
 import {
   formatCredits,
+  formatSpendToday,
   formatInterval,
   lastRunLabel,
   loopNeedsOwner,
@@ -65,6 +66,7 @@ export default function LoopsPage() {
                 <th>Last run</th>
                 <th>Next run</th>
                 <th>Runs</th>
+                <th title="Credits since 00:00 UTC, against the daily budget">Today</th>
                 <th title="Top-level runs kept for 90 days">Credits (90 days)</th>
                 <th style={{ width: 320 }} />
               </tr>
@@ -105,6 +107,7 @@ export default function LoopsPage() {
                   <td>{lastRunLabel(loop)}</td>
                   <td data-testid="loops-row-next-run">{nextRunLabel(loop)}</td>
                   <td>{loop.runCount}</td>
+                  <td data-testid="loops-row-spend-today">{formatSpendToday(loop)}</td>
                   <td>{formatCredits(loop.creditsUsed)}</td>
                   <td>
                     <LoopActions loop={loop} />

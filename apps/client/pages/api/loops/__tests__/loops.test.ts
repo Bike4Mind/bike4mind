@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { startOfUtcDay } from '@bike4mind/common';
 
 /**
  * Route-level tests for /api/loops. The repository is mocked - its own behaviour
@@ -176,6 +177,8 @@ describe('POST /api/loops', () => {
     [{ ...validBody, goal: 'x'.repeat(8001) }, /goal/],
     [{ ...validBody, tools: 'web_search' }, /tools/],
     [{ ...validBody, tools: Array.from({ length: 51 }, (_, i) => `t${i}`) }, /tools/],
+    [{ ...validBody, budgetCreditsPerDay: 0 }, /budgetCreditsPerDay/],
+    [{ ...validBody, budgetCreditsPerDay: -5 }, /budgetCreditsPerDay/],
   ])('rejects an invalid body (%#)', async (body, message) => {
     await expect(call('collection', 'post', { body }).result).rejects.toThrow(message);
     expect(repo.create).not.toHaveBeenCalled();
@@ -206,23 +209,35 @@ describe('POST /api/loops', () => {
 });
 
 describe('GET creditsUsed', () => {
-  it('adds each loop its credits in one aggregate, 0 when it has none', async () => {
+  const today = startOfUtcDay(new Date());
+  const creditsBy = (total: Record<string, number>, sinceToday: Record<string, number>) =>
+    executions.sumCreditsByLoop.mockImplementation(async (_ids: string[], _sessions: string[], since?: Date) =>
+      since ? sinceToday : total
+    );
+
+  it('adds each loop its credits in total and since the start of the UTC day, 0 when it has none', async () => {
     repo.listForUser.mockResolvedValue([loop(), loop({ id: 'other', sessionId: 's2' })]);
-    executions.sumCreditsByLoop.mockResolvedValue({ [OID]: 42 });
+    creditsBy({ [OID]: 42 }, { [OID]: 4 });
     const { res, result } = call('collection', 'get');
     await result;
-    expect(executions.sumCreditsByLoop).toHaveBeenCalledTimes(1);
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledTimes(2);
     expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID, 'other'], ['s1', 's2']);
-    expect(res._getJSONData().map((l: { creditsUsed: number }) => l.creditsUsed)).toEqual([42, 0]);
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID, 'other'], ['s1', 's2'], today);
+    const body = res._getJSONData() as { creditsUsed: number; creditsToday: number }[];
+    expect(body.map(l => [l.creditsUsed, l.creditsToday])).toEqual([
+      [42, 4],
+      [0, 0],
+    ]);
   });
 
   it('adds the credits to a single loop', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop());
-    executions.sumCreditsByLoop.mockResolvedValue({ [OID]: 9 });
+    creditsBy({ [OID]: 9 }, { [OID]: 2 });
     const { res, result } = call('item', 'get', { query: { id: OID } });
     await result;
     expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID], ['s1']);
-    expect(res._getJSONData().creditsUsed).toBe(9);
+    expect(executions.sumCreditsByLoop).toHaveBeenCalledWith([OID], ['s1'], today);
+    expect(res._getJSONData()).toMatchObject({ creditsUsed: 9, creditsToday: 2 });
   });
 });
 
@@ -295,6 +310,21 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(await patchStatus({ status: 'live' }, 'paused')).toMatchObject({ status: 'paused' });
   });
 
+  it('pausing a loop the scheduler paused makes it an owner pause', async () => {
+    expect(
+      await patchStatus({ status: 'paused', autoResume: 'budget', statusReason: 'Daily budget' }, 'paused')
+    ).toEqual({ statusReason: null, autoResume: null });
+    expect(repo.updateForUser.mock.calls[0][3]).toBe('paused');
+  });
+
+  it('setting an auto-paused loop live clears autoResume', async () => {
+    expect(await patchStatus({ status: 'paused', autoResume: 'credits' }, 'live')).toMatchObject({
+      status: 'live',
+      statusReason: null,
+      autoResume: null,
+    });
+  });
+
   it.each([
     ['draft', 'paused'],
     ['live', 'error'],
@@ -336,6 +366,14 @@ describe('PATCH /api/loops/:id status transitions', () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', lastRunAt: new Date() }));
     await call('item', 'patch', { query: { id: OID }, body: { name: 'Renamed', intervalMinutes: 15 } }).result;
     expect(repo.updateForUser.mock.calls[0][2]).not.toHaveProperty('nextRunAt');
+  });
+
+  it('rejects a PATCH budget of 0', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { budgetCreditsPerDay: 0 } }).result
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
   });
 
   it('clears agentId and budgetCreditsPerDay with null', async () => {

@@ -48,6 +48,7 @@ export const loopKeys = {
 
 export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 'tools' | 'stages'> & {
   agentId?: string | null;
+  budgetCreditsPerDay?: number | null;
 };
 
 const LIST_POLL_MS = 30_000;

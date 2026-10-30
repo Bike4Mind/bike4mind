@@ -20,7 +20,9 @@ const STATUS_LABEL: Record<LoopStatus, string> = {
 
 /** Client mirror of the PATCH transitions in apps/client/server/utils/loopValidation.ts (nextStatusPatch). */
 export const canSetLive = (status: LoopStatus) => status !== 'live';
-export const canPause = (status: LoopStatus) => status === 'live';
+// Pausing a scheduler pause (`autoResume`) turns it into an owner pause.
+export const canPause = (loop: Pick<ILoop, 'status' | 'autoResume'>) =>
+  loop.status === 'live' || (loop.status === 'paused' && !!loop.autoResume);
 export const canRunNow = (status: LoopStatus) => status === 'live';
 
 export function formatInterval(minutes: number): string {
@@ -43,6 +45,11 @@ export const loopNeedsOwner = (loop: Pick<ILoopWithUsage, 'status' | 'statusReas
   loopStatusNeedsOwner(loop) || loop.blockedTickets > 0;
 
 export const formatCredits = (credits: number) => `${Math.round(credits).toLocaleString()} credits`;
+
+export const formatSpendToday = (loop: Pick<ILoopWithUsage, 'creditsToday' | 'budgetCreditsPerDay'>) =>
+  loop.budgetCreditsPerDay === undefined
+    ? formatCredits(loop.creditsToday)
+    : `${Math.round(loop.creditsToday).toLocaleString()} / ${loop.budgetCreditsPerDay.toLocaleString()} credits`;
 
 export function LoopStatusChip({ loop }: { loop: Pick<ILoop, 'status' | 'statusReason'> }) {
   return (
