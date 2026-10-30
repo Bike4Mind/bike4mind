@@ -19,6 +19,10 @@ export default function SignupHoneypot({ value, onChange }: SignupHoneypotProps)
         data-testid="signup-honeypot-input"
         tabIndex={-1}
         autoComplete="off"
+        data-1p-ignore
+        data-lpignore="true"
+        data-bwignore
+        data-form-type="other"
         value={value}
         onChange={e => onChange(e.target.value)}
       />

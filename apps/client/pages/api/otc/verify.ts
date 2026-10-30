@@ -22,6 +22,7 @@ import {
   oauthClientRepository,
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { withTransaction } from '@bike4mind/db-core';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
 import { isPartnerDomainSignupAllowed } from '@server/utils/auth/partnerSignupBypass';
@@ -83,6 +84,21 @@ function parseSourceClientId(value: unknown): string | undefined {
 // Existing-user login spreads the self-view user at the top level next to the access token.
 const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
 const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
+
+// Re-read at verify so turning the kill switch off also stops codes issued before the change. A failed
+// read keeps applying, matching what send stored.
+async function isSignupBotChecksEnabled(logger: { warn: (...args: unknown[]) => void }): Promise<boolean> {
+  try {
+    const settings = await getSettingsMap(
+      { adminSettings: adminSettingsRepository },
+      { names: ['signupBotChecksEnabled'] }
+    );
+    return getSettingsValue('signupBotChecksEnabled', settings, true);
+  } catch (err) {
+    logger.warn('signup bot-check setting read failed; applying stored signals', err);
+    return true;
+  }
+}
 
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
@@ -536,7 +552,8 @@ const handler = baseApi({ auth: false })
     // Best-effort: a failure here must neither fail the signup nor change the response.
     // Signals are written by otc/send only, from the closed UserRiskSignalType set.
     const signals = (pendingCode.riskSignals ?? []) as UserRiskSignalType[];
-    if (signals.length && newUser?.id) {
+    const botChecksEnabled = signals.length > 0 && (await isSignupBotChecksEnabled(req.logger));
+    if (signals.length && botChecksEnabled && newUser?.id) {
       const signalLog = { userId: newUser.id, signals };
       let step = 'record risk signals';
       try {

@@ -20,6 +20,15 @@ describe('evaluateSignupSignals', () => {
     expect(evaluate({ formToken: signSignupFormToken(NOW), formExtra: 'x' })).toEqual(['signup_honeypot']);
   });
 
+  it('flags a honeypot filled with a non-string value', () => {
+    for (const formExtra of [1, 0, {}, [], true, false]) {
+      expect(evaluate({ formToken: signSignupFormToken(NOW), formExtra })).toEqual(['signup_honeypot']);
+    }
+    for (const formExtra of [undefined, null, '']) {
+      expect(evaluate({ formToken: signSignupFormToken(NOW), formExtra })).toEqual([]);
+    }
+  });
+
   it('flags a missing token', () => {
     expect(evaluate({})).toEqual(['signup_token_missing']);
     expect(evaluate({ formToken: '' })).toEqual(['signup_token_missing']);

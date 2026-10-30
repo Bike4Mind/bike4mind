@@ -4696,7 +4696,7 @@ export const settingsMap = {
     min: 0,
     max: 60000,
     description:
-      'A signup form submitted faster than this after the form loaded is recorded as a risk signal on the new account. The submission itself is never rejected.',
+      'A signup form submitted faster than this after the page fetched its form token is recorded as a risk signal on the new account. The submission itself is never rejected.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4714,7 +4714,7 @@ export const settingsMap = {
     name: 'Restricted Tier Model Allowlist',
     defaultValue: ['gpt-5.4-nano', 'gemini-3.1-flash-lite'],
     description:
-      'Models available to users in the restricted tier. A request for any other model runs on the first entry that is available to the caller. Must contain at least one model id.',
+      'Models available to users in the restricted tier. A request for any other model runs on the first entry that is available to the caller; if none is available on this deployment, the requested model runs (the daily cap still applies). Must contain at least one model id.',
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     schema: z.array(z.string()).min(1),
@@ -4725,7 +4725,7 @@ export const settingsMap = {
     defaultValue: 3,
     min: 1,
     max: 1000,
-    description: 'Max requests per minute for users in the restricted tier, on sessions and API keys.',
+    description: 'Max requests per minute, per endpoint, for users in the restricted tier, on sessions and API keys.',
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
   }),

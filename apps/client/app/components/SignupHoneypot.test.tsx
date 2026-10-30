@@ -17,6 +17,15 @@ describe('SignupHoneypot', () => {
     expect(input.getAttribute('autocomplete')).toBe('off');
   });
 
+  it('opts out of password managers', () => {
+    wrap(<SignupHoneypot value="" onChange={() => {}} />);
+    const input = screen.getByTestId('signup-honeypot-input');
+    expect(input.hasAttribute('data-1p-ignore')).toBe(true);
+    expect(input.getAttribute('data-lpignore')).toBe('true');
+    expect(input.hasAttribute('data-bwignore')).toBe(true);
+    expect(input.getAttribute('data-form-type')).toBe('other');
+  });
+
   it('hides the wrapper from assistive tech and positions it off-screen without display:none', () => {
     wrap(<SignupHoneypot value="" onChange={() => {}} />);
     const wrapper = screen.getByTestId('signup-honeypot');

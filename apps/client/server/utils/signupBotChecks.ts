@@ -26,7 +26,9 @@ export function evaluateSignupSignals(input: {
   minSubmitMs: number;
 }): UserRiskSignalType[] {
   const signals: UserRiskSignalType[] = [];
-  if (typeof input.formExtra === 'string' && input.formExtra.length > 0) signals.push('signup_honeypot');
+  // Any non-empty type counts as filled: a bot posting JSON can send a number, object or boolean.
+  if (input.formExtra !== undefined && input.formExtra !== null && input.formExtra !== '')
+    signals.push('signup_honeypot');
 
   if (typeof input.formToken !== 'string' || !input.formToken) {
     signals.push(

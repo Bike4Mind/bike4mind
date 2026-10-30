@@ -103,6 +103,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import handler from '@pages/api/otc/send';
+import { getSettingsMap } from '@bike4mind/utils';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
 import { EmailEvents } from '@server/utils/eventBus';
 import { recordTurnstileVerification } from '@server/auth/signupChallenge';
@@ -572,6 +573,37 @@ describe('/api/otc/send', () => {
       await send();
       expect(mockEvaluateSignals).not.toHaveBeenCalled();
       expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+    });
+
+    it.each([
+      [
+        'settings read',
+        () =>
+          // Keyed on the bot-check read: other callers of getSettingsMap run before it and must not consume the failure.
+          vi.mocked(getSettingsMap).mockImplementation(async (_adapters, query) => {
+            if (query?.names?.includes('signupBotChecksEnabled')) throw new Error('db down');
+            return {};
+          }),
+      ],
+      [
+        'evaluator',
+        () =>
+          mockEvaluateSignals.mockImplementationOnce(() => {
+            throw new Error('boom');
+          }),
+      ],
+    ])('fails open when the %s throws: 200, token issued, no signals, warning logged', async (_name, arrange) => {
+      const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+      mockSendOTC.mockImplementation((params, adapters) => userService.sendOTC(params, adapters));
+      arrange();
+      mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
+      mockConfirmReservation.mockResolvedValue(true);
+      const { req, res } = makeReqRes();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ pendingToken: 'signed-pending-token' });
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+      expect(req.logger.warn).toHaveBeenCalled();
     });
 
     it('records nothing when E2E is enabled', async () => {

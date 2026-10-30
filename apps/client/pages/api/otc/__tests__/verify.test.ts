@@ -195,6 +195,7 @@ vi.mock('@bike4mind/services', () => ({
 
 import { oauthClientRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
@@ -1657,6 +1658,8 @@ describe('/api/otc/verify - signup bot-check signals', () => {
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0, tags: [] });
     mockSetThrottleTier.mockResolvedValue({ changed: true, before: 'none', after: 'shadow' });
+    vi.mocked(getSettingsMap).mockResolvedValue({} as never);
+    vi.mocked(getSettingsValue).mockReturnValue(true as never);
   });
 
   const withSignals = (list: string[]) => mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: list });
@@ -1761,6 +1764,29 @@ describe('/api/otc/verify - signup bot-check signals', () => {
       { reason: 'signup checks: signup_token_missing,signup_honeypot', source: 'signup_honeypot' },
       expect.anything()
     );
+  });
+
+  it('skips recording and the tier change when the kill switch was turned off after the code was issued', async () => {
+    vi.mocked(getSettingsValue).mockReturnValue(false as never);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(signals);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSetThrottleTier).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ riskSignals: expect.anything() }));
+  });
+
+  it('keeps applying stored signals when the setting read fails', async () => {
+    // Keyed on the bot-check read: other getSettingsMap callers in the handler must not consume the failure.
+    vi.mocked(getSettingsMap).mockImplementation(async (_adapters, query) => {
+      if (query?.names?.includes('signupBotChecksEnabled')) throw new Error('db down');
+      return {};
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    withSignals(signals);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSetThrottleTier).toHaveBeenCalled();
   });
 
   it('does nothing for a new account without signals', async () => {

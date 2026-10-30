@@ -104,6 +104,7 @@ const handler = baseApi({ auth: false })
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
 
+    // Evaluated on every send, existing users included, so the response never reveals whether the email has an account.
     const riskSignals = await collectSignupSignals(req.body, req.logger);
 
     const result = await userService
