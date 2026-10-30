@@ -9904,7 +9904,9 @@ describe('ChatCompletionProcess', () => {
 
       it('saves the workspace reply as a finished turn and never calls the model', async () => {
         const uiSideEffects = [{ type: 'example', payload: {} }];
-        respond.mockResolvedValue({ replies: ['Scripted ', 'answer'], uiSideEffects });
+        const structuredReplies = [{ type: 'text', text: 'Scripted answer' }];
+        const toolResults = [{ toolName: 'example', result: 'ok' }];
+        respond.mockResolvedValue({ replies: ['Scripted ', 'answer'], uiSideEffects, structuredReplies, toolResults });
 
         const turn = await runTurn({ surface: 'settings-surface' }, respondingTable);
 
@@ -9921,7 +9923,10 @@ describe('ChatCompletionProcess', () => {
           replies: ['Scripted ', 'answer'],
           reply: 'Scripted answer',
           uiSideEffects,
+          structuredReplies,
+          toolResults,
         });
+        expect(mockDb.quests.update.mock.calls.at(-1)?.[0].promptMeta?.model).toBeUndefined();
       });
 
       it('hands the turn to the model when the responder returns null', async () => {

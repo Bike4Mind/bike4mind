@@ -313,6 +313,11 @@ export async function applyWorkspaceSessionSettings<TSession extends SurfaceSett
   return effective as TSession;
 }
 
+/** Whether `session`'s workspace answers its turns itself, so no model may answer one. */
+export function workspaceAnswersTurns(session: SurfaceSettingsSession, table: WorkspaceSessionSettingsTable): boolean {
+  return !!ownedFieldsFor(session, table, false)?.entry.respond;
+}
+
 /**
  * The workspace's own answer to a turn, or null when it has none and the model should answer. A
  * responder that throws fails the turn rather than letting a model improvise a scripted reply.

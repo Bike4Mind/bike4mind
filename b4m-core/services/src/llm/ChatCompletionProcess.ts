@@ -2304,6 +2304,11 @@ export class ChatCompletionProcess {
         if (workspaceReply.structuredReplies) quest.structuredReplies = workspaceReply.structuredReplies;
         if (workspaceReply.toolResults) quest.toolResults = workspaceReply.toolResults;
         if (workspaceReply.uiSideEffects) quest.uiSideEffects = workspaceReply.uiSideEffects;
+        // Invoke stamped the session's model; no model wrote this reply.
+        if (quest.promptMeta?.model) {
+          const { model: _unused, ...promptMeta } = quest.promptMeta;
+          quest.promptMeta = promptMeta;
+        }
         setTerminalQuestStatus(quest, 'done');
         turnTiming.finish();
         await saveQuest(quest);

@@ -3,6 +3,7 @@ import {
   applyWorkspaceSessionSettings,
   defineWorkspaceSessionSettingsTable,
   respondFromWorkspace,
+  workspaceAnswersTurns,
   stripSurfaceOwnedFields,
   surfaceOwnedFields,
   userSetSessionFields,
@@ -201,6 +202,13 @@ describe('respondFromWorkspace', () => {
   const quest = { id: 'q1', prompt: 'hello' };
   const tableWith = (respond?: WorkspaceSessionSettingsEntry['respond']): WorkspaceSessionSettingsTable => ({
     [WORKSPACE]: { ownedFields: ['temperature'], resolve: async () => ({}), respond },
+  });
+
+  it('reports which sessions answer their own turns', () => {
+    const respond = async () => null;
+    expect(workspaceAnswersTurns(session(), tableWith(respond))).toBe(true);
+    expect(workspaceAnswersTurns(session(), tableWith())).toBe(false);
+    expect(workspaceAnswersTurns(session({ surface: 'other' }), tableWith(respond))).toBe(false);
   });
 
   it('returns the workspace reply for a session on it', async () => {
