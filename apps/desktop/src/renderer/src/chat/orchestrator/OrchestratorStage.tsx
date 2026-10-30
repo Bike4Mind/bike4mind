@@ -52,15 +52,16 @@ export function OrchestratorStage({
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = agents.find(agent => agent.id === selectedId) ?? null;
+  const hasSelection = selected !== null;
 
   useEffect(() => {
-    if (!selected) return;
+    if (!hasSelection) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectedId(null);
+      if (event.key === 'Escape' && !event.isComposing && !event.defaultPrevented) setSelectedId(null);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selected]);
+  }, [hasSelection]);
 
   const { total, counts, usdCost, credits, costPartial } = summarizeRoster(agents);
   const cost = formatAgentCost(usdCost === 0 && credits > 0 ? undefined : usdCost, credits);

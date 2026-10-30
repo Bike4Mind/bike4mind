@@ -5,7 +5,7 @@ import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import { snippetOf } from '@shared/agentOutcome';
 import type { ChatMessage, ChatQueuedMessage } from '@shared/chat';
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { activityLabel } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
@@ -21,43 +21,71 @@ interface AgentPeekDrawerProps {
   actions: AgentActions;
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : 'Something went wrong';
+}
+
 /** The newest messages, refetched whenever the agent's summary changes (a finished step bumps `updatedAt`). */
-function useRecentMessages(agentId: string, updatedAt: string): ChatMessage[] {
+function useRecentMessages(agentId: string, updatedAt: string): { messages: ChatMessage[]; loadError: string | null } {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
     let stale = false;
-    void window.b4m.chat.getSession(agentId).then(session => {
-      if (!stale) setMessages(session ? session.messages.slice(-RECENT_MESSAGES) : []);
-    });
+    window.b4m.chat.getSession(agentId).then(
+      session => {
+        if (stale) return;
+        setLoadError(null);
+        setMessages(session ? session.messages.slice(-RECENT_MESSAGES) : []);
+      },
+      (error: unknown) => {
+        if (!stale) setLoadError(errorText(error));
+      }
+    );
     return () => {
       stale = true;
     };
   }, [agentId, updatedAt]);
-  return messages;
+  return { messages, loadError };
 }
 
 function ReplyBox({ agentId }: { agentId: string }) {
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage | null>(null);
+  const [sending, setSending] = useState(false);
+  // A ref as well as state: two keystrokes can land before React re-renders with `sending` set.
+  const sendingRef = useRef(false);
 
   const send = async () => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
     setError(null);
-    const result = await window.b4m.chat.sendMessage({ sessionId: agentId, text: trimmed });
-    if (!result.ok) {
-      setError(result.error);
-      return;
+    try {
+      const result = await window.b4m.chat.sendMessage({ sessionId: agentId, text: trimmed });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setText('');
+      setQueued(result.queued ? result.message : null);
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
-    setText('');
-    setQueued(result.queued ? result.message : null);
   };
 
   const settleQueued = async (action: 'cancelQueuedMessage' | 'sendQueuedMessageNow') => {
     if (!queued) return;
-    await window.b4m.chat[action](agentId, queued.id);
-    setQueued(null);
+    try {
+      await window.b4m.chat[action](agentId, queued.id);
+      setQueued(null);
+    } catch (caught) {
+      setError(errorText(caught));
+    }
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -105,7 +133,12 @@ function ReplyBox({ agentId }: { agentId: string }) {
           </Box>
         </Box>
       )}
-      <Button size="sm" disabled={!text.trim()} data-testid="orchestrator-peek-send-btn" onClick={() => void send()}>
+      <Button
+        size="sm"
+        disabled={!text.trim() || sending}
+        data-testid="orchestrator-peek-send-btn"
+        onClick={() => void send()}
+      >
         Send
       </Button>
     </Box>
@@ -113,7 +146,7 @@ function ReplyBox({ agentId }: { agentId: string }) {
 }
 
 export function AgentPeekDrawer({ agent, onClose, actions }: AgentPeekDrawerProps) {
-  const messages = useRecentMessages(agent.id, agent.updatedAt);
+  const { messages, loadError } = useRecentMessages(agent.id, agent.updatedAt);
   const canStop = agent.state === 'working' || agent.state === 'needs-you';
 
   return (
@@ -166,6 +199,11 @@ export function AgentPeekDrawer({ agent, onClose, actions }: AgentPeekDrawerProp
       )}
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+        {loadError && (
+          <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-load-error">
+            {loadError}
+          </Typography>
+        )}
         {messages.map(message => (
           <Typography key={message.id} level="body-xs" data-testid="orchestrator-peek-message">
             <b>{message.role}</b>: {snippetOf(message.content, MESSAGE_SNIPPET_MAX)}
