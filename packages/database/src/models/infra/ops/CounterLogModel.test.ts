@@ -553,6 +553,38 @@ describe('findYoungAccountSpend', () => {
     ]);
   });
 
+  it('leaves out accounts already banned, dispute-pending or suspended', async () => {
+    const open = await seedUser('open@example.com', threeDaysBefore);
+    const locked = await Promise.all(
+      [{ isBanned: true }, { disputePending: true }, { moderation: { status: 'suspended' } }].map(
+        async (state, index) => {
+          const userId = await seedUser(`locked${index}@example.com`, threeDaysBefore);
+          await mongoose.connection
+            .collection('users')
+            .updateOne({ _id: new mongoose.Types.ObjectId(userId) }, { $set: state });
+          return userId;
+        }
+      )
+    );
+    // A suspension still awaiting confirmation does not lock the account, so it keeps alerting.
+    const pending = await seedUser('pending@example.com', threeDaysBefore);
+    await mongoose.connection
+      .collection('users')
+      .updateOne(
+        { _id: new mongoose.Types.ObjectId(pending) },
+        { $set: { moderation: { status: 'suspend_pending' } } }
+      );
+    await spendFor(open, 100, halfHourAgo);
+    await spendFor(pending, 50, halfHourAgo);
+    await Promise.all(locked.map(userId => spendFor(userId, 9000, halfHourAgo)));
+
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+
+    expect(result.totalCredits).toBe(150);
+    expect(result.accountCount).toBe(2);
+    expect(result.topSpenders.map(({ userId }) => userId)).toEqual([open, pending]);
+  });
+
   it('reads the hour through the ownerType/createdAt/type index instead of a collection scan', async () => {
     await CreditTransaction.init();
     await spendFor(await seedUser('plan@example.com', threeDaysBefore), 100, halfHourAgo);

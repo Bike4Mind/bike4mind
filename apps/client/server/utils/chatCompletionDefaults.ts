@@ -13,7 +13,6 @@ import {
   lakeAccessEventRepository,
   latticeModelRepository,
   mcpServerRepository,
-  newAccountSpendCapAdapters,
   mementoRepository,
   mongoose,
   organizationRepository,
@@ -33,6 +32,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
@@ -154,7 +154,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       projects: projectRepository,
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
-      newAccountSpendCap: newAccountSpendCapAdapters,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
       operationalBilling: operationalBillingAdapters,

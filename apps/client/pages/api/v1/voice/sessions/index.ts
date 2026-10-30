@@ -47,6 +47,7 @@ import { requestTurnAuth } from '@server/auth/turnAuth';
 import { adminRoleWithheldFor } from '@server/auth/apiKeyAdminScope';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
@@ -257,6 +258,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       realtime: false,
       unaffordable: () =>
         insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
     });
     if (!opened) {
       throw new ConflictError('Another voice call on this session started at the same time; retry');

@@ -122,8 +122,8 @@ export type YoungAccountSpendSummary = {
 };
 
 /**
- * Per-user AI credit spend in [start, end) for accounts created in the 168 hours before `end`,
- * highest spend first. Shares newAccountExpression with the report's `isNew` flag.
+ * Per-user AI credit spend in [start, end) for accounts created in the 168 hours before `end` and
+ * not banned, dispute-pending or suspended, highest spend first. Shares newAccountExpression with the report's `isNew` flag.
  */
 function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.PipelineStage[] {
   return [
@@ -146,7 +146,17 @@ function buildYoungAccountSpendPipeline(start: Date, end: Date): mongoose.Pipeli
       },
     },
     { $unwind: '$user' },
-    { $match: { $expr: newAccountExpression('$user.createdAt', end) } },
+    {
+      $match: {
+        $expr: newAccountExpression('$user.createdAt', end),
+        // An account already locked can no longer spend, so it must not keep re-tripping the alert or
+        // crowd the top-spender list. Must stay in sync with accountBlockReasons
+        // (b4m-core/services/src/userService/accountState.ts).
+        'user.isBanned': { $ne: true },
+        'user.disputePending': { $ne: true },
+        'user.moderation.status': { $ne: 'suspended' },
+      },
+    },
     {
       $project: {
         _id: 0,

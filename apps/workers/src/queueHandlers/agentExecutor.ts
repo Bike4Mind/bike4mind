@@ -44,8 +44,8 @@ import {
   mcpServerRepository,
   scopedSettingsRepository,
   cacheRepository,
-  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
@@ -2905,7 +2905,7 @@ async function processExecution(
                   billedToOrganization: Boolean(organization),
                   logger,
                 },
-                newAccountSpendCapAdapters
+                newAccountSpendCapAdaptersWithAlert
               ),
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();

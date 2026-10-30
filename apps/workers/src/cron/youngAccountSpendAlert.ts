@@ -1,9 +1,10 @@
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap } from '@bike4mind/utils';
-import { classifyStage, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
+import { escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import type { YoungAccountSpendSummary, YoungAccountSpender } from '@bike4mind/database';
 import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
+import { stripeCustomerSlackLink } from '@server/integrations/slack/accountLinks';
 import { appUrlFromEnv } from '../events/alarmSlackMessage';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import axios from 'axios';
@@ -54,23 +55,13 @@ function adminUserLink(userId: string, appUrl: string | undefined): string | nul
   return slackLink(toAbsoluteUrl(appUrl, `/admin/users/${encodeURIComponent(userId)}`), 'admin');
 }
 
-/** Non-production stages bill through Stripe test mode, whose dashboard lives under /test. */
-function stripeCustomerLink(stripeCustomerId: string | null, stage: string): string {
-  if (!stripeCustomerId) return 'no Stripe customer';
-  const modePrefix = classifyStage(stage) === 'production' ? '' : '/test';
-  return slackLink(
-    `https://dashboard.stripe.com${modePrefix}/customers/${encodeURIComponent(stripeCustomerId)}`,
-    'Stripe'
-  );
-}
-
 function formatSpenderLine(
   spender: YoungAccountSpender,
   rank: number,
   stage: string,
   appUrl: string | undefined
 ): string {
-  const links = [adminUserLink(spender.userId, appUrl), stripeCustomerLink(spender.stripeCustomerId, stage)];
+  const links = [adminUserLink(spender.userId, appUrl), stripeCustomerSlackLink(spender.stripeCustomerId, stage)];
   return (
     `${rank}. \`${escapeSlackText(spender.userId)}\` ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
     `(created ${new Date(spender.accountCreatedAt).toISOString()}) - ` +

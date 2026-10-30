@@ -5,6 +5,9 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { hashSignupNetwork } from '@bike4mind/server-utils/auth/signupNetworkSignals';
 import { findLinkedAccounts } from '@server/billing/linkedAccounts';
+import { alertFraudBlock } from '@server/billing/fraudBlockAlert';
+import { adminUserSlackRef } from '@server/integrations/slack/accountLinks';
+import { escapeSlackText } from '@bike4mind/common';
 
 const MINUTE_MS = 60_000;
 
@@ -54,6 +57,13 @@ export async function checkoutRefusal(
   return null;
 }
 
+export function describeCheckoutRefusal(refusal: CheckoutRefusal): string {
+  if (refusal.reason === 'radarBlocks') {
+    return `${refusal.count} Radar-blocked payments from this ${refusal.scope} recently`;
+  }
+  return `linked by card or network to blocked account ${adminUserSlackRef(refusal.linkedUserId)}`;
+}
+
 /**
  * Throws the neutral ForbiddenError when checkoutRefusal refuses. A failure to evaluate lets the
  * checkout through (logged): Radar still screens the payment, and a database hiccup must not stop
@@ -78,5 +88,10 @@ export async function assertCheckoutAllowed(
   }
   if (!refusal) return;
   logger.warn('[PaymentRisk] checkout refused', { userId: user.id, checkout, ...refusal });
+  await alertFraudBlock({
+    kind: 'checkoutRefused',
+    userId: user.id,
+    details: [`*Checkout:* ${escapeSlackText(checkout)}`, `*Why:* ${describeCheckoutRefusal(refusal)}`],
+  });
   throw new ForbiddenError(CHECKOUT_REFUSED_MESSAGE);
 }

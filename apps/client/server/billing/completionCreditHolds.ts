@@ -1,11 +1,11 @@
 import { CreditHolderType } from '@bike4mind/common';
 import {
-  newAccountSpendCapAdapters,
   pendingCreditHoldRepository,
   userRepository,
   withTransaction,
   type PendingCreditHold,
 } from '@bike4mind/database';
+import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
 import { creditService } from '@bike4mind/services';
 import type { CompletionCreditHolds } from '@bike4mind/services/cliCompletions';
 import type { Logger } from '@bike4mind/observability';
@@ -25,7 +25,7 @@ export function createCompletionCreditHolds(logger: Logger): CompletionCreditHol
         if (user) {
           await creditService.assertNewAccountSpendWithinCap(
             { user, requestedCredits: hold.reservedCredits, billedToOrganization: false, logger },
-            newAccountSpendCapAdapters
+            newAccountSpendCapAdaptersWithAlert
           );
         }
       }
