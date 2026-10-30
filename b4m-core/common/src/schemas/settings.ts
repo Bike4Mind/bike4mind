@@ -300,6 +300,8 @@ export const SettingKeySchema = z.enum([
   'WebSearchFreshnessPrompt',
   'KnowledgeBaseRetrievalPrompt',
   'UseFormatPrompt',
+  'EnableDeferredToolLoading',
+  'DeferredToolStartSetMaxTokens',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
   'EnableHearth',
@@ -463,6 +465,12 @@ export const SettingKeySchema = z.enum([
   'enableDomainIntelligence',
   'holdSignupsFromDomainsYoungerThanDays',
   'domainIntelligenceTimeoutMs',
+  'paymentRiskAlertsEnabled',
+  'paymentRiskYoungAccountMinutes',
+  'paymentRiskMaxAccountsPerCard',
+  'paymentRiskMaxCardsPerWindow',
+  'paymentRiskCardWindowMinutes',
+  'paymentRiskFlagHostingNetwork',
   'defaultFreeCredits',
   'freeTierDailySpendCapCredits',
   'freeTierDay1SpendCapCredits',
@@ -966,6 +974,11 @@ export interface BaseSetting {
   order?: SettingOrder;
   /** Whether the setting is sensitive and should be hidden from users. */
   isSensitive?: boolean;
+  /**
+   * Hide from the admin settings list on production stages (PRODUCTION_STAGES in
+   * @bike4mind/infra). Display only: the stored value and the update route are unchanged.
+   */
+  hideOnProductionStages?: boolean;
   /**
    * Opt-in: include this setting in the PUBLIC, unauthenticated CDN config artifact
    * (see docs/perf/mobile-startup-latency.md, M2.5). Fail-closed - a setting is NEVER
@@ -2212,6 +2225,12 @@ export const API_SERVICE_GROUPS = {
       { key: 'enableDomainIntelligence', order: 29 },
       { key: 'holdSignupsFromDomainsYoungerThanDays', order: 30 },
       { key: 'domainIntelligenceTimeoutMs', order: 31 },
+      { key: 'paymentRiskAlertsEnabled', order: 32 },
+      { key: 'paymentRiskYoungAccountMinutes', order: 33 },
+      { key: 'paymentRiskMaxAccountsPerCard', order: 34 },
+      { key: 'paymentRiskMaxCardsPerWindow', order: 35 },
+      { key: 'paymentRiskCardWindowMinutes', order: 36 },
+      { key: 'paymentRiskFlagHostingNetwork', order: 37 },
     ],
   },
   KNOWLEDGE: {
@@ -3219,6 +3238,25 @@ export const settingsMap = {
     category: 'AI',
     order: 13,
   }),
+  EnableDeferredToolLoading: makeBooleanSetting({
+    key: 'EnableDeferredToolLoading',
+    name: 'Deferred Tool Loading (Claude)',
+    defaultValue: false,
+    description:
+      'On supported Claude models, send the optional chat tools a turn offers with defer_loading and add them, with their guidance, through a mid-conversation tool_addition message, so the cached tools-and-system head is the same for every user whatever tools they have on. Unsupported models and fallback hops keep the current request shape. Off by default until the live cache check passes.',
+    category: 'AI',
+    order: 14,
+  }),
+  DeferredToolStartSetMaxTokens: makeNumberSetting({
+    key: 'DeferredToolStartSetMaxTokens',
+    name: 'Deferred Tool Loading: Start Set Limit (tokens)',
+    defaultValue: 100000,
+    description:
+      'With Deferred Tool Loading on, the built-in tools a conversation offers on its first turn stay loaded when their definitions total at most this many tokens (estimated), and only tools offered later are added through tool_addition. A loaded start set uses the cached head shared by every chat with that tool set, which is the cheapest choice once traffic keeps those heads warm. 0 defers every optional tool behind one shared head, which costs each conversation its definitions once more but is cheaper at low traffic. MCP tools are always deferred.',
+    category: 'AI',
+    order: 15,
+    dependsOn: 'EnableDeferredToolLoading',
+  }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',
     name: 'Use Format Prompt',
@@ -3435,7 +3473,7 @@ export const settingsMap = {
   }),
   ReferralCreditsAmount: makeNumberSetting({
     key: 'ReferralCreditsAmount',
-    name: 'Referal Credits Amount',
+    name: 'Referral Credits Amount',
     defaultValue: 10000,
     description: 'Credits to give to the referred user.',
     category: 'Referrals',
@@ -4211,7 +4249,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits released after email verification for newly enrolled staged accounts. Migrated from the installed default grant without increasing it.',
+      'Credits released after email verification for newly enrolled staged accounts. Copied once from Default Free Credits when staged grants were installed; later changes to Default Free Credits do not update it. 0 grants nothing.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4277,6 +4315,7 @@ export const settingsMap = {
     int: true,
     description:
       'Deprecated and unused: the activity drip qualifies on active time, not chat turns. Use Signup Activity Minimum Active Seconds.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4302,6 +4341,7 @@ export const settingsMap = {
     int: true,
     description:
       'Deprecated and unused: the activity drip is paid per qualifying UTC day and no longer reads this value. Leave at zero.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4335,6 +4375,7 @@ export const settingsMap = {
     defaultValue: false,
     description:
       'PR previews only: use five-minute earning windows instead of UTC days to test the activity drip. Each window still requires the configured active time; use a minimum below five minutes. Production, staging and personal environments always use UTC days. The platform daily budget is unchanged. Reload the test user tab after toggling this switch.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4369,7 +4410,7 @@ export const settingsMap = {
     name: 'Default Free Credits',
     defaultValue: 0,
     description:
-      'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
+      'Flat credits granted after email verification to a user who registers WITHOUT an invite code and is not enrolled in staged grants (Staged Signup Grants OFF, or the account has no staged grant). Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. Does not set the staged amount: that is Signup Grant Credits, which was copied from this value once and is edited separately. 0 grants nothing. An unverified account receives no credits.',
     category: 'Users',
   }),
   noCardUnlockEnabled: makeBooleanSetting({
@@ -4663,6 +4704,69 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description: 'Budget for the RDAP and MX lookups on an uncached signup domain. A timeout lets the signup through.',
+  }),
+  paymentRiskAlertsEnabled: makeBooleanSetting({
+    key: 'paymentRiskAlertsEnabled',
+    name: 'Payment Risk Alerts',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Post a LiveOps alert when a card payment matches a risk signal below (young account, shared card, several cards, hosting network). Alerts only; nothing is blocked.',
+  }),
+  paymentRiskYoungAccountMinutes: makeNumberSetting({
+    key: 'paymentRiskYoungAccountMinutes',
+    name: 'Payment Risk: Young Account (minutes)',
+    defaultValue: 60,
+    int: true,
+    min: 0,
+    max: 10_080,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Flag a payment made by an account younger than this. 0 turns the check off.',
+  }),
+  paymentRiskMaxAccountsPerCard: makeNumberSetting({
+    key: 'paymentRiskMaxAccountsPerCard',
+    name: 'Payment Risk: Max Accounts Per Card',
+    defaultValue: 1,
+    int: true,
+    min: 0,
+    max: 100,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Flag a payment whose card has been used, successfully or not, on more accounts than this (by card fingerprint, within the attempt retention window). 0 turns the check off.',
+  }),
+  paymentRiskMaxCardsPerWindow: makeNumberSetting({
+    key: 'paymentRiskMaxCardsPerWindow',
+    name: 'Payment Risk: Max Cards Per Window',
+    defaultValue: 1,
+    int: true,
+    min: 0,
+    max: 100,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description:
+      'Flag a payment when one account, or one network, has tried more distinct cards than this within the card window. 0 turns the check off.',
+  }),
+  paymentRiskCardWindowMinutes: makeNumberSetting({
+    key: 'paymentRiskCardWindowMinutes',
+    name: 'Payment Risk: Card Window (minutes)',
+    defaultValue: 60,
+    int: true,
+    min: 1,
+    max: 10_080,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Look-back window for the Max Cards Per Window check.',
+  }),
+  paymentRiskFlagHostingNetwork: makeBooleanSetting({
+    key: 'paymentRiskFlagHostingNetwork',
+    name: 'Payment Risk: Flag Hosting/VPN Networks',
+    defaultValue: true,
+    category: 'Users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    description: 'Flag a payment started from a datacenter network or a WAF anonymous-IP (VPN/proxy/hosting) address.',
   }),
   FacebookLink: makeStringSetting({
     key: 'FacebookLink',
@@ -6947,4 +7051,12 @@ export function isRegisteredSettingKey(key: string): boolean {
 /** Core definitions followed by contributed ones. */
 export function allSettingDefinitions(): SettingDefinition<string>[] {
   return [...(Object.values(settingsMap) as SettingDefinition<string>[]), ...contributedSettings.values()];
+}
+
+/** Keys the admin settings list hides on this stage; see BaseSetting.hideOnProductionStages. */
+export function stageHiddenSettingKeys(isProductionStage: boolean): string[] {
+  if (!isProductionStage) return [];
+  return allSettingDefinitions()
+    .filter(definition => definition.hideOnProductionStages)
+    .map(definition => definition.key);
 }

@@ -9,6 +9,8 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { logEventSafe } from '@server/utils/analyticsLog';
+import { recordPaymentStart } from '@server/billing/paymentRisk';
+import { readNetworkMeta } from '@server/auth/networkMeta';
 import type Stripe from 'stripe';
 
 const handler = baseApi()
@@ -111,6 +113,17 @@ const handler = baseApi()
         },
       },
       undefined,
+      req.logger
+    );
+    // The webhook only sees Stripe's network, so where the buyer paid from is stamped here.
+    await recordPaymentStart(
+      {
+        paymentIntentId: paymentIntent.id,
+        userId: req.user.id,
+        amount: paymentDetails.amount,
+        currency: 'usd',
+        network: readNetworkMeta(req),
+      },
       req.logger
     );
 

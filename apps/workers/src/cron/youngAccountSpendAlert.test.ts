@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   resolveSlackWebhookUrl: vi.fn(),
   post: vi.fn(),
   log: vi.fn(),
+  error: vi.fn(),
 }));
 
 vi.mock('sst', () => ({ Resource: mocks.resource }));
@@ -23,7 +24,7 @@ vi.mock('axios', () => ({ default: { post: mocks.post } }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     withMetadata() {
-      return { log: mocks.log, error: vi.fn() };
+      return { log: mocks.log, error: mocks.error };
     }
   },
 }));
@@ -40,7 +41,9 @@ const createdAt = new Date('2026-10-25T00:00:00.000Z');
 const summary = (totalCredits: number, accountCount: number) => ({
   totalCredits,
   accountCount,
-  topSpenders: [{ userId: 'user-a', creditsSpent: totalCredits, accountCreatedAt: createdAt }],
+  topSpenders: [
+    { userId: 'user-a', creditsSpent: totalCredits, accountCreatedAt: createdAt, stripeCustomerId: 'cus_a' },
+  ],
 });
 
 beforeEach(() => {
@@ -75,26 +78,66 @@ describe('young-account spend thresholds', () => {
 });
 
 describe('young-account spend message', () => {
+  const window = { start: new Date('2026-10-26T10:00:00.000Z'), end: new Date('2026-10-26T11:00:00.000Z') };
+  const twoSpenders = {
+    totalCredits: 12345,
+    accountCount: 2,
+    topSpenders: [
+      { userId: 'user-a', creditsSpent: 12000, accountCreatedAt: createdAt, stripeCustomerId: 'cus_a' },
+      { userId: 'user-b', creditsSpent: 345, accountCreatedAt: createdAt, stripeCustomerId: null },
+    ],
+  };
+  const thresholds = { credits: 5000, accounts: 25 };
+
   it('lists the window, counts and ranked user ids without emails', () => {
-    const text = formatYoungAccountSpendMessage(
-      {
-        totalCredits: 12345,
-        accountCount: 2,
-        topSpenders: [
-          { userId: 'user-a', creditsSpent: 12000, accountCreatedAt: createdAt },
-          { userId: 'user-b', creditsSpent: 345, accountCreatedAt: createdAt },
-        ],
-      },
-      { credits: 5000, accounts: 25 },
-      { start: new Date('2026-10-26T10:00:00.000Z'), end: new Date('2026-10-26T11:00:00.000Z') },
-      'production'
-    );
+    const text = formatYoungAccountSpendMessage(twoSpenders, thresholds, window, 'production', undefined);
     expect(text).toContain('2026-10-26T10:00:00.000Z to 2026-10-26T11:00:00.000Z');
     expect(text).toContain('12,345 credits across 2 accounts');
     expect(text).toContain('1. `user-a` 12,000 credits');
     expect(text).toContain('2. `user-b` 345 credits');
     expect(text).not.toContain('@');
     expect([...text].every(char => char.charCodeAt(0) < 128)).toBe(true);
+  });
+
+  it('links each account to the admin profile and the live Stripe customer, or marks it as unbilled', () => {
+    const lines = formatYoungAccountSpendMessage(
+      twoSpenders,
+      thresholds,
+      window,
+      'production',
+      'https://app.example.com'
+    ).split('\n');
+    expect(lines).toContain(
+      '1. `user-a` 12,000 credits (created 2026-10-25T00:00:00.000Z) - ' +
+        '<https://app.example.com/admin/users/user-a|admin> | <https://dashboard.stripe.com/customers/cus_a|Stripe>'
+    );
+    expect(lines).toContain(
+      '2. `user-b` 345 credits (created 2026-10-25T00:00:00.000Z) - ' +
+        '<https://app.example.com/admin/users/user-b|admin> | no Stripe customer'
+    );
+  });
+
+  it('links the Stripe test-mode dashboard outside production', () => {
+    const text = formatYoungAccountSpendMessage(twoSpenders, thresholds, window, 'staging', undefined);
+    expect(text).toContain('<https://dashboard.stripe.com/test/customers/cus_a|Stripe>');
+  });
+
+  it('omits the admin link when the app URL is unknown', () => {
+    const text = formatYoungAccountSpendMessage(twoSpenders, thresholds, window, 'production', undefined);
+    expect(text).not.toContain('/admin/users/');
+    expect(text).toContain('- <https://dashboard.stripe.com/customers/cus_a|Stripe>');
+  });
+
+  it('keeps ids from breaking out of their Slack links', () => {
+    const text = formatYoungAccountSpendMessage(
+      { ...twoSpenders, topSpenders: [{ ...twoSpenders.topSpenders[0], userId: 'a|b>c', stripeCustomerId: 'cus|x' }] },
+      thresholds,
+      window,
+      'production',
+      'https://app.example.com'
+    );
+    expect(text).toContain('<https://app.example.com/admin/users/a%7Cb%3Ec|admin>');
+    expect(text).toContain('<https://dashboard.stripe.com/customers/cus%7Cx|Stripe>');
   });
 });
 
@@ -158,6 +201,25 @@ describe('young-account spend handler', () => {
     expect(await handler(event)).toMatchObject({ status: 'alerted', totalCredits: 9000 });
     expect(mocks.post).toHaveBeenCalledExactlyOnceWith('https://hooks.example.com/x', {
       text: expect.stringContaining('`user-a`'),
+    });
+  });
+
+  it('still alerts, and logs the gap, when the deploy domain is unknown', async () => {
+    vi.stubEnv('SERVER_DOMAIN', '');
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    expect(await handler(event)).toMatchObject({ status: 'alerted' });
+    expect(mocks.post).toHaveBeenCalledOnce();
+    expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('SERVER_DOMAIN'));
+  });
+
+  it('builds the admin link from the deploy domain', async () => {
+    vi.stubEnv('SERVER_DOMAIN', 'example.com');
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    await handler(event);
+    expect(mocks.post).toHaveBeenCalledExactlyOnceWith('https://hooks.example.com/x', {
+      text: expect.stringContaining(
+        '<https://app.example.com/admin/users/user-a|admin> | <https://dashboard.stripe.com/customers/cus_a|Stripe>'
+      ),
     });
   });
 

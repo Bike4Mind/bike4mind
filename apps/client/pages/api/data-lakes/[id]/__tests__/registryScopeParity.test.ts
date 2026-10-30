@@ -99,7 +99,9 @@ const makeReq = (id: string) => ({
 });
 const makeRes = () => {
   const json = vi.fn();
-  return { json, res: { json } as never };
+  const res = { json, status: vi.fn() };
+  res.status.mockReturnValue(res);
+  return { json, res: res as never };
 };
 
 /**

@@ -157,7 +157,7 @@ describe('lockFile', () => {
   });
 
   it('gives a stale lock behind a stale guard to exactly one of many contenders', async () => {
-    for (let trial = 0; trial < 20; trial++) {
+    for (let trial = 0; trial < 300; trial++) {
       const path = target();
       await writeFile(`${path}.lock`, '{}');
       await writeFile(`${path}.lock.takeover`, '');

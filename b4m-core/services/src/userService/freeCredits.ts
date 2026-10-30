@@ -160,6 +160,7 @@ async function grantFlatFreeCredits(
         type: 'generic_add',
         transactionId,
         reason,
+        description: `Signup credits: ${reason}`,
       },
       {
         db: { creditTransactions: db.creditTransactions, creditLots: db.creditLots },

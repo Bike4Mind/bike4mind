@@ -59,7 +59,8 @@ import {
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
-import { AUTO_COMPACT_PERCENT, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
+import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
+import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import type { AppWorktree } from '@shared/worktreeRemoval';
@@ -77,6 +78,7 @@ import {
 } from '@shared/mcp';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
+import type { PrMonitor } from '../pr/PrMonitor';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import type { CapabilityLedger } from './capabilities/CapabilityLedger';
 import { capabilityFor, capabilityScope } from './capabilities/approvalCapabilities';
@@ -288,11 +290,16 @@ type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 const MID_TURN_NOTE =
   'The user sent this while you were still working. Answer or act on it now, then carry on with the task unless it changes what they want.';
 
+/** Rides with a relay that reached a running turn; the relay's own framing says whose words they are. */
+const RELAY_MID_TURN_NOTE =
+  'This message from another conversation arrived while you were still working. Weigh it now, then carry on with the task unless it changes what you should do.';
+
 /** Something that reached a running turn between rounds; see takeArrivals. */
 interface MidTurnArrival {
   message: ChatMessage;
   /** The queue entry it came from, for the event that clears its row. Absent on a notice. */
   queuedId?: string;
+  queuedEntries?: ChatQueuedMessage[];
 }
 
 /** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
@@ -454,6 +461,8 @@ export interface ChatServiceDeps {
   mcp?: McpManager;
   /** The agent's hidden browser. Absent in tests that do not exercise it; the tools are then not declared. */
   browser?: BrowserProvider;
+  /** Each conversation's PR binding. Absent in tests that do not exercise it; set_session_pull_request is then not declared. */
+  pullRequests?: Pick<PrMonitor, 'bindForAgent' | 'dismiss'>;
   /** Other apps' windows, for screen_capture. Absent in tests that do not exercise it; the tool is then not declared. */
   screen?: ScreenCapturer;
   /** Fits an image a tool shows the model. Absent in tests, where file_read then describes an image in text. */
@@ -544,6 +553,7 @@ interface ResumedReply {
   toolCalls: ChatToolCall[];
   artifacts: ChatArtifact[];
   usage?: ChatUsage;
+  contextSnapshot?: ContextSnapshot;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -2143,6 +2153,7 @@ export class ChatService {
       toolCalls: last.toolCalls ?? [],
       artifacts: last.artifacts ?? [],
       ...(last.usage ? { usage: last.usage } : {}),
+      ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
     });
     return { ok: true, messageId: replyId };
   }
@@ -2588,8 +2599,10 @@ export class ChatService {
     let content = resume?.content ?? '';
     let stopReason: string | undefined;
     let usage: ChatUsage | undefined = resume?.usage;
+    let contextSnapshot: ContextSnapshot | undefined = resume?.contextSnapshot;
     let toolCalls: ChatToolCall[] = [...(resume?.toolCalls ?? [])];
     let thinking: unknown[] | undefined;
+    let segmentSettled = false;
     let previousRound: string | null = null;
     let stalled = 0;
     let roundsSincePlanUpdate = 0;
@@ -2605,6 +2618,9 @@ export class ChatService {
       const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '', cdnUrl: '' };
       // A spawned session's seed run has nobody watching it; a turn the user typed into it does.
       const ask = !session.origin || this.attendedTurns.has(sessionId);
+      // Narrower than `ask`: a relay or automatic turn in a main session can still show a card,
+      // but nobody typed it.
+      const attended = this.attendedTurns.has(sessionId);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
@@ -2710,6 +2726,7 @@ export class ChatService {
               suggestions: !session.origin,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
+              pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
             });
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
@@ -2761,6 +2778,8 @@ export class ChatService {
           toolsSupported && !!screen
         );
       wire.unshift(systemMessage());
+      let overheadKey = '';
+      let overhead: ContextSnapshot['overhead'] = [];
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
       // conversation around. It rides on the newest turn only, after the cached prefix.
       const carried = this.pendingPlanReminder.get(sessionId);
@@ -2821,6 +2840,7 @@ export class ChatService {
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
+          ...(contextSnapshot ? { contextSnapshot } : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
@@ -2830,6 +2850,7 @@ export class ChatService {
           content: finalContent,
           stopReason,
           usage,
+          ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
@@ -2863,6 +2884,23 @@ export class ChatService {
         };
 
         await this.clearStaleResults(session, toolCalls, produced, wire, replyId);
+
+        const system = typeof wire[0].content === 'string' ? wire[0].content : '';
+        const key = system + JSON.stringify(tools);
+        if (key !== overheadKey) {
+          overheadKey = key;
+          const mcpNames = new Set(mcpTools.map(binding => binding.definition.schema.name));
+          overhead = estimateContextOverhead({
+            system,
+            project: projectContext,
+            skills: toolsSupported ? skillsSection : '',
+            tools: tools.map(tool => ({
+              name: tool.toolSchema.name,
+              schema: tool,
+              mcp: mcpNames.has(tool.toolSchema.name),
+            })),
+          });
+        }
 
         const probe = this.deps.turnTiming ? createRoundProbe(roundIndex === 0 ? turnStartedAt : undefined) : undefined;
         const setPhase = createPhaseTracker(phase =>
@@ -2922,7 +2960,7 @@ export class ChatService {
                 messages: cacheable ? withCacheBreakpoints(wire) : wire,
                 tools,
                 thinking: askForThinking,
-                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+                // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
                 ...(maxTokens ? { maxTokens } : {}),
@@ -2955,6 +2993,14 @@ export class ChatService {
         // from the first round trip on - the alternative is a field that stays blank for a
         // minute, or one filled in with a guess.
         usage = addUsage(usage, turnUsage);
+        const inputTokens = inputSide(turnUsage);
+        if (inputTokens !== null)
+          contextSnapshot = {
+            model: session.model,
+            inputTokens,
+            overhead,
+            ...(localTurn ? { modelWindow: await this.contextWindowOf(session.model) } : {}),
+          };
         if (usage) this.emit({ type: 'usage', sessionId, messageId: replyId, usage });
 
         // A turn whose context has run out is not a failed request to report: the rounds before
@@ -3038,6 +3084,7 @@ export class ChatService {
                 web,
                 patchEdits,
                 ask,
+                attended,
                 title: session.title,
                 directories: directoryTurn,
                 permissions: {
@@ -3150,21 +3197,34 @@ export class ChatService {
         // that is about to end; a turn that stops instead sends the queue as a turn of its own.
         const arrivals = controller.signal.aborted ? [] : await this.takeArrivals(sessionId, session.model);
         if (arrivals.length > 0) {
-          await settleSegment();
-          for (const arrival of arrivals) {
-            const updated = await this.deps.store.appendMessage(sessionId, arrival.message);
-            if (updated) session = updated;
-            if (arrival.queuedId) this.deps.queue?.sent(sessionId, arrival.queuedId, arrival.message);
-            else this.emit({ type: 'message', sessionId, message: arrival.message });
+          const unaccepted = [...arrivals];
+          try {
+            await settleSegment();
+            segmentSettled = true;
+            for (const arrival of arrivals) {
+              const updated = await this.deps.store.appendMessage(sessionId, arrival.message);
+              if (updated) session = updated;
+              unaccepted.shift();
+              if (arrival.queuedId) this.deps.queue?.sent(sessionId, arrival.queuedId, arrival.message);
+              else this.emit({ type: 'message', sessionId, message: arrival.message });
+            }
+          } catch (error) {
+            this.restoreArrivals(
+              sessionId,
+              unaccepted.flatMap(arrival => arrival.queuedEntries ?? [])
+            );
+            throw error;
           }
           // The rest of the turn is a new reply under the new messages. The resumed message, if
           // any, was just written back whole, so nothing more carries over from it.
           resume = undefined;
           replyId = randomUUID();
+          segmentSettled = false;
           content = '';
           toolCalls = [];
           produced = [];
           usage = undefined;
+          contextSnapshot = undefined;
           thinking = undefined;
           stopReason = undefined;
           // New input is new information: repeating the last round may be the right answer to it.
@@ -3217,6 +3277,14 @@ export class ChatService {
           ? { stopReason: SERVER_CREDENTIALS_STOP }
           : {};
 
+      if (segmentSettled) {
+        // settleSegment already stored this reply whole, rounds and artifacts included; a
+        // rewrite from the raw stream would drop them, so only the failure is added.
+        const updated = await this.deps.store.updateMessage(sessionId, replyId, { error: message, ...stop });
+        if (updated) this.captureSessionHistory(updated, historyScope);
+        this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+        return expired ? 'expired' : 'failed';
+      }
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
       await this.settleReply(sessionId, !!resume, historyScope, {
@@ -3228,8 +3296,16 @@ export class ChatService {
         ...stop,
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
+        ...(contextSnapshot ? { contextSnapshot } : {}),
       });
-      this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
+      this.emit({
+        type: 'error',
+        sessionId,
+        messageId: replyId,
+        message,
+        ...stop,
+        ...(contextSnapshot ? { contextSnapshot } : {}),
+      });
       return expired ? 'expired' : 'failed';
     }
   }
@@ -3307,6 +3383,7 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      contextSnapshot: message.contextSnapshot,
     });
     if (updated) this.captureSessionHistory(updated, historyScope);
   }
@@ -3357,34 +3434,35 @@ export class ChatService {
 
   /**
    * What reached a running turn since its last request, taken for the next one: whatever the
-   * user typed ahead, and any background-exit notice. Two map lookups and nothing else when
-   * neither is waiting, which is every round of almost every turn.
+   * user typed ahead, messages relayed from other sessions, and any background-exit notice. Two
+   * map lookups and nothing else when none is waiting, which is every round of almost every turn.
    *
-   * Only the user's own typed entries ride along. A relay stays a turn of its own: it is
-   * another agent's words, framed and hop-counted per turn, and folding it into this one would
-   * spend this turn's relay budget and blur whose turn it is. An auto-fix entry stays one too,
-   * because it switches on its own tool guard. A `/skill` invocation waits as well: its body is a
-   * new set of instructions, expanded when its turn starts. So does a message whose image the
-   * model cannot read, so it is refused and handed back exactly as before.
+   * A relay stays a message of its own, framed and stored exactly as it would be as its own turn.
+   * The turn goes on at the deeper of its own hop depth and the relay's, with the fresh send
+   * budget the relay's own turn would have started with, so a chain between sessions is bounded
+   * the same whether a message arrives here or after the turn. An auto-fix entry waits for a turn
+   * of its own, because it switches on its own tool guard. A typed `/skill` invocation waits as
+   * well: its body is a new set of instructions, expanded when its turn starts. So does a message
+   * whose image the model cannot read, so it is refused and handed back exactly as before.
    *
-   * The notice goes before the user's message, so their words are the last thing the model reads.
+   * The notice goes first, then the queue in its own order, so the last thing the model reads is
+   * the newest message.
    */
   private async takeArrivals(sessionId: string, model: string): Promise<MidTurnArrival[]> {
     const queue = this.deps.queue;
     const queued = queue?.list(sessionId) ?? [];
     // "Send now" already has it in hand and is about to interrupt this turn.
     if (this.promoted.has(sessionId)) return [];
-    const typed = queued.filter(
+    const eligible = queued.filter(
       entry =>
-        !entry.relay &&
         !entry.automatic &&
-        !(this.deps.skills && parseSkillInvocation(entry.text.trim())) &&
+        !(this.deps.skills && !entry.relay && parseSkillInvocation(entry.text.trim())) &&
         !this.refuseUnreadableImages(model, entry.attachments ?? [])
     );
-    if (typed.length === 0 && !this.wake?.has(sessionId)) return [];
+    if (eligible.length === 0 && !this.wake?.has(sessionId)) return [];
 
     // Taken before any await, so a cancel or a "send now" racing this finds nothing to act on.
-    const taken = queue ? typed.flatMap(entry => queue.take(sessionId, entry.id) ?? []) : [];
+    const taken = queue ? eligible.flatMap(entry => queue.take(sessionId, entry.id) ?? []) : [];
     const notice = this.wake?.take(sessionId) ?? null;
     const arrivals: MidTurnArrival[] = [];
     const createdAt = new Date().toISOString();
@@ -3408,29 +3486,62 @@ export class ChatService {
       });
     }
 
-    if (taken.length > 0) {
-      const attachments = await this.resolveAttachments(
-        sessionId,
-        taken.flatMap(entry => entry.attachments ?? [])
-      );
-      const notes = [...taken.flatMap(entry => entry.notes ?? []), MID_TURN_NOTE];
-      arrivals.push({
-        queuedId: taken[0].id,
-        message: {
-          id: randomUUID(),
-          role: 'user',
-          content: taken
-            .map(entry => entry.text.trim())
-            .filter(Boolean)
-            .join('\n'),
-          createdAt,
-          ...(attachments.length > 0 ? { attachments } : {}),
-          notes,
-        },
-      });
-      this.wake?.attended(sessionId);
+    // Typed entries next to each other go as one message, as they always have; a relay between
+    // them splits the run so each side keeps its place.
+    const runs: ChatQueuedMessage[][] = [];
+    for (const entry of taken) {
+      const last = runs[runs.length - 1];
+      if (!entry.relay && last && !last[0].relay) last.push(entry);
+      else runs.push([entry]);
     }
+
+    try {
+      for (const run of runs) {
+        const [head] = run;
+        const attachments = await this.resolveAttachments(
+          sessionId,
+          run.flatMap(entry => entry.attachments ?? [])
+        );
+        const notes = [...run.flatMap(entry => entry.notes ?? []), head.relay ? RELAY_MID_TURN_NOTE : MID_TURN_NOTE];
+        arrivals.push({
+          queuedId: head.id,
+          queuedEntries: run,
+          message: {
+            id: randomUUID(),
+            role: 'user',
+            content: run
+              .map(entry => entry.text.trim())
+              .filter(Boolean)
+              .join('\n'),
+            createdAt,
+            ...(head.relay ? { system: true, relay: head.relay } : {}),
+            ...(attachments.length > 0 ? { attachments } : {}),
+            notes,
+          },
+        });
+      }
+    } catch (error) {
+      this.restoreArrivals(sessionId, taken);
+      throw error;
+    }
+
+    // Only once every arrival is built: a restored relay is stranded, so its depth must not stick.
+    const relayHops = taken.flatMap(entry => (entry.relay ? [entry.relay.hops] : []));
+    if (relayHops.length > 0) {
+      const hops = Math.max(this.turnRelay.get(sessionId)?.hops ?? 0, ...relayHops);
+      this.turnRelay.set(sessionId, { hops, sends: 0 });
+    }
+    if (taken.some(entry => !entry.relay)) this.wake?.attended(sessionId);
     return arrivals;
+  }
+
+  /**
+   * Keep unaccepted entries available to the failed-turn handback and relay stranding. They go
+   * back at the head of the queue in their own order, so ahead of any untaken auto-fix or `/skill`
+   * entry that was queued before them; the failure hands the whole queue back at once.
+   */
+  private restoreArrivals(sessionId: string, entries: readonly ChatQueuedMessage[]): void {
+    for (const entry of [...entries].reverse()) this.deps.queue?.restore(sessionId, entry);
   }
 
   /**
@@ -3533,6 +3644,8 @@ export class ChatService {
       patchEdits: boolean;
       /** Whether a user is present to answer an ask_user card. */
       ask: boolean;
+      /** Whether the user typed this turn, as opposed to a relay, an automatic turn or a seed prompt. */
+      attended: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
@@ -3558,7 +3671,9 @@ export class ChatService {
       web,
       patchEdits,
       ask,
+      attended,
     } = scope;
+    const pullRequests = this.deps.pullRequests;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -3694,6 +3809,16 @@ export class ChatService {
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
           ...(this.deps.mcp ? { mcp: this.deps.mcp } : {}),
+          // Not on the declaration alone: an undeclared tool still resolves by name, and in a turn
+          // the user did not type nobody can have asked for the change.
+          ...(pullRequests && attended
+            ? {
+                pullRequests: {
+                  bind: (target: string) => pullRequests.bindForAgent(sessionId, target),
+                  clear: () => pullRequests.dismiss(sessionId),
+                },
+              }
+            : {}),
           report,
           isStanding: key => !!this.deps.approvals?.isStanding(sessionId, key),
         };

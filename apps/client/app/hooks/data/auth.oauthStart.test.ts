@@ -17,7 +17,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: (...args: unknown[]) => getMock(...args), post: (...args: unknown[]) => postMock(...args) },
 }));
 
-import { TurnstileCancelledError } from '@client/app/utils/turnstile';
+import { TurnstileCancelledError, TurnstileError } from '@client/app/utils/turnstile';
 import { oauthStartProvider, oauthStartUrl, useStartOAuthSignIn } from './auth';
 
 const wrapper = ({ children }: { children: React.ReactNode }) => {
@@ -90,6 +90,16 @@ describe('useStartOAuthSignIn', () => {
     getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
     solveMock.mockRejectedValue(new Error('turnstile-unavailable'));
     await expect(start('/api/auth/google')).rejects.toThrow(/verification check/i);
+    expect(location.href).toBe('');
+    expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', expect.anything());
+  });
+
+  it('points a browser Cloudflare keeps rejecting at a regular browser without navigating', async () => {
+    getMock.mockResolvedValue({ data: { turnstileSiteKey: 'site' } });
+    solveMock.mockRejectedValue(new TurnstileError('error', 3, '600010'));
+    const rejection = await start('/api/auth/google').catch((error: Error) => error);
+    expect(rejection.message).toContain('regular browser');
+    expect(rejection.message).not.toContain('refresh');
     expect(location.href).toBe('');
     expect(postMock).toHaveBeenCalledWith('/api/turnstile/client-failure', expect.anything());
   });
