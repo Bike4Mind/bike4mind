@@ -425,7 +425,8 @@ const SessionSidenavItem: FC<{
 
   const boxStyles = useMemo(
     () => [
-      (theme: Theme) => conversationRowSx(theme, isSelected),
+      // The header shows the open notebook's title, not a list selection: no wash, no bar.
+      (theme: Theme) => conversationRowSx(theme, isSelected && location !== 'header'),
       {
         '&:hover': {
           '& .item-actions:not(.isProcessing)': {
@@ -445,9 +446,7 @@ const SessionSidenavItem: FC<{
         '&:focus-within .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
         // Header style
         ...(location === 'header' && {
-          backgroundColor: 'transparent',
           display: 'flex',
-          '&::before': {},
           '&:hover': {
             backgroundColor: 'transparent',
           },

@@ -8,7 +8,7 @@ describe('conversation row frame', () => {
   const src = readFileSync(join(__dirname, 'SidenavItem.tsx'), 'utf8');
 
   it('takes its frame from the sidenav kit', () => {
-    expect(src).toMatch(/conversationRowSx\(theme, isSelected\)/);
+    expect(src).toMatch(/conversationRowSx\(theme, isSelected/);
     expect(src).not.toMatch(/'&::before': isSelected/);
   });
 
