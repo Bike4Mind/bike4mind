@@ -67,6 +67,25 @@ describe('card verification offer', () => {
     await waitFor(() => expect(mocks.confirm).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByTestId('card-verification-result')).toHaveTextContent('not charged'));
   });
+  it('reopens the hosted form for an unconfirmed verification', async () => {
+    mocks.get.mockResolvedValue({ data: { ...offer, available: false, pending: ['synthetic-id'] } });
+    mocks.post.mockResolvedValueOnce({
+      data: { outcome: 'pending', clientSecret: 'synthetic-secret', publishableKey: 'synthetic-public' },
+    });
+    mount();
+    fireEvent.click(await screen.findByTestId('card-verification-retry-btn'));
+    await screen.findByTestId('stripe-hosted-element');
+    expect(mocks.post).toHaveBeenCalledWith('/api/stripe/card-verification', { verificationId: 'synthetic-id' });
+    expect(mocks.token).not.toHaveBeenCalled();
+  });
+  it('reports processing when the verification cannot be reopened', async () => {
+    mocks.get.mockResolvedValue({ data: { ...offer, available: false, pending: ['synthetic-id'] } });
+    mocks.post.mockResolvedValueOnce({ data: { outcome: 'pending' } });
+    mount();
+    fireEvent.click(await screen.findByTestId('card-verification-retry-btn'));
+    await waitFor(() => expect(screen.getByTestId('card-verification-result')).toHaveTextContent('processing'));
+    expect(screen.queryByTestId('stripe-hosted-element')).toBeNull();
+  });
   it('removes only the server-provided saved verification', async () => {
     mocks.get.mockResolvedValue({ data: { ...offer, available: false, saved: ['synthetic-id'] } });
     mocks.remove.mockResolvedValue({ data: { removed: true } });

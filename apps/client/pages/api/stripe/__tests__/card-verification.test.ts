@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   offer: vi.fn(),
   runtime: vi.fn(),
   network: vi.fn(),
+  resumable: vi.fn(),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -40,6 +41,7 @@ vi.mock('@server/billing/cardVerificationRuntime', async () => ({
   cardNetworkDigest: () => 'synthetic-digest',
   cardVerificationRuntime: mocks.runtime,
   finishCardVerification: mocks.finish,
+  resumableVerificationSecret: mocks.resumable,
   verificationOffer: mocks.offer,
   verificationIdSchema: (await import('zod')).z.string().uuid(),
   verificationFailure: (error: unknown) => {
@@ -92,5 +94,22 @@ describe('verification route', () => {
     const removal = request({ verificationId: id });
     await mocks.handlers.delete(removal.req, removal.res);
     expect(mocks.finish).toHaveBeenCalledWith(id, 'synthetic-owner', true);
+    expect(mocks.resumable).not.toHaveBeenCalled();
+  });
+  it('returns the owner setup secret only for a resumable pending verification', async () => {
+    mocks.finish.mockResolvedValue('pending');
+    mocks.resumable.mockResolvedValueOnce('synthetic-secret');
+    const resumable = request({ verificationId: id });
+    await mocks.handlers.post(resumable.req, resumable.res);
+    expect(mocks.resumable).toHaveBeenCalledWith(id, 'synthetic-owner');
+    expect(resumable.res._getJSONData()).toEqual({
+      outcome: 'pending',
+      clientSecret: 'synthetic-secret',
+      publishableKey: 'synthetic-public',
+    });
+    mocks.resumable.mockResolvedValueOnce(null);
+    const processing = request({ verificationId: id });
+    await mocks.handlers.post(processing.req, processing.res);
+    expect(processing.res._getJSONData()).toEqual({ outcome: 'pending' });
   });
 });

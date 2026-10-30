@@ -307,6 +307,31 @@ async function expirePendingVerification(row: CardVerificationRecord): Promise<b
   return true;
 }
 
+/** Client secret of the caller's own unconfirmed setup, so the original Elements session can be reopened. */
+export async function resumableVerificationSecret(verificationId: string, userId: string): Promise<string | null> {
+  const record = await CardVerification.findOne({
+    verificationId,
+    userId,
+    state: 'pending',
+    environment: Config.STAGE,
+    livemode: isProduction(),
+  }).lean();
+  if (!record?.setupIntentId || !record.customerId || !record.createdAt) return null;
+  if (Date.now() - record.createdAt.getTime() > 23 * 3600000) return null;
+  const intent = await stripe.setupIntents.retrieve(record.setupIntentId);
+  const customer = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
+  if (
+    intent.livemode !== record.livemode ||
+    customer !== record.customerId ||
+    intent.metadata?.verificationId !== verificationId ||
+    intent.metadata?.purpose !== 'card_verification' ||
+    intent.metadata?.environment !== record.environment ||
+    !['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(intent.status)
+  )
+    return null;
+  return intent.client_secret;
+}
+
 export async function reconcileCardVerifications() {
   const rows = await CardVerification.find({
     environment: Config.STAGE,

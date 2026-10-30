@@ -50,6 +50,7 @@ import {
   CardVerificationFailure,
   cardVerificationRuntime,
   reconcileCardVerifications,
+  resumableVerificationSecret,
 } from './cardVerificationRuntime';
 import { finishCardVerification } from './cardVerificationRuntime';
 vi.mock('./cardVerificationLifecycle', async importOriginal => ({
@@ -239,6 +240,34 @@ describe('mandatory verification defenses', () => {
       'card-verification-recovery-refused',
       expect.objectContaining({ verificationId: 'synthetic' })
     );
+  });
+  it.each([
+    ['requires_payment_method', 'synthetic-secret'],
+    ['requires_action', 'synthetic-secret'],
+    ['processing', null],
+    ['canceled', null],
+  ])('returns the owner setup secret for a %s setup only while resumable', async (status, expected) => {
+    vi.spyOn(CardVerification, 'findOne').mockReturnValue({
+      lean: async () => ({
+        verificationId: 'synthetic',
+        state: 'pending',
+        environment: 'test',
+        livemode: false,
+        customerId: 'cus_synthetic',
+        setupIntentId: 'seti_synthetic',
+        createdAt: new Date(),
+      }),
+    } as never);
+    mocks.retrieve.mockResolvedValue({
+      id: 'seti_synthetic',
+      customer: 'cus_synthetic',
+      livemode: false,
+      status,
+      client_secret: 'synthetic-secret',
+      metadata: { verificationId: 'synthetic', purpose: 'card_verification', environment: 'test' },
+    });
+    expect(await resumableVerificationSecret('synthetic', 'synthetic-user')).toBe(expected);
+    expect(CardVerification.findOne).toHaveBeenCalledWith(expect.objectContaining({ userId: 'synthetic-user' }));
   });
   it.each(['succeeded', 'processing'])('does not cancel an old %s setup', async status => {
     const row = {

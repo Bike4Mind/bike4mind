@@ -8,6 +8,7 @@ import {
   cardNetworkDigest,
   cardVerificationRuntime,
   finishCardVerification,
+  resumableVerificationSecret,
   verificationFailure,
   verificationIdSchema,
   verificationOffer,
@@ -27,6 +28,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (req.body?.verificationId) {
         const id = verificationIdSchema.parse(req.body.verificationId);
         const outcome = await finishCardVerification(id, req.user.id);
+        if (outcome === 'pending') {
+          const clientSecret = await resumableVerificationSecret(id, req.user.id);
+          if (clientSecret) return res.json({ outcome, clientSecret, publishableKey: Config.STRIPE_PUBLISHABLE_KEY });
+        }
         return res.json({ outcome });
       }
       const body = start.parse(req.body);

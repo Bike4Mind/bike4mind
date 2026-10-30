@@ -94,12 +94,18 @@ export function CardVerificationCard({ entry = 'billing' }: { entry?: 'billing' 
     ]);
   };
   const complete = async (verificationId: string) => {
-    const { data } = await api.post<{ outcome: string }>(endpoint, { verificationId });
+    const { data } = await api.post<{ outcome: string; clientSecret?: string; publishableKey?: string }>(endpoint, {
+      verificationId,
+    });
     if (data.outcome === 'granted' || data.outcome === 'already_granted') {
       setMessage('Card verified, not charged. Your promotional credits are available.');
       setSession(null);
-    } else if (data.outcome === 'pending') setMessage('Verification is processing. Check again shortly.');
-    else {
+    } else if (data.outcome === 'pending') {
+      const { clientSecret, publishableKey } = data;
+      if (clientSecret && publishableKey)
+        setSession(current => current ?? { verificationId, clientSecret, stripe: loadStripe(publishableKey) });
+      else setMessage('Verification is processing. Check again shortly.');
+    } else {
       setMessage('This card has already unlocked credits or did not qualify.');
       setSession(null);
     }
