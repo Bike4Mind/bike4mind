@@ -18,9 +18,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/checkBlockedIP', () => ({
-  checkBlockedIP: () => (_req: unknown, _res: unknown, next: () => void) => next(),
-}));
+const blockedIp = vi.hoisted(() => vi.fn((_req: unknown, _res: unknown, next: () => void) => next()));
+vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => blockedIp }));
 
 // The real requireTurnstile runs against a controllable policy and verifier.
 const policy = vi.hoisted(() => ({ active: false }));
@@ -45,13 +44,13 @@ const cache = vi.hoisted(() => {
   const counts = new Map<string, number>();
   return {
     counts,
-    tryIncrement: async (key: string, limit: number) => {
+    tryIncrement: vi.fn(async (key: string, limit: number) => {
       const count = counts.get(key) ?? 0;
       const expiresAt = new Date(Date.now() + 60_000);
       if (count + 1 > limit) return { success: false, count, expiresAt };
       counts.set(key, count + 1);
       return { success: true, count: count + 1, expiresAt };
-    },
+    }),
   };
 });
 const mocks = vi.hoisted(() => ({
@@ -108,8 +107,16 @@ beforeEach(() => {
 });
 
 describe('/api/subscribers/create - bot challenge', () => {
-  it('runs the blocked-IP check, the challenge and both per-IP counters ahead of the handler', () => {
+  it('runs the blocked-IP check, the challenge and both per-IP counters ahead of the handler', async () => {
     expect(wiring.uses).toHaveLength(4);
+    expect(wiring.uses[0]).toBe(blockedIp);
+
+    // Challenge before counters: a refused request must not consume any rate-limit budget.
+    policy.active = true;
+    const res = await submit(person);
+    expect(res._getStatusCode()).toBe(403);
+    expect(blockedIp).toHaveBeenCalledTimes(1);
+    expect(cache.tryIncrement).not.toHaveBeenCalled();
   });
 
   it('refuses a signup without a solved challenge while the policy is active', async () => {
