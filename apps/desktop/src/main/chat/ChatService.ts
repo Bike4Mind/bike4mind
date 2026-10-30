@@ -2835,9 +2835,7 @@ export class ChatService {
           toolsSupported && !!screen
         );
       wire.unshift(
-        deferred
-          ? buildDeferredSystemMessage(session.project, projectContext, skillsSection, session.model)
-          : systemMessage()
+        deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
       );
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
       // conversation around. It rides on the newest turn only, after the cached prefix.
@@ -6067,8 +6065,7 @@ function localToolLines(
 export function buildDeferredSystemMessage(
   project: ChatProject | undefined,
   projectContext: string,
-  skillsSection: string,
-  modelId: string
+  skillsSection: string
 ): CompletionMessage {
   return {
     role: 'system',
@@ -6078,7 +6075,6 @@ export function buildDeferredSystemMessage(
       ...(project ? projectPreamble(project) : []),
       ...WEB_GUIDANCE,
       ...HONESTY_LINES,
-      ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
       ...desktopAppGuidance(null),
       ...(skillsSection ? [skillsSection] : []),
       '',
