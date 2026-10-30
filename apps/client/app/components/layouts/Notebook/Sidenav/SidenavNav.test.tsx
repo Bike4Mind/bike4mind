@@ -556,6 +556,7 @@ describe('SidenavNav More overflow', () => {
     renderNav();
     fireEvent.click(within(openMore()).getByTestId('sidenav-more-skill-market'));
     expect(navigate).toHaveBeenCalledWith({ to: '/skills/market' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
   it('marks More as the current page while a folded row is active', () => {
