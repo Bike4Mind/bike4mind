@@ -4,6 +4,7 @@ import Typography from '@mui/joy/Typography';
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
+import { prefersReducedMotion } from './motion';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { formatAgentCost, type AgentState, type AgentView } from './roster';
 
@@ -25,9 +26,6 @@ const lineClamp = (lines: number) =>
     WebkitBoxOrient: 'vertical',
     overflow: 'hidden',
   }) as const;
-
-const prefersReducedMotion = () =>
-  typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 interface Point {
   x: number;
