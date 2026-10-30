@@ -27,61 +27,60 @@ afterEach(() => {
 });
 
 describe('OrchestrateToggle', () => {
-  it('renders nothing when the session has no agents', async () => {
+  it('renders nothing when the session has no agents and cannot start', async () => {
     await renderToggle([]);
-    expect(query('chat-orchestrate-chip')).toBeNull();
+    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
     expect(query('chat-surface-toggle-chat')).toBeNull();
   });
 
-  it('offers a plain Orchestrate chip on a code session with no agents, which starts orchestrating', async () => {
+  it('shows the segmented control on the chat surface of an agentless code session, and starting turns Orchestrate on', async () => {
     await renderToggle([], 'chat', true);
-    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
-    act(() => el('chat-orchestrate-chip').querySelector('button')?.click());
+    expect(el('chat-surface-toggle-chat')).not.toBeNull();
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
+    expect(query('chat-orchestrate-count')).toBeNull();
+    act(() => el('chat-surface-toggle-orchestrate').click());
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(onSurfaceChange).not.toHaveBeenCalled();
   });
 
-  it('offers the Chat / Orchestrate control on a code session with no agents yet, once orchestrating', async () => {
+  it('keeps the same control once orchestrating an agentless code session, and Chat switches back', async () => {
     await renderToggle([], 'orchestrate', true);
-    expect(query('chat-orchestrate-chip')).toBeNull();
+    act(() => el('chat-surface-toggle-orchestrate').click());
+    expect(onStart).not.toHaveBeenCalled();
     act(() => el('chat-surface-toggle-chat').click());
     expect(onSurfaceChange).toHaveBeenCalledWith('chat');
   });
 
-  it('only switches the surface from the chip once agents exist, even on a code session', async () => {
+  it('switches the surface from the Orchestrate segment once agents exist, even on a code session', async () => {
     await renderToggle(['working'], 'chat', true);
-    act(() => el('chat-orchestrate-chip').querySelector('button')?.click());
+    act(() => el('chat-surface-toggle-orchestrate').click());
     expect(onSurfaceChange).toHaveBeenCalledWith('orchestrate');
     expect(onStart).not.toHaveBeenCalled();
   });
 
-  it('counts agents and says when any is working', async () => {
-    await renderToggle(['working', 'done', 'failed']);
-    expect(el('chat-orchestrate-chip').textContent).toBe('3 agents working \u00B7 Orchestrate');
+  it('badges the agent count on the Orchestrate segment', async () => {
+    await renderToggle(['done', 'failed', 'idle']);
+    expect(el('chat-orchestrate-count').textContent).toBe('3');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate3');
+    expect(query('chat-orchestrate-working')).toBeNull();
+    expect(query('chat-orchestrate-needs-you')).toBeNull();
   });
 
-  it('drops "working" when every agent has settled', async () => {
-    await renderToggle(['done', 'failed']);
-    expect(el('chat-orchestrate-chip').textContent).toBe('2 agents \u00B7 Orchestrate');
+  it('shows the working indicator while any agent is working', async () => {
+    await renderToggle(['working', 'done']);
+    expect(query('chat-orchestrate-working')).not.toBeNull();
+    expect(query('chat-orchestrate-needs-you')).toBeNull();
   });
 
-  it('uses the singular for one agent', async () => {
-    await renderToggle(['working']);
-    expect(el('chat-orchestrate-chip').textContent).toBe('1 agent working \u00B7 Orchestrate');
-    await renderToggle(['done']);
-    expect(el('chat-orchestrate-chip').textContent).toBe('1 agent \u00B7 Orchestrate');
+  it('flags an agent that needs you, taking over from the working indicator', async () => {
+    await renderToggle(['working', 'needs-you']);
+    expect(query('chat-orchestrate-needs-you')).not.toBeNull();
+    expect(query('chat-orchestrate-working')).toBeNull();
   });
 
-  it('switches to the orchestrate surface when the chip is clicked', async () => {
-    await renderToggle(['working']);
-    // Joy routes a chip's click through its inner action button.
-    act(() => el('chat-orchestrate-chip').querySelector('button')?.click());
-    expect(onSurfaceChange).toHaveBeenCalledWith('orchestrate');
-  });
-
-  it('offers a Chat / Orchestrate control in the orchestrate surface', async () => {
+  it('keeps the same control, with the count, on the orchestrate surface', async () => {
     await renderToggle(['working'], 'orchestrate');
-    expect(query('chat-orchestrate-chip')).toBeNull();
+    expect(el('chat-orchestrate-count').textContent).toBe('1');
     act(() => el('chat-surface-toggle-chat').click());
     expect(onSurfaceChange).toHaveBeenCalledWith('chat');
   });

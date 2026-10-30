@@ -207,12 +207,12 @@ async function openParent(title: string = PARENT.title, mode: 'chat' | 'code' = 
   await clickSessionRow(title);
 }
 
-const enterOrchestrate = () => act(() => el('chat-orchestrate-chip').querySelector('button')?.click());
+const enterOrchestrate = () => act(() => el('chat-surface-toggle-orchestrate').click());
 
 describe('orchestrate mode in the chat shell', () => {
-  it('offers the chip only on a session that has spawned agents, and keeps the chat surface as before', async () => {
+  it('offers the toggle only on a session that has spawned agents, and keeps the chat surface as before', async () => {
     await openParent();
-    expect(el('chat-orchestrate-chip').textContent).toBe('1 agent \u00B7 Orchestrate');
+    expect(el('chat-orchestrate-count').textContent).toBe('1');
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-thread-empty-host')).not.toBeNull();
   });
@@ -326,19 +326,19 @@ describe('orchestrate mode in the chat shell', () => {
     expect(window.localStorage.getItem('b4m.orchestrator.surface.other-scope')).toBe('orchestrate');
   });
 
-  it('offers no chip on a chat session with no agents', async () => {
+  it('offers no toggle on a chat session with no agents', async () => {
     listed = [...SESSIONS, { ...PARENT, id: 'plain-1', title: 'Plain chat' } as ChatSessionSummary];
     await openParent('Plain chat');
-    expect(query('chat-orchestrate-chip')).toBeNull();
+    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
   });
 
-  it('starts orchestrating an empty code session from its chip, with an empty stage and the delegate switch on', async () => {
+  it('starts orchestrating an empty code session from its toggle, with an empty stage and the delegate switch on', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     listed = [...SESSIONS, CODE];
     await openParent(CODE.title, 'code');
-    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
 
-    await act(async () => el('chat-orchestrate-chip').querySelector('button')?.click());
+    await act(async () => el('chat-surface-toggle-orchestrate').click());
     expect(setSessionOrchestrate).toHaveBeenCalledWith(CODE.id, true);
     expect(el('orchestrator-empty-state').textContent).toBe(
       'No agents yet. Describe the work and it will be split across agents.'
@@ -352,13 +352,13 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-stage')).toBeNull();
     expect(setSessionOrchestrate).toHaveBeenCalledTimes(1);
 
-    await act(async () => el('chat-orchestrate-chip').querySelector('button')?.click());
+    await act(async () => el('chat-surface-toggle-orchestrate').click());
     expect(setSessionOrchestrate).toHaveBeenCalledTimes(1);
     await act(async () => delegate()?.click());
     expect(setSessionOrchestrate).toHaveBeenLastCalledWith(CODE.id, false);
     // Off with no agents, the stage has nothing to show and falls back to the conversation.
     expect(query('orchestrator-stage')).toBeNull();
-    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
   });
 
   it('reopens an empty code session on the conversation when its surface was left on orchestrate but the flag is off', async () => {
@@ -367,7 +367,7 @@ describe('orchestrate mode in the chat shell', () => {
     await openParent(CODE.title, 'code');
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-thread-empty-host')).not.toBeNull();
-    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
   });
 
   it('keeps the empty stage for a code session whose flag is on', async () => {
@@ -378,13 +378,13 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-empty-state')).not.toBeNull();
   });
 
-  it('offers neither the chip nor the switch on a code session whose model has no tools', async () => {
+  it('offers neither the toggle nor the switch on a code session whose model has no tools', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     window.localStorage.setItem(`b4m.orchestrator.surface.${CODE.id}`, 'orchestrate');
     catalogModels = [{ id: 'no-tools', name: 'No tools', supportsTools: false } as ChatModelOption];
     listed = [...SESSIONS, { ...CODE, model: 'no-tools', orchestrate: true } as ChatSessionSummary];
     await openParent(CODE.title, 'code');
-    expect(query('chat-orchestrate-chip')).toBeNull();
+    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('orchestrator-delegate-switch')).toBeNull();
   });
@@ -402,12 +402,12 @@ describe('orchestrate mode in the chat shell', () => {
     listed = [...SESSIONS, CODE, deep];
     await openParent(deep.title, 'code');
     expect(el('chat-session-title').textContent).toBe(deep.title);
-    expect(query('chat-orchestrate-chip')).toBeNull();
+    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('orchestrator-delegate-switch')).toBeNull();
   });
 
-  it('offers the chip on a code agent below the depth cap', async () => {
+  it('offers the toggle on a code agent below the depth cap', async () => {
     const shallow = {
       ...CODE,
       id: 'code-shallow',
@@ -417,7 +417,7 @@ describe('orchestrate mode in the chat shell', () => {
     listed = [...SESSIONS, CODE, shallow];
     await openParent(shallow.title, 'code');
     expect(el('chat-session-title').textContent).toBe(shallow.title);
-    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Orchestrate');
   });
 
   it('leaves the delegate switch out of a chat session stage', async () => {
