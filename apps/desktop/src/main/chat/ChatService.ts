@@ -169,7 +169,7 @@ import { resolveInlineSkills } from './skills/inline';
 import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
-import { desktopAppGuidance, mcpServerLines } from './mcp/prompt';
+import { desktopAppGuidance, mcpGuidance, mcpServerLines } from './mcp/prompt';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
@@ -6111,7 +6111,7 @@ export function buildToolStateText(state: {
     ...(state.host ? HOST_GUIDANCE : []),
     ...(state.memory ? MEMORY_GUIDANCE : []),
     ...(ask ? ASK_GUIDANCE : []),
-    ...desktopAppGuidance(mcp).slice(desktopAppGuidance(null).length),
+    ...mcpGuidance(mcp),
     ...(mcpServers ? ['', ...mcpServerLines(mcpServers)] : []),
   ].join('\n');
 }
