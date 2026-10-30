@@ -6,7 +6,7 @@ import type {
 } from './adminSubscriptionsFilter';
 
 /** Contract of GET /api/admin/revenue; React-free because the server imports it.
- * See docs/admin-subscriptions-spec.md sections 5.3 and 6.5. */
+ * See docs/admin-subscriptions-spec.md sections 5.3 and 6.4. */
 
 export const REVENUE_RANGES = ['30d', '90d', '12m'] as const;
 export type RevenueRange = (typeof REVENUE_RANGES)[number];

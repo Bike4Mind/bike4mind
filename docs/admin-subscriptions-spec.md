@@ -386,7 +386,7 @@ A nightly cron. This is acceptable under infra principle 5 (cleanup and reconcil
 
 ### 6.4 Daily snapshot
 
-The same cron writes one `RevenueSnapshot` per day: date, MRR, paying count, MRR by plan. That is enough for the 12-month chart without replaying history.
+A daily cron (`apps/workers/src/cron/revenueSnapshot.ts`, 00:20 UTC, its own schedule rather than the reconciliation cron) writes one `RevenueSnapshot` per day: date, MRR, paying count, MRR by plan. That is enough for the 12-month chart without replaying history.
 
 ### 6.5 Admin endpoints
 

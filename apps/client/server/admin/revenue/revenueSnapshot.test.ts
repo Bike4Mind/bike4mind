@@ -38,6 +38,7 @@ describe('revenueFacets', () => {
         { cancelAt: { $gte: DAY.from, $lt: DAY.to } },
         { cancelAt: null, canceledAt: { $gte: DAY.from, $lt: DAY.to } },
       ],
+      $nor: [{ createdAt: { $gte: DAY.from, $lt: DAY.to } }],
     });
   });
 

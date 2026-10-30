@@ -14,7 +14,8 @@ export type RevenueSnapshotBreakdown<Key extends string> = Record<Key, string | 
 
 /**
  * Written by apps/workers/src/cron/revenueSnapshot.ts. Totals are as of the run, just after the day ended;
- * `newMrr` and `churnedMrr` cover the day itself.
+ * `newMrr` and `churnedMrr` cover the day itself. `newMrr` counts rows created that day that already count
+ * toward MRR at the run, so a row that starts incomplete and pays on a later day is in no day's `newMrr`.
  */
 export interface IRevenueSnapshotDocument extends IMongoDocument {
   /** UTC day, `YYYY-MM-DD`; unique, so a rerun overwrites that day's row. */

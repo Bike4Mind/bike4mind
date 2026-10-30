@@ -92,8 +92,10 @@ describe('computeRevenueSnapshot', () => {
     const dayBefore = new Date('2026-10-28T12:00:00Z');
     await seed({ createdAt: inDay });
     await seed({ createdAt: dayBefore });
-    // Created on the day but already canceled: not new MRR.
+    // Created on the day but already canceled: neither new nor churned MRR, so new - churned stays the net change.
     await seed({ createdAt: inDay, status: 'canceled', canceledAt: new Date('2026-10-29T13:00:00Z') });
+    // An older subscription canceled immediately on the day.
+    await seed({ status: 'canceled', canceledAt: inDay });
     // A scheduled cancel requested earlier that took effect on the day.
     await seed({ status: 'canceled', canceledAt: dayBefore, cancelAt: inDay, unitAmount: 12000, interval: 'year' });
     // A scheduled cancel whose request fell on the day but that ended earlier.

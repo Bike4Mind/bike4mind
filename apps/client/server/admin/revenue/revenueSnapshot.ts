@@ -31,11 +31,13 @@ const REVENUE_MAX_TIME_MS = 20_000;
 const createdWithin = (from: Date, to: Date): Condition => ({ createdAt: { $gte: from, $lt: to } });
 
 // Stripe's canceled_at is when a cancel was requested, so a scheduled cancel ends at `cancelAt`;
-// canceled_at is the end only for an immediate one.
+// canceled_at is the end only for an immediate one. A row that started in the window is left out:
+// it was never new MRR (no longer paying), so counting its churn would break new - churned = net change.
 export const churnedWithin = (from: Date, to: Date): Condition => ({
   source: SubscriptionSource.Stripe,
   status: 'canceled',
   $or: [{ cancelAt: { $gte: from, $lt: to } }, { cancelAt: null, canceledAt: { $gte: from, $lt: to } }],
+  $nor: [createdWithin(from, to)],
 });
 
 export type RevenueBreakdownEntry = { key: string | null; count: number; mrr: AdminSubscriptionsMrrTotal };

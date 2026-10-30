@@ -7,7 +7,12 @@ import {
   type RevenueRange,
   type RevenueTrendPoint,
 } from '@client/app/utils/adminRevenue';
-import { MRR_CURRENCY, type AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionsFilter';
+import {
+  MRR_CURRENCY,
+  UNKNOWN_PLAN_FILTER,
+  type AdminSubscriptionRow,
+  type AdminSubscriptionsMrrTotal,
+} from '@client/app/utils/adminSubscriptionsFilter';
 import { AnalyticsTermHelp } from '../EventMetrics/components/AnalyticsTermHelp';
 import {
   AdminPageHeader,
@@ -32,7 +37,7 @@ import { formatLongDay, formatShare, formatTrendDay, signedMoney, trendTakeaway 
 import { subscriptionsViewSearch } from './revenueLinks';
 import { useAdminRevenue } from './useAdminRevenue';
 
-const SELF_HOST_DOCS_URL = 'https://docs.bike4mind.com/self-host/configuration';
+const SELF_HOST_DOCS_URL = 'https://docs.bike4mind.com/self-host#2-configure-your-environment';
 
 const RANGE_OPTIONS: readonly { value: RevenueRange; label: string }[] = [
   { value: '30d', label: '30 days' },
@@ -46,7 +51,7 @@ const rangeLabel = (range: RevenueRange) => `Last ${RANGE_OPTIONS.find(option =>
 const NEW_MRR_DEFINITION =
   'MRR of subscriptions started in the range that count toward MRR today. Upgrades and seat changes are not included.';
 const CHURNED_MRR_DEFINITION =
-  'MRR of Stripe subscriptions that ended (reached canceled) in the range, at the price they were billed. A scheduled cancel counts when it takes effect.';
+  'MRR of Stripe subscriptions that ended (reached canceled) in the range, at the price they were billed. A scheduled cancel counts when it takes effect; one that also started in the range is not counted.';
 
 const money = (amount: number) => formatMoney(amount, MRR_CURRENCY);
 const compactMoney = (amount: number) => formatMoney(amount, MRR_CURRENCY, { compact: true });
@@ -57,7 +62,7 @@ type OpenView = (viewId: SubscriptionsBuiltInView['id'], filters?: Partial<Subsc
 
 function RevenueStrip({ data, isError }: { data?: AdminRevenueData; isError: boolean }) {
   const value = (render: (revenue: AdminRevenueData) => ReactNode) =>
-    isError ? '\u2014' : data ? render(data) : <Skeletal />;
+    data ? render(data) : isError ? '\u2014' : <Skeletal />;
   const current = data?.current;
   const start = data?.startOfRange;
   const mrrComparison = current
@@ -69,6 +74,8 @@ function RevenueStrip({ data, isError }: { data?: AdminRevenueData; isError: boo
         .join('. ')
     : undefined;
   const range = data ? rangeLabel(data.range) : undefined;
+  const rangeComparison = (total: AdminSubscriptionsMrrTotal) =>
+    [range, mrrExclusionNote(total)].filter(Boolean).join('. ') || undefined;
   return (
     <StatStrip aria-label="Revenue totals">
       <StatTile
@@ -89,7 +96,7 @@ function RevenueStrip({ data, isError }: { data?: AdminRevenueData; isError: boo
           <AnalyticsTermHelp term="New MRR" testId="admin-revenue-new-mrr-help-btn" description={NEW_MRR_DEFINITION} />
         }
         value={value(revenue => compactMoney(revenue.current.newMrr.amount))}
-        comparison={range}
+        comparison={current && rangeComparison(current.newMrr)}
       />
       <StatTile
         label="Churned MRR"
@@ -101,7 +108,7 @@ function RevenueStrip({ data, isError }: { data?: AdminRevenueData; isError: boo
           />
         }
         value={value(revenue => compactMoney(revenue.current.churnedMrr.amount))}
-        comparison={range}
+        comparison={current && rangeComparison(current.churnedMrr)}
       />
     </StatStrip>
   );
@@ -295,7 +302,7 @@ function TablesSection({ data, loading, openView }: { data?: AdminRevenueData; l
           rowTestId={row => `admin-revenue-plan-row-${row.plan.priceId ?? 'none'}`}
           loading={loading}
           onRetry={() => undefined}
-          onRowActivate={row => openView('paying', row.plan.priceId ? { plan: [row.plan.priceId] } : {})}
+          onRowActivate={row => openView('paying', { plan: [row.plan.priceId ?? UNKNOWN_PLAN_FILTER] })}
           pagination={false}
           minWidth="24rem"
           maxHeight="none"

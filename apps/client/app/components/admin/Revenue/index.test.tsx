@@ -188,6 +188,33 @@ describe('AdminRevenue', () => {
     });
   });
 
+  it('opens a plan with no price id as the Paying view narrowed to unknown plans', async () => {
+    response = revenue({
+      byPlan: [{ plan: { priceId: null, name: null, interval: null }, subscriptions: 3, mrr: usd(5_700), share: 1 }],
+    });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('admin-revenue-plan-row-none'));
+    expect(fakeAdminRouter.search).toEqual({
+      tab: 'subscriptions',
+      subsPage: 1,
+      subsStatus: ['active', 'past_due'],
+      subsSource: 'stripe',
+      subsPlan: ['unknown'],
+    });
+  });
+
+  it('notes the rows New and Churned MRR leave out of their totals', async () => {
+    const base = revenue();
+    response = revenue({
+      current: { ...base.current, newMrr: usd(19_000, { otherCurrency: 1 }), churnedMrr: usd(4_900, { unpriced: 2 }) },
+    });
+    renderTab();
+    await screen.findByText('Trend starts collecting on October 30, 2026');
+    const [, , , newMrr, churned] = tiles();
+    expect(newMrr).toContain('Last 30 days. Not in total: 1 in another currency');
+    expect(churned).toContain('Last 30 days. Not in total: 2 with no billed amount');
+  });
+
   it('opens an at-risk row in the Past due or Canceling view it belongs to', async () => {
     renderTab();
     fireEvent.click(await screen.findByTestId('admin-revenue-at-risk-row-r1'));
@@ -222,7 +249,7 @@ describe('AdminRevenue', () => {
     renderTab();
     expect(await screen.findByText("Stripe isn't configured on this deployment")).toBeTruthy();
     expect(screen.getByTestId('admin-revenue-self-host-docs-link').getAttribute('href')).toBe(
-      'https://docs.bike4mind.com/self-host/configuration'
+      'https://docs.bike4mind.com/self-host#2-configure-your-environment'
     );
     expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
     expect(screen.queryByTestId('admin-revenue-range')).toBeNull();
