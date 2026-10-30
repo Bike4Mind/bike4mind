@@ -1526,6 +1526,7 @@ export {
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
   providerUsagePollCron,
+  spendMonitor,
   creditPurchaseReconciliationCron,
   revenueSnapshotCron,
   storageReconciliationCron,
