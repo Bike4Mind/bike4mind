@@ -459,6 +459,9 @@ export const SettingKeySchema = z.enum([
   'otcLimitSendPerIpDaily',
   'otcLimitVerifyPerEmailPerIp',
   'otcLimitVerifyPerIp',
+  'subscriberLimitPerIp',
+  'subscriberLimitPerIpDaily',
+  'subscriberLimitSlackAlertsPerHour',
   'signupBurstThreshold',
   'signupBurstWindowHours',
   'signupBurstAutoHold',
@@ -2380,6 +2383,18 @@ export const API_SERVICE_GROUPS = {
       { key: 'otcLimitVerifyPerIp', order: 10 },
     ],
   },
+  SUBSCRIBER_LIMITS: {
+    id: 'subscriberLimitsService',
+    name: 'Subscriber Limits',
+    description:
+      'Tightens the public subscribe form (/api/subscribers/create) during an incident. Unrelated to billing subscriptions. Each value can only lower its built-in limit; 0 keeps the built-in. Changes take up to 5 minutes to apply.',
+    icon: 'Security',
+    settings: [
+      { key: 'subscriberLimitPerIp', order: 1 },
+      { key: 'subscriberLimitPerIpDaily', order: 2 },
+      { key: 'subscriberLimitSlackAlertsPerHour', order: 3 },
+    ],
+  },
   AUTH_ABUSE: {
     id: 'authAbuseService',
     name: 'OAuth Abuse Protection',
@@ -4197,6 +4212,46 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
     order: 10,
+  }),
+  subscriberLimitPerIp: makeNumberSetting({
+    key: 'subscriberLimitPerIp',
+    name: 'Subscribers: Per IP (per 15 min)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in SUBSCRIBER_LIMITS (apps/client/server/utils/subscriberLimits.ts).
+    max: 5,
+    int: true,
+    description: 'Subscribe requests one IP may make in 15 minutes. Built-in: 5. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SUBSCRIBER_LIMITS.id,
+    order: 1,
+  }),
+  subscriberLimitPerIpDaily: makeNumberSetting({
+    key: 'subscriberLimitPerIpDaily',
+    name: 'Subscribers: Per IP (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in SUBSCRIBER_LIMITS (apps/client/server/utils/subscriberLimits.ts).
+    max: 10,
+    int: true,
+    description: 'Subscribe requests one IP may make in a day. Built-in: 10. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SUBSCRIBER_LIMITS.id,
+    order: 2,
+  }),
+  subscriberLimitSlackAlertsPerHour: makeNumberSetting({
+    key: 'subscriberLimitSlackAlertsPerHour',
+    name: 'Subscribers: Slack alerts per hour',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in SUBSCRIBER_LIMITS (apps/client/server/utils/subscriberLimits.ts).
+    max: 10,
+    int: true,
+    description:
+      'New-subscriber Slack alerts posted per hour across all sources; past it, one notice and then silence until the hour ends. Signups are still saved. Built-in: 10. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SUBSCRIBER_LIMITS.id,
+    order: 3,
   }),
   blockDisposableEmails: makeBooleanSetting({
     key: 'blockDisposableEmails',
