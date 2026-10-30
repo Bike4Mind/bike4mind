@@ -63,9 +63,9 @@ export class BlockedIPRepository extends BaseRepository<IBlockedIPDocument> {
       // Repeat blocks only ever extend the window (a short manual block must not cut an escalated
       // auto block), without a new row or audit entry.
       const refreshed = await this.model.findOneAndUpdate(
-        { ip, active: true, expiresAt: { $lt: expiresAt } },
+        { ip, active: true, expiresAt: { $gt: now, $lt: expiresAt } },
         { expiresAt },
-        { new: true }
+        { new: true, sort: { blockedAt: -1 } }
       );
       return { doc: refreshed ?? existing, created: false };
     }

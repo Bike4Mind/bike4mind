@@ -48,6 +48,31 @@ describe('BlockedIPRepository', () => {
     expect(manual.expiresAt.getTime()).toBe(auto.expiresAt.getTime());
   });
 
+  it('extends the current block, not a stale expired row still marked active', async () => {
+    const now = Date.now();
+    await BlockedIP.create([
+      {
+        ip: '1.1.1.5',
+        active: true,
+        expiresAt: new Date(now - 1000),
+        blockedAt: new Date(now - 60_000),
+        reason: 'stale',
+      },
+      {
+        ip: '1.1.1.5',
+        active: true,
+        expiresAt: new Date(now + 60_000),
+        blockedAt: new Date(now - 1000),
+        reason: 'current',
+      },
+    ]);
+    const { doc, created } = await blockedIPRepository.block('1.1.1.5', 'auto', { durationMs: 3_600_000 });
+    expect(created).toBe(false);
+    expect(doc.reason).toBe('current');
+    expect(doc.expiresAt.getTime()).toBeGreaterThanOrEqual(now + 3_600_000);
+    expect((await blockedIPRepository.findLatestBlock('1.1.1.5'))?.expiresAt.getTime()).toBe(doc.expiresAt.getTime());
+  });
+
   it('unblock deactivates every active row of the IP', async () => {
     const expiresAt = new Date(Date.now() + 3_600_000);
     await BlockedIP.create([
