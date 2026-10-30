@@ -1,9 +1,10 @@
-import { useSettingsFromServer } from '@client/app/hooks/data/settings';
+import { useConfig, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import {
   isBlankSettingValue,
   allSettingDefinitions,
   resolveSettingDefinition,
   settingsMap,
+  stageHiddenSettingKeys,
   SETTING_TABS,
   type SettingDefinition,
   API_SERVICE_GROUPS,
@@ -183,6 +184,13 @@ const AdminSettingsTab: React.FC = () => {
   const [allTabs, setAllTabs] = useState<boolean>(false);
   const settingsFromServer = useSettingsFromServer();
   const setAdminTab = useAdminModal(s => s.setActiveTab);
+  const serverConfig = useConfig();
+
+  // Until the server reports this stage's list, hide every stage-gated setting rather than flash it.
+  const hiddenSettingKeys = useMemo(() => {
+    const keys = serverConfig.data?.hiddenAdminSettingKeys;
+    return new Set<string>(Array.isArray(keys) ? keys : stageHiddenSettingKeys(true));
+  }, [serverConfig.data]);
 
   // Index server values by setting name once, so the hot search/filter paths
   // don't re-scan the whole list per setting on every keystroke.
@@ -242,6 +250,8 @@ const AdminSettingsTab: React.FC = () => {
 
       if (!settingInfo) return false;
 
+      if (hiddenSettingKeys.has(settingConfig.key)) return false;
+
       if ((GROWTH_PRICING_ONLY_KEYS as ReadonlySet<string>).has(settingConfig.key)) return false;
 
       // Hide settings that have dedicated custom UI in other admin tabs
@@ -297,7 +307,7 @@ const AdminSettingsTab: React.FC = () => {
 
       return true;
     });
-  }, [searchTerm, settingValueByName, allTabs, matchesSearch]);
+  }, [searchTerm, settingValueByName, allTabs, matchesSearch, hiddenSettingKeys]);
 
   // Total settings matching the current search across ALL tabs - so the count is
   // visible even when the active tab happens to show none of them.

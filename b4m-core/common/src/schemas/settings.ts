@@ -958,6 +958,11 @@ export interface BaseSetting {
   /** Whether the setting is sensitive and should be hidden from users. */
   isSensitive?: boolean;
   /**
+   * Hide from the admin settings list on production stages (PRODUCTION_STAGES in
+   * @bike4mind/infra). Display only: the stored value and the update route are unchanged.
+   */
+  hideOnProductionStages?: boolean;
+  /**
    * Opt-in: include this setting in the PUBLIC, unauthenticated CDN config artifact
    * (see docs/perf/mobile-startup-latency.md, M2.5). Fail-closed - a setting is NEVER
    * public unless explicitly tagged here, regardless of isSensitive. Only tag settings
@@ -4148,6 +4153,7 @@ export const settingsMap = {
     int: true,
     description:
       'Deprecated and unused: the activity drip qualifies on active time, not chat turns. Use Signup Activity Minimum Active Seconds.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4173,6 +4179,7 @@ export const settingsMap = {
     int: true,
     description:
       'Deprecated and unused: the activity drip is paid per qualifying UTC day and no longer reads this value. Leave at zero.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4206,6 +4213,7 @@ export const settingsMap = {
     defaultValue: false,
     description:
       'PR previews only: use five-minute earning windows instead of UTC days to test the activity drip. Each window still requires the configured active time; use a minimum below five minutes. Production, staging and personal environments always use UTC days. The platform daily budget is unchanged. Reload the test user tab after toggling this switch.',
+    hideOnProductionStages: true,
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -6818,4 +6826,12 @@ export function isRegisteredSettingKey(key: string): boolean {
 /** Core definitions followed by contributed ones. */
 export function allSettingDefinitions(): SettingDefinition<string>[] {
   return [...(Object.values(settingsMap) as SettingDefinition<string>[]), ...contributedSettings.values()];
+}
+
+/** Keys the admin settings list hides on this stage; see BaseSetting.hideOnProductionStages. */
+export function stageHiddenSettingKeys(isProductionStage: boolean): string[] {
+  if (!isProductionStage) return [];
+  return allSettingDefinitions()
+    .filter(definition => definition.hideOnProductionStages)
+    .map(definition => definition.key);
 }
