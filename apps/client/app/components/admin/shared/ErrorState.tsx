@@ -17,7 +17,7 @@ export function ErrorState({
       </Button>
       {onFirstPage && (
         <Button variant="plain" onClick={onFirstPage} data-testid="admin-error-first-page-btn">
-          Go to first page
+          Back to the first page
         </Button>
       )}
     </Stack>
