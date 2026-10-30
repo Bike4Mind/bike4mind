@@ -12,7 +12,6 @@ import type { AdminUsersListRow } from '@client/app/utils/adminUsersFilter';
 import type { AdminUsersBulkActionType, AdminUsersBulkTarget } from '@client/app/utils/adminUsersBulk';
 import type { SignupAnomalySnapshot } from '@client/app/utils/signupAnomaly';
 import type { SignupTimeseriesRange } from '@client/app/utils/signupSignals';
-import AdminProfileModal from '../AdminProfileModal';
 import {
   AdminPageHeader,
   DataTable,
@@ -57,6 +56,7 @@ const copyToClipboard = async (value: string, what: string) => {
 };
 
 function UserRowActions({ row, onOpen }: { row: AdminUsersListRow; onOpen: () => void }) {
+  const { email } = row;
   return (
     <Dropdown>
       <MenuButton
@@ -81,7 +81,7 @@ function UserRowActions({ row, onOpen }: { row: AdminUsersListRow; onOpen: () =>
           Open profile
         </MenuItem>
         <MenuItem onClick={() => copyToClipboard(row.id, 'User ID')}>Copy user ID</MenuItem>
-        {row.email && <MenuItem onClick={() => copyToClipboard(row.email ?? '', 'Email')}>Copy email</MenuItem>}
+        {email && <MenuItem onClick={() => copyToClipboard(email, 'Email')}>Copy email</MenuItem>}
       </Menu>
     </Dropdown>
   );
@@ -104,7 +104,7 @@ const UsersTab: React.FC = () => {
     value: search,
     debouncedValue: debouncedSearch,
     setValue: setSearch,
-  } = useDebounceValue(useUsersTab.getState().params.search ?? '');
+  } = useDebounceValue(useUsersTab.getState().params.search);
   useEffect(() => {
     if (debouncedSearch === params.search) return;
     setParams({ search: debouncedSearch, page: 1 });
@@ -366,7 +366,6 @@ const UsersTab: React.FC = () => {
         </>
       )}
 
-      <AdminProfileModal />
       <ComplianceModal />
       <CreateUserModal />
       {/* Mounted only while open, so each run starts from a clean form and idempotency key. */}

@@ -9,7 +9,6 @@ import type { AdminUserProfile } from './userProfileModel';
 const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   setComplianceUserId: vi.fn(),
-  setEditProfileUserId: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
@@ -19,13 +18,16 @@ vi.mock('../BulkAbuseResponseModal', () => ({
     selectedUserIds,
     recordAction,
     onExecuted,
+    onClose,
   }: {
     selectedUserIds: string[];
     recordAction: string;
     onExecuted: () => void;
+    onClose: () => void;
   }) => (
     <div role="dialog" data-testid="bulk-abuse-modal" data-user={selectedUserIds[0]} data-action={recordAction}>
       <button data-testid="stub-bulk-executed-btn" onClick={onExecuted} />
+      <button data-testid="stub-bulk-close-btn" onClick={onClose} />
     </div>
   ),
 }));
@@ -33,10 +35,6 @@ vi.mock('./actions/useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks
 vi.mock('../ComplianceModal', () => ({
   useComplianceModal: (select: (state: { setUserId: (id: string) => void }) => unknown) =>
     select({ setUserId: mocks.setComplianceUserId }),
-}));
-vi.mock('../../AdminProfileModal', () => ({
-  useAdminProfileModal: (select: (state: { setUserId: (id: string) => void }) => unknown) =>
-    select({ setUserId: mocks.setEditProfileUserId }),
 }));
 vi.mock('../Details/GrantSubscriptionModal', () => ({
   default: ({ onClose }: { onClose: () => void }) => (
@@ -57,10 +55,21 @@ vi.mock('./tabs/AdminLogTab', () => ({ AdminLogTab: () => <div data-testid="stub
 vi.mock('./UserRiskBadges', () => ({ UserRiskBadges: () => <div data-testid="stub-risk-badges" /> }));
 vi.mock('./UserProfileStats', () => ({ UserProfileStats: () => <div data-testid="stub-stats" /> }));
 vi.mock('./tabs/OverviewTab', () => ({
-  OverviewTab: ({ onAction, onViewActivity }: { onAction: (action: 'tags') => void; onViewActivity: () => void }) => (
+  OverviewTab: ({
+    onAction,
+    onViewActivity,
+    onViewCredits,
+  }: {
+    onAction: (action: string) => void;
+    onViewActivity: () => void;
+    onViewCredits: () => void;
+  }) => (
     <div data-testid="stub-overview">
-      <button data-testid="stub-overview-tags-btn" onClick={() => onAction('tags')} />
+      {['tags', 'mfaReset', 'emailVerification', 'apiKeyTrust'].map(action => (
+        <button key={action} data-testid={`stub-overview-${action}-btn`} onClick={() => onAction(action)} />
+      ))}
       <button data-testid="stub-overview-activity-btn" onClick={onViewActivity} />
+      <button data-testid="stub-overview-credits-btn" onClick={onViewCredits} />
     </div>
   ),
 }));
@@ -72,6 +81,9 @@ vi.mock('./tabs/credits/CreditsTab', () => ({
   ),
 }));
 vi.mock('./tabs/keys/ApiKeysTab', () => ({ ApiKeysTab: () => <div data-testid="stub-keys" /> }));
+vi.mock('./actions/EditProfileDialog', () => ({
+  EditProfileDialog: () => <div data-testid="edit-profile-dialog" />,
+}));
 vi.mock('./actions/accessDialogs', () => {
   const stub = (id: string) => {
     const Stub = () => <div data-testid={id} />;
@@ -181,6 +193,15 @@ describe('UserProfileView', () => {
       expect(modal).toHaveAttribute('data-action', 'revoke');
     });
 
+    it('closes the revoke flow from its own close button', () => {
+      setup();
+
+      fireEvent.click(screen.getByTestId('admin-command-revoke-btn'));
+      fireEvent.click(screen.getByTestId('stub-bulk-close-btn'));
+
+      expect(screen.queryByTestId('bulk-abuse-modal')).not.toBeInTheDocument();
+    });
+
     it('refetches the API keys once the revoke has run', () => {
       const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
       setup();
@@ -222,6 +243,7 @@ describe('UserProfileView', () => {
     });
 
     it.each([
+      ['editProfile', 'edit-profile-dialog'],
       ['loginAs', 'login-as-dialog'],
       ['message', 'send-message-dialog'],
       ['role', 'change-role-dialog'],
@@ -248,22 +270,17 @@ describe('UserProfileView', () => {
       expect(mocks.setComplianceUserId).toHaveBeenCalledWith(user.id);
     });
 
-    it('the Edit profile item opens the profile editor for this user', async () => {
-      const user = buildProfile();
-      setup(user);
-
-      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
-      fireEvent.click(await screen.findByTestId('user-profile-menu-editProfile-item'));
-
-      expect(mocks.setEditProfileUserId).toHaveBeenCalledWith(user.id);
-    });
-
-    it('opens a dialog requested by the overview tab', () => {
+    it.each([
+      ['tags', 'manage-tags-dialog'],
+      ['mfaReset', 'mfa-reset-dialog'],
+      ['emailVerification', 'email-verification-dialog'],
+      ['apiKeyTrust', 'api-key-trust-dialog'],
+    ])('opens the %s dialog requested by the overview tab', (action, dialogId) => {
       setup();
 
-      fireEvent.click(screen.getByTestId('stub-overview-tags-btn'));
+      fireEvent.click(screen.getByTestId(`stub-overview-${action}-btn`));
 
-      expect(screen.getByTestId('manage-tags-dialog')).toBeInTheDocument();
+      expect(screen.getByTestId(dialogId)).toBeInTheDocument();
     });
 
     it('goes back to the list once a deleted user is reported', async () => {
@@ -338,6 +355,14 @@ describe('UserProfileView', () => {
       expect(screen.getByTestId('stub-activity')).toHaveAttribute('data-user-id', user.id);
     });
 
+    it('lets the overview jump to the credits tab', () => {
+      const { onTabChange } = setup();
+
+      fireEvent.click(screen.getByTestId('stub-overview-credits-btn'));
+
+      expect(onTabChange).toHaveBeenCalledWith('credits');
+    });
+
     it('lets the overview jump to the activity tab', () => {
       const { onTabChange } = setup();
 
@@ -399,6 +424,17 @@ describe('UserProfileView', () => {
           statusChangeReason: 'Undo: Suspended in error',
         })
       );
+    });
+
+    it('the reinstatement toast links to the Admin log tab', async () => {
+      const { onTabChange } = setup(buildProfile({ isBanned: true }));
+
+      fireEvent.click(screen.getByTestId('user-profile-reinstate-btn'));
+      fireEvent.click(screen.getByTestId('reinstate-dialog-reason-input-preset-0'));
+      fireEvent.click(screen.getByTestId('reinstate-dialog-confirm-btn'));
+      fireEvent.click(await screen.findByTestId('undo-toast-audit-btn'));
+
+      expect(onTabChange).toHaveBeenCalledWith('admin');
     });
 
     it('shows no toast when the reinstatement fails', async () => {

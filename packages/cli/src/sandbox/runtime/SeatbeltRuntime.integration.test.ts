@@ -91,31 +91,48 @@ describe.skipIf(process.platform !== 'darwin')('SeatbeltRuntime integration', ()
     }
   );
 
-  it('allows loopback but no other IP when network is enabled through a proxy', async () => {
-    const proxy = net.createServer(socket => socket.destroy());
-    await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
-    const probe = (host: string, port: number) => `out=$(nc -z -w 2 ${host} ${port} 2>&1) && echo open || echo closed`;
-    const listenAndConnect = (host: string) =>
-      `node -e "const s=require('net').createServer(c=>c.end()).listen(0,'${host}',()=>require('net').connect(s.address().port,'${host}',()=>{console.log('loopback');process.exit(0)}))" 2>&1 || echo failed`;
+  it('allows outbound loopback only to the proxy port when network is enabled', async () => {
+    const listen = async () => {
+      const server = net.createServer(socket => socket.destroy());
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      return server;
+    };
+    const proxy = await listen();
+    const other = await listen();
+    const portOf = (server: net.Server) => (server.address() as net.AddressInfo).port;
+    const probe = (host: string, port: number) =>
+      `nc -v -z -w 2 ${host} ${port} 2>&1 | grep -q 'not permitted' && echo denied || echo allowed`;
     const wrapped = runtime.wrapCommand({
-      command: [
-        probe('127.0.0.1', (proxy.address() as net.AddressInfo).port),
-        listenAndConnect('127.0.0.1'),
-        listenAndConnect('::1'),
-        `nc -v -z -w 2 127.0.0.2 9 2>&1 | grep -q 'not permitted' && echo denied || echo allowed`,
-      ].join('; '),
+      command: [probe('127.0.0.1', portOf(proxy)), probe('127.0.0.1', portOf(other)), probe('127.0.0.2', 9)].join('; '),
       cwd: TEST_DIR,
       filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
       networkEnabled: true,
-      proxyPort: (proxy.address() as net.AddressInfo).port,
+      proxyPort: portOf(proxy),
     });
 
     try {
       const output = execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 15000 });
-      expect(output.trim().split('\n')).toEqual(['open', 'loopback', 'loopback', 'denied']);
+      expect(output.trim().split('\n')).toEqual(['allowed', 'denied', 'denied']);
     } finally {
       cleanupWrapped(wrapped.cleanupPaths);
       proxy.close();
+      other.close();
+    }
+  });
+
+  it.each([false, true])('resolves no hostnames through the system resolver (network %s)', networkEnabled => {
+    const wrapped = runtime.wrapCommand({
+      command: `dscacheutil -q host -a name example.com | grep -q address && echo resolved || echo unresolved`,
+      cwd: TEST_DIR,
+      filesystemConfig: { writeOnlyToWorkingDir: true, allowedReadPaths: [], deniedPaths: [] },
+      networkEnabled,
+      ...(networkEnabled && { proxyPort: 9 }),
+    });
+
+    try {
+      expect(execSync(wrapped.commandString, { encoding: 'utf-8', timeout: 15000 }).trim()).toBe('unresolved');
+    } finally {
+      cleanupWrapped(wrapped.cleanupPaths);
     }
   });
 

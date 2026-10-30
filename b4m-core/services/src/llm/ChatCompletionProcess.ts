@@ -16,7 +16,6 @@ import {
   getTextModelCost,
   getTurnsCost,
   buildUsagePriceStamp,
-  CACHE_READ_MULTIPLIER,
   ModelInfo,
   ModelBackend,
   b4mLLMTools,
@@ -148,6 +147,7 @@ import {
   convertOpenAIToolHistoryToCanonical,
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
+import { timedOutAttemptUsageFields } from './timedOutAttemptUsage';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
@@ -5051,13 +5051,14 @@ export class ChatCompletionProcess {
       let streamIdleTimeoutRetried = false;
       let streamEndedWithoutFinishRetried = false;
       // A timed-out stream rejects before reporting usage and the next attempt resets
-      // actualTokenUsage, so the prompt the provider billed for it is recorded here as COGS only.
-      // Called only when the loop moves on to another attempt: a timeout that ends the turn is
-      // settled by settleAbortedReservation, and recording it here too would count it twice.
-      const recordTimedOutAttempt = (error: Error, attemptModel: typeof currentModel) => {
+      // actualTokenUsage, so the usage the provider billed for it is recorded here as COGS only:
+      // when the loop moves on, and when the timeout ends the turn (nothing else settles it then).
+      // The set keeps an error rethrown after its hop was recorded from being booked twice.
+      const recordedTimeouts = new WeakSet<Error>();
+      const recordTimedOutAttempt = (error: unknown, attemptModel: typeof currentModel) => {
         if (!adminSettingsEnforceCredits || !isLlmTimeoutError(error) || !error.usage) return;
-        const { inputTokens: providerInputTokens, cacheReadInputTokens, cacheCreationInputTokens } = error.usage;
-        const promptTokens = providerInputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+        if (recordedTimeouts.has(error)) return;
+        recordedTimeouts.add(error);
         this.db.usageEvents
           ?.record({
             requestId: quest.id,
@@ -5066,28 +5067,8 @@ export class ChatCompletionProcess {
             ownerType: this.reservedCreditsOwnerType,
             sessionId: quest.sessionId,
             feature: 'chat',
-            provider: attemptModel.backend,
-            model: attemptModel.id,
             source: 'web',
-            // inputTokens is the local estimate and counts toward the user's token quota; this
-            // attempt is ours to absorb, so the provider count goes in providerInputTokens only.
-            inputTokens: 0,
-            // The provider reports output only in message_delta, which a cut stream never reached.
-            outputTokens: 0,
-            providerInputTokens,
-            cachedInputTokens: cacheReadInputTokens,
-            cacheWriteTokens: cacheCreationInputTokens,
-            costUsd: getTextModelCost(
-              attemptModel,
-              providerInputTokens,
-              0,
-              cacheReadInputTokens,
-              cacheCreationInputTokens,
-              promptTokens
-            ),
-            creditsCharged: 0,
-            ...buildUsagePriceStamp(attemptModel, { tierBasisTokens: promptTokens }),
-            status: 'timeout',
+            ...timedOutAttemptUsageFields(attemptModel, error.usage),
             latencyMs: Date.now() - processStartTime,
           })
           .catch((usageEventError: unknown) => {
@@ -6195,6 +6176,7 @@ export class ChatCompletionProcess {
         };
       } catch (error) {
         logger.debug(`Error during fallback-enabled model invocation (final model: ${currentModel.id}):`, error);
+        recordTimedOutAttempt(error, currentModel);
         // Only a turn that ends refused counts: a refusal a fallback model answered may be a
         // classifier false positive, and the hit drives throttling/suspension.
         if (error instanceof Error && isSafetyRefusalError(error)) {
@@ -6241,8 +6223,9 @@ export class ChatCompletionProcess {
         // zeroed axis as free.
         // Anything less than full positive usage falls back to the local
         // estimate, which also remains the pre-reservation basis. The fallback
-        // keeps the capped cache-read discount and never bills cache creation,
-        // exactly the pre-provider-basis behavior. The bases never blend.
+        // bills capped cache reads at the model's own cache-read rate (the same
+        // one the provider basis uses) and never bills cache creation. The bases
+        // never blend.
         //
         // Disjoint-fields assumption: whatever an adapter forwards as
         // cacheReadInputTokens must NOT also be counted in inputTokens. Anthropic-family
@@ -6296,9 +6279,9 @@ export class ChatCompletionProcess {
               )
           : getTextModelCost(
               currentModel,
-              localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              localInputTokens - cacheReadInputTokens,
               outputTokens,
-              0,
+              cacheReadInputTokens,
               0,
               // The local estimate is one whole prompt; the cache discount above must not lower its tier.
               localInputTokens

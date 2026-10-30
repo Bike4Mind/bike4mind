@@ -94,7 +94,9 @@ try {
   while (Date.now() < deadline) {
     const result = await call('Runtime.evaluate', {
       expression: `(async () => {
-        if (!window.b4m || !document.querySelector('[data-testid="environment-active-text"]')) return null;
+        // The picker is open only when no server resolves; otherwise the card shows a summary line.
+        const card = '[data-testid="environment-active-text"], [data-testid="signin-server-text"]';
+        if (!window.b4m || !document.querySelector(card)) return null;
         return { info: await window.b4m.getAppInfo(), auth: (await window.b4m.auth.getState()).status,
           update: (await window.b4m.update.getState()).status,
           heading: document.body.innerText.includes('Bike4Mind Desktop') };

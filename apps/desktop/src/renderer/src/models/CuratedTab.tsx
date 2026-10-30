@@ -133,7 +133,7 @@ function VisionChip({ entry }: { entry: CuratedEntryView }) {
 }
 
 // Lets the shared row show a curated build; the dialog and the pull use what main hands back for it.
-function rowBuild(build: CuratedBuildView, target: ModelTarget): HubBuildView {
+function rowBuild(build: CuratedBuildView, rated: boolean): HubBuildView {
   return {
     id: build.pullBuildId,
     label: build.quant,
@@ -141,9 +141,21 @@ function rowBuild(build: CuratedBuildView, target: ModelTarget): HubBuildView {
     ollamaRef: build.ollamaRef,
     installedNames: [build.ollamaRef.toLowerCase()],
     blockedReason: build.blockedReason,
-    // Fit rates this computer, not a saved server.
-    fit: target.local ? build.fit : null,
+    fit: rated ? build.fit : null,
   };
+}
+
+/** The hardware typed in Settings that the badges rate. */
+function enteredText(machine: MachineView, name: string): string {
+  const memory = formatMemory(machine.totalMemoryBytes);
+  const gpu = machine.gpuMemoryBytes ? formatMemory(machine.gpuMemoryBytes) : null;
+  const rated = `${name} is rated from the hardware entered in Settings:`;
+  if (machine.memoryKind === 'unified')
+    return gpu
+      ? `${rated} ${memory} of memory shared with its GPU, which can use ${gpu}.`
+      : `${rated} ${memory} of memory shared with its GPU.`;
+  if (machine.memoryKind === 'discrete' && gpu) return `${rated} ${memory} of RAM and ${gpu} of GPU memory.`;
+  return `${rated} ${memory} of RAM and no GPU, so badges assume models run on the CPU.`;
 }
 
 interface Confirming {
@@ -250,6 +262,8 @@ type CuratedPull = ReturnType<typeof useCuratedPull>;
 interface RowContext {
   flow: CuratedPull;
   target: ModelTarget;
+  /** The list's fits describe the target; false on a saved server without entered hardware. */
+  rated: boolean;
   installedNames: Set<string>;
   pulls: ModelPull[];
   runtimeReady: boolean;
@@ -267,7 +281,7 @@ function CuratedBuild({
   build: CuratedBuildView;
   context: RowContext;
 }) {
-  const { flow, target, installedNames, pulls, runtimeReady, onOpenInExplore } = context;
+  const { flow, target, rated, installedNames, pulls, runtimeReady, onOpenInExplore } = context;
   const canPull = target.management === 'allowed';
   const pull = pulls.find(candidate => candidate.key === pullKey(build.repo, build.pullBuildId, target.id));
   const failure = pull?.phase === 'failed' ? pull.error : null;
@@ -293,7 +307,7 @@ function CuratedBuild({
     <>
       <BuildRow
         repo={build.repo}
-        build={rowBuild(build, target)}
+        build={rowBuild(build, rated)}
         pull={pull}
         installed={installedNames.has(build.ollamaRef.toLowerCase())}
         runtimeReady={runtimeReady}
@@ -341,7 +355,7 @@ function CuratedBuild({
         <PullDialog
           key={where}
           model={confirming.model}
-          build={target.local ? confirming.build : { ...confirming.build, fit: null }}
+          build={confirming.build}
           target={target}
           onClose={flow.cancel}
           onConfirm={consent => void flow.confirm(confirming, consent, build)}
@@ -460,7 +474,7 @@ function Section({ title, children, testId }: { title: string; children: ReactNo
   );
 }
 
-/** Open models Bike4Mind picked: this computer's picks first, then every model on the list with its fit. */
+/** Open models Bike4Mind picked: the picks for the target's hardware first, then every model on the list with its fit. */
 export function CuratedTab({
   status,
   target,
@@ -537,7 +551,9 @@ export function CuratedTab({
     );
 
   const runtimeReady = status?.reachable === true;
-  const context: RowContext = { flow, target, installedNames, pulls, runtimeReady, onOpenInExplore };
+  const rated = list.rating !== null;
+  const subject = target.local ? 'this computer' : target.name;
+  const context: RowContext = { flow, target, rated, installedNames, pulls, runtimeReady, onOpenInExplore };
   const picks = list.picks.flatMap(pick => {
     const entry = list.entries.find(candidate => candidate.id === pick.entryId);
     const build = entry?.builds.find(candidate => candidate.id === pick.buildId);
@@ -548,7 +564,11 @@ export function CuratedTab({
     <Stack spacing={1} data-testid="models-curated">
       <Typography level="body-xs" textColor="text.tertiary" data-testid="models-curated-machine">
         <span data-testid="models-curated-date">Curated list from {listDate(list.updatedAt)}.</span>{' '}
-        {target.local ? `${machineText(list.machine)} Hover a badge for why.` : 'Fit is not rated for a saved server.'}
+        {list.rating === 'probe' && `${machineText(list.machine)} Hover a badge for why.`}
+        {list.rating === 'entered' &&
+          `${enteredText(list.machine, target.local ? 'This computer' : target.name)} Hover a badge for why.`}
+        {list.rating === null &&
+          'Fit is not rated for a saved server. Enter its hardware under Settings, Model servers to rate it.'}
       </Typography>
       <Stack direction="row" spacing={1} alignItems="center">
         <Typography
@@ -579,11 +599,11 @@ export function CuratedTab({
             : `Downloads need ${target.name} to be reachable.`}
         </Alert>
       )}
-      <Section title={target.local ? 'For this computer' : 'Curated picks'} testId="models-curated-picks">
+      <Section title={rated ? `For ${subject}` : 'Curated picks'} testId="models-curated-picks">
         {picks.length === 0 ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="models-curated-no-picks">
-            {target.local
-              ? "The list has no picks for this computer's memory yet. Every model below shows whether it fits."
+            {rated
+              ? `The list has no picks for ${subject}'s memory yet. Every model below shows whether it fits.`
               : 'The list has no picks yet. Every model is listed below.'}
           </Typography>
         ) : (
