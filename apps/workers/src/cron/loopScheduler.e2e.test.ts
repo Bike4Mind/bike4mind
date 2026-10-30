@@ -270,6 +270,16 @@ describe('runLoopSchedulerTick', () => {
     expect((await reload(loop.id)).leaseUntil).toBeUndefined();
   });
 
+  it('releases the lease when loading directives throws', async () => {
+    const loop = await createLoop();
+    vi.spyOn(loopDirectiveRepository, 'listOpenForLoop').mockRejectedValue(new Error('db down'));
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect((await reload(loop.id)).leaseUntil).toBeUndefined();
+  });
+
   it('keeps the lease when a started run could not be recorded', async () => {
     const loop = await createLoop();
     vi.spyOn(loopRepository, 'markDispatched').mockRejectedValue(new Error('db blip'));

@@ -10,6 +10,9 @@
  */
 import {
   LOOP_DIRECTIVE_TOOL_NAMES,
+  LOOP_DIRECTIVE_INSTRUCTION_MAX,
+  LOOP_DIRECTIVE_NOTE_MAX,
+  LOOP_DIRECTIVE_REASON_MAX,
   LOOP_DIRECTIVE_TRANSITIONS,
   LOOP_OVERSEER_TOOL_NAMES,
   WORK_ITEM_STATUSES,
@@ -34,9 +37,6 @@ import { asToolResult, LOOP_NOT_FOUND } from './agentExecutor.loopTicketTools';
  * on open directives per target. Add an atomic counter on the execution if either is ever seen.
  */
 export const MAX_DIRECTIVES_PER_RUN = 5;
-const INSTRUCTION_MAX = 2000;
-const REASON_MAX = 1000;
-const NOTE_MAX = 1000;
 const MEMORY_CHARS = 1000;
 const TICKET_SCAN_LIMIT = 100;
 const BLOCKED_LIMIT = 20;
@@ -169,7 +169,7 @@ export function buildLoopDirectiveTools({
           if (params.note !== undefined && typeof params.note !== 'string') {
             throw new BadRequestError('note must be a string');
           }
-          const note = params.note?.trim().slice(0, NOTE_MAX);
+          const note = params.note?.trim().slice(0, LOOP_DIRECTIVE_NOTE_MAX);
           if (outcome === 'pushed_back' && !note) throw new BadRequestError('note is required to push back');
 
           const from = LOOP_DIRECTIVE_TRANSITIONS[outcome];
@@ -192,7 +192,12 @@ export function buildLoopDirectiveTools({
           type: 'object',
           properties: {
             directiveId: { type: 'string', description: 'The directive id from this run prompt.' },
-            outcome: { type: 'string', enum: [...WORKER_OUTCOMES] },
+            outcome: {
+              type: 'string',
+              enum: [...WORKER_OUTCOMES],
+              description:
+                'accepted, pushed_back or done; an accepted directive can still move to done or pushed_back.',
+            },
             note: { type: 'string', description: 'Required for pushed_back: your reason (1000 characters max).' },
           },
           required: ['directiveId', 'outcome'],
@@ -241,8 +246,8 @@ export function buildLoopDirectiveTools({
         asToolResult(async () => {
           const params = (value ?? {}) as { loopId?: unknown; instruction?: unknown; reason?: unknown };
           const { overseer, target } = await watchedLoop(params.loopId);
-          const instruction = requiredText('instruction', params.instruction, INSTRUCTION_MAX);
-          const reason = requiredText('reason', params.reason, REASON_MAX);
+          const instruction = requiredText('instruction', params.instruction, LOOP_DIRECTIVE_INSTRUCTION_MAX);
+          const reason = requiredText('reason', params.reason, LOOP_DIRECTIVE_REASON_MAX);
           if ((await loopDirectiveRepository.countByExecution(executionId)) >= MAX_DIRECTIVES_PER_RUN) {
             throw new BadRequestError(`at most ${MAX_DIRECTIVES_PER_RUN} directives can be issued per run`);
           }

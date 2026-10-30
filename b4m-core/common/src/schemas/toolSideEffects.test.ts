@@ -69,6 +69,12 @@ describe('tool side-effect declarations', () => {
     }
   });
 
+  it('classifies the loop directive tools: status reads, issue and respond write', () => {
+    expect(getToolSideEffects('loop_oversee_status')).toBe('none');
+    expect(getToolSideEffects('loop_directive_issue')).toBe('external');
+    expect(getToolSideEffects('loop_directive_respond')).toBe('external');
+  });
+
   it('declares nothing for names it has never heard of', () => {
     expect(getToolSideEffects('mcp__github__get_issue')).toBeUndefined();
     expect(getToolSideEffects('totally_unknown_tool')).toBeUndefined();

@@ -3,6 +3,9 @@ import {
   ILoopDirective,
   ILoopDirectiveReply,
   ILoopDirectiveRepository,
+  LOOP_DIRECTIVE_INSTRUCTION_MAX,
+  LOOP_DIRECTIVE_NOTE_MAX,
+  LOOP_DIRECTIVE_REASON_MAX,
   LOOP_DIRECTIVE_STATES,
   LoopDirectiveState,
 } from '@bike4mind/common';
@@ -25,7 +28,8 @@ export class LoopDirectiveRepository extends BaseRepository<ILoopDirective> impl
   async listOpenForLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]> {
     const results = await this.loopDirectiveModel
       .find({ userId, loopId, state: { $in: ['open', 'accepted'] } })
-      .sort({ createdAt: 1 })
+      // 'accepted' > 'open' lexically, so unanswered directives come first and are never starved by accepted ones.
+      .sort({ state: -1, createdAt: 1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
   }
@@ -80,7 +84,7 @@ const ReplySchema = new Schema(
       enum: ['accepted', 'pushed_back', 'done', 'withdrawn', 'overruled'],
       required: true,
     },
-    note: { type: String, maxlength: 1000 },
+    note: { type: String, maxlength: LOOP_DIRECTIVE_NOTE_MAX },
     executionId: { type: String },
     userId: { type: String },
     at: { type: Date, required: true },
@@ -95,8 +99,8 @@ export const LoopDirectiveSchema = new Schema<ILoopDirective, ILoopDirectiveMode
     fromLoopId: { type: String, required: true },
     fromLoopName: { type: String, required: true },
     executionId: { type: String, required: true },
-    instruction: { type: String, required: true, maxlength: 2000 },
-    reason: { type: String, required: true, maxlength: 1000 },
+    instruction: { type: String, required: true, maxlength: LOOP_DIRECTIVE_INSTRUCTION_MAX },
+    reason: { type: String, required: true, maxlength: LOOP_DIRECTIVE_REASON_MAX },
     state: { type: String, enum: LOOP_DIRECTIVE_STATES, required: true, default: 'open' },
     replies: { type: [ReplySchema], default: [] },
   },

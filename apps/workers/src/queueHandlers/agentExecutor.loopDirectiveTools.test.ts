@@ -164,6 +164,15 @@ describe('loop_directive_issue', () => {
     expect(directives.create).not.toHaveBeenCalled();
   });
 
+  it('caps the instruction and reason, and refuses a non-string target', async () => {
+    await issue(overseerTools(), { instruction: 'i'.repeat(2500), reason: 'r'.repeat(1500) });
+    expect(directives.create).toHaveBeenCalledWith(
+      expect.objectContaining({ instruction: 'i'.repeat(2000), reason: 'r'.repeat(1000) })
+    );
+    expect(await issue(overseerTools(), { loopId: 42 })).toMatch(/^Error/);
+    expect(directives.create).toHaveBeenCalledTimes(1);
+  });
+
   it('re-reads oversees per call, so a loop the owner just removed is refused', async () => {
     const tools = overseerTools();
     oversees = [];
@@ -220,6 +229,12 @@ describe('loop_oversee_status', () => {
 
   it('refuses an unwatched loop', async () => {
     expect(await run(tools(), 'loop_oversee_status', { loopId: UNWATCHED })).toBe('Error: loop not found');
+  });
+
+  it("is 'loop not found' once the overseer itself is gone", async () => {
+    loops.findByIdAndUserId.mockResolvedValue(null);
+    expect(await run(tools(), 'loop_oversee_status', {})).toBe('Error: loop not found');
+    expect(await run(tools(), 'loop_oversee_status', { loopId: WORKER })).toBe('Error: loop not found');
   });
 });
 

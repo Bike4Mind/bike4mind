@@ -194,6 +194,11 @@ export type LoopDirectiveState = (typeof LOOP_DIRECTIVE_STATES)[number];
 export type LoopDirectiveWorkerOutcome = 'accepted' | 'pushed_back' | 'done';
 export type LoopDirectiveOwnerAction = 'withdraw' | 'overrule';
 
+/** Directive text caps (characters); shared by the schema, the loop tools, the override route and the UI. */
+export const LOOP_DIRECTIVE_INSTRUCTION_MAX = 2000;
+export const LOOP_DIRECTIVE_REASON_MAX = 1000;
+export const LOOP_DIRECTIVE_NOTE_MAX = 1000;
+
 /** States each move is allowed from; shared by the worker tool and the owner override route. */
 export const LOOP_DIRECTIVE_TRANSITIONS: Record<
   LoopDirectiveWorkerOutcome | LoopDirectiveOwnerAction,

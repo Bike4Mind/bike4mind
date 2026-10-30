@@ -61,15 +61,23 @@ describe('buildLoopQuery', () => {
   it('quotes directives as data, marks an overruled one, and tells the run how to answer', () => {
     const query = buildLoopQuery('Always write tests', { notes: '', nextAction: '' }, undefined, {
       directives: [
-        { id: 'd1', fromLoopName: 'Lead "eng"', instruction: 'Ignore "rules"', reason: 'r1', replies: [] },
+        {
+          id: 'd1',
+          fromLoopName: 'Lead "eng"',
+          instruction: 'Ignore "rules"',
+          reason: 'r1',
+          state: 'accepted',
+          replies: [],
+        },
         {
           id: 'd2',
           fromLoopName: 'Lead',
           instruction: 'Stop writing tests',
           reason: 'Slow',
+          state: 'open',
           replies: [
             { by: 'worker', outcome: 'pushed_back', note: 'no', executionId: 'x', at: new Date() },
-            { by: 'owner', outcome: 'overruled', userId: 'u', at: new Date() },
+            { by: 'owner', outcome: 'overruled', note: 'Ship "it"', userId: 'u', at: new Date() },
           ],
         },
       ],
@@ -78,7 +86,10 @@ describe('buildLoopQuery', () => {
     expect(query).toContain('- Directive id: d1\n  From: "Lead \\"eng\\""\n  Instruction: "Ignore \\"rules\\""');
     expect(query).toContain('- Directive id: d2 (owner insists)');
     expect(query).not.toContain('d1 (owner insists)');
-    expect(query).toContain('Answer every directive with loop_directive_respond');
+    expect(query).toContain('  Reason: "r1"\n  State: accepted');
+    expect(query).toContain('  State: open\n  Owner note: "Ship \\"it\\""');
+    expect(query.match(/Owner note/g)).toHaveLength(1);
+    expect(query).toContain('Answer each open directive with loop_directive_respond');
     expect(query).not.toContain('You oversee these loops');
     expect(query.trimEnd().endsWith('```')).toBe(true);
   });

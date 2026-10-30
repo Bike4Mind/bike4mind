@@ -72,6 +72,15 @@ describe('LoopDirectiveRepository', () => {
     expect((await loopDirectiveRepository.listToLoop(USER, WORKER, 10)).map(d => d.id)).not.toContain(issued.id);
   });
 
+  it('lists unanswered directives before accepted ones, so accepted ones cannot starve them', async () => {
+    const at = (ms: number) => ({ createdAt: new Date(ms) });
+    await create({ instruction: 'accepted-old', state: 'accepted', ...at(1000) });
+    await create({ instruction: 'accepted-new', state: 'accepted', ...at(2000) });
+    await create({ instruction: 'open-new', ...at(3000) });
+    const open = await loopDirectiveRepository.listOpenForLoop(USER, WORKER, 2);
+    expect(open.map(d => d.instruction)).toEqual(['open-new', 'accepted-old']);
+  });
+
   it('transitions only from the expected states, appending the reply', async () => {
     const directive = await create();
     const accepted = await loopDirectiveRepository.transition(
