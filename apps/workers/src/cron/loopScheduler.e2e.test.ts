@@ -10,6 +10,8 @@ import {
   LoopEvent,
   loopEventRepository,
   loopRepository,
+  organizationRepository,
+  userRepository,
   WorkItem,
   workItemRepository,
 } from '@bike4mind/database';
@@ -26,7 +28,7 @@ vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: h.startAgentExecution }));
 
-import { LOOP_LEASE_MS, MAX_CONSECUTIVE_FAILURES, runLoopSchedulerTick } from './loopScheduler';
+import { BUDGET_PAUSE_REASON, LOOP_LEASE_MS, MAX_CONSECUTIVE_FAILURES, runLoopSchedulerTick } from './loopScheduler';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -138,7 +140,7 @@ describe('runLoopSchedulerTick', () => {
     await runLoopSchedulerTick(NOW, logger);
 
     const after = await reload(loop.id);
-    expect(after).toMatchObject({ status: 'paused', statusReason: 'Out of credits' });
+    expect(after).toMatchObject({ status: 'paused', statusReason: 'Out of credits', autoResume: 'credits' });
     expect(after.activeExecutionId).toBeUndefined();
   });
 
@@ -643,5 +645,131 @@ describe('runLoopSchedulerTick - unsure', () => {
     const events = await eventsOf(loop.id);
     expect(events).toHaveLength(1);
     expect(events[0].resolution).toMatchObject({ outcome: 'rejected', by: 'user-1', at: NOW });
+  });
+});
+
+describe('runLoopSchedulerTick - budget and auto-resume', () => {
+  const MIDNIGHT = new Date('2026-10-30T00:00:00Z');
+  let spentToday: number;
+  let balance: { currentCredits: number } | null;
+
+  beforeEach(() => {
+    spentToday = 0;
+    balance = { currentCredits: 0 };
+    vi.spyOn(agentExecutionRepository, 'sumCreditsByLoop').mockImplementation((async (ids: string[]) =>
+      Object.fromEntries(ids.map(id => [id, spentToday]))) as never);
+    vi.spyOn(userRepository, 'findById').mockImplementation((async () => balance) as never);
+  });
+
+  const eventsOf = (loopId: string) => LoopEvent.find({ loopId }).lean();
+
+  it('does not start a run once spend today reaches the budget, and pauses until the next UTC midnight', async () => {
+    const loop = await createLoop({ budgetCreditsPerDay: 10 });
+    const ticket = await WorkItem.create({
+      userId: 'user-1',
+      loopId: loop.id,
+      title: 'Write the summary',
+      stage: 'todo',
+      status: 'open',
+      dependencies: [],
+    });
+    spentToday = 10;
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(agentExecutionRepository.sumCreditsByLoop).toHaveBeenCalledWith(
+      [loop.id],
+      ['session-1'],
+      new Date('2026-10-29T00:00:00Z')
+    );
+    const after = await reload(loop.id);
+    expect(after).toMatchObject({
+      status: 'paused',
+      autoResume: 'budget',
+      statusReason: BUDGET_PAUSE_REASON,
+      nextRunAt: MIDNIGHT,
+    });
+    expect(after.leaseUntil).toBeUndefined();
+    expect((await WorkItem.findById(ticket.id))!.toJSON()).toMatchObject({ status: 'open' });
+  });
+
+  it('dispatches while under budget, and skips the spend check without one', async () => {
+    const budgeted = await createLoop({ budgetCreditsPerDay: 10 });
+    await createLoop({ sessionId: 'session-2' });
+    spentToday = 9.5;
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    expect(agentExecutionRepository.sumCreditsByLoop).toHaveBeenCalledTimes(1);
+    expect(agentExecutionRepository.sumCreditsByLoop).toHaveBeenCalledWith(
+      [budgeted.id],
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('resumes a budget pause at the next UTC midnight and dispatches it in the same tick', async () => {
+    const loop = await createLoop({ budgetCreditsPerDay: 10, lastExecutionId: 'exec-0' });
+    spentToday = 10;
+    await runLoopSchedulerTick(NOW, logger);
+    expect(await eventsOf(loop.id)).toHaveLength(0);
+
+    await runLoopSchedulerTick(new Date(MIDNIGHT.getTime() - 1), logger);
+    expect((await reload(loop.id)).status).toBe('paused');
+
+    spentToday = 0;
+    await runLoopSchedulerTick(MIDNIGHT, logger);
+
+    const after = await reload(loop.id);
+    expect(after).toMatchObject({ status: 'live', activeExecutionId: 'exec-1' });
+    expect(after.autoResume).toBeUndefined();
+    expect(after.statusReason).toBeUndefined();
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await eventsOf(loop.id)).toMatchObject([
+      { kind: 'auto_resumed', executionId: 'exec-0', reason: 'Daily budget reset', requestedAt: MIDNIGHT },
+    ]);
+  });
+
+  it('keeps a credit pause while the balance is empty and resumes once it is positive', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', lastExecutionId: 'exec-0' });
+    executions['exec-0'] = { status: 'failed', failureReason: 'insufficient_credits', error: { message: 'x' } };
+    await runLoopSchedulerTick(NOW, logger);
+
+    await runLoopSchedulerTick(NOW, logger);
+    expect(await reload(loop.id)).toMatchObject({ status: 'paused', autoResume: 'credits' });
+
+    balance = { currentCredits: 5 };
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(await reload(loop.id)).toMatchObject({ status: 'live', activeExecutionId: 'exec-1' });
+    expect(await eventsOf(loop.id)).toMatchObject([{ kind: 'auto_resumed', reason: 'Credits available again' }]);
+  });
+
+  it('keeps a credit pause on an org loop while the member is at its cap', async () => {
+    // A member cap of 0 means the member is at it with nothing used.
+    const org: Record<string, unknown> = { currentCredits: 100, maxCreditsPerMember: 0, userDetails: [] };
+    vi.spyOn(organizationRepository, 'findById').mockResolvedValue(org as never);
+    const loop = await createLoop({ status: 'paused', autoResume: 'credits', organizationId: 'org-1' });
+
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(loop.id)).status).toBe('paused');
+    expect(organizationRepository.findById).toHaveBeenCalledWith('org-1');
+    expect(userRepository.findById).not.toHaveBeenCalled();
+
+    delete org.maxCreditsPerMember;
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(loop.id)).status).toBe('live');
+  });
+
+  it('never resumes an owner pause', async () => {
+    balance = { currentCredits: 100 };
+    const loop = await createLoop({ status: 'paused' });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect((await reload(loop.id)).status).toBe('paused');
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
   });
 });

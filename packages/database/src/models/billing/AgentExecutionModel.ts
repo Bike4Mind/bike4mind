@@ -1185,12 +1185,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Credits per loop over its top-level runs, keyed by loop id. Sync children roll up into their parent;
    * background children carry no loopId, so they are not counted. `sessionIds` are the loops' notebooks:
    * they narrow the scan to the {sessionId, status} index, while `loopId` leaves out any chat a user starts
-   * by hand in a loop's notebook.
+   * by hand in a loop's notebook. With `since`, only runs created since then count, so a run that crosses
+   * midnight counts toward the day it started.
    */
-  async sumCreditsByLoop(loopIds: string[], sessionIds: string[]): Promise<Record<string, number>> {
+  async sumCreditsByLoop(loopIds: string[], sessionIds: string[], since?: Date): Promise<Record<string, number>> {
     if (loopIds.length === 0) return {};
     const rows = await this.model.aggregate<{ _id: string; credits: number }>([
-      { $match: { sessionId: { $in: sessionIds }, loopId: { $in: loopIds }, parentExecutionId: null } },
+      {
+        $match: {
+          sessionId: { $in: sessionIds },
+          loopId: { $in: loopIds },
+          parentExecutionId: null,
+          ...(since && { createdAt: { $gte: since } }),
+        },
+      },
       { $group: { _id: '$loopId', credits: { $sum: '$totalCreditsUsed' } } },
     ]);
     return Object.fromEntries(rows.map(row => [row._id, row.credits]));

@@ -55,6 +55,39 @@ describe('LoopRepository', () => {
     await expect(create({ intervalMinutes: 5.5 })).rejects.toThrow(/intervalMinutes/);
   });
 
+  it('rejects a budget of 0 or below', async () => {
+    await expect(create({ budgetCreditsPerDay: 0 })).rejects.toThrow(/budgetCreditsPerDay/);
+    await expect(create({ budgetCreditsPerDay: -1 })).rejects.toThrow(/budgetCreditsPerDay/);
+    expect((await create({ budgetCreditsPerDay: 0.5 })).budgetCreditsPerDay).toBe(0.5);
+  });
+
+  describe('auto-paused loops', () => {
+    const now = new Date('2026-10-30T00:00:00Z');
+
+    it('lists only paused loops with autoResume', async () => {
+      const budget = await create({ status: 'paused', autoResume: 'budget', statusReason: 'Daily budget reached' });
+      await create({ status: 'paused' });
+      await create({ status: 'live' });
+      expect((await loopRepository.listAutoPaused()).map(loop => loop.id)).toEqual([budget.id]);
+    });
+
+    it('resumeAutoPaused only matches a paused loop with the same autoResume', async () => {
+      const loop = await create({ status: 'paused', autoResume: 'budget', statusReason: 'Daily budget reached' });
+      const owner = await create({ status: 'paused' });
+
+      expect(await loopRepository.resumeAutoPaused(loop.id, 'credits', now)).toBe(false);
+      expect(await loopRepository.resumeAutoPaused(owner.id, 'budget', now)).toBe(false);
+      expect(await loopRepository.resumeAutoPaused(loop.id, 'budget', now)).toBe(true);
+      expect(await loopRepository.resumeAutoPaused(loop.id, 'budget', now)).toBe(false);
+
+      const resumed = await loopRepository.findById(loop.id);
+      expect(resumed).toMatchObject({ status: 'live', nextRunAt: now });
+      expect(resumed?.autoResume).toBeUndefined();
+      expect(resumed?.statusReason).toBeUndefined();
+      expect((await loopRepository.findById(owner.id))?.status).toBe('paused');
+    });
+  });
+
   it('declares the scheduler and list indexes', async () => {
     const keys = (await Loop.collection.indexes()).map(index => index.key);
     expect(keys).toEqual(

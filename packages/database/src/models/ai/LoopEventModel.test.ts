@@ -72,6 +72,23 @@ describe('LoopEventRepository', () => {
     expect(await loopEventRepository.listResumedUnfolded(10)).toEqual([]);
   });
 
+  it('records an auto_resumed event without iteration or confidence, and still requires them on unsure', async () => {
+    await loopEventRepository.recordAutoResumed({
+      loopId: LOOP,
+      userId: USER,
+      executionId: 'exec-1',
+      reason: 'Daily budget reset',
+      requestedAt: new Date(5000),
+    });
+    const [event] = await loopEventRepository.listForLoop(USER, LOOP, 10);
+    expect(event).toMatchObject({ kind: 'auto_resumed', reason: 'Daily budget reset' });
+    expect(event.confidence).toBeUndefined();
+
+    await expect(
+      LoopEvent.create({ ...fields({ executionId: 'exec-2' }), iteration: undefined, kind: 'unsure' })
+    ).rejects.toThrow(/iteration/);
+  });
+
   it("listForLoop is owner-scoped and deleteManyForLoop removes only that loop's events", async () => {
     await loopEventRepository.recordUnsure(fields());
     await loopEventRepository.recordUnsure(fields({ executionId: 'exec-2', loopId: 'loop-2' }));

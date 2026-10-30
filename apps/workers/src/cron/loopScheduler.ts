@@ -2,6 +2,7 @@ import { Context } from 'aws-lambda';
 import { randomUUID } from 'crypto';
 import {
   ACTIVE_AGENT_EXECUTION_STATUSES,
+  startOfUtcDay,
   type ILoop,
   type ILoopEvent,
   type IWorkItem,
@@ -13,11 +14,14 @@ import {
   connectDB,
   loopEventRepository,
   loopRepository,
+  organizationRepository,
+  userRepository,
   workItemRepository,
   type IAgentExecution,
   type IPendingGate,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { creditService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
@@ -44,6 +48,8 @@ export const MAX_CONSECUTIVE_FAILURES = 3;
 export const MAX_RESUMED_FOLDS_PER_TICK = 100;
 
 const MINUTE_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
+export const BUDGET_PAUSE_REASON = 'Daily budget reached; resumes 00:00 UTC';
 
 /**
  * Loop scheduler (5-minute cron). Each tick first folds finished runs back into their
@@ -67,6 +73,14 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
   if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) {
     logger.info('[Loops] EnableLoops is off; skipping tick');
     return;
+  }
+
+  for (const loop of await loopRepository.listAutoPaused()) {
+    try {
+      await resumeIfDue(loop, now);
+    } catch (error) {
+      logger.error(`[Loops] Failed to auto-resume loop ${loop.id}`, error as Error);
+    }
   }
 
   // ponytail: oldest first and still-running resumed runs are skipped unfolded, so 100+ of those across all
@@ -170,7 +184,12 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     // Not the ticket's fault: it goes back to open, and the loop pauses.
     if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, { status: 'open' });
     await loopRepository.foldRun(loop.id, executionId, {
-      $set: { status: 'paused', statusReason: 'Out of credits', lastRunAt: execution.completedAt ?? now },
+      $set: {
+        status: 'paused',
+        statusReason: 'Out of credits',
+        autoResume: 'credits',
+        lastRunAt: execution.completedAt ?? now,
+      },
     });
     return;
   }
@@ -274,6 +293,64 @@ async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
   if (ticket) await makeDueIfReady(loop, now);
 }
 
+/**
+ * Lifts a pause the scheduler set itself: a budget pause once its `nextRunAt` (the next UTC midnight) has
+ * passed, a credit pause once the account the executor bills can pay again. Logs each resume; the notice
+ * sweep resolves the pause notice at the end of the tick.
+ */
+async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
+  const kind = loop.autoResume!;
+  if (kind === 'budget' ? !loop.nextRunAt || new Date(loop.nextRunAt) > now : !(await canPayAgain(loop))) return;
+  if (!(await loopRepository.resumeAutoPaused(loop.id, kind, now)) || !loop.lastExecutionId) return;
+  await loopEventRepository.recordAutoResumed({
+    loopId: loop.id,
+    userId: loop.userId,
+    executionId: loop.lastExecutionId,
+    reason: kind === 'budget' ? 'Daily budget reset' : 'Credits available again',
+    requestedAt: now,
+  });
+}
+
+// ponytail: any positive balance resumes, though one iteration may cost more; such a run is refused and
+// the loop pauses again, at most once per tick. Compare against the executor's requiredCredits if noisy.
+async function canPayAgain(loop: ILoop): Promise<boolean> {
+  if (loop.organizationId) {
+    const org = await organizationRepository.findById(loop.organizationId);
+    return !!org && org.currentCredits > 0 && !creditService.isMemberAtOrOverCap(org, loop.userId);
+  }
+  const user = await userRepository.findById(loop.userId);
+  return !!user && (user.currentCredits ?? 0) > 0;
+}
+
+/**
+ * Pauses a loop whose runs started today have spent its daily budget, until the next UTC midnight.
+ * ponytail: checked before each run with one run in flight per loop, so a run can overshoot the budget
+ * by at most its own cost.
+ */
+async function pausedForBudget(loop: ILoop, now: Date, logger: Logger): Promise<boolean> {
+  if (loop.budgetCreditsPerDay === undefined) return false;
+  const today = startOfUtcDay(now);
+  const spent = await agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], today);
+  if ((spent[loop.id] ?? 0) < loop.budgetCreditsPerDay) return false;
+
+  // Conditional on 'live' so an owner's pause landing mid-dispatch is not overwritten.
+  const paused = await loopRepository.updateForUser(
+    loop.id,
+    loop.userId,
+    {
+      status: 'paused',
+      autoResume: 'budget',
+      statusReason: BUDGET_PAUSE_REASON,
+      nextRunAt: new Date(today.getTime() + DAY_MS),
+      leaseUntil: null,
+    },
+    'live'
+  );
+  if (!paused) await loopRepository.releaseLease(loop.id);
+  logger.info(`[Loops] Loop ${loop.id} reached its daily budget`);
+  return true;
+}
+
 /** Claims the loop's next ready ticket for this run; null means a plain goal run. */
 async function claimNextTicket(loop: ILoop): Promise<IWorkItem | null> {
   const next = await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, lastStageOf(loop));
@@ -293,6 +370,7 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<voi
   let ticket: IWorkItem | null = null;
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
+    if (await pausedForBudget(loop, now, logger)) return;
     ticket = await claimNextTicket(loop);
     result = await startAgentExecution(
       {
