@@ -1,4 +1,4 @@
-import { AI_USAGE_TRANSACTION_TYPES, CreditHolderType } from '@bike4mind/common';
+import { AI_USAGE_TRANSACTION_TYPES, CreditHolderType, UnprocessableEntityError } from '@bike4mind/common';
 import {
   AnalyticsUserDay,
   CreditTransaction,
@@ -26,6 +26,8 @@ import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organization
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 const LIST_MAX_TIME_MS = 10_000;
 const SPEND_WINDOW_MS = 30 * 86_400_000;
+// The active ids feed an `_id: { $in }` match, so the list has to stay small enough for one query document.
+export const ACTIVE_USERS_MAX = 50_000;
 
 const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
 
@@ -40,7 +42,13 @@ async function activeUserIds(fromDay: string, toDay: string): Promise<string[]> 
   const rows = await AnalyticsUserDay.aggregate<{ _id: string }>([
     { $match: { day: { $gte: fromDay, $lte: toDay } } },
     { $group: { _id: '$userId' } },
+    { $limit: ACTIVE_USERS_MAX + 1 },
   ]).option({ maxTimeMS: LIST_MAX_TIME_MS });
+  if (rows.length > ACTIVE_USERS_MAX) {
+    throw new UnprocessableEntityError(
+      `More than ${ACTIVE_USERS_MAX.toLocaleString('en-US')} active users in this window. Narrow the active range.`
+    );
+  }
   return rows.map(row => row._id);
 }
 

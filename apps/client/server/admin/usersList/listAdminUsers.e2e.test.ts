@@ -10,6 +10,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
 import {
+  ACTIVE_USERS_MAX,
   USERS_EXPORT_MAX_ROWS,
   adminUsersDomainGroups,
   adminUsersSummary,
@@ -205,6 +206,43 @@ describe('analytics drill-down filters', () => {
     expect(usernames(week)).toEqual(['early', 'late']);
     expect(week.totalUsers).toBe(2);
     expect(day.users.map(user => user.username)).toEqual(['late']);
+  });
+
+  it('exports only the users active in the window', async () => {
+    const early = await seedUser('early');
+    const late = await seedUser('late');
+    const before = await seedUser('before');
+    await seedUser('idle');
+    await seedActiveDay(early._id, '2026-06-01');
+    await seedActiveDay(late._id, '2026-06-05');
+    await seedActiveDay(before._id, '2026-05-31');
+
+    const { users, truncated } = await exportAdminUsers({ activeFrom: '2026-06-01', activeTo: '2026-06-05' }, NOW);
+
+    expect(users.map(user => user.username).sort()).toEqual(['early', 'late']);
+    expect(truncated).toBe(false);
+  });
+
+  it('refuses an active window holding more users than it can resolve', async () => {
+    await AnalyticsUserDay.createIndexes();
+    await AnalyticsUserDay.collection.insertMany(
+      Array.from({ length: ACTIVE_USERS_MAX + 1 }, (_, i) => ({
+        day: '2026-06-01',
+        userId: `active${i}`,
+        ownerType: 'User',
+        suspected: false,
+      }))
+    );
+    const active = { activeFrom: '2026-06-01', activeTo: '2026-06-05' };
+
+    await expect(listAdminUsers({ ...params, ...active }, viewer, { logError }, NOW)).rejects.toMatchObject({
+      statusCode: 422,
+      message: expect.stringMatching(/Narrow the active range/),
+    });
+    await expect(exportAdminUsers(active, NOW)).rejects.toMatchObject({
+      statusCode: 422,
+      message: expect.stringMatching(/Narrow the active range/),
+    });
   });
 
   it('filters a created window to the users whose furthest funnel step is the one asked for', async () => {
