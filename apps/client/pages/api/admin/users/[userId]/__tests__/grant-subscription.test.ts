@@ -112,6 +112,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     const { res, run } = call(5);
     await run();
     expect(mockOrgCreate).toHaveBeenCalled();
+    expect(mockSubCreate).toHaveBeenCalledWith(expect.objectContaining({ grantedReason: REASON }));
     expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 5 * 1000 }), expect.anything());
     expect(res._getJSONData()).toMatchObject({ seats: 5, credits: 5 * 1000 });
   });
@@ -200,7 +201,13 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
     await run();
 
     expect(mockSubCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'user-1', priceId: plan.priceId, grantedBy: 'admin-1', quantity: 1 })
+      expect.objectContaining({
+        ownerId: 'user-1',
+        priceId: plan.priceId,
+        grantedBy: 'admin-1',
+        grantedReason: REASON,
+        quantity: 1,
+      })
     );
     expect(mockAddCredits).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'user-1', credits: plan.credits * 2 }),

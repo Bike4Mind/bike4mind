@@ -100,6 +100,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         priceId,
         durationMonths,
         grantedBy: req.user.id,
+        grantedReason: reason,
         onGranted: async ({ credits, creditTransactionId, subscriptionId }) => {
           await recordAdminActionFromRequest(req, {
             action: 'user.subscription.granted',
@@ -222,6 +223,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           status: 'active',
           source: SubscriptionSource.AdminGrant,
           grantedBy: req.user.id,
+          grantedReason: reason,
           periodStartsAt,
           periodEndsAt,
           canceledAt: null,
