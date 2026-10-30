@@ -11,6 +11,7 @@ import type { ChatModelOption } from '@shared/chat';
 import { isLocalModel, parseLocalModelId } from '@shared/chat';
 import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME } from '@shared/modelServers';
 import type { NoLocalModels } from './noLocalModels';
+import { formatCredits } from './statusLine';
 import type { ModelCatalogController } from './useChat';
 
 /** Above this the list is long enough that scanning it beats scrolling it. */
@@ -93,7 +94,7 @@ function SwitchCost({ credits }: { credits: number | null }) {
   if (credits === null) return null;
   return (
     <Typography level="body-xs" textColor="warning.plainColor" noWrap data-testid="model-picker-switch-cost">
-      About {credits.toLocaleString('en-US')} credits to re-read this chat
+      About {formatCredits(credits)} credits to re-read this chat
     </Typography>
   );
 }
