@@ -93,9 +93,16 @@ export function useSendOTC() {
   return useMutation<SendOTCResponse, LoginError, SendOTCData>({
     mutationFn: async (data: SendOTCData) => {
       try {
+        const send = (turnstileToken: string | undefined) =>
+          api.post<SendOTCResponse>('/api/otc/send', { ...data, turnstileToken });
         const turnstileToken = await solveTurnstileIfRequired(queryClient, TURNSTILE_ACTION_OTC_SEND);
-        const response = await api.post<SendOTCResponse>('/api/otc/send', { ...data, turnstileToken });
-        return response.data;
+        try {
+          return (await send(turnstileToken)).data;
+        } catch (error) {
+          const siteKey = challengeRequiredSiteKey(error);
+          if (!siteKey) throw error;
+          return (await send(await solveTurnstile(siteKey, TURNSTILE_ACTION_OTC_SEND))).data;
+        }
       } catch (error) {
         if (error instanceof AxiosError && error.response) {
           throw {
@@ -127,8 +134,21 @@ export async function solveTurnstileIfRequired(
     staleTime: 1000 * 60 * 5,
   });
   if (!config?.turnstileSiteKey) return undefined;
+  return solveTurnstile(config.turnstileSiteKey, action);
+}
+
+/** The site key the server asked to be solved with when it wants a challenge for this one request. */
+function challengeRequiredSiteKey(error: unknown): string | undefined {
+  if (!(error instanceof AxiosError) || error.response?.status !== 403) return undefined;
+  const body = error.response.data as { code?: unknown; siteKey?: unknown } | undefined;
+  return body?.code === 'challenge_required' && typeof body.siteKey === 'string' && body.siteKey
+    ? body.siteKey
+    : undefined;
+}
+
+async function solveTurnstile(siteKey: string, action: TurnstileAction): Promise<string> {
   try {
-    return await getTurnstileToken(config.turnstileSiteKey, action);
+    return await getTurnstileToken(siteKey, action);
   } catch (error) {
     if (error instanceof TurnstileCancelledError) {
       throw new Error('Verification cancelled. Try again when you are ready.');

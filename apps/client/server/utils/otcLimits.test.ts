@@ -39,6 +39,7 @@ import { settingsMap } from '@bike4mind/common';
 import {
   OTC_ESTABLISHED_DOMAIN_MIN_AGE_MS,
   OTC_LIMITS,
+  OTC_SEND_CHALLENGE_BUDGETS,
   OTC_SEND_EMAIL_BUDGETS,
   OTC_VERIFY_EMAIL_BUDGETS,
   chargeOtcEmailBudget,
@@ -374,6 +375,18 @@ describe('admin-lowered limits', () => {
     ['send.perEmailPerIp', OTC_LIMITS.send.perEmailPerIp, 'otc-limit:send-email-ip:', reserveSend],
     ['send.perEmailPerIpDaily', OTC_LIMITS.send.perEmailPerIpDaily, 'otc-limit:send-email-ip-daily:', reserveSend],
     ['send.perEmail', OTC_LIMITS.send.perEmail, 'otc-limit:send-email:', reserveSend],
+    [
+      'send.perEmailDailyChallenge',
+      OTC_LIMITS.send.perEmailDailyChallenge,
+      'otc-limit:send-email-daily-challenge:',
+      () => chargeOtcEmailBudget('a@b.co', ip, OTC_SEND_CHALLENGE_BUDGETS),
+    ],
+    [
+      'send.globalHourlyChallenge',
+      OTC_LIMITS.send.globalHourlyChallenge,
+      'otc-limit:send-global-hourly-challenge:',
+      () => chargeOtcEmailBudget('a@b.co', ip, OTC_SEND_CHALLENGE_BUDGETS),
+    ],
     [
       'send.perIpDistinctEmails',
       OTC_LIMITS.send.perIpDistinctEmails,

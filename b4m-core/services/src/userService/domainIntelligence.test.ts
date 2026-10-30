@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DisposableListSource, DomainIntel, SignupProtectionRepository } from '@bike4mind/common';
 import {
+  domainAcceptsMail,
   domainHoldReason,
   domainRiskFacts,
   getDomainIntel,
@@ -291,5 +292,65 @@ describe('domainRiskFacts', () => {
       )
     ).toEqual(['young-domain', 'single-source-list', 'cloudflare-routing']);
     expect(domainRiskFacts(null, { youngerThanDays: 30, listSources: ['aggregate', 'curated'] })).toEqual([]);
+  });
+});
+
+describe('domainAcceptsMail', () => {
+  const dnsError = (code: string) => Object.assign(new Error(code), { code });
+  const resolver = (overrides: Partial<Record<'resolveMx' | 'resolve4' | 'resolve6', () => Promise<unknown>>>) =>
+    ({
+      resolveMx: vi.fn(async () => []),
+      resolve4: vi.fn(async () => []),
+      resolve6: vi.fn(async () => []),
+      ...overrides,
+    }) as never;
+
+  it('accepts a domain with an MX host', async () => {
+    const mx = resolver({ resolveMx: async () => [{ exchange: 'mx.example.com', priority: 10 }] });
+    expect(await domainAcceptsMail('example.com', { timeoutMs: 1000, resolver: mx })).toBe(true);
+  });
+
+  it('rejects a null MX', async () => {
+    const mx = resolver({ resolveMx: async () => [{ exchange: '', priority: 0 }] });
+    expect(await domainAcceptsMail('example.com', { timeoutMs: 1000, resolver: mx })).toBe(false);
+  });
+
+  it('rejects a domain that does not exist', async () => {
+    const mx = resolver({ resolveMx: async () => Promise.reject(dnsError('ENOTFOUND')) });
+    expect(await domainAcceptsMail('nope.example', { timeoutMs: 1000, resolver: mx })).toBe(false);
+  });
+
+  it('falls back to address records when there is no MX', async () => {
+    const noMx = async () => Promise.reject(dnsError('ENODATA'));
+    expect(
+      await domainAcceptsMail('example.com', {
+        timeoutMs: 1000,
+        resolver: resolver({ resolveMx: noMx, resolve6: async () => ['2001:db8::1'] }),
+      })
+    ).toBe(true);
+    expect(
+      await domainAcceptsMail('example.com', {
+        timeoutMs: 1000,
+        resolver: resolver({
+          resolveMx: noMx,
+          resolve4: async () => Promise.reject(dnsError('ENODATA')),
+          resolve6: async () => Promise.reject(dnsError('ENOTFOUND')),
+        }),
+      })
+    ).toBe(false);
+  });
+
+  it('is undecided when a lookup fails or misses the deadline', async () => {
+    const failing = resolver({ resolveMx: async () => Promise.reject(dnsError('ESERVFAIL')) });
+    expect(await domainAcceptsMail('example.com', { timeoutMs: 1000, resolver: failing })).toBeUndefined();
+
+    const partial = resolver({
+      resolveMx: async () => Promise.reject(dnsError('ENODATA')),
+      resolve4: async () => Promise.reject(dnsError('ETIMEOUT')),
+    });
+    expect(await domainAcceptsMail('example.com', { timeoutMs: 1000, resolver: partial })).toBeUndefined();
+
+    const hanging = resolver({ resolveMx: () => new Promise(() => {}) });
+    expect(await domainAcceptsMail('example.com', { timeoutMs: 20, resolver: hanging })).toBeUndefined();
   });
 });
