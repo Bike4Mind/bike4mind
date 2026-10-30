@@ -8,6 +8,10 @@ import {
 import { creditService } from '@bike4mind/services';
 import { CardVerification } from './cardVerificationModel';
 
+export function cardVerificationTransactionId(userId: string): string {
+  return `unlock-grant:card_verified:${userId}`;
+}
+
 export async function grantVerifiedCardCredits(
   verificationId: string,
   userId: string,
@@ -18,7 +22,7 @@ export async function grantVerifiedCardCredits(
     throw new Error('Card verification has not been approved');
   if (!Number.isSafeInteger(record.credits) || record.credits <= 0) throw new Error('Invalid verification entitlement');
   if (!(await eligible(userId))) throw new Error('Account is not eligible for a verification grant');
-  const transactionId = `unlock-grant:card_verified:${userId}`;
+  const transactionId = cardVerificationTransactionId(userId);
   if (!(await claimCreditGrantIdentity({ identityDigest: record.identityDigest, ownerId: userId, transactionId }))) {
     await CardVerification.updateOne({ verificationId, state: 'verified' }, { $set: { state: 'refused' } });
     return 'refused';

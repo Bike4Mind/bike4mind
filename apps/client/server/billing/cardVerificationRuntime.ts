@@ -20,6 +20,7 @@ import { getTurnstilePolicy, turnstileAllowedHostnames } from '@server/utils/aut
 import { signupProtection } from '@server/auth/signupProtection';
 import { CardVerification, type CardVerificationRecord } from './cardVerificationModel';
 import { authenticatedSetupAttempt, parseCardDefensePolicy } from './cardVerificationPolicy';
+import { cardVerificationTransactionId } from './grantVerifiedCardCredits';
 import {
   CardVerificationRefused,
   completeCardVerification,
@@ -403,7 +404,7 @@ export async function verificationOffer(userId: string) {
     .limit(100)
     .lean();
   const granted = !!(await creditTransactionRepository.findOne({
-    transactionId: `unlock-grant:card_verified:${userId}`,
+    transactionId: cardVerificationTransactionId(userId),
   }));
   return {
     available: policy.enabled && !granted && (await cardAccountEligible(userId)),
