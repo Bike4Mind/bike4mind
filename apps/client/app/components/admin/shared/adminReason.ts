@@ -17,6 +17,7 @@ export const ADMIN_REASON_PRESETS = {
   emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
   profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
   apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
+  newAccountSpendCap: ['Verified customer', 'Known high-volume user', 'Suspicious usage'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
   accountTags: ['Account review', 'Support request', 'Internal testing'],
@@ -44,6 +45,8 @@ export const ADMIN_REASON_PRESETS = {
   paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
   orgMembership: ['Customer request', 'Joined the team', 'Left the team', 'Account cleanup'],
   orgRoleChange: ['Customer request', 'Owner request', 'Team lead changed'],
+  ipBlock: ['Card testing or payment fraud', 'Abuse / automated signups', 'Credential stuffing', 'Under investigation'],
+  ipUnblock: ['Blocked in error', 'Legitimate users affected', 'Threat has ended'],
   signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
 } as const satisfies Record<string, readonly string[]>;
 

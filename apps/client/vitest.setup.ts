@@ -141,6 +141,23 @@ vi.mock('@/app/contexts/WebsocketContext', () => ({
 // seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.
 // The real module is not spread in: it imports the Subscription model, which suites that stub
 // @bike4mind/database cannot load.
+// The `app` surface of the IP-block gate (checkBlockedIP.ts, mounted on every authenticated write
+// by baseApi) reads the active `all` blocks from Mongo. Suites that drive the real baseApi chain
+// with connectDB stubbed would wait out Mongoose's 10s command buffer on each write, so that
+// surface passes through by default. The `login` surface stays real for the sign-in suites.
+// Suites that exercise the app surface mock the module themselves or `vi.unmock` it.
+vi.mock('@server/middlewares/checkBlockedIP', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/middlewares/checkBlockedIP')>();
+  const passThrough: ReturnType<typeof actual.checkBlockedIP> = (_req, _res, next) => next();
+  return {
+    ...actual,
+    checkBlockedIP: (options: Parameters<typeof actual.checkBlockedIP>[0] = {}) =>
+      options.surface === 'app' ? passThrough : actual.checkBlockedIP(options),
+    ipBlockRefusal: async (...args: Parameters<typeof actual.ipBlockRefusal>) =>
+      args[1] === 'app' ? null : actual.ipBlockRefusal(...args),
+  };
+});
+
 vi.mock('@server/utils/apiKeyAccessGate', () => ({
   API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
   CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',

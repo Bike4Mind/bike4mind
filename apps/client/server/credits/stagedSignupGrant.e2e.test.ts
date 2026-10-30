@@ -30,6 +30,8 @@ const config = {
   stagedSignupGrantEnabled: 'true',
   signupGrantCredits: '12',
   verifiedUnlockCredits: '28',
+  // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
+  signupUnlockPaymentHoldHours: '0',
 };
 const adminSettings = {
   findBySettingName: async (key: string) =>

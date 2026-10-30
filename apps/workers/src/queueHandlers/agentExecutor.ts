@@ -44,6 +44,7 @@ import {
   mcpServerRepository,
   scopedSettingsRepository,
   cacheRepository,
+  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
@@ -61,6 +62,7 @@ import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
 import {
   applyWorkspaceSessionSettings,
+  workspaceAnswersTurns,
   defaultEmbeddingModelForEnv,
   isSupportedEmbeddingModel,
   libraryFlagForScope,
@@ -1036,6 +1038,14 @@ async function processExecution(
         message: 'Session ownership validation failed',
       });
       await sendWs('failed', { executionId, reason: 'unauthorized' });
+      return;
+    }
+    // Such a workspace scripts every reply, so an agent model must not improvise one.
+    if (workspaceAnswersTurns(loadedSession, premiumWorkspaceSessionSettings)) {
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'This workspace answers its own turns, so agent runs are not available in it',
+      });
+      await sendWs('failed', { executionId, reason: 'workspace_answers_turns' });
       return;
     }
     const session = await applyWorkspaceSessionSettings(
@@ -2896,6 +2906,16 @@ async function processExecution(
             lastInputTokens,
             readBalance: () =>
               readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
+            checkSpendCap: requiredCredits =>
+              creditService.checkNewAccountSpendCap(
+                {
+                  user: user as IUserDocument,
+                  requestedCredits: requiredCredits,
+                  billedToOrganization: Boolean(organization),
+                  logger,
+                },
+                newAccountSpendCapAdapters
+              ),
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };

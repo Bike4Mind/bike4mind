@@ -9,6 +9,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
 import { subscriptionRepository } from '@server/models/Subscription';
+import { readNetworkMeta } from '@server/auth/networkMeta';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 import { Request } from 'express';
 import { z } from 'zod';
 
@@ -36,6 +38,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .put<Request<unknown, unknown, RequestBody>>(async (req, res) => {
     const userId = req.user?.id;
     const { priceId } = subscriptionPlanSchema.parse(req.body);
+    // A plan change charges the card on file now, so it is gated like a new checkout.
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'subscription_change');
 
     const userSubscription = await subscriptionRepository.findChangeableUserSubscription(userId);
     if (!userSubscription) {

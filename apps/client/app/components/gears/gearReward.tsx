@@ -11,6 +11,11 @@ import { GEAR_TRUST_MIN_AGE_DAYS } from '@client/lib/gears/keys';
 export const creditText = (gear: GearStatus) =>
   `${gear.credits.toLocaleString()} credit${gear.credits === 1 ? '' : 's'}`;
 
+const minAgeText = (gear: GearStatus) => {
+  const days = gear.minAccountAgeDays ?? GEAR_TRUST_MIN_AGE_DAYS;
+  return `${days} day${days === 1 ? '' : 's'}`;
+};
+
 export type RewardState = 'locked' | 'claimable' | 'pending' | 'claimed' | 'none';
 
 export const rewardState = (gear: GearStatus): RewardState => {
@@ -267,7 +272,7 @@ export const PendingRewardNote = ({ gear }: { gear: GearStatus }) => (
     {gear.pendingReason === 'unverified'
       ? `Verify your email to claim ${creditText(gear)}.`
       : gear.pendingReason === 'too_new'
-        ? `Claimable for ${creditText(gear)} once your account is ${GEAR_TRUST_MIN_AGE_DAYS} days old.`
+        ? `Claimable for ${creditText(gear)} once your account is ${minAgeText(gear)} old.`
         : `Once someone else opens your artifact link while signed in, you can claim ${creditText(gear)}.`}
   </Typography>
 );
