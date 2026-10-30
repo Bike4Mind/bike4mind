@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -216,6 +216,63 @@ describe('SessionStore', () => {
 
       expect(await store.updateProjectWorkspace(id, { workingDirectory: '/repo-wt' })).toBeNull();
       expect((await store.get(id))?.project).toBeUndefined();
+    });
+  });
+
+  describe('summary fields for the orchestrator roster', () => {
+    const at = '2026-01-01T00:00:00.000Z';
+
+    it('carries the last outcome, snippet and summed cost', async () => {
+      const { id } = await store.create();
+      await store.appendMessage(id, { id: 'u1', role: 'user', content: 'fix it', createdAt: at });
+      await store.appendMessage(id, {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Fixed the bug in foo.ts',
+        createdAt: at,
+        usage: { usdCost: 0.25, creditsUsed: 10 },
+      });
+      await store.appendMessage(id, {
+        id: 'a2',
+        role: 'assistant',
+        content: '',
+        createdAt: at,
+        usage: { usdCost: 0.5 },
+      });
+
+      const [summary] = await store.list();
+      expect(summary).toMatchObject({ lastOutcome: 'finished', totalUsdCost: 0.75, totalCredits: 10 });
+      expect(summary.lastSnippet).toBeUndefined();
+
+      await store.appendMessage(id, { id: 'a3', role: 'assistant', content: 'All\n  done', createdAt: at });
+      expect((await store.list())[0].lastSnippet).toBe('All done');
+    });
+
+    it('leaves all four fields off a session with only a user message', async () => {
+      const { id } = await store.create();
+      await store.appendMessage(id, { id: 'u1', role: 'user', content: 'hello', createdAt: at });
+
+      const [summary] = await store.list();
+      expect(summary).not.toHaveProperty('lastOutcome');
+      expect(summary).not.toHaveProperty('lastSnippet');
+      expect(summary).not.toHaveProperty('totalUsdCost');
+      expect(summary).not.toHaveProperty('totalCredits');
+    });
+
+    it('recomputes summaries cached by an older index version', async () => {
+      const { id } = await store.create();
+      await store.appendMessage(id, { id: 'a1', role: 'assistant', content: 'hi', createdAt: at });
+      await store.list();
+
+      const indexPath = join(directory, '.summary-index');
+      const index = JSON.parse(await readFile(indexPath, 'utf8'));
+      index.version = 1;
+      delete index.entries[id].summary.lastOutcome;
+      delete index.entries[id].summary.lastSnippet;
+      await writeFile(indexPath, JSON.stringify(index), 'utf8');
+
+      const [summary] = await new SessionStore(directory, MODEL).list();
+      expect(summary).toMatchObject({ lastOutcome: 'finished', lastSnippet: 'hi' });
     });
   });
 });

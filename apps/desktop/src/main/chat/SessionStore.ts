@@ -15,6 +15,7 @@ import type {
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import type { WorkspaceOwner } from '@shared/worktreeRemoval';
+import { classifyMessagesOutcome, snippetOf } from '@shared/agentOutcome';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
@@ -97,7 +98,7 @@ export interface CreateOptions {
  * `list` never mistakes it for a session.
  */
 const SUMMARY_INDEX = '.summary-index';
-const SUMMARY_INDEX_VERSION = 1;
+const SUMMARY_INDEX_VERSION = 2;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
@@ -150,7 +151,28 @@ async function projectOnDisk(project: ChatProject): Promise<boolean> {
 
 function summarize(session: ChatSession): ChatSessionSummary {
   const { messages, spawnSuggestions: _suggestions, ...summary } = session;
-  return { ...summary, messageCount: messages.length };
+  const lastAssistant = [...messages].reverse().find(message => message.role === 'assistant');
+  const lastSnippet = lastAssistant ? snippetOf(lastAssistant.content) : '';
+  const totalUsdCost = sumUsage(messages, 'usdCost');
+  const totalCredits = sumUsage(messages, 'creditsUsed');
+  return {
+    ...summary,
+    messageCount: messages.length,
+    ...(lastAssistant ? { lastOutcome: classifyMessagesOutcome(messages) } : {}),
+    ...(lastSnippet ? { lastSnippet } : {}),
+    ...(totalUsdCost !== undefined ? { totalUsdCost } : {}),
+    ...(totalCredits !== undefined ? { totalCredits } : {}),
+  };
+}
+
+/** Sum of one usage field over every message, or undefined when no message reported it. */
+function sumUsage(messages: readonly ChatMessage[], field: 'usdCost' | 'creditsUsed'): number | undefined {
+  let total: number | undefined;
+  for (const message of messages) {
+    const value = message.usage?.[field];
+    if (typeof value === 'number') total = (total ?? 0) + value;
+  }
+  return total;
 }
 
 /**
