@@ -107,6 +107,12 @@ export class AdminPage extends BasePage {
     await expect(this.page.getByTestId('invite-center-codes-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
+  async navigateToHeldSignupGrants() {
+    await this.expandUserOps();
+    await (await this.revealSidebarItem('admin-held-signup-grants-tab-btn', 'people')).click();
+    await expect(this.page.getByTestId('held-signup-grants-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  }
+
   async switchToInviteCodesTab() {
     await this.page.getByTestId('invite-center-codes-tab').click();
   }

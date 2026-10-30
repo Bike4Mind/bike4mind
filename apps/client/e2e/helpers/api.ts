@@ -1,7 +1,7 @@
 import { test, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { Resource } from 'sst';
 import crypto from 'crypto';
-import type { DataLakeOrigin } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, type DataLakeOrigin, type SignupGrant } from '@bike4mind/common';
 import { getE2ETestId, getTestRunId } from './test-users';
 import { wafBypassHeaders } from './waf-bypass';
 
@@ -257,6 +257,85 @@ export async function apiLoginViaOtc(
     );
   }
   return { accessToken: body.accessToken, refreshToken };
+}
+
+/**
+ * Register a brand-new account through the real self-serve path (/api/otc/send, then /api/otc/verify
+ * with a username), unlike apiCreateTestUser, which skips registerViaOTC and so never enrolls the
+ * account in signup grants. Needs open registration. Each call spends one unit of the email
+ * domain's new-account budget (OTC_REGISTER_DOMAIN_BUDGETS, 5 an hour on a domain with no
+ * week-old verified account), so keep the number of calls per run small.
+ */
+export async function apiRegisterViaOtc(
+  request: APIRequestContext,
+  params: { email: string; username: string }
+): Promise<{ userId: string; accessToken: string; refreshToken: string }> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const email = params.email.toLowerCase().trim();
+  const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;
+  if (!secret) {
+    throw new Error('E2E_CLEANUP_SECRET must be set in .env.e2e');
+  }
+  const sendResponse = await request.post(`${baseURL}/api/otc/send`, {
+    data: { email },
+    headers: { ...wafBypassHeaders(), 'x-e2e-cleanup-secret': secret },
+  });
+  if (!sendResponse.ok()) {
+    throw new Error(`OTC send failed: ${sendResponse.status()} ${sendResponse.statusText()}`);
+  }
+  const { pendingToken } = (await sendResponse.json()) as { pendingToken: string };
+  const code = await apiGetOtcCode(request, email);
+
+  const verifyResponse = await request.post(`${baseURL}/api/otc/verify`, {
+    data: {
+      email,
+      code,
+      pendingToken,
+      username: params.username,
+      acceptedPolicyVersion: CURRENT_POLICY_VERSION,
+      ageAttestation: true,
+    },
+    headers: wafBypassHeaders(),
+  });
+  if (!verifyResponse.ok()) {
+    throw new Error(
+      `OTC registration failed: ${verifyResponse.status()} ${verifyResponse.statusText()} ${await verifyResponse.text()}`
+    );
+  }
+  const body = (await verifyResponse.json()) as { accessToken?: string; user?: { id?: string; _id?: string } };
+  const refreshToken = refreshTokenFromSetCookie(verifyResponse.headers()['set-cookie']);
+  const userId = body.user?.id || body.user?._id;
+  if (!body.accessToken || !refreshToken || !userId) {
+    throw new Error(`OTC registration returned no session: keys=${Object.keys(body).join(',')}`);
+  }
+  return { userId, accessToken: body.accessToken, refreshToken };
+}
+
+export interface SignupGrantView {
+  currentCredits: number;
+  signupGrant?: SignupGrant;
+  signupGrantHeldReason?: string | null;
+}
+
+/** The account's own view of its balance and staged signup grant (GET /api/users/<id>). */
+export async function apiGetSignupGrant(
+  request: APIRequestContext,
+  token: string,
+  userId: string
+): Promise<SignupGrantView> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/users/${userId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok()) {
+    throw new Error(`Get user failed: ${response.status()} ${response.statusText()}`);
+  }
+  const user = (await response.json()) as SignupGrantView;
+  return {
+    currentCredits: user.currentCredits,
+    signupGrant: user.signupGrant,
+    signupGrantHeldReason: user.signupGrantHeldReason ?? null,
+  };
 }
 
 /**

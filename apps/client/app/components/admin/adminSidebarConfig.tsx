@@ -207,7 +207,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Risk review',
         testid: 'admin-signup-risk-review-btn',
       },
-      { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
+      {
+        Icon: HandCoins,
+        tab: AdminTab.HeldSignupGrants,
+        label: 'Held signup grants',
+        testid: 'admin-held-signup-grants-tab-btn',
+      },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },
