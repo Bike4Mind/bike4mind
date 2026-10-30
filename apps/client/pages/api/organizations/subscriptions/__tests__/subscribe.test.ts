@@ -94,6 +94,11 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   },
 }));
 
+// The gate's own rules are covered in server/billing/checkoutGate.test.ts; here only that the route calls it.
+const { mockAssertCheckoutAllowed } = vi.hoisted(() => ({ mockAssertCheckoutAllowed: vi.fn() }));
+vi.mock('@server/billing/checkoutGate', () => ({ assertCheckoutAllowed: mockAssertCheckoutAllowed }));
+vi.mock('@server/auth/networkMeta', () => ({ readNetworkMeta: () => ({ ip: '203.0.113.7' }) }));
+
 import handler from '../subscribe';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;

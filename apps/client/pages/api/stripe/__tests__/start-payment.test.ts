@@ -87,6 +87,10 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test', STRIPE_PUBLISHABLE_KEY: 'pk_test_123' },
 }));
 
+// The gate's own rules are covered in server/billing/checkoutGate.test.ts; here only that the route calls it.
+const { mockAssertCheckoutAllowed } = vi.hoisted(() => ({ mockAssertCheckoutAllowed: vi.fn() }));
+vi.mock('@server/billing/checkoutGate', () => ({ assertCheckoutAllowed: mockAssertCheckoutAllowed }));
+
 import handler from '../start-payment';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
