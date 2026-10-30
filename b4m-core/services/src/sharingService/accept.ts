@@ -119,15 +119,6 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     throw new ForbiddenError('This invite was not sent to your account');
   }
 
-  if (invite.recipients) {
-    invite.recipients.pending = invite.recipients.pending?.filter(p => !isEmail(p));
-    invite.recipients.refused = invite.recipients.refused?.filter(p => !isEmail(p));
-    invite.recipients.accepted.push(user.email);
-  }
-
-  invite.accepted += 1;
-  invite.remaining -= 1;
-
   // Assumes the invite carries permissions.
   const inviteWithPermissions = invite as IInvite & { permissions: Permission[] };
 
@@ -204,13 +195,13 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
               return;
             }
 
-            pushShareable(fabfile, { userId, permissions: grantPermissions, sessionId: session.id });
-            await db.fabFiles.update({ id: fabfile.id, users: fabfile.users });
+            await db.fabFiles.shareable.updateUserShares(fabfile.id, {
+              add: [{ userId, permissions: grantPermissions, sessionId: session.id }],
+            });
           })
         );
       }
-      pushShareable(session, { userId, permissions: granted });
-      await db.sessions.update({ id: session.id, users: session.users });
+      await db.sessions.shareable.updateUserShares(session.id, { add: [{ userId, permissions: granted }] });
       break;
     }
     case InviteType.FabFile: {
@@ -220,8 +211,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       }
 
       const granted = permissionsInviterCanStillGrant(fabfile, invite, invitePermissions, inviter);
-      pushShareable(fabfile, { userId, permissions: granted });
-      await db.fabFiles.update({ id: fabfile.id, users: fabfile.users });
+      await db.fabFiles.shareable.updateUserShares(fabfile.id, { add: [{ userId, permissions: granted }] });
       break;
     }
     case InviteType.Organization:
@@ -243,14 +233,10 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
 
   // Written after the grant so a refused accept (e.g. the inviter lost share) leaves the slot unspent
   // even without the route's transaction.
-  await db.invites.update({
-    id: invite.id,
-    recipients: invite.recipients,
-    accepted: invite.accepted,
-    remaining: invite.remaining,
-  });
+  const accepted = await db.invites.acceptRecipient(invite.id, user.email);
+  if (!accepted) throw new UnprocessableEntityError('Invite has no remaining users');
 
-  return invite;
+  return accepted;
 };
 
 interface AcceptOrganizationParameters {
@@ -317,9 +303,7 @@ const acceptProject = async (
 
   const permissions = permissionsInviterCanStillGrant(project, invite, invite.permissions, inviter);
 
-  pushShareable(project, { userId: user.id, permissions });
-
-  await db.projects.update({ id: project.id, users: project.users });
+  await db.projects.shareable.updateUserShares(project.id, { add: [{ userId: user.id, permissions }] });
 
   const files = await db.fabFiles.findAllByIds([
     ...project.fileIds,
@@ -327,14 +311,9 @@ const acceptProject = async (
   ]);
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
-  for (const file of files) {
-    pushShareable(file, { userId: user.id, permissions, projectId });
-    await db.fabFiles.update({ id: file.id, users: file.users });
-  }
-  for (const session of sessions) {
-    pushShareable(session, { userId: user.id, permissions, projectId });
-    await db.sessions.update({ id: session.id, users: session.users });
-  }
+  const grant = { add: [{ userId: user.id, permissions, projectId }] };
+  for (const file of files) await db.fabFiles.shareable.updateUserShares(file.id, grant);
+  for (const session of sessions) await db.sessions.shareable.updateUserShares(session.id, grant);
 };
 
 /**
@@ -374,6 +353,8 @@ const reshareableBy = (
   return { holdsShare, granted: holdsShare ? permissions.filter(permission => held.has(permission)) : [] };
 };
 
+// In-memory form of the shareable repositories' updateUserShares merge (SharableDocumentModel.ts in
+// packages/database); the two must keep the same row key and permission union.
 export const pushShareable = (
   entity: IShareableDocument,
   data: { userId: string; permissions: Permission[]; projectId?: string; sessionId?: string }
@@ -403,11 +384,9 @@ export const pushShareable = (
       sessionId: data.sessionId,
     });
   } else {
-    // Merge, don't replace: pushShareable's callers are this file's own invite-accept arms plus
-    // projectService's addFiles/addSessions/addSystemPrompts (propagating a member's current
-    // project access onto a newly-added file/session) - every one of them grants or refreshes
-    // access, none narrows it, so an update here must never silently drop the existing entry's
-    // extraData or narrow permissions it already carries down to just this grant.
+    // Merge, don't replace: every grant path grants or refreshes access, none narrows it, so an update
+    // here must never silently drop the existing entry's extraData or narrow permissions it already
+    // carries down to just this grant.
     const existing = entity.users[userIndex];
     entity.users[userIndex] = {
       ...existing,

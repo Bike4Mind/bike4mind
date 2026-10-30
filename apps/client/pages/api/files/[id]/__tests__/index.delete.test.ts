@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   findByIdAndUserId: vi.fn(),
   findById: vi.fn(),
   update: vi.fn(),
+  updateUserShares: vi.fn(),
   deleteManyByFabFileId: vi.fn(),
   findAllWithKnowledgeId: vi.fn(),
   sessionUpdate: vi.fn(),
@@ -64,6 +65,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     findById: h.findById,
     update: h.update,
     computeDataLakeStats: h.computeDataLakeStats,
+    shareable: { updateUserShares: h.updateUserShares },
   },
   fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
   adminSettingsRepository: {

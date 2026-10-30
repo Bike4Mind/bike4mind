@@ -51,7 +51,7 @@ export const getImageGeneration = (): ImageGenerationService => {
         imageModerationIncidents,
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
-      imageModerationService: new RekognitionImageModerationService(Logger.globalInstance),
+      imageModerationService: new RekognitionImageModerationService(),
       // Owner-wide lake arms for the input-image lookup, parity with the chat/agent attachment
       // doors - a lake-only image the workbench admitted must still resolve as an image-gen input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),

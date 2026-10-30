@@ -1,5 +1,6 @@
-import { AI_USAGE_TRANSACTION_TYPES, CreditHolderType } from '@bike4mind/common';
+import { AI_USAGE_TRANSACTION_TYPES, CreditHolderType, UnprocessableEntityError } from '@bike4mind/common';
 import {
+  AnalyticsUserDay,
   CreditTransaction,
   Organization,
   User,
@@ -18,18 +19,43 @@ import type {
 } from '@client/app/utils/adminUsersFilter';
 import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
+import { funnelStepUserIds } from '@server/analytics/activationFunnel';
+import { signupVerdictUserIds } from '@server/analytics/signupCohort';
 import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
 const LIST_MAX_TIME_MS = 10_000;
 const SPEND_WINDOW_MS = 30 * 86_400_000;
+// The active ids feed an `_id: { $in }` match, so the list has to stay small enough for one query document.
+export const ACTIVE_USERS_MAX = 50_000;
 
 const toObjectId = (id: string) => new mongoose.Types.ObjectId(id);
 
+/** The created window `verdict` and `funnelStep` classify; the filter schema requires both ends with them. */
+function cohortWindow(filter: AdminUsersFilter, key: 'verdict' | 'funnelStep') {
+  if (!filter.createdFrom || !filter.createdTo) throw new Error(`${key} needs createdFrom and createdTo`);
+  return { start: new Date(filter.createdFrom), end: new Date(filter.createdTo) };
+}
+
+/** Users with a rolled-up day of AI activity in [fromDay, toDay], served by the { day, userId } index. */
+async function activeUserIds(fromDay: string, toDay: string): Promise<string[]> {
+  const rows = await AnalyticsUserDay.aggregate<{ _id: string }>([
+    { $match: { day: { $gte: fromDay, $lte: toDay } } },
+    { $group: { _id: '$userId' } },
+    { $limit: ACTIVE_USERS_MAX + 1 },
+  ]).option({ maxTimeMS: LIST_MAX_TIME_MS });
+  if (rows.length > ACTIVE_USERS_MAX) {
+    throw new UnprocessableEntityError(
+      `More than ${ACTIVE_USERS_MAX.toLocaleString('en-US')} active users in this window. Narrow the active range.`
+    );
+  }
+  return rows.map(row => row._id);
+}
+
 /**
- * The filter as a single leading `$match`, with organization names and live-key holders resolved to
- * ids. The list, export, domain groups and the bulk resolver all start here, so one filter always
- * selects the same users.
+ * The filter as a single leading `$match`, with organization names, live-key holders and the analytics
+ * cohorts (verdict, active window, funnel step) resolved to ids. The list, export, domain groups and the
+ * bulk resolver all start here, so one filter always selects the same users.
  */
 export async function adminUsersPipeline(
   filter: AdminUsersFilter,
@@ -48,7 +74,25 @@ export async function adminUsersPipeline(
   const liveApiKeyUserIds = filter.hasApiKey
     ? ((await UserApiKey.distinct('userId', { status: LIVE_API_KEY_STATUS })) as unknown[]).map(String)
     : undefined;
-  const match = buildAdminUsersMatch(filter, { now, organizationIds, toObjectId, liveApiKeyUserIds });
+  const cohortOptions = { now, deadlineMs: LIST_MAX_TIME_MS };
+  const [verdictUserIds, activeIds, funnelIds] = await Promise.all([
+    filter.verdict
+      ? signupVerdictUserIds({ ...cohortWindow(filter, 'verdict'), verdict: filter.verdict }, cohortOptions)
+      : undefined,
+    filter.activeFrom && filter.activeTo ? activeUserIds(filter.activeFrom, filter.activeTo) : undefined,
+    filter.funnelStep
+      ? funnelStepUserIds({ ...cohortWindow(filter, 'funnelStep'), step: filter.funnelStep }, cohortOptions)
+      : undefined,
+  ]);
+  const match = buildAdminUsersMatch(filter, {
+    now,
+    organizationIds,
+    toObjectId,
+    liveApiKeyUserIds,
+    verdictUserIds,
+    activeUserIds: activeIds,
+    funnelStepUserIds: funnelIds,
+  });
   // adminUsersQuery builds plain objects so it stays mongoose-free and unit-testable.
   return [{ $match: match }] as unknown as mongoose.PipelineStage[];
 }

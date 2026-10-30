@@ -1307,6 +1307,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
           // Only a spend racing this settlement between the balance read above and this write gets here
           if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
+            // Message text is matched by the overdraft metric filter in infra/llmSpend.ts.
             logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
               userId,
               holderId,

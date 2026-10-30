@@ -52,7 +52,7 @@ export const getImageEdit = (): ImageEditService => {
         imageModerationIncidents,
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
-      imageModerationService: new RekognitionImageModerationService(Logger.globalInstance),
+      imageModerationService: new RekognitionImageModerationService(),
       // Owner-wide lake arms for the reference-image lookup, parity with imageGeneration - a
       // lake-only anchor the workbench admitted must still resolve as an edit input.
       resolveLakeAccess: (user: IUserDocument, logger: Logger) => createAttachmentLakeAccess(user, logger)(),
