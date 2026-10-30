@@ -57,6 +57,19 @@ describe('evaluatePlatform', () => {
     expect(breaches).toHaveLength(1);
     expect(breaches[0]).toMatchObject({ rule: 'platform_cost_spike', severity: 'critical' });
   });
+
+  it('fires a cost spike without a baseline once cost reaches floor * ratio', () => {
+    const breaches = evaluatePlatform(quietCost, platformCredits(60, null), thresholds);
+    expect(breaches).toEqual([
+      expect.objectContaining({ rule: 'platform_cost_spike', severity: 'warning', ratio: null }),
+    ]);
+    expect(evaluatePlatform(quietCost, platformCredits(59, null), thresholds)).toEqual([]);
+  });
+
+  it('returns both breaches when credits and cost spike together', () => {
+    const breaches = evaluatePlatform(platformCredits(15000, 4000), platformCredits(100, 10), thresholds);
+    expect(breaches.map(breach => breach.rule)).toEqual(['platform_spike', 'platform_cost_spike']);
+  });
 });
 
 describe('evaluateScope', () => {
@@ -85,6 +98,11 @@ describe('evaluateScope', () => {
     const breaches = evaluateScope(scope('apiKey', 6000, 0), thresholds);
     expect(breaches).toHaveLength(1);
     expect(breaches[0]).toMatchObject({ rule: 'apikey_ceiling', severity: 'critical', ratio: null });
+  });
+
+  it('raises an apikey spike warning for an apiKey scope', () => {
+    const breaches = evaluateScope(scope('apiKey', 1200, 100), thresholds);
+    expect(breaches).toEqual([expect.objectContaining({ rule: 'apikey_spike', severity: 'warning', ratio: 12 })]);
   });
 
   it('returns nothing for platform and model scopes', () => {

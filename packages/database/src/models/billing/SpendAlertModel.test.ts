@@ -69,3 +69,63 @@ describe('SpendAlertRepository', () => {
     expect(active[0]?.id).toEqual(expect.any(String));
   });
 });
+
+describe('SpendAlertRepository.applyEvaluation', () => {
+  const firstWindowEnd = new Date('2026-10-30T12:05:00.000Z');
+  const nextWindowEnd = new Date('2026-10-30T12:10:00.000Z');
+
+  it('applies to an incident no run has evaluated yet', async () => {
+    const alert = await spendAlertRepository.create(alertFor('u1'));
+
+    const applied = await spendAlertRepository.applyEvaluation({
+      id: alert.id,
+      clearRuns: 1,
+      lastEvaluatedWindowEnd: firstWindowEnd,
+    });
+
+    expect(applied).toBe(true);
+    expect(await SpendAlert.findById(alert.id).lean()).toMatchObject({
+      clearRuns: 1,
+      lastEvaluatedWindowEnd: firstWindowEnd,
+    });
+  });
+
+  it('no-ops when the window was already evaluated, so a retry cannot double-count', async () => {
+    const alert = await spendAlertRepository.create(alertFor('u1', { lastEvaluatedWindowEnd: firstWindowEnd }));
+
+    const applied = await spendAlertRepository.applyEvaluation({
+      id: alert.id,
+      clearRuns: 1,
+      lastEvaluatedWindowEnd: firstWindowEnd,
+    });
+
+    expect(applied).toBe(false);
+    expect(await SpendAlert.findById(alert.id).lean()).toMatchObject({ clearRuns: 0 });
+  });
+
+  it('lets exactly one of two overlapping runs apply the same window', async () => {
+    const alert = await spendAlertRepository.create(alertFor('u1'));
+    const patch = { id: alert.id, clearRuns: 1, lastEvaluatedWindowEnd: firstWindowEnd };
+
+    const results = await Promise.all([
+      spendAlertRepository.applyEvaluation(patch),
+      spendAlertRepository.applyEvaluation(patch),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('applies a later window and honours unset', async () => {
+    const alert = await spendAlertRepository.create(alertFor('u1', { lastEvaluatedWindowEnd: firstWindowEnd }));
+
+    const applied = await spendAlertRepository.applyEvaluation(
+      { id: alert.id, status: 'resolved', lastEvaluatedWindowEnd: nextWindowEnd },
+      { unset: ['openKey'] }
+    );
+
+    expect(applied).toBe(true);
+    const stored = await SpendAlert.findById(alert.id).lean();
+    expect(stored).toMatchObject({ status: 'resolved', lastEvaluatedWindowEnd: nextWindowEnd });
+    expect(stored).not.toHaveProperty('openKey');
+  });
+});

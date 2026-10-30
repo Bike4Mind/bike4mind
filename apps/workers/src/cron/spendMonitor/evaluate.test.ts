@@ -39,15 +39,19 @@ const quietPlatformHistory = (): ISpendRollup[] =>
   );
 
 function createFakes() {
-  let rollups: ISpendRollup[] = [];
+  let storedRollups: ISpendRollup[] = [];
+  // Each later window shifts every rollup (and the run time) forward one bucket, as the real cron sees it.
+  let windowOffset = 0;
   const alerts: SpendAlertRecord[] = [];
   let nextId = 1;
 
   const inRange = (r: ISpendRollup, from: Date, to: Date) => r.bucketStart >= from && r.bucketStart < to;
+  const currentRollups = () =>
+    storedRollups.map(r => ({ ...r, bucketStart: new Date(r.bucketStart.getTime() + windowOffset * BUCKET_MS) }));
 
   const sumWindow = vi.fn(async (scopeType: SpendRollupScopeType, from: Date, to: Date, scopeIds?: string[]) => {
     const totals = new Map<string, ISpendRollup>();
-    for (const r of rollups) {
+    for (const r of currentRollups()) {
       if (r.scopeType !== scopeType || !inRange(r, from, to)) continue;
       if (scopeIds && !scopeIds.includes(r.scopeId)) continue;
       const previous = totals.get(r.scopeId);
@@ -63,7 +67,7 @@ function createFakes() {
 
   const windowSeries = vi.fn(async (scopeType: SpendRollupScopeType, scopeIds: string[], from: Date, to: Date) => {
     const series = new Map<string, ISpendRollup[]>();
-    for (const r of rollups) {
+    for (const r of currentRollups()) {
       if (r.scopeType !== scopeType || !scopeIds.includes(r.scopeId) || !inRange(r, from, to)) continue;
       series.set(r.scopeId, [...(series.get(r.scopeId) ?? []), r]);
     }
@@ -71,7 +75,9 @@ function createFakes() {
   });
 
   const latestBucketStart = vi.fn(async () => {
-    const platform = rollups.filter(r => r.scopeType === 'platform').map(r => r.bucketStart.getTime());
+    const platform = currentRollups()
+      .filter(r => r.scopeType === 'platform')
+      .map(r => r.bucketStart.getTime());
     return platform.length > 0 ? new Date(Math.max(...platform)) : null;
   });
 
@@ -92,6 +98,19 @@ function createFakes() {
     return record;
   });
 
+  const applyEvaluation = vi.fn(
+    async (
+      data: Partial<SpendAlertRecord> & { id: string; lastEvaluatedWindowEnd: Date },
+      options?: { unset?: string[] }
+    ) => {
+      const record = alerts.find(alert => alert.id === data.id);
+      if (!record) return false;
+      if (record.lastEvaluatedWindowEnd && record.lastEvaluatedWindowEnd >= data.lastEvaluatedWindowEnd) return false;
+      await update(data, options);
+      return true;
+    }
+  );
+
   const findActive = vi.fn(async () =>
     alerts.filter(alert => alert.status === 'open' || alert.status === 'acknowledged')
   );
@@ -103,7 +122,7 @@ function createFakes() {
 
   const deps: EvaluateDeps = {
     rollups: { sumWindow, windowSeries, latestBucketStart },
-    alerts: { findActive, create, update } as unknown as EvaluateDeps['alerts'],
+    alerts: { findActive, create, update, applyEvaluation } as unknown as EvaluateDeps['alerts'],
     resolveScopeDeps: {
       findUsersByIds: async ids => ids.map(id => ({ id, email: `${id}@example.com` })),
       findOrganizationsByIds: async () => [],
@@ -121,14 +140,21 @@ function createFakes() {
     posts,
     post,
     create,
+    update,
+    applyEvaluation,
+    sumWindow,
     windowSeries,
     setRollups: (next: ISpendRollup[]) => {
-      rollups = next;
+      storedRollups = next;
     },
+    nextWindow: () => {
+      windowOffset += 1;
+    },
+    now: () => new Date(NOW.getTime() + windowOffset * BUCKET_MS),
   };
 }
 
-const run = (fakes: ReturnType<typeof createFakes>) => evaluateSpend(NOW, fakes.deps, thresholds);
+const run = (fakes: ReturnType<typeof createFakes>) => evaluateSpend(fakes.now(), fakes.deps, thresholds);
 
 describe('evaluateSpend', () => {
   it('opens and posts once on a platform spike, stays quiet at the same value, escalates at double', async () => {
@@ -139,8 +165,10 @@ describe('evaluateSpend', () => {
     expect(fakes.alerts).toHaveLength(1);
     expect(fakes.alerts[0]).toMatchObject({ rule: 'platform_spike', status: 'open', lastNotifiedValue: 15000 });
 
+    fakes.nextWindow();
     await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 0 });
 
+    fakes.nextWindow();
     fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 10000)]);
     await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 1 });
     expect(fakes.alerts).toHaveLength(1);
@@ -156,8 +184,11 @@ describe('evaluateSpend', () => {
     expect(fakes.alerts).toHaveLength(1);
     expect(fakes.alerts[0].lastNotifiedValue).toBeUndefined();
 
+    fakes.nextWindow();
     await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 1 });
     expect(fakes.alerts[0].lastNotifiedValue).toBe(15000);
+    // The opening post never landed, so the re-notification still announces an open, not an escalation.
+    expect(JSON.stringify(fakes.posts[0])).not.toContain('escalated');
   });
 
   it('resolves an account that left the window after 2 runs, posts the resolve, and reopens fresh later', async () => {
@@ -169,15 +200,18 @@ describe('evaluateSpend', () => {
     expect(fakes.alerts[0]).toMatchObject({ rule: 'account_ceiling', scopeId: 'u1', openKey: expect.any(String) });
     expect(fakes.posts[0].text).toContain('Account spend ceiling');
 
+    fakes.nextWindow();
     fakes.setRollups(platform);
     await expect(run(fakes)).resolves.toMatchObject({ posted: 0 });
     expect(fakes.alerts[0]).toMatchObject({ status: 'open', clearRuns: 1 });
 
+    fakes.nextWindow();
     await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
     expect(fakes.alerts[0]).toMatchObject({ status: 'resolved' });
     expect(fakes.alerts[0]).not.toHaveProperty('openKey');
     expect(fakes.posts[1].text).toContain('Resolved');
 
+    fakes.nextWindow();
     fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000)]);
     await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
     expect(fakes.alerts).toHaveLength(2);
@@ -248,10 +282,73 @@ describe('evaluateSpend', () => {
     await expect(run(fakes)).resolves.toMatchObject({ breaches: 2, posted: 1 });
     expect(fakes.alerts).toHaveLength(2);
     expect(fakes.alerts.filter(alert => alert.lastNotifiedValue !== undefined)).toHaveLength(1);
+    expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-post-failed', expect.anything());
   });
 
   it('does nothing before any bucket has been rolled up', async () => {
     const fakes = createFakes();
     await expect(run(fakes)).resolves.toEqual({ breaches: 0, posted: 0 });
+  });
+
+  it('a retried run for the same window neither double-counts clear runs nor re-posts', async () => {
+    const fakes = createFakes();
+    const platform = windowBuckets('platform', 'all', 100);
+    fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000)]);
+    await run(fakes);
+    await expect(run(fakes)).resolves.toMatchObject({ posted: 0 });
+    expect(fakes.alerts).toHaveLength(1);
+
+    fakes.nextWindow();
+    fakes.setRollups(platform);
+    await run(fakes);
+    await run(fakes);
+
+    expect(fakes.alerts[0]).toMatchObject({ status: 'open', clearRuns: 1 });
+  });
+
+  it('skips the post when an overlapping run already applied the window', async () => {
+    const fakes = createFakes();
+    fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 5000)]);
+    await run(fakes);
+    fakes.nextWindow();
+    fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 10000)]);
+    fakes.applyEvaluation.mockResolvedValueOnce(false);
+
+    await expect(run(fakes)).resolves.toEqual({ breaches: 1, posted: 0 });
+    expect(fakes.posts).toHaveLength(1);
+    expect(fakes.deps.logger.log).toHaveBeenCalledWith(
+      'spend-monitor-evaluation-lost-race',
+      expect.objectContaining({ alertId: fakes.alerts[0].id, kind: 'escalate' })
+    );
+  });
+
+  it('surfaces a failed notification bookkeeping write after a successful post', async () => {
+    const fakes = createFakes();
+    fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 5000)]);
+    fakes.update.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(run(fakes)).rejects.toThrow(AggregateError);
+    expect(fakes.posts).toHaveLength(1);
+    expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-notify-bookkeeping-failed', expect.anything());
+    expect(fakes.deps.logger.error).not.toHaveBeenCalledWith('spend-monitor-post-failed', expect.anything());
+  });
+
+  it('lists the top 5 accounts and top 3 models, reusing the account totals already summed', async () => {
+    const fakes = createFakes();
+    const users = ['u1', 'u2', 'u3', 'u4', 'u5', 'u6'].flatMap((id, i) => windowBuckets('User', id, 10 + i));
+    const models = ['m1', 'm2', 'm3', 'm4'].flatMap((id, i) => windowBuckets('model', id, 10 + i));
+    fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 5000), ...users, ...models]);
+
+    await run(fakes);
+
+    const text = JSON.stringify(fakes.posts[0]);
+    expect(['u6', 'u5', 'u4', 'u3', 'u2'].every(id => text.includes(`${id}@example.com`))).toBe(true);
+    expect(text).not.toContain('u1@example.com');
+    expect(['m4', 'm3', 'm2'].every(id => text.includes(id))).toBe(true);
+    expect(text).not.toContain('m1:');
+    const accountSums = fakes.sumWindow.mock.calls.filter(
+      ([scopeType]) => scopeType === 'User' || scopeType === 'Organization'
+    );
+    expect(accountSums).toHaveLength(2);
   });
 });
