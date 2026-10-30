@@ -34,20 +34,24 @@ await new Promise(resolveClose => server.close(resolveClose));
 const home = await mkdtemp(join(tmpdir(), 'desktop-smoke-'));
 let logs = '';
 let socket;
+const env = {
+  ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, 'config'),
+  XDG_CACHE_HOME: join(home, 'cache'), XDG_DATA_HOME: join(home, 'data'),
+  ...(process.platform === 'win32' && {
+    APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'), USERPROFILE: home,
+  }),
+};
+// Delete rather than blank: Windows treats an empty variable as set, so ELECTRON_RUN_AS_NODE=''
+// still starts the exe as plain Node, which rejects every Chromium flag.
+delete env.ELECTRON_RENDERER_URL;
+delete env.ELECTRON_RUN_AS_NODE;
 const child = spawn(executable, [
   ...platformArgs,
   '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${port}`,
   `--user-data-dir=${join(home, 'profile')}`,
 ], {
   detached: true,
-  env: {
-    ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, 'config'),
-    XDG_CACHE_HOME: join(home, 'cache'), XDG_DATA_HOME: join(home, 'data'),
-    ...(process.platform === 'win32' && {
-      APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'), USERPROFILE: home,
-    }),
-    ELECTRON_RENDERER_URL: '', ELECTRON_RUN_AS_NODE: '',
-  },
+  env,
 });
 child.stdout.on('data', chunk => { logs += chunk; });
 child.stderr.on('data', chunk => { logs += chunk; });
