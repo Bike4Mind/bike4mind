@@ -1038,10 +1038,13 @@ export class AnthropicBackend implements ICompletionBackend {
       m => m.cache === true && m.role === 'system' && !isToolChangeMessage(m)
     );
     const anyMessageCacheControlled = anyUserOrAssistantCacheControlled || anySystemCacheControlled;
+    // A tool round reads the newest flagged message the first call wrote; older flags (a lookback
+    // breakpoint) are spent and would take the slot this round's end-of-array anchor needs.
+    const newestFlagged = toolCallCount > 0 ? messages.findLastIndex(m => m.cache === true && m.role !== 'system') : -1;
 
     const cacheStampedMessages: IMessage[] = anyUserOrAssistantCacheControlled
-      ? messages.map(m => {
-          if (m.cache !== true || m.role === 'system') return m;
+      ? messages.map((m, index) => {
+          if (m.cache !== true || m.role === 'system' || index < newestFlagged) return m;
           const content = m.content;
           if (typeof content === 'string') {
             return {
