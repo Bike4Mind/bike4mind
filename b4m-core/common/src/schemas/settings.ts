@@ -60,6 +60,7 @@ import {
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { ReleaseNotesConfigSchema } from './releaseNotes';
+import { VERIFIED_UNLOCK_CREDITS_DEFAULT } from '../signupGrant';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
@@ -4089,7 +4090,7 @@ export const settingsMap = {
   verifiedUnlockCredits: makeNumberSetting({
     key: 'verifiedUnlockCredits',
     name: 'Verified Unlock Credits',
-    defaultValue: 0,
+    defaultValue: VERIFIED_UNLOCK_CREDITS_DEFAULT,
     min: 0,
     int: true,
     userReadable: true,
@@ -4097,6 +4098,8 @@ export const settingsMap = {
       'Maximum additional credits available after server-validated unlocks. Stronger evidence pays only the cumulative difference. Does not enable a verification flow.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
+    clearDeletesRow: true,
+    unsetLabel: `default, ${VERIFIED_UNLOCK_CREDITS_DEFAULT}`,
   }),
   signupGrantDailyBudget: makeNumberSetting({
     key: 'signupGrantDailyBudget',

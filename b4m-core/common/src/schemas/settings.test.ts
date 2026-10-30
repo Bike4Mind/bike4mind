@@ -713,7 +713,7 @@ describe('isBlankSettingValue', () => {
     const clearing = (Object.keys(settingsMap) as SettingKey[]).filter(
       key => settingsMap[key].clearDeletesRow === true
     );
-    expect(clearing).toEqual(['forcedRetrievalMinSimilarityPct']);
+    expect(clearing).toEqual(['verifiedUnlockCredits', 'forcedRetrievalMinSimilarityPct']);
     // update.ts returns before materializing the public settings artifact on a row delete.
     expect(clearing.filter(key => settingsMap[key].publicSafe)).toEqual([]);
   });

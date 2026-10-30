@@ -1,6 +1,7 @@
 import { newSignupGrant, PENDING_FREE_CREDITS_TAG, sanitizeUsername, USERNAME_MAX_LENGTH } from '@bike4mind/common';
 import type { ISignupMeta } from '@bike4mind/common';
 import { adminSettingsRepository, User } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
@@ -11,6 +12,7 @@ const MAX_USERNAME_RETRIES = 5;
 // Longest disambiguating suffix createUniqueOAuthUser appends: `-` plus 6 hex chars.
 const MAX_USERNAME_SUFFIX_LENGTH = 7;
 const MAX_OAUTH_USERNAME_BASE_LENGTH = USERNAME_MAX_LENGTH - MAX_USERNAME_SUFFIX_LENGTH;
+const logger = new Logger({ metadata: { service: 'createOAuthUser' } });
 
 /**
  * True only for a MongoDB E11000 on the `username` unique index specifically.
@@ -84,7 +86,7 @@ export async function createUniqueOAuthUser(params: {
   // retried and fails the whole sign-in - the same class of opaque OAuth-create
   // lockout this helper exists to prevent. baseUsername is guaranteed non-empty.
   const safeName = name || baseUsername;
-  const signupGrant = pendingFreeCredits ? await newSignupGrant(adminSettingsRepository) : undefined;
+  const signupGrant = pendingFreeCredits ? await newSignupGrant(adminSettingsRepository, undefined, logger) : undefined;
   const buildDoc = (username: string) => ({
     name: safeName,
     username,

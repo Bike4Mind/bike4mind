@@ -52,6 +52,7 @@ export function hasPaidSignupDrip(
 }
 
 const DEFAULT_SIGNUP_ACTIVE_SECONDS = 60;
+export const VERIFIED_UNLOCK_CREDITS_DEFAULT = 0;
 
 /** Zero, non-integer and out-of-range values fall back to the default rather than switching the drip off. */
 export function signupActiveSeconds(value: unknown): number {
@@ -79,24 +80,36 @@ export async function resolveSignupGrantSettings(adminSettings: Pick<IAdminSetti
   return {
     enabled: enabled?.settingValue === 'true' || (enabled?.settingValue as unknown) === true,
     signupCredits: nonnegativeGrantCredits(signup == null ? legacy?.settingValue : signup.settingValue),
-    unlockCredits: nonnegativeGrantCredits(unlock?.settingValue),
+    unlockCredits:
+      unlock == null || unlock.settingValue == null || String(unlock.settingValue).trim() === ''
+        ? undefined
+        : nonnegativeGrantCredits(unlock.settingValue),
   };
 }
 
 /** `totalCredits` fixes the whole entitlement (tranche first, remainder locked) instead of the signup settings. */
 export async function newSignupGrant(
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>,
-  totalCredits?: number
+  totalCredits?: number,
+  logger?: { warn: (message: string) => void }
 ) {
   const enabled = await adminSettings.findBySettingName('stagedSignupGrantEnabled');
   if (enabled?.settingValue !== 'true' && (enabled?.settingValue as unknown) !== true) return undefined;
   const config = await resolveSignupGrantSettings(adminSettings);
   const signupCredits =
     totalCredits === undefined ? config.signupCredits : Math.min(config.signupCredits, totalCredits);
+  if (totalCredits === undefined && config.unlockCredits === undefined) {
+    logger?.warn(
+      `verifiedUnlockCredits is unset; using the default of ${VERIFIED_UNLOCK_CREDITS_DEFAULT} unlock credits`
+    );
+  }
   return {
     stage: 'pending_email',
     signupCredits,
-    unlockCredits: totalCredits === undefined ? config.unlockCredits : totalCredits - signupCredits,
+    unlockCredits:
+      totalCredits === undefined
+        ? (config.unlockCredits ?? VERIFIED_UNLOCK_CREDITS_DEFAULT)
+        : totalCredits - signupCredits,
     creditsReleased: 0,
     nextCondition: 'email_verification',
   } satisfies SignupGrant;

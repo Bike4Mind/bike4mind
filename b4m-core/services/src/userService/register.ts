@@ -290,7 +290,7 @@ export const registerUser = async (
   // Open signups and refer-a-friend invitees trickle their grant; admin and unlimited codes keep the flat grant.
   const isReferralInvite = Boolean(invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral);
   const referralGrant = !hasInviteCode
-    ? await newSignupGrant(db.adminSettings)
+    ? await newSignupGrant(db.adminSettings, undefined, logger)
     : isReferralInvite && freeCredits > 0
       ? await newSignupGrant(db.adminSettings, freeCredits)
       : undefined;

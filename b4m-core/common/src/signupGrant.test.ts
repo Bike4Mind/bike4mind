@@ -16,7 +16,7 @@ describe('signup grant configuration', () => {
     async value => {
       const result = await resolveSignupGrantSettings(settings({ defaultFreeCredits: value }));
       expect(result.signupCredits).toBe(value === '75' ? 75 : 0);
-      expect(result.unlockCredits).toBe(0);
+      expect(result.unlockCredits).toBeUndefined();
     }
   );
 
