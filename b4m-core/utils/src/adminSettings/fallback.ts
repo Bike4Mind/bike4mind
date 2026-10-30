@@ -105,6 +105,8 @@ const PROVIDER_SPEND_LIMIT_MESSAGES = [
  */
 export function isProviderSpendLimitError(error: Error): boolean {
   const message = error.message.toLowerCase();
+  // Gemini words its per-minute rate limit (429 RESOURCE_EXHAUSTED) like OpenAI's exhausted quota.
+  if (message.includes('resource_exhausted')) return false;
   return PROVIDER_SPEND_LIMIT_MESSAGES.some(trigger => message.includes(trigger));
 }
 

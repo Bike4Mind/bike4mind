@@ -315,7 +315,7 @@ describe('isProviderSpendLimitError', () => {
   );
   const openaiQuota = providerError(
     429,
-    '429 You exceeded your current quota, please check your plan and billing details. (insufficient_quota)'
+    '429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.'
   );
 
   it.each([
@@ -343,6 +343,13 @@ describe('isProviderSpendLimitError', () => {
     );
     expect(isProviderSpendLimitError(rateLimited)).toBe(false);
     expect(isOverloadedError(rateLimited)).toBe(true);
+
+    const geminiRateLimited = providerError(
+      429,
+      '{"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. Please retry in 41s.","status":"RESOURCE_EXHAUSTED"}}'
+    );
+    expect(isProviderSpendLimitError(geminiRateLimited)).toBe(false);
+    expect(isOverloadedError(geminiRateLimited)).toBe(true);
   });
 });
 
