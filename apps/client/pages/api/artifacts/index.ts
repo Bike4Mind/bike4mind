@@ -135,6 +135,8 @@ const handler = baseApi()
       validatedData.organizationId = await resolveActiveOrg(req as Request, validatedData.organizationId);
 
       if (isAiAuthoredCreate(validatedData.metadata) && !(await areUserArtifactsEnabled(user))) {
+        // The desktop client matches this exact body to tell the opt-out from other 403s; keep in
+        // sync with ARTIFACTS_DISABLED_ERROR in apps/desktop/src/main/chat/artifacts/ArtifactPublisher.ts.
         return res.status(403).json({ error: 'Artifacts are disabled for this user' });
       }
 

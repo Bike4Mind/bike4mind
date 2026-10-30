@@ -101,15 +101,27 @@ function withSave(artifact: ChatArtifact, save: ChatArtifactSave): ChatArtifact 
 }
 
 /**
- * 403 is the artifact opt-out, not a fault: the route answers it when `EnableArtifacts` is off
- * for this user, and telling them their artifact "failed to save" would send them looking for a
- * problem instead of at the setting they turned off.
+ * The error body `POST /api/artifacts` answers when `EnableArtifacts` is off for this user. Must
+ * stay in sync with the route (`apps/client/pages/api/artifacts/index.ts`). Matched on the body
+ * rather than the bare 403 because the route also 403s on org and source-ref access checks,
+ * which are real failures and not the opt-out.
+ */
+const ARTIFACTS_DISABLED_ERROR = 'Artifacts are disabled for this user';
+
+/**
+ * The opt-out is not a fault: the artifact rendered and still publishes, only the library copy
+ * was skipped, so the reason says that and where the setting lives instead of reading as if the
+ * whole feature were off.
  */
 function toSaveFailure(err: unknown): ChatArtifactSave {
   if (isAxiosError(err)) {
     const status = err.response?.status;
-    if (status === 403) {
-      return { status: 'disabled', reason: 'Artifacts are turned off for your account.' };
+    if (status === 403 && isArtifactsDisabledBody(err.response?.data)) {
+      return {
+        status: 'disabled',
+        reason:
+          'Not saved to your Artifacts library. Artifacts are off in your profile settings (Experimental features in the web app).',
+      };
     }
     if (status === 401) {
       return { status: 'failed', reason: 'Your session has expired.' };
@@ -118,4 +130,10 @@ function toSaveFailure(err: unknown): ChatArtifactSave {
     return { status: 'failed', reason: 'The server could not be reached.' };
   }
   return { status: 'failed', reason: err instanceof Error ? err.message : 'Unknown error.' };
+}
+
+function isArtifactsDisabledBody(data: unknown): boolean {
+  return (
+    typeof data === 'object' && data !== null && (data as Record<string, unknown>).error === ARTIFACTS_DISABLED_ERROR
+  );
 }
