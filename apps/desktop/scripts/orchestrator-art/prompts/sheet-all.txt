@@ -1,0 +1,11 @@
+Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.
+Row 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.
+Row 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.
+Row 3: a human ranger with a green hood, brown cloak and quiver.
+Row 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.
+The same 5 poses in the same order in every row, left to right:
+Column 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.
+Column 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.
+Column 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.
+Column 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.
+Column 5 IDLE: standing neutral facing the viewer, arms at the sides.

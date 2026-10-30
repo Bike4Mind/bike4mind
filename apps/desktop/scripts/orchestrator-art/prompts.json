@@ -1,0 +1,170 @@
+{
+  "backdrop.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "16-bit pixel art game background, SNES-era style, crisp hard-edged pixels, limited warm palette. A cozy fantasy tavern interior seen from a side / three-quarter view, wide 16:9 composition, wooden plank floor, stone and timber walls, warm candle and fire light. Clearly separated areas: LEFT third: a row of sturdy wooden workbenches / crafting tables with tools (hammers, tongs, anvil, scrolls, gears) with open floor space in front for six small characters. BACK RIGHT: a long wooden bar counter with a brass hand bell on it, shelves of bottles and barrels behind it, space in front for four characters. RIGHT side: a big stone hearth / fireplace with a glowing fire and two or three cozy armchairs around it, space for four characters. FRONT (bottom of image, foreground): long wooden benches and a table, room for six characters. A wooden door on the far left wall. Empty room: absolutely no people, no characters, no animals, no text, no letters, no signs with writing, no UI.",
+    "date": "2026-10-30T09:34:37.813Z",
+    "size": "2048x1152",
+    "background": "opaque",
+    "note": "raw 2048x1152 downscaled to 1280x720 (nearest, 128-colour palette)"
+  },
+  "char-1-work.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 1 column 1"
+  },
+  "char-1-call.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 1 column 2"
+  },
+  "char-1-rest.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 1 column 3"
+  },
+  "char-1-ko.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 1 column 4"
+  },
+  "char-1-idle.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 1 column 5"
+  },
+  "char-2-work.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 2 column 1"
+  },
+  "char-2-call.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 2 column 2"
+  },
+  "char-2-rest.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 2 column 3"
+  },
+  "char-2-ko.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 2 column 4"
+  },
+  "char-2-idle.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 2 column 5"
+  },
+  "char-3-work.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 3 column 1"
+  },
+  "char-3-call.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 3 column 2"
+  },
+  "char-3-rest.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 3 column 3"
+  },
+  "char-3-ko.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 3 column 4"
+  },
+  "char-3-idle.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 3 column 5"
+  },
+  "char-4-work.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 4 column 1"
+  },
+  "char-4-call.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 4 column 2"
+  },
+  "char-4-rest.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 4 column 3"
+  },
+  "char-4-ko.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 4 column 4"
+  },
+  "char-4-idle.png": {
+    "model": "gpt-image-2.5-sunburst",
+    "prompt": "Pixel art sprite sheet, 16-bit SNES-style, cute chibi characters about 2.5 heads tall, crisp hard pixel edges, dark 1px outlines, consistent scale and style, no anti-aliasing, no text, no labels, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite full body and the same size, feet aligned on each row's baseline.\nRow 1: a stout dwarf blacksmith with a braided red beard, leather apron and helmet.\nRow 2: an elf scholar with long silver hair, pointed ears, blue robe and round glasses.\nRow 3: a human ranger with a green hood, brown cloak and quiver.\nRow 4: a gnome tinkerer with goggles on her head, purple hair, overalls and a wrench.\nThe same 5 poses in the same order in every row, left to right:\nColumn 1 WORK: facing right in side view, swinging a hammer down onto a small work piece / tool, busy working.\nColumn 2 CALL: facing the viewer, one arm raised high waving excitedly, mouth open as if calling for attention.\nColumn 3 REST: sitting relaxed on the ground holding a wooden mug of ale, content smile.\nColumn 4 KO: lying flat on the back knocked out, eyes as X marks, little yellow stars circling above the head.\nColumn 5 IDLE: standing neutral facing the viewer, arms at the sides.",
+    "date": "2026-10-30T09:34:51.006Z",
+    "size": "2048x1648",
+    "background": "transparent",
+    "note": "sliced from raw/sheet-all.png row 4 column 5"
+  }
+}
