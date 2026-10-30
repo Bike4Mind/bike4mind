@@ -1496,6 +1496,16 @@ describe('spend monitor settings', () => {
     expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
   });
 
+  it.each([
+    'spendMonitorPlatformSpikeFloorCredits',
+    'spendMonitorPlatformCostFloorUsd',
+    'spendMonitorAccountSpikeFloorCredits',
+    'spendMonitorAccountCeilingCredits',
+  ] as const)('%s rejects 0 and accepts 1', key => {
+    expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
+    expect(settingsMap[key].schema.parse(1)).toBe(1);
+  });
+
   it('keeps the settings admin-only', () => {
     const readable = new Set(userReadableSettingKeys());
     for (const key of Object.keys(expectedDefaults)) {

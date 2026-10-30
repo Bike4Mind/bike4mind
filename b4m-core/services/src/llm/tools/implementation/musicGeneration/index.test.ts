@@ -16,10 +16,11 @@ type BuildOptions = {
   findJob?: MusicToolConfig['findJob'];
   releaseDiscardedJob?: MusicToolConfig['releaseDiscardedJob'];
   signal?: AbortSignal;
+  apiKeyId?: string;
 };
 
 const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = {}) => {
-  const { usableModels = ['test-music'], findJob, releaseDiscardedJob, signal } = options;
+  const { usableModels = ['test-music'], findJob, releaseDiscardedJob, signal, apiKeyId } = options;
   const questId = 'questId' in options ? options.questId : 'q1';
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
   const onStart = vi.fn();
@@ -39,6 +40,7 @@ const build = (createJob: MusicToolConfig['createJob'], options: BuildOptions = 
     organizationId: 'org1',
     sessionId: 's1',
     questId,
+    apiKeyId,
     statusUpdate,
     onStart,
     onFinish,
@@ -60,6 +62,13 @@ describe('music_generation tool', () => {
       request: { model: 'test-music', prompt: 'a sea shanty' },
     });
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'music' }] });
+  });
+
+  it('attributes the job to the authenticating API key', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob, { apiKeyId: 'key1' });
+    await tool.toolFn({ model: 'test-music', prompt: 'a sea shanty' });
+    expect(createJob.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key1' });
   });
 
   it('song prompts written from chat describe style without naming artists', async () => {

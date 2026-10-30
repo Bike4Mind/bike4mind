@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SPEND_BUCKET_MS } from '@bike4mind/common';
-import { backfillSpendRollups } from './backfillSpendRollups';
+import { backfillSpendRollups, parseBackfillDays } from './backfillSpendRollups';
 
 const makeRepo = () => ({ rollupBucket: vi.fn().mockResolvedValue({ docs: 0 }) });
 
@@ -60,5 +60,23 @@ describe('backfillSpendRollups', () => {
 
     await expect(backfillSpendRollups(repo, from, to)).rejects.toThrow('boom');
     expect(repo.rollupBucket).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('parseBackfillDays', () => {
+  it('defaults to 28 days when --days is absent', () => {
+    expect(parseBackfillDays(['node', 'script'])).toBe(28);
+  });
+
+  it('reads a positive integer', () => {
+    expect(parseBackfillDays(['node', 'script', '--days', '7'])).toBe(7);
+  });
+
+  it('throws when --days has no value', () => {
+    expect(() => parseBackfillDays(['node', 'script', '--days'])).toThrow(/--days/);
+  });
+
+  it.each(['0', '-1', '1.5', 'abc'])('throws on --days %s', raw => {
+    expect(() => parseBackfillDays(['node', 'script', '--days', raw])).toThrow(/--days/);
   });
 });

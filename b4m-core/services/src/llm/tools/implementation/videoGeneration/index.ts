@@ -66,6 +66,7 @@ export const videoGenerationTool: ToolDefinition = {
           },
           request,
           source: 'agent',
+          apiKeyId: context.apiKeyId,
           questId: context.questId,
           idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
         });

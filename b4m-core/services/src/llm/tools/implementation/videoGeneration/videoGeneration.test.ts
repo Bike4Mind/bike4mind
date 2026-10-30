@@ -5,7 +5,7 @@ const okJob = { ok: true as const, created: true, job: { id: 'job1' } };
 
 const build = (
   createJob: VideoToolConfig['createJob'],
-  { questId }: { questId?: string } = { questId: 'q1' },
+  { questId, apiKeyId }: { questId?: string; apiKeyId?: string } = { questId: 'q1' },
   deliveryNote?: string
 ) => {
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
@@ -17,6 +17,7 @@ const build = (
     userId: 'u1',
     organizationId: null,
     questId,
+    apiKeyId,
     statusUpdate,
     onStart,
     onFinish,
@@ -36,6 +37,13 @@ describe('video_generation tool', () => {
       user: { id: 'u1', adminRoleWithheld: true },
     });
     expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'video' }] });
+  });
+
+  it('attributes the job to the authenticating API key', async () => {
+    const createJob = vi.fn().mockResolvedValue(okJob);
+    const { tool } = build(createJob, { questId: 'q1', apiKeyId: 'key1' });
+    await tool.toolFn({ model: 'test-video', prompt: 'a cat' });
+    expect(createJob.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key1' });
   });
 
   it('adds the surface delivery note to the result when the config carries one', async () => {

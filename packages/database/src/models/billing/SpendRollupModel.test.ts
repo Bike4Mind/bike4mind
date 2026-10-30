@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -116,6 +116,20 @@ describe('SpendRollupRepository.rollupBucket', () => {
     expect(await findRollup('platform', 'all')).toMatchObject({ credits: 100, requests: 1 });
   });
 
+  it('skips UsageEvent rows without a model instead of writing a null model scope', async () => {
+    await UsageEvent.collection.insertOne({ ...usageEvent(1), model: null });
+
+    await spendRollupRepository.rollupBucket(bucketStart);
+
+    expect(await findRollup('platform', 'all')).toMatchObject({ costUsd: 1 });
+    expect(await SpendRollup.countDocuments({ scopeType: 'model' })).toBe(0);
+  });
+
+  it('rejects a bucketStart that is not on a bucket boundary', async () => {
+    await expect(spendRollupRepository.rollupBucket(inBucket)).rejects.toThrow(/bucket boundary/);
+    expect(await SpendRollup.countDocuments({})).toBe(0);
+  });
+
   it('writes a zero platform doc for an empty bucket', async () => {
     const result = await spendRollupRepository.rollupBucket(bucketStart);
 
@@ -162,6 +176,21 @@ describe('SpendRollupRepository reads', () => {
 
     const onlyB = await spendRollupRepository.sumWindow('User', bucketStart, third, ['b']);
     expect([...onlyB.keys()]).toEqual(['b']);
+  });
+
+  it('latestBucketStart reads the platform doc through the scope index without an in-memory sort', async () => {
+    await seed();
+    await SpendRollup.insertMany([{ bucketStart, scopeType: 'platform', scopeId: 'all' }]);
+    const findOne = vi.spyOn(SpendRollup, 'findOne');
+
+    await expect(spendRollupRepository.latestBucketStart()).resolves.toEqual(bucketStart);
+
+    const [filter] = findOne.mock.calls[0];
+    findOne.mockRestore();
+    expect(filter).toEqual({ scopeType: 'platform', scopeId: 'all' });
+    const plan = JSON.stringify(await SpendRollup.find(filter).sort({ bucketStart: -1 }).limit(1).explain());
+    expect(plan).toContain('scopeType_1_scopeId_1_bucketStart_-1');
+    expect(plan).not.toContain('"stage":"SORT"');
   });
 
   it('windowSeries returns per-bucket docs ascending', async () => {

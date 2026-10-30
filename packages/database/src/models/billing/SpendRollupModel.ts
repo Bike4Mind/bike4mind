@@ -41,7 +41,7 @@ export type ISpendRollupModel = Model<ISpendRollupDocument>;
 
 type Totals = Pick<ISpendRollup, 'credits' | 'costUsd' | 'creditsCharged' | 'requests'>;
 
-type TotalsRow = { _id: string | null; credits?: number; requests?: number; costUsd?: number; creditsCharged?: number };
+type TotalsRow = Totals & { _id: string };
 
 const emptyTotals = (): Totals => ({ credits: 0, costUsd: 0, creditsCharged: 0, requests: 0 });
 
@@ -83,6 +83,9 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
   }
 
   async rollupBucket(bucketStart: Date): Promise<{ docs: number }> {
+    if (bucketStart.getTime() % SPEND_BUCKET_MS !== 0) {
+      throw new Error(`rollupBucket: ${bucketStart.toISOString()} is not on a bucket boundary`);
+    }
     const bucketEnd = new Date(bucketStart.getTime() + SPEND_BUCKET_MS);
     const [ledgerFacets, usageFacets] = await Promise.all([
       this.aggregateLedger(bucketStart, bucketEnd),
@@ -127,7 +130,10 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
   }
 
   async latestBucketStart(): Promise<Date | null> {
-    const latest = await this.model.findOne({ scopeType: 'platform' }).sort({ bucketStart: -1 }).lean();
+    const latest = await this.model
+      .findOne({ scopeType: 'platform', scopeId: PLATFORM_SCOPE_ID })
+      .sort({ bucketStart: -1 })
+      .lean();
     return latest?.bucketStart ?? null;
   }
 
@@ -157,17 +163,9 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
     ]);
 
     return new Map(
-      rows.map(row => [
-        row._id ?? '',
-        {
-          bucketStart: from,
-          scopeType,
-          scopeId: row._id ?? '',
-          credits: row.credits ?? 0,
-          costUsd: row.costUsd ?? 0,
-          creditsCharged: row.creditsCharged ?? 0,
-          requests: row.requests ?? 0,
-        },
+      rows.map(({ _id: scopeId, credits, costUsd, creditsCharged, requests }) => [
+        scopeId,
+        { bucketStart: from, scopeType, scopeId, credits, costUsd, creditsCharged, requests },
       ])
     );
   }
@@ -230,7 +228,7 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
       model: Array<{ _id: string; costUsd: number; creditsCharged: number }>;
     }>([
       { $match: { createdAt: { $gte: from, $lt: to } } },
-      { $facet: { platform: [group(null)], model: [group('$model')] } },
+      { $facet: { platform: [group(null)], model: [{ $match: { model: { $type: 'string' } } }, group('$model')] } },
     ]);
     return facets ?? { platform: [], model: [] };
   }
