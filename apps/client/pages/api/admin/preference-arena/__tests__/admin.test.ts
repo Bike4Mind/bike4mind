@@ -31,7 +31,7 @@ vi.mock('@server/preferenceArena', () => ({
   getArenaService: () => ({ importPairs: mockImport, getArenaStats: mockStats }),
 }));
 
-import '../pairs/index';
+import { config } from '../pairs/index';
 
 const run = async (method: 'GET' | 'POST', user: Record<string, unknown>, body?: unknown) => {
   const { req, res } = createMocks({ method, body: body as never });
@@ -67,6 +67,20 @@ describe('admin arena pairs route', () => {
     await expect(run('POST', { id: 'admin1', isAdmin: true }, { pairs: [] })).rejects.toMatchObject({
       statusCode: 400,
     });
+  });
+
+  it('accepts 500 pairs and rejects 501 with 400', async () => {
+    mockImport.mockResolvedValue(500);
+    await run('POST', { id: 'admin1', isAdmin: true }, { pairs: Array(500).fill(validPair) });
+    expect(mockImport).toHaveBeenCalledTimes(1);
+    await expect(
+      run('POST', { id: 'admin1', isAdmin: true }, { pairs: Array(501).fill(validPair) })
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockImport).toHaveBeenCalledTimes(1);
+  });
+
+  it('raises the body limit to fit a full 500-pair import', () => {
+    expect(config.api.bodyParser.sizeLimit).toBe('4mb');
   });
 
   it('imports pairs for an admin', async () => {

@@ -150,7 +150,7 @@ describe('serveNextPair', () => {
       status: 'ready',
       pair: { pairId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
     });
-    expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('stale', expect.any(Date));
+    expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('stale', new Date('2025-12-31T23:59:10Z'));
   });
 
   it('shows the winner of a serve race', async () => {
@@ -243,7 +243,7 @@ describe('submitVote', () => {
     const { service, votes, pairs, addCredits } = build();
     pairs.findById.mockResolvedValue(pair({ active: false }));
     await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(NotFoundError);
-    expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('vote1', expect.any(Date));
+    expect(votes.deleteUnclaimedServed).toHaveBeenCalledWith('vote1', new Date('2025-12-31T23:59:10Z'));
     expect(addCredits).not.toHaveBeenCalled();
     expect(votes.recordVote).not.toHaveBeenCalled();
   });

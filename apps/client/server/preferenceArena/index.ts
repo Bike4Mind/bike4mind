@@ -49,7 +49,8 @@ async function loadNoCardUnlocks(userId: string): Promise<NoCardUnlockReason[]> 
       creditTransactionRepository.findOne({ transactionId: noCardUnlockTransactionId(reason, userId) })
     )
   );
-  return NO_CARD_UNLOCK_REASONS.filter((_, index) => rows[index] !== null);
+  // BaseRepository.findOne yields undefined (not null) on a miss.
+  return NO_CARD_UNLOCK_REASONS.filter((_, index) => rows[index] != null);
 }
 
 export async function loadArenaUser(userId: string): Promise<ArenaUser | null> {
