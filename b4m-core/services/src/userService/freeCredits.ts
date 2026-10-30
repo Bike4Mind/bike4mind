@@ -44,6 +44,8 @@ export type GrantFreeCreditsResult = {
   withheld?: boolean;
   /** Set when the grant stayed held because the daily budget was spent. */
   budgetExhausted?: boolean;
+  /** Set when a payment unlock is held until its payment settles. */
+  heldUntil?: Date;
   creditsGranted: number;
   currentCredits: number | null;
 };

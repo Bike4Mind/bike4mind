@@ -34,6 +34,7 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
+import { findUserByStripeCustomer, forfeitSignupUnlock } from '@server/credits/paymentUnlockForfeit';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
@@ -495,6 +496,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             realtimeConnections: realtimeConnectionRepository,
           },
         });
+        // Cancels a signup bonus still held for this payment to settle.
+        await forfeitSignupUnlock(user.id, 'dispute', req.logger);
 
         await postMessageToSlack(
           `\u{1F6A8} *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated${deactivatedKeys ? ', API keys deactivated' : ''}.`
@@ -564,6 +567,10 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         break;
       }
 
+      // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
+      const refundedUser = await findUserByStripeCustomer(charge.customer);
+      if (refundedUser) await forfeitSignupUnlock(refundedUser.id, 'refund', req.logger);
+
       const refundPaymentIntentId =
         typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
 
@@ -632,6 +639,16 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
       }
 
+      break;
+    }
+
+    case 'radar.early_fraud_warning.created': {
+      const warning = event.data.object;
+      const chargeId = typeof warning.charge === 'string' ? warning.charge : warning.charge.id;
+      const charge = await stripe.charges.retrieve(chargeId);
+      const user = await findUserByStripeCustomer(charge.customer);
+      if (user) await forfeitSignupUnlock(user.id, 'fraud_warning', req.logger);
+      else req.logger.warn(`Could not find user for early fraud warning ${warning.id}`);
       break;
     }
 
