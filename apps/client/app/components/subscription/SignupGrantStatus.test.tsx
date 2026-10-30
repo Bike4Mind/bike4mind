@@ -72,6 +72,11 @@ describe('signup grant status', () => {
     show();
     expect(screen.queryByTestId('signup-grant-unlock-paths')).toBeNull();
   });
+  it('omits the daily drip once the account has dripped up to the cap', () => {
+    h.grant = { ...h.grant!, dripCredits: 9000 };
+    show();
+    expect(screen.getByTestId('signup-grant-unlock-paths')).not.toHaveTextContent('each day');
+  });
   it('has no eligibility-check button', () => {
     show();
     expect(screen.queryByRole('button')).toBeNull();

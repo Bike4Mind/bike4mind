@@ -51,9 +51,9 @@ const NewUserWelcome = () => {
   const schedule = useSignupGrantSchedule();
   const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
   const dailyDripCredits = advertisedDripCredits({
-    enabled: schedule.dailyCredits > 0,
     dailyCredits: schedule.dailyCredits,
-    unlockCredits: currentUser?.signupGrant?.unlockCredits,
+    dripCap: schedule.dripCap,
+    grant: currentUser?.signupGrant,
   });
   const balance = useEffectiveCredits();
   const liveBalance = useEffectiveCredits({ live: true });

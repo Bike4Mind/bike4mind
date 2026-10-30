@@ -7,7 +7,7 @@ import { advertisedDripCredits, unlockPathsCopy } from '@client/app/components/S
 
 export default function SignupGrantStatus() {
   const { currentUser } = useUser();
-  const { dailyCredits } = useSignupGrantSchedule();
+  const { dailyCredits, dripCap } = useSignupGrantSchedule();
   const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
   const grant = currentUser?.signupGrant;
   if (currentUser?.signupGrantHeldReason === 'budget_exhausted' && (!grant || grant.stage === 'pending_email')) {
@@ -30,10 +30,7 @@ export default function SignupGrantStatus() {
       </Typography>
       {remaining > 0 && (
         <Typography level="body-sm" data-testid="signup-grant-unlock-paths">
-          {unlockPathsCopy(
-            advertisedDripCredits({ enabled: dailyCredits > 0, dailyCredits, unlockCredits: grant.unlockCredits }),
-            minActiveSeconds
-          )}
+          {unlockPathsCopy(advertisedDripCredits({ dailyCredits, dripCap, grant }), minActiveSeconds)}
         </Typography>
       )}
     </Stack>
