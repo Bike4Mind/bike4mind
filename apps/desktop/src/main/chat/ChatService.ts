@@ -4226,10 +4226,17 @@ export class ChatService {
   private async storeToolState(session: ChatSession, messageId: string, state: ChatToolState): Promise<void> {
     const message = session.messages.find(entry => entry.id === messageId);
     if (message) message.toolState = state;
-    try {
-      await this.deps.store.updateMessage(session.id, messageId, { toolState: state });
-    } catch (err) {
-      this.deps.logger.warn(`CHAT: could not store the tool state: ${String(err)}`);
+    // A lost record replays its change somewhere else after a restart, so a failure gets one retry.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.deps.store.updateMessage(session.id, messageId, { toolState: state });
+        return;
+      } catch (err) {
+        if (attempt >= 2) {
+          this.deps.logger.warn(`CHAT: could not store the tool state: ${String(err)}`);
+          return;
+        }
+      }
     }
   }
 
