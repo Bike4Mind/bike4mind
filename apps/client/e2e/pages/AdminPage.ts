@@ -64,7 +64,7 @@ export class AdminPage extends BasePage {
 
   async navigateToUsersTab() {
     await this.expandUserOps();
-    await this.page.getByTestId('admin-users-tab-btn').filter({ visible: true }).first().click();
+    await (await this.revealSidebarItem('admin-users-tab-btn', 'people')).click();
     await expect(this.page.getByTestId('admin-users-search-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
     await this.waitForUsersLoaded();
   }
@@ -80,15 +80,22 @@ export class AdminPage extends BasePage {
 
   async navigateToOrganizationsTab() {
     await this.expandUserOps();
-    await this.page.getByTestId('admin-organizations-tab-btn').filter({ visible: true }).first().click();
+    await (await this.revealSidebarItem('admin-organizations-tab-btn', 'people')).click();
     await expect(this.page.getByTestId('admin-organizations-search-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
-  /** Long sidebar sections hide items past the first few behind a "More" row (see splitSectionItems). */
+  /**
+   * Long sidebar sections hide items past the first few behind a "More" row (see splitSectionItems).
+   * Every sidebar navigation goes through here so a reorder of the section can't silently hide a link.
+   */
   private async revealSidebarItem(testId: string, sectionKey: string) {
     const link = this.page.getByTestId(testId).filter({ visible: true }).first();
     if (!(await link.isVisible())) {
-      await this.page.getByTestId(`admin-sidebar-more-${sectionKey}-btn`).filter({ visible: true }).first().click();
+      const moreRow = this.page.getByTestId(`admin-sidebar-more-${sectionKey}-btn`).filter({ visible: true }).first();
+      // The row toggles: clicking it while expanded ("Less") would hide the link instead.
+      if ((await moreRow.getAttribute('aria-expanded')) === 'false') {
+        await moreRow.click();
+      }
     }
     await expect(link).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
     return link;
