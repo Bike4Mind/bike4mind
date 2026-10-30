@@ -152,7 +152,17 @@ export function toolStateRecords(
   if (latestIndex === lastIndex) {
     return sameToolState(latest, atLast) ? [] : [{ messageId: history[lastIndex].id, state: atLast }];
   }
-  return sameToolState(latest, current) ? [] : [{ messageId: history[lastIndex].id, state: atLast }];
+  // A tool no record holds that a later turn called anyway (a turn that was not deferred) was
+  // added where it was called (insertToolChanges), so it is active until a record drops it.
+  const recorded = new Set(userIndexes.flatMap(index => history[index].toolState?.tools ?? []));
+  const active: ChatToolState | undefined = latest && {
+    tools: sortedUnion(
+      latest.tools,
+      calledAfter(history, latestIndex, declarable).filter(name => !recorded.has(name))
+    ),
+    text: latest.text,
+  };
+  return sameToolState(active, current) ? [] : [{ messageId: history[lastIndex].id, state: atLast }];
 }
 
 export function toolStateReminder(state: ChatToolState): string {
@@ -170,6 +180,8 @@ export interface ToolStateMark {
  * by a change (a user turn answered by another user turn) moves to the next place that can, and a
  * later record at the same place supersedes it. Names with no schema left are dropped, which
  * re-writes history from their first addition. The changes start from the loaded `start` set.
+ * A replayed tool_use of a tool never added before it (one a turn that was not deferred called)
+ * gets its addition at the last place before that call, so nothing earlier moves.
  * Returns the names the changes reference, which the request must declare.
  */
 export function insertToolChanges(
@@ -184,10 +196,20 @@ export function insertToolChanges(
     while (at < wire.length && !canFollowWithToolChange(wire, at)) at++;
     if (at < wire.length) placed.set(at, mark.tools.filter(declarable));
   }
+  const slots = wire.flatMap((_message, index) => (canFollowWithToolChange(wire, index) ? [index] : []));
   const inserts = new Map<number, CompletionMessage>();
   const referenced = new Set<string>();
   let active: readonly string[] = start.filter(declarable);
-  for (const [at, tools] of [...placed.entries()].sort(([left], [right]) => left - right)) {
+  // A removed tool stays surfaced: a call to it replays as is and is refused when run.
+  const surfaced = new Set(active);
+  for (const [slot, at] of slots.entries()) {
+    const target = placed.get(at) ?? active;
+    target.forEach(name => surfaced.add(name));
+    const lifted = calledIn(wire.slice(at + 1, slots[slot + 1])).filter(
+      name => !CORE_TOOL_NAMES.has(name) && !surfaced.has(name) && declarable(name)
+    );
+    lifted.forEach(name => surfaced.add(name));
+    const tools = sortedUnion(target, lifted);
     const { added, removed } = diffToolNames(active, tools);
     if (added.length > 0 || removed.length > 0) {
       inserts.set(at, { role: 'system', content: toolChangeContent(added, removed) });
@@ -202,6 +224,17 @@ export function insertToolChanges(
     }),
     referenced: [...referenced].sort(),
   };
+}
+
+function calledIn(messages: readonly CompletionMessage[]): string[] {
+  return messages.flatMap(message =>
+    message.role === 'assistant' && Array.isArray(message.content)
+      ? message.content.flatMap(block => {
+          const { type, name } = (block ?? {}) as { type?: unknown; name?: unknown };
+          return type === 'tool_use' && typeof name === 'string' ? [name] : [];
+        })
+      : []
+  );
 }
 
 /**

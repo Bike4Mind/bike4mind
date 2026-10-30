@@ -135,6 +135,30 @@ describe('toolStateRecords', () => {
       { messageId: history[2].id, state: state(['a'], 'other') },
     ]);
   });
+
+  it('counts a tool an unrecorded turn called as active, so a state without it records its removal', () => {
+    const history = [
+      message('user', { toolState: state(['a']) }),
+      message('assistant'),
+      message('user'),
+      message('assistant', { toolCalls: [call('file_read'), call('a')] }),
+      message('user'),
+    ];
+    expect(toolStateRecords(history, state(['a']), all)).toEqual([{ messageId: history[4].id, state: state(['a']) }]);
+    expect(toolStateRecords(history, state(['a', 'file_read']), all)).toEqual([]);
+    expect(toolStateRecords(history, state(['a']), name => name !== 'file_read')).toEqual([]);
+  });
+
+  it('does not count a call to a tool an earlier record held', () => {
+    const history = [
+      message('user', { toolState: state(['a', 'file_read']) }),
+      message('assistant'),
+      message('user', { toolState: state(['a']) }),
+      message('assistant', { toolCalls: [call('file_read')] }),
+      message('user'),
+    ];
+    expect(toolStateRecords(history, state(['a']), all)).toEqual([]);
+  });
 });
 
 describe('insertToolChanges', () => {
@@ -160,6 +184,78 @@ describe('insertToolChanges', () => {
       { type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } },
     ]);
     expect(referenced).toEqual(['a', 'b']);
+  });
+
+  it('adds a tool no change surfaced right before the replayed call to it', () => {
+    const use = (...names: string[]): CompletionMessage => ({
+      role: 'assistant',
+      content: [{ type: 'text', text: 't' }, ...names.map(name => ({ type: 'tool_use', id: name, name, input: {} }))],
+    });
+    const result: CompletionMessage = { role: 'user', content: [{ type: 'tool_result' }] };
+    const messages: CompletionMessage[] = [
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: 'a' },
+      { role: 'user', content: 'two' },
+      use('file_read', WEB_SEARCH_TOOL_NAME, 'gone'),
+      result,
+      use('file_read', 'grep'),
+      result,
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: 'three' },
+    ];
+    const marks = [
+      { index: 0, tools: ['a'] },
+      { index: 8, tools: ['a'] },
+    ];
+    const declarable = (name: string) => name !== 'gone';
+    const { wire: out, referenced } = insertToolChanges(messages, marks, declarable);
+    const added = (...names: string[]) =>
+      names.map(name => ({ type: 'tool_addition', tool: { type: 'tool_reference', name } }));
+    const removed = (...names: string[]) =>
+      names.map(name => ({ type: 'tool_removal', tool: { type: 'tool_reference', name } }));
+    expect(out.map(entry => (entry.role === 'system' ? entry.content : entry.role))).toEqual([
+      'user',
+      added('a'),
+      'assistant',
+      'user',
+      added('file_read'),
+      'assistant',
+      'user',
+      added('grep'),
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+      removed('file_read', 'grep'),
+    ]);
+    expect(referenced).toEqual(['a', 'file_read', 'grep']);
+    // The same history renders the same bytes on the next turn, a record later or not.
+    expect(insertToolChanges([...messages, { role: 'assistant', content: 'ok' }], marks, declarable).wire).toEqual([
+      ...out,
+      { role: 'assistant', content: 'ok' },
+    ]);
+  });
+
+  it('replays a call to a removed tool without adding it back', () => {
+    const messages: CompletionMessage[] = [
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: 'a' },
+      { role: 'user', content: 'two' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'file_read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result' }] },
+    ];
+    const { wire: out } = insertToolChanges(
+      messages,
+      [
+        { index: 0, tools: ['file_read'] },
+        { index: 2, tools: [] },
+      ],
+      all
+    );
+    expect(out.filter(entry => entry.role === 'system').map(entry => entry.content)).toEqual([
+      [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'file_read' } }],
+      [{ type: 'tool_removal', tool: { type: 'tool_reference', name: 'file_read' } }],
+    ]);
   });
 
   it('drops names with no schema left', () => {

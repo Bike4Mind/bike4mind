@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { ChatModels, DEFERRED_ANCHOR_TOOL_NAME, ToolChangeMessageContentSchema } from '@bike4mind/common';
 import type { ChatStreamEvent } from '@shared/chat';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { type Mock, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
@@ -45,8 +45,10 @@ describe('ChatService deferred tools', () => {
   let events: ChatStreamEvent[];
   let service: ChatService;
   let deferredTools: { startSetMaxTokens: number } | undefined;
+  let logger: { debug: Mock<(message: string) => void>; warn: Mock<(message: string) => void> };
 
   beforeEach(async () => {
+    logger = { debug: vi.fn(), warn: vi.fn() };
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-deferred-')));
     await writeFile(join(root, 'tiny.txt'), 'z', 'utf8');
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-deferred-sessions-')), ChatModels.CLAUDE_5_5_OPUS);
@@ -79,7 +81,7 @@ describe('ChatService deferred tools', () => {
         cached: () => [],
       } as unknown as ModelCatalog,
       access: { list: async () => roots } as unknown as AccessStore,
-      logger: { debug: vi.fn(), warn: vi.fn() },
+      logger,
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
@@ -105,6 +107,112 @@ describe('ChatService deferred tools', () => {
     });
     return body(before);
   }
+
+  /** A turn whose first round reads tiny.txt and whose second answers. */
+  async function readingTurn(sessionId: string, text: string, callId: string): Promise<void> {
+    const before = post.mock.calls.length;
+    const done = events.filter(event => event.type === 'done').length;
+    await service.send(sessionId, text);
+    await vi.waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 });
+    streams[before].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: callId, name: 'file_read', arguments: JSON.stringify({ path: join(root, 'tiny.txt') }) }],
+      })
+    );
+    streams[before].write(frame('[DONE]'));
+    await vi.waitUntil(() => streams.length === before + 2, { timeout: 3000, interval: 5 });
+    streams[before + 1].write(frame({ type: 'content', text: 'It says z.' }));
+    streams[before + 1].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.filter(event => event.type === 'done').length === done + 1, {
+      timeout: 3000,
+      interval: 5,
+    });
+  }
+
+  const blockNames = (message: WireMessage, type: string) =>
+    Array.isArray(message.content)
+      ? (message.content as { type: string; name?: string; tool?: { name: string } }[])
+          .filter(block => block.type === type)
+          .map(block => block.name ?? block.tool?.name)
+      : [];
+
+  /** Where the first tool_use of `name` sits, and where the first addition of it sits. */
+  const positions = (request: Body, name: string) => ({
+    use: request.messages.findIndex(message => blockNames(message, 'tool_use').includes(name)),
+    addition: request.messages.findIndex(
+      message => message.role === 'system' && blockNames(message, 'tool_addition').includes(name)
+    ),
+  });
+
+  describe('a tool called on a turn that was not deferred', () => {
+    async function switchAwayAndBack(shareOnReturn: boolean) {
+      roots = [];
+      const { id } = await service.createSession();
+      const first = await turn(id, 'hello');
+      expect(first.options.tools.some(tool => tool.toolSchema.name === 'file_read')).toBe(false);
+
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      roots = [root];
+      await readingTurn(id, 'read my file', 'call_1');
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_5_OPUS);
+      if (!shareOnReturn) roots = [];
+      const third = await turn(id, 'back on Opus');
+      const fourth = await turn(id, 'and again');
+      return { first, third, fourth };
+    }
+
+    const unmarked = ({ cache: _cache, ...rest }: WireMessage) => rest;
+
+    it.each([
+      ['still shared', true],
+      ['unshared again', false],
+    ])('is added before its replayed call and declared deferred (%s)', async (_label, shared) => {
+      const { first, third, fourth } = await switchAwayAndBack(shared);
+      for (const request of [third, fourth]) {
+        const { use, addition } = positions(request, 'file_read');
+        expect(use).toBeGreaterThan(0);
+        expect(addition).toBeGreaterThan(0);
+        expect(addition).toBeLessThan(use);
+        // The change sits on the read's own prompt, so nothing before that prompt moved.
+        expect(request.messages[addition - 1]).toMatchObject({ role: 'user', content: 'read my file' });
+        expect(request.options.tools.find(tool => tool.toolSchema.name === 'file_read')?.toolSchema.defer_loading).toBe(
+          true
+        );
+      }
+      expect(third.messages.slice(0, first.messages.length).map(unmarked)).toEqual(first.messages.map(unmarked));
+      expect(fourth.messages.slice(0, third.messages.length).map(unmarked)).toEqual(third.messages.map(unmarked));
+      expect(headHash(first)).toBe(headHash(third));
+      expect(headHash(third)).toBe(headHash(fourth));
+
+      const lastChange = changes(third).at(-1) as { type: string; tool: { name: string } }[];
+      const summary = lastChange.map(block => `${block.type}:${block.tool.name}`);
+      if (shared) {
+        expect(summary).not.toContain('tool_addition:file_read');
+        expect(summary.every(entry => entry.startsWith('tool_addition:'))).toBe(true);
+      } else {
+        expect(summary).toEqual(['tool_removal:file_read']);
+      }
+    });
+  });
+
+  it('retries a tool-state write that failed once', async () => {
+    const original = store.updateMessage.bind(store);
+    let failures = 0;
+    const update = vi.spyOn(store, 'updateMessage').mockImplementation((sessionId, messageId, changes) => {
+      if (changes.toolState && failures++ === 0) return Promise.reject(new Error('disk busy'));
+      return original(sessionId, messageId, changes);
+    });
+    const { id } = await service.createSession();
+    await turn(id, 'hi');
+
+    const writes = update.mock.calls.filter(([, , changes]) => changes.toolState);
+    expect(writes).toHaveLength(2);
+    expect(writes[1][1]).toBe(writes[0][1]);
+    const stored = await store.get(id);
+    expect(stored?.messages.find(message => message.id === writes[0][1])?.toolState).toEqual(writes[0][2].toolState);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not store the tool state'));
+  });
 
   it('sends two different tool sets with the same head when every optional tool is deferred', async () => {
     deferredTools = { startSetMaxTokens: 0 };
