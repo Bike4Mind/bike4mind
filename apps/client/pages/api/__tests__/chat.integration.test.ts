@@ -135,8 +135,12 @@ vi.mock('@server/utils/userRateTier', () => ({
 // their edges. getSettingsValue stays real (with {} it falls back to the default
 // model). SQSService is inert; the tokenizer/default-options are irrelevant to
 // the async response.
+const { mockOptionsFindUser, mockProcessOptions } = vi.hoisted(() => ({
+  mockOptionsFindUser: vi.fn(),
+  mockProcessOptions: vi.fn(),
+}));
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
-  getDefaultChatCompletionOptions: () => ({}),
+  getDefaultChatCompletionOptions: () => ({ db: { users: { findById: mockOptionsFindUser } } }),
   getSharedTokenizer: () => ({}),
   resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
   isChatModelUsable: (...a: unknown[]) => mockIsChatModelUsable(...a),
@@ -174,6 +178,9 @@ vi.mock('@bike4mind/services/llm', async orig => {
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
   class MockChatCompletionProcess {
+    constructor(options: unknown) {
+      mockProcessOptions(options);
+    }
     pipelinePhases = undefined;
     get terminalError() {
       return mockTerminalError.value;
@@ -421,6 +428,23 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     await handler(req, res);
     expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
   });
+
+  it.each([
+    ['withholds', [ApiKeyScope.AI_CHAT], false],
+    ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], true],
+  ] as const)(
+    '%s the admin role from a wait=true tool that re-reads the owner, for a key with scopes %j',
+    async (_, scopes, expected) => {
+      validateWithScopes([...scopes]);
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      const { users } = (
+        mockProcessOptions.mock.calls[0][0] as { db: { users: { findById: (id: string) => unknown } } }
+      ).db;
+      mockOptionsFindUser.mockResolvedValueOnce({ id: 'user-1', isAdmin: true });
+      expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(expected);
+    }
+  );
 
   describe.each([
     {
