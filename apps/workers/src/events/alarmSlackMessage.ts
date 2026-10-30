@@ -5,7 +5,8 @@
  * Layout: a top-level header carries stage and level at a glance; the details sit in a
  * colour-barred attachment (red page / amber warn / blue info on production, grey on any other
  * stage, green when resolved). Mentions only ever apply to production alarms, at page level
- * unless the setting widens them to warn (see parseMentionSetting).
+ * unless the setting widens them to warn (see parseMentionSetting). Stages other than production
+ * post page-level alarms only; their warnings are dropped.
  */
 
 import { classifyStage } from '@bike4mind/common';
@@ -730,6 +731,8 @@ export function formatAlarmSlackMessage(
   if (alarm.NewStateValue !== 'ALARM' && alarm.NewStateValue !== 'OK') return null;
 
   const { entry, title, level } = resolveEntry(alarm, stage);
+  // Other stages run the production ceilings against QA traffic, so only their pages are worth a post.
+  if (!isProductionStage(stage) && level !== 'page') return null;
   const when = parseStateChangeTime(alarm.StateChangeTime);
   const url = consoleUrl(alarm);
   const link = url ? `<${url}|Open in CloudWatch>` : undefined;
