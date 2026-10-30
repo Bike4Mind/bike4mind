@@ -25,7 +25,7 @@ const splitRender = (text: string) => {
 
 const frames = (text: string) => Array.from({ length: text.length }, (_, i) => text.slice(0, i + 1));
 
-describe('splitStreamingBlocks render oracle, round 2', () => {
+describe('splitStreamingBlocks render oracle across frames', () => {
   it('does not cut inside a fence when the reply uses CRLF line endings', () => {
     const text = 'intro\r\n\r\n```js\r\nconst a = 1;\r\n\r\nconst b = 2;\r\n```\r\n\r\nafter';
     expect(splitRender(text)).toBe(md(text));

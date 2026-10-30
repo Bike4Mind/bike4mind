@@ -44,12 +44,13 @@ const Subject = ({
 
 const streamThenComplete = (text: string, components: Components = NO_COMPONENTS) => {
   const view = render(<Subject text="" streaming components={components} />);
-  for (let i = 1; i <= text.length; i++) view.rerender(<Subject text={text.slice(0, i)} streaming components={components} />);
+  for (let i = 1; i <= text.length; i++)
+    view.rerender(<Subject text={text.slice(0, i)} streaming components={components} />);
   view.rerender(<Subject text={text} streaming={false} components={components} />);
   return view;
 };
 
-describe('StreamingMarkdown round 4', () => {
+describe('StreamingMarkdown render and parse counts per frame', () => {
   it('keeps the code of a fence indented under an ordered list item unindented after streaming', () => {
     const text = '1. Run this:\n\n  ```bash\n  npm i\n  npm test\n  ```\n\nDone.';
     const streamed = streamThenComplete(text);
@@ -103,12 +104,14 @@ describe('StreamingMarkdown round 4', () => {
     const t0 = performance.now();
     for (let i = 0; i < 200; i++) split.createBlockParser([...assistantReplyRemarkPlugins])('x');
     const perParser = (performance.now() - t0) / 200;
-    console.log(`50 frames with unstable plugins ${elapsed.toFixed(1)} ms; parser build + first parse ${perParser.toFixed(3)} ms`);
+    console.log(
+      `50 frames with unstable plugins ${elapsed.toFixed(1)} ms; parser build + first parse ${perParser.toFixed(3)} ms`
+    );
     expect(perParser).toBeLessThan(2);
   });
 });
 
-describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown round 4 cost breakdown', () => {
+describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown cost breakdown', () => {
   it('splits where the streamed-frame time goes', async () => {
     const actual = await vi.importActual<typeof import('./streamingSplit')>('./streamingSplit');
     let answer = '';
@@ -141,7 +144,7 @@ describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown round 4 cost breakdown
   });
 });
 
-describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown round 4 replies that never settle', () => {
+describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown replies that never settle', () => {
   const measure = (frames: string[], el: (t: string) => React.ReactElement) => {
     const view = render(el(''));
     const t = performance.now();
@@ -156,11 +159,21 @@ describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown round 4 replies that n
   it.each([
     [
       'one loose bullet list with code in every item',
-      (i: number) => `- **Step ${i + 1}**: configure the service.\n\n  Run the command below and check the output.\n\n  \`\`\`bash\n  npm run step-${i + 1}\n  \`\`\`\n\n`,
+      (i: number) =>
+        `- **Step ${i + 1}**: configure the service.\n\n  Run the command below and check the output.\n\n  \`\`\`bash\n  npm run step-${i + 1}\n  \`\`\`\n\n`,
     ],
-    ['one long table', (i: number) => (i === 0 ? '| a | b | c |\n|---|---|---|\n' : `| row ${i} | value ${i} | note ${i} |\n`)],
-    ['one long tight bullet list', (i: number) => `- **Item ${i}**: a short note with \`code\` and a [link](https://example.com/${i})\n`],
-    ['one long fenced code block', (i: number) => (i === 0 ? '```ts\n' : `const value${i} = compute(${i}, 'label-${i}');\n`)],
+    [
+      'one long table',
+      (i: number) => (i === 0 ? '| a | b | c |\n|---|---|---|\n' : `| row ${i} | value ${i} | note ${i} |\n`),
+    ],
+    [
+      'one long tight bullet list',
+      (i: number) => `- **Item ${i}**: a short note with \`code\` and a [link](https://example.com/${i})\n`,
+    ],
+    [
+      'one long fenced code block',
+      (i: number) => (i === 0 ? '```ts\n' : `const value${i} = compute(${i}, 'label-${i}');\n`),
+    ],
   ])('compares the streamed path with a full re-parse for %s', (_name, unit) => {
     let answer = '';
     for (let i = 0; answer.length < 6 * 1024; i++) answer += unit(i);

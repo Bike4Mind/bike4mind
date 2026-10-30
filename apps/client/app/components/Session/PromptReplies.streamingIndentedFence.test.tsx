@@ -55,9 +55,10 @@ const codeText = (container: HTMLElement) =>
     .map(el => el.textContent)
     .join('|');
 
-describe('PromptReplies, round 4', () => {
+describe('PromptReplies with a fence indented under a numbered step', () => {
   it('shows the same code for a fence indented under a numbered step whether the reply streamed here or loaded from history', () => {
-    const text = '1. Install the dependencies:\n\n  ```bash\n  npm install\n  npm run build\n  ```\n\n2. Start the server.';
+    const text =
+      '1. Install the dependencies:\n\n  ```bash\n  npm install\n  npm run build\n  ```\n\n2. Start the server.';
     const history = render(<Reply text={text} status="done" />);
     const fromHistory = codeText(history.container);
     cleanup();

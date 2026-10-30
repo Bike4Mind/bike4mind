@@ -177,9 +177,15 @@ describe('text that only looks cross-block still keeps the blocks when the reply
   };
 
   it.each([
-    ['an XML code block', 'Config:\n\n```xml\n<dependency>\n  <groupId>x</groupId>\n</dependency>\n```\n\n![shot](https://example.com/s.png)\n\nDone.'],
+    [
+      'an XML code block',
+      'Config:\n\n```xml\n<dependency>\n  <groupId>x</groupId>\n</dependency>\n```\n\n![shot](https://example.com/s.png)\n\nDone.',
+    ],
     ['a regex negated class', 'Use `/[^a-z]/g` to strip.\n\n![shot](https://example.com/s.png)\n\nDone.'],
-    ['a TypeScript index signature', 'Type:\n\n```ts\ninterface Bag {\n  [key: string]: number;\n}\n```\n\n![shot](https://example.com/s.png)\n\nDone.'],
+    [
+      'a TypeScript index signature',
+      'Type:\n\n```ts\ninterface Bag {\n  [key: string]: number;\n}\n```\n\n![shot](https://example.com/s.png)\n\nDone.',
+    ],
   ])('keeps an image approved mid-stream after completion when the reply has %s', (_, text) => {
     approveThenComplete(text);
     expect(screen.queryByTestId('reply-image-load-btn')).toBeNull();
