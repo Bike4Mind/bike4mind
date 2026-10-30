@@ -22,7 +22,7 @@
     "core:incremental": "pnpm --filter \"./b4m-core/*\" --filter \"./packages/database\" incremental",
     "core:dev": "pnpm --filter \"./b4m-core/*\" --filter \"./packages/database\" --parallel dev",
     "core:clean": "pnpm --filter \"./b4m-core/*\" --filter \"./packages/database\" clean",
-    "turbo:build": "turbo build --filter='!@bike4mind/client'",
+    "turbo:build": "turbo build --filter=\"!@bike4mind/client\"",
     "turbo:core:build": "turbo build --filter=\"./b4m-core/*\" --filter=\"./packages/database\" --filter=\"./packages/sdk\" --filter=\"./packages/premium/*/engine\" --filter=\"./packages/premium/*/engine-container\"",
     "turbo:typecheck": "turbo typecheck",
     "turbo:typecheck:native": "turbo typecheck:native",

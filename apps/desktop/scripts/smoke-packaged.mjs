@@ -123,6 +123,9 @@ try {
   if (process.env.EXPECT_UPDATES_DISABLED === 'true') {
     assert.equal(state.update, 'unsupported', 'Manual-install builds must not enable in-app updates');
   }
+  if (process.env.EXPECT_UPDATES_ENABLED === 'true') {
+    assert.notEqual(state.update, 'unsupported', 'Feed-enabled builds must enable in-app updates');
+  }
   assert.equal(exceptions.length, 0, JSON.stringify(exceptions));
   assert.equal(child.exitCode, null, 'App exited during startup verification');
   await writeFile(join(output, 'result.json'), JSON.stringify(state, null, 2));
@@ -137,5 +140,6 @@ try {
     try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already exited. */ }
   }
   await writeFile(join(output, 'app.log'), logs);
-  await rm(home, { recursive: true, force: true });
+  // Windows can hold handles in the profile briefly after taskkill returns.
+  await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

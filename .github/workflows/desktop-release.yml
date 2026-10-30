@@ -242,6 +242,8 @@ jobs:
         if: matrix.platform == 'win'
         timeout-minutes: 5
         shell: pwsh
+        env:
+          EXPECT_UPDATES_ENABLED: 'true'
         run: |
           $installDir = Join-Path $env:RUNNER_TEMP 'bike4mind-install'
           $installer = "apps/desktop/release/Bike4Mind-$env:DESKTOP_VERSION-setup.exe"

@@ -65,6 +65,7 @@ class ReleaseWorkflowTest(unittest.TestCase):
         smoke = build.split(step, 1)[1].split('- name:', 1)[0]
         self.assertIn('shell: pwsh', smoke)
         self.assertIn("'/S'", smoke)
+        self.assertIn("EXPECT_UPDATES_ENABLED: 'true'", smoke)
         self.assertIn('smoke-packaged.mjs', smoke)
         self.assertIn('apps/desktop/release/*.exe', build)
         self.assertIn('installers/latest.yml', job('validate'))
