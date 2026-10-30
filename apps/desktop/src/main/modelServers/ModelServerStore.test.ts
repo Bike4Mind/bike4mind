@@ -219,6 +219,21 @@ describe('ModelServerStore', () => {
       expect(await store.list()).toHaveLength(1);
       expect(store.headers(record)).toEqual({ authorization: `Bearer ${TOKEN}` });
     });
+
+    it('keeps the entered hardware when saving new figures fails', async () => {
+      const { file, state } = failingOnce();
+      const store = new ModelServerStore(cipher(), file, logger);
+      const record = await store.add(base, { type: 'none' });
+      const specs = { ramGiB: 64, gpuMemoryGiB: 24, bandwidthGBps: null, unified: false };
+      await store.update(record.id, { specs });
+      await store.setLocalSpecs(specs);
+      state.fail = true;
+      await expect(store.update(record.id, { specs: { ...specs, ramGiB: 128 } })).rejects.toThrow(/disk full/);
+      state.fail = true;
+      await expect(store.setLocalSpecs(null)).rejects.toThrow(/disk full/);
+      expect((await store.get(record.id))?.specs).toEqual(specs);
+      expect(await store.localSpecs()).toEqual(specs);
+    });
   });
 
   it('keeps both servers when two are added at once', async () => {
