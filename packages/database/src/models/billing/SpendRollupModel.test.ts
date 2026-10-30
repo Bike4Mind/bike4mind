@@ -31,7 +31,7 @@ const deduct = (
   ownerType: CreditHolderType,
   ownerId: string,
   credits: number,
-  extra: { model?: string; apiKeyId?: string; createdAt?: Date } = {}
+  extra: { model?: string; apiKeyId?: string; createdAt?: Date; type?: string } = {}
 ) => ({
   ownerId,
   ownerType,
@@ -62,7 +62,7 @@ const findRollup = (scopeType: string, scopeId: string) =>
 describe('SpendRollupRepository.rollupBucket', () => {
   it('rolls usage credits per platform, owner, apiKey and model', async () => {
     await CreditTransaction.insertMany([
-      deduct(CreditHolderType.User, 'user-a', -100, { model: 'm1', apiKeyId: 'K1' }),
+      deduct(CreditHolderType.User, 'user-a', -100, { model: 'm1', apiKeyId: 'K1', type: 'completion_api_usage' }),
       deduct(CreditHolderType.User, 'user-a', -50, { model: 'm2' }),
       deduct(CreditHolderType.Organization, 'org-o', -30, { model: 'm1' }),
       { ownerId: 'user-a', ownerType: CreditHolderType.User, type: 'purchase', credits: 1000, createdAt: inBucket },
@@ -70,11 +70,12 @@ describe('SpendRollupRepository.rollupBucket', () => {
 
     await spendRollupRepository.rollupBucket(bucketStart);
 
-    expect(await findRollup('platform', 'all')).toMatchObject({ credits: 180, requests: 3 });
-    expect(await findRollup('User', 'user-a')).toMatchObject({ credits: 150, requests: 2 });
-    expect(await findRollup('Organization', 'org-o')).toMatchObject({ credits: 30, requests: 1 });
+    // Only the completion_api_usage row is a request; text_generation_usage rows add credits only.
+    expect(await findRollup('platform', 'all')).toMatchObject({ credits: 180, requests: 1 });
+    expect(await findRollup('User', 'user-a')).toMatchObject({ credits: 150, requests: 1 });
+    expect(await findRollup('Organization', 'org-o')).toMatchObject({ credits: 30, requests: 0 });
     expect(await findRollup('apiKey', 'K1')).toMatchObject({ credits: 100, requests: 1 });
-    expect(await findRollup('model', 'm1')).toMatchObject({ credits: 130, requests: 2 });
+    expect(await findRollup('model', 'm1')).toMatchObject({ credits: 130, requests: 1 });
     expect(await findRollup('model', 'm2')).toMatchObject({ credits: 50 });
     // platform + user-a + org-o + K1 + m1 + m2; the purchase adds nothing.
     expect(await SpendRollup.countDocuments({ bucketStart })).toBe(6);
@@ -102,7 +103,7 @@ describe('SpendRollupRepository.rollupBucket', () => {
 
     await spendRollupRepository.rollupBucket(bucketStart);
 
-    expect(await findRollup('platform', 'all')).toMatchObject({ credits: 10, requests: 1 });
+    expect(await findRollup('platform', 'all')).toMatchObject({ credits: 10 });
   });
 
   it('is idempotent', async () => {
@@ -113,7 +114,7 @@ describe('SpendRollupRepository.rollupBucket', () => {
     await spendRollupRepository.rollupBucket(bucketStart);
 
     expect(await SpendRollup.countDocuments({})).toBe(countAfterFirst);
-    expect(await findRollup('platform', 'all')).toMatchObject({ credits: 100, requests: 1 });
+    expect(await findRollup('platform', 'all')).toMatchObject({ credits: 100 });
   });
 
   it('skips UsageEvent rows without a model instead of writing a null model scope', async () => {
@@ -136,6 +137,17 @@ describe('SpendRollupRepository.rollupBucket', () => {
     expect(result.docs).toBe(1);
     expect(await findRollup('platform', 'all')).toMatchObject({ credits: 0, costUsd: 0, requests: 0 });
     expect(await spendRollupRepository.latestBucketStart()).toEqual(bucketStart);
+  });
+
+  it('does not write the platform marker when a scope write fails', async () => {
+    await CreditTransaction.insertMany([deduct(CreditHolderType.User, 'user-a', -100, { model: 'm1' })]);
+    const bulkWrite = vi.spyOn(SpendRollup, 'bulkWrite').mockRejectedValueOnce(new Error('transient'));
+
+    await expect(spendRollupRepository.rollupBucket(bucketStart)).rejects.toThrow('transient');
+    bulkWrite.mockRestore();
+
+    expect(await spendRollupRepository.latestBucketStart()).toBeNull();
+    expect(await SpendRollup.countDocuments({})).toBe(0);
   });
 });
 

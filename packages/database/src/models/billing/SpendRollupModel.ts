@@ -10,7 +10,7 @@ import {
   SPEND_ROLLUP_SCOPE_TYPES,
   SpendRollupScopeType,
 } from '@bike4mind/common';
-import { CreditTransaction } from './CreditTransactionModel';
+import { API_KEY_REQUEST_TRANSACTION_TYPES, CreditTransaction } from './CreditTransactionModel';
 import { UsageEvent } from './UsageEventModel';
 
 export type ISpendRollupDocument = ISpendRollup & IMongoDocument;
@@ -114,19 +114,28 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
       scopes.add('model', row._id, { costUsd: row.costUsd, creditsCharged: row.creditsCharged });
     }
 
-    const operations: AnyBulkWriteOperation<ISpendRollupDocument>[] = scopes
-      .values()
-      .filter(({ scopeType, totals }) => scopeType === 'platform' || isNonZero(totals))
-      .map(({ scopeType, scopeId, totals }) => ({
-        updateOne: {
-          filter: { bucketStart, scopeType, scopeId },
-          update: { $set: totals },
-          upsert: true,
-        },
-      }));
+    const toUpsert = ({ scopeType, scopeId, totals }: ReturnType<ScopeTotals['values']>[number]) => ({
+      updateOne: {
+        filter: { bucketStart, scopeType, scopeId },
+        update: { $set: totals },
+        upsert: true,
+      },
+    });
+    const all = scopes.values();
+    const scopeOps: AnyBulkWriteOperation<ISpendRollupDocument>[] = all
+      .filter(({ scopeType, totals }) => scopeType !== 'platform' && isNonZero(totals))
+      .map(toUpsert);
+    const platformOps: AnyBulkWriteOperation<ISpendRollupDocument>[] = all
+      .filter(({ scopeType }) => scopeType === 'platform')
+      .map(toUpsert);
 
-    await this.model.bulkWrite(operations, { ordered: false });
-    return { docs: operations.length };
+    // The platform doc is the "bucket done" marker latestBucketStart reads, so it is written only after
+    // every scope doc lands; a partial failure then leaves the bucket unrolled for the retry.
+    if (scopeOps.length > 0) {
+      await this.model.bulkWrite(scopeOps, { ordered: false });
+    }
+    await this.model.bulkWrite(platformOps, { ordered: false });
+    return { docs: scopeOps.length + platformOps.length };
   }
 
   async latestBucketStart(): Promise<Date | null> {
@@ -192,7 +201,12 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
 
   private async aggregateLedger(from: Date, to: Date) {
     const group = (id: unknown) => ({
-      $group: { _id: id, credits: { $sum: { $abs: '$credits' } }, requests: { $sum: 1 } },
+      $group: {
+        _id: id,
+        credits: { $sum: { $abs: '$credits' } },
+        // Same definition as apiKeyUsageForOwner: one request can write several usage rows.
+        requests: { $sum: { $cond: [{ $in: ['$type', API_KEY_REQUEST_TRANSACTION_TYPES] }, 1, 0] } },
+      },
     });
     const [facets] = await CreditTransaction.aggregate<{
       platform: Array<{ credits: number; requests: number }>;

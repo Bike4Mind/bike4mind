@@ -193,7 +193,7 @@ export type AiSpendSummary = {
   bySource: AiSpendBucket[];
 };
 
-const API_KEY_REQUEST_TRANSACTION_TYPES = ['completion_api_usage', 'decision_usage'];
+export const API_KEY_REQUEST_TRANSACTION_TYPES = ['completion_api_usage', 'decision_usage'];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const AI_SPEND_DAILY_WINDOW_DAYS = 90;
