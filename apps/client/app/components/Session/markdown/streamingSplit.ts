@@ -16,9 +16,8 @@ export interface StreamingBlocks {
   settledCrossBlock: boolean;
   /** Boundaries in the tail where a node could settle, as of the last parse. */
   settleCandidates: number;
-  /** Marker and start of the list the tail ends in (a further item of it is not a boundary), else null. */
-  tailListMarker: string | null;
-  tailListStart: number;
+  /** The list the tail ends in, if any: where it starts, its marker and its last item's content indent. */
+  tailList: { start: number; marker: string; contentIndent: number } | null;
   /** Offset in the tail of a line a list is waiting on; its end is a reason to parse again. */
   pendingLineAt: number | null;
 }
@@ -27,7 +26,7 @@ export type BlockParser = (text: string) => BlockNode;
 
 interface BlockNode {
   type: string;
-  position?: { start: { offset: number }; end: { offset: number } };
+  position?: { start: { offset: number; column: number }; end: { offset: number } };
   children?: BlockNode[];
 }
 
@@ -47,32 +46,54 @@ const hasCrossBlock = (node: BlockNode): boolean =>
 
 const BLANK_LINE = /\n[ \t]*\n/;
 const LIST_ITEM = /^(?:([-*+])|\d{1,9}([.)]))(?:\s|$)/;
-const listMarkerAt = (text: string, offset: number) => {
-  const m = LIST_ITEM.exec(text.slice(offset, offset + 12));
-  return m ? (m[1] ?? m[2]) : null;
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+const markerOf = (line: string) => {
+  const m = LIST_ITEM.exec(line);
+  return m && !THEMATIC_BREAK.test(line) ? (m[1] ?? m[2]) : null;
+};
+const indentOf = (line: string) => {
+  let indent = 0;
+  for (const ch of line) {
+    if (ch === ' ') indent++;
+    else if (ch === '\t') indent += 4 - (indent % 4);
+    else break;
+  }
+  return indent;
 };
 
-// A node can only settle at a blank line followed by a column-0 line. While the tail still
-// ends in a list, a further item of that list is not a boundary; any other column-0 line ends
-// the list first (a lazy continuation counts as ending it, which only costs a parse).
-const countSettleCandidates = (text: string, listMarker: string | null, listStart: number) => {
+/**
+ * Counts the places in the tail where a node could settle: a non-blank line after a blank line
+ * that starts a new top-level node. While the tail still ends in a list (as of the last parse),
+ * a line that continues it is not one: a further item with the same marker, or a line indented
+ * to the item's content. Any other line ends the list first. The count only grows as text
+ * arrives, so the tail is re-parsed when it rises.
+ */
+export const countSettleCandidates = (text: string, list: StreamingBlocks['tailList']) => {
   let count = 0;
-  let inList = listMarker !== null;
+  let inList = list !== null;
   let afterBlank = false;
-  let lineStart = listStart;
-  let first = true;
+  let lineStart = list ? list.start : 0;
+  let first = list !== null;
   while (lineStart <= text.length) {
     const lineEnd = text.indexOf('\n', lineStart);
     const line = text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd);
+    // The unterminated last line can still change class (a `1` becoming `1.`), which would let
+    // the count drop; inside a list it is left to the list's own wait for that line to end.
+    if (lineEnd === -1 && inList && !first) break;
     if (/^[ \t]*$/.test(line)) afterBlank = true;
-    else {
-      if (/^\S/.test(line) && !first) {
-        if (afterBlank && (!inList || listMarkerAt(text, lineStart) !== listMarker)) count++;
-        if (!afterBlank || !inList || listMarkerAt(text, lineStart) !== listMarker) inList = false;
+    else if (first) {
+      first = false;
+      afterBlank = false;
+    } else {
+      const indent = indentOf(line);
+      const continuesItem = inList && indent >= 1 && indent >= (list?.contentIndent ?? 0);
+      const furtherItem = inList && indent === 0 && markerOf(line) === list?.marker;
+      if (!continuesItem && !furtherItem) {
+        if (afterBlank) count++;
+        inList = false;
       }
       afterBlank = false;
     }
-    first = false;
     if (lineEnd === -1) break;
     lineStart = lineEnd + 1;
   }
@@ -85,8 +106,8 @@ const countSettleCandidates = (text: string, listMarker: string | null, listStar
  * next node, at which point later text can no longer change it; a list also waits for the next
  * node's first line to end, since a partial line could still turn into one of its items.
  * `prev` keeps the blocks already settled (so only the tail is parsed) while `text` still starts
- * with them, and the tail is only re-parsed once a new boundary has appeared in it; `final`
- * always parses, so `crossBlock` covers the whole reply.
+ * with them, and the tail is only re-parsed once a new boundary has appeared in it or the line
+ * a list waits on has ended; `final` always parses, so `crossBlock` covers the whole reply.
  */
 export const splitStreamingBlocks = (
   text: string,
@@ -102,7 +123,7 @@ export const splitStreamingBlocks = (
   if (
     !final &&
     kept &&
-    countSettleCandidates(tail, kept.tailListMarker, kept.tailListStart) <= kept.settleCandidates &&
+    countSettleCandidates(tail, kept.tailList) <= kept.settleCandidates &&
     (kept.pendingLineAt === null || tail.indexOf('\n', kept.pendingLineAt) === -1)
   ) {
     return { ...kept, blocks, tail };
@@ -133,16 +154,27 @@ export const splitStreamingBlocks = (
   }
   const rest = tail.slice(blockStart);
   const last = nodes[nodes.length - 1];
-  const tailListStart = last?.type === 'list' && last.position ? last.position.start.offset - blockStart : 0;
-  const tailListMarker = last?.type === 'list' ? listMarkerAt(rest, tailListStart) : null;
+  let tailList: StreamingBlocks['tailList'] = null;
+  if (last?.type === 'list' && last.position) {
+    const start = last.position.start.offset - blockStart;
+    const lineEnd = rest.indexOf('\n', start);
+    const marker = markerOf(rest.slice(start, lineEnd === -1 ? undefined : lineEnd));
+    const item = last.children?.[last.children.length - 1];
+    const content = item?.children?.[0];
+    // An item still without content may be the tail's last line turning into something else.
+    if (item?.position && !content && rest.indexOf('\n', item.position.start.offset - blockStart) === -1) {
+      pendingLineAt = item.position.start.offset;
+    }
+    const contentIndent = content?.position ? content.position.start.column - 1 : (marker?.length ?? 1) + 1;
+    if (marker) tailList = { start, marker, contentIndent };
+  }
   return {
     blocks,
     tail: rest,
     crossBlock: settledCrossBlock || nodes.slice(settledNodes).some(hasCrossBlock),
     settledCrossBlock,
-    settleCandidates: countSettleCandidates(rest, tailListMarker, tailListStart),
-    tailListMarker,
-    tailListStart,
+    settleCandidates: countSettleCandidates(rest, tailList),
+    tailList,
     pendingLineAt: pendingLineAt === null ? null : pendingLineAt - blockStart,
   };
 };

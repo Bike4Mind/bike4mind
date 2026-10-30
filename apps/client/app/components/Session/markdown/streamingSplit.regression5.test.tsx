@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown, { type Options } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
-import { createBlockParser, splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
+import { countSettleCandidates, createBlockParser, splitStreamingBlocks, type StreamingBlocks } from './streamingSplit';
 
 const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
 const rehypePlugins: Options['rehypePlugins'] = [rehypeKatex];
@@ -19,11 +19,7 @@ const md = (text: string) =>
       )
     : '';
 
-const perBlockHtml = (split: StreamingBlocks) =>
-  [...split.blocks, split.tail]
-    .filter(Boolean)
-    .map(md)
-    .join('\n');
+const perBlockHtml = (split: StreamingBlocks) => [...split.blocks, split.tail].filter(Boolean).map(md).join('\n');
 
 const chunkedPrefixes = (text: string, chunks: number[]) => {
   const out: string[] = [];
@@ -81,7 +77,9 @@ describe('skip rule: a new list node below a list is not a candidate', () => {
 
   it('settles numbered steps with column-0 fences under chunked frames', () => {
     const step = (n: number) => `${n}. Step ${n}:\n\`\`\`bash\nnpm run task-${n}\n\`\`\`\n\n`;
-    const text = Array.from({ length: 8 }, (_, i) => step(i + 1)).join('').trimEnd();
+    const text = Array.from({ length: 8 }, (_, i) => step(i + 1))
+      .join('')
+      .trimEnd();
     const { skip, always, frames, lagFrames } = compareWithAlwaysParse(chunkedPrefixes(text, [9, 13, 7, 21]));
     expect({ frames, lagFrames, settledSkip: skip.blocks.length, settledAlways: always.blocks.length }).toEqual({
       frames,
@@ -95,7 +93,9 @@ describe('skip rule: a new list node below a list is not a candidate', () => {
 describe('skip rule: numbered steps with column-0 fences, char by char', () => {
   it('settles every finished step when frames add one character', () => {
     const step = (n: number) => `${n}. Step ${n}:\n\`\`\`bash\nnpm run task-${n}\n\`\`\`\n\n`;
-    const text = Array.from({ length: 8 }, (_, i) => step(i + 1)).join('').trimEnd();
+    const text = Array.from({ length: 8 }, (_, i) => step(i + 1))
+      .join('')
+      .trimEnd();
     expect(compareWithAlwaysParse(charByChar(text)).lagFrames).toBe(0);
   });
 });
@@ -147,20 +147,24 @@ describe('skip rule: boundaries after a list that are counted', () => {
   });
 });
 
-const BOUNDARY = /\n[ \t]*\n(?=\S)/g;
-const LIST_ITEM = /^(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
-const countCandidates = (text: string, endsInList: boolean) => {
-  let count = 0;
-  for (const match of text.matchAll(BOUNDARY)) {
-    const lineStart = match.index + match[0].length;
-    if (!endsInList || !LIST_ITEM.test(text.slice(lineStart, lineStart + 12))) count++;
-  }
-  return count;
-};
+const countCandidates = (text: string, prev: StreamingBlocks) => countSettleCandidates(text, prev.tailList);
 
 describe('skip rule: candidate count monotonicity', () => {
   it('never sees the candidate count drop below the stored one on a skip frame', () => {
-    const pieces = ['- a', '1', '12', '1. b', '1) c', '+ d', '* e', 'para', '- - -', '> q', '```\nx\n```', '  - nested'];
+    const pieces = [
+      '- a',
+      '1',
+      '12',
+      '1. b',
+      '1) c',
+      '+ d',
+      '* e',
+      'para',
+      '- - -',
+      '> q',
+      '```\nx\n```',
+      '  - nested',
+    ];
     const seps = ['\n\n', '\n'];
     const drops: string[] = [];
     let seed = 5050;
@@ -181,7 +185,7 @@ describe('skip rule: candidate count monotonicity', () => {
         for (const prefix of chunkedPrefixes(text, chunks)) {
           parsed = false;
           const next = splitStreamingBlocks(prefix, spy, prev);
-          if (!parsed && prev && countCandidates(next.tail, prev.tailEndsInList) < prev.settleCandidates) {
+          if (!parsed && prev && countCandidates(next.tail, prev) < prev.settleCandidates) {
             drops.push(JSON.stringify(prefix));
           }
           prev = next;
