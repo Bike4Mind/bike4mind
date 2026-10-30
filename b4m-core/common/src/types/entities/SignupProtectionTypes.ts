@@ -81,6 +81,8 @@ export type SignupProtection = {
   repository: SignupProtectionRepository;
   mode?: 'observe' | 'enforce';
   notifyHold?: (review: SignupDomainReview) => Promise<void>;
+  /** Alerts operators that a required setting is unset and the drip is running on its fallback. */
+  notifyConfig?: (alert: { setting: 'signupGrantDripCap'; fallback: number }) => Promise<void>;
   /** Daily payout budget for free signup grants; absent means no budget is enforced. */
   grantBudget?: SignupGrantBudget;
 };

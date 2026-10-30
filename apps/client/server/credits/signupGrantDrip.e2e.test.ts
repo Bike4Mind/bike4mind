@@ -35,6 +35,7 @@ const adminSettings = {
 } as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: () => Promise<[]> };
 let clock = new Date();
 const notify = vi.fn<(alert: SignupGrantBudgetAlert) => Promise<void>>().mockResolvedValue();
+const notifyConfig = vi.fn<NonNullable<SignupProtection['notifyConfig']>>().mockResolvedValue();
 const signupProtection: SignupProtection = {
   repository: {
     findReview: async () => null,
@@ -44,6 +45,7 @@ const signupProtection: SignupProtection = {
     isOrganizationDomain: async () => false,
   },
   grantBudget: { repository: signupGrantBudgetRepository, notify, now: () => clock },
+  notifyConfig,
 };
 const adapters = {
   db: { users: userRepository, creditTransactions: creditTransactionRepository, adminSettings, signupProtection },
@@ -81,7 +83,11 @@ beforeEach(async () => {
   config.signupGrantActivityMaxCredits = '9000';
   config.verifiedUnlockCredits = '9000';
   delete config.signupGrantRiskPolicy;
+  delete config.signupGrantDailyCredits;
+  delete config.signupGrantDripCap;
   notify.mockClear();
+  notifyConfig.mockClear();
+  userService.resetUnsetDripCapAlert();
   clock = new Date();
 });
 
@@ -178,13 +184,60 @@ describe('signup activity drip', () => {
   it.each([
     ['daily rate', 'signupGrantActivityDailyCredits'],
     ['cap', 'signupGrantActivityMaxCredits'],
-  ])('is off when the %s is 0 or invalid', async (_label, key) => {
+    ['schedule daily rate', 'signupGrantDailyCredits'],
+    ['schedule cap', 'signupGrantDripCap'],
+  ])('is off when the %s is 0', async (_label, key) => {
     const user = await createSignupStageUser();
-    for (const value of ['0', '-5', 'abc']) {
-      config[key] = value;
-      expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 0 });
-    }
+    config[key] = '0';
+    expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 0 });
     expect(await dripRows(user.id)).toHaveLength(0);
+  });
+
+  it('applies a lowered then raised live cap on the next drip, never paying past it', async () => {
+    const user = await createSignupStageUser();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+    expect((await drip(user.id, 1)).creditsGranted).toBe(1000);
+    config.signupGrantDripCap = '2000';
+    expect((await drip(user.id, 2)).creditsGranted).toBe(0);
+    config.signupGrantDripCap = '1500';
+    expect((await drip(user.id, 3)).creditsGranted).toBe(0);
+    config.signupGrantDripCap = '3500';
+    const granted: number[] = [];
+    for (let n = 4; n < 7; n++) granted.push((await drip(user.id, n)).creditsGranted);
+    expect(granted).toEqual([1000, 500, 0]);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ dripCredits: 3500, stage: 'signup' });
+  });
+
+  it('grows the enrolled unlock pool when the cap is raised above its snapshot', async () => {
+    config.verifiedUnlockCredits = '2000';
+    const user = await createSignupStageUser();
+    expect((await User.findById(user.id))?.signupGrant?.unlockCredits).toBe(2000);
+    config.signupGrantDripCap = '3500';
+    const granted: number[] = [];
+    for (let n = 0; n < 5; n++) granted.push((await drip(user.id, n)).creditsGranted);
+    expect(granted).toEqual([1000, 1000, 1000, 500, 0]);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      unlockCredits: 3500,
+      creditsReleased: 4500,
+      dripCredits: 3500,
+      stage: 'unlocked',
+    });
+  });
+
+  it('alerts once a day when the cap falls back to the registry default', async () => {
+    delete config.verifiedUnlockCredits;
+    delete config.signupGrantActivityMaxCredits;
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    await drip(user.id, 1);
+    expect(notifyConfig).toHaveBeenCalledTimes(1);
+    expect(notifyConfig).toHaveBeenCalledWith({ setting: 'signupGrantDripCap', fallback: 9000 });
+  });
+
+  it('does not alert when a cap is configured', async () => {
+    const user = await createSignupStageUser();
+    await drip(user.id, 0);
+    expect(notifyConfig).not.toHaveBeenCalled();
   });
 
   it('draws the daily budget, and an exhausted budget pays nothing and retries on a later day', async () => {

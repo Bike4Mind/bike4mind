@@ -64,6 +64,11 @@ export function signupGrantRemaining(grant: SignupGrant): number {
   return Math.max(0, grant.signupCredits + grant.unlockCredits - grant.creditsReleased);
 }
 
+/** Credits the drip may still pay under `dripCap`; never negative when the cap was lowered below what was dripped. */
+export function signupGrantDripRemaining(grant: Pick<SignupGrant, 'dripCredits'>, dripCap: number): number {
+  return Math.max(0, dripCap - (Number.isSafeInteger(grant.dripCredits) ? (grant.dripCredits as number) : 0));
+}
+
 export function nonnegativeGrantCredits(value: unknown): number {
   if (typeof value !== 'string' && typeof value !== 'number') return 0;
   if (typeof value === 'string' && !value.trim()) return 0;

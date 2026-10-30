@@ -1,4 +1,4 @@
-import { hasPaidSignupDrip } from '@bike4mind/common';
+import { hasPaidSignupDrip, signupGrantDripRemaining } from '@bike4mind/common';
 import { resolveSignupDripPeriod } from './signupDripPeriod';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
@@ -36,8 +36,8 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
   if (!(await isActivityDripEnabled())) return result;
   const requiredSeconds = await resolveRequiredActiveSeconds();
   result.requiredSeconds = requiredSeconds;
-  const { dailyCredits, dripCap: maxCredits } = await userService.resolveDripLimits(adminSettingsRepository);
-  if (!(dailyCredits > 0) || !(maxCredits > 0) || (grant.dripCredits ?? 0) >= maxCredits) return result;
+  const { dailyCredits, dripCap } = await userService.resolveDripLimits(adminSettingsRepository);
+  if (!(dailyCredits > 0) || signupGrantDripRemaining(grant, dripCap) <= 0) return result;
 
   const prior = grant.activity;
   const samePeriod = prior?.day === day && prior.period === period.key;

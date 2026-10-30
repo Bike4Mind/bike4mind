@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { newSignupGrant, resolveSignupGrantSchedule, resolveSignupGrantSettings } from './signupGrant';
+import {
+  newSignupGrant,
+  resolveSignupGrantSchedule,
+  resolveSignupGrantSettings,
+  signupGrantDripRemaining,
+} from './signupGrant';
 
 const settings = (values: Record<string, unknown>) =>
   ({
@@ -121,5 +126,21 @@ describe('signup grant schedule', () => {
       inviteBonusCredits: 0,
       dripCapSource: 'default',
     });
+  });
+});
+
+describe('signupGrantDripRemaining', () => {
+  it.each([
+    [undefined, 9000],
+    [NaN, 9000],
+    [1.5, 9000],
+    [2000, 7000],
+    [9000, 0],
+    [9500, 0],
+  ])('dripped %s under a 9000 cap leaves %s', (dripCredits, remaining) => {
+    expect(signupGrantDripRemaining({ dripCredits }, 9000)).toBe(remaining);
+  });
+  it('leaves nothing under a 0 cap', () => {
+    expect(signupGrantDripRemaining({}, 0)).toBe(0);
   });
 });

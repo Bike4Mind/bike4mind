@@ -3,6 +3,7 @@ import {
   hasPaidSignupDrip,
   PENDING_FREE_CREDITS_TAG,
   resolveSignupGrantSchedule,
+  signupGrantDripRemaining,
   type IUserDocument,
   type SignupGrant,
   type SignupGrantUnlockReason,
@@ -27,7 +28,7 @@ export type SignupGrantValidator = (
 ) => Promise<boolean | { cumulativeCredits: number } | { unlockedOrgId: string }>;
 
 /** One UTC day's activity drip: a fixed daily amount, bounded by the account-wide drip cap. */
-type DripEvidence = { drip: { day: string; dailyCredits: number; maxCredits: number; period?: string } };
+type DripEvidence = { drip: { day: string; dailyCredits: number; dripCap: number; period?: string } };
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
 
@@ -93,6 +94,8 @@ async function releaseStage(
       let assessedBand: SignupRiskBand | undefined;
       let target: number;
       let dripAmount = 0;
+      let unlockCredits = grant.unlockCredits;
+      let dripRemainingAfter = 0;
       if (expected === 'pending_email') {
         if (!assessment) {
           const setting = await db.adminSettings.findBySettingName('signupGrantRiskPolicy');
@@ -127,18 +130,19 @@ async function releaseStage(
           throw new Error('Invalid signup assessment entitlement');
       } else {
         if (typeof evidence === 'object' && 'drip' in evidence) {
-          const { day, dailyCredits, maxCredits, period } = evidence.drip;
+          const { day, dailyCredits, dripCap, period } = evidence.drip;
           const dripped = grant.dripCredits ?? 0;
           if (hasPaidSignupDrip(grant, day, period) || !Number.isSafeInteger(dripped) || dripped < 0) return noGrant();
-          dripAmount = Math.max(
-            0,
-            Math.min(dailyCredits, maxCredits - dripped, grant.unlockCredits - dripped, maximum - grant.creditsReleased)
-          );
+          dripAmount = Math.max(0, Math.min(dailyCredits, signupGrantDripRemaining(grant, dripCap)));
           target = grant.creditsReleased + dripAmount;
+          // The live cap governs the drip, so a cap raised after enrollment grows the snapshot pool to fit,
+          // and the grant stays open while the cap still has room.
+          unlockCredits = Math.max(grant.unlockCredits, target - grant.signupCredits);
+          dripRemainingAfter = signupGrantDripRemaining({ dripCredits: dripped + dripAmount }, dripCap);
         } else {
           target = evidence === true || 'unlockedOrgId' in evidence ? maximum : evidence.cumulativeCredits;
         }
-        if (!Number.isSafeInteger(target) || target < 0 || target > maximum)
+        if (!Number.isSafeInteger(target) || target < 0 || target > grant.signupCredits + unlockCredits)
           throw new Error('Invalid unlock entitlement');
       }
       const amount = Math.max(0, target - grant.creditsReleased);
@@ -206,7 +210,7 @@ async function releaseStage(
         creditTransactionId = result.creditTransactionId;
       }
       const released = grant.creditsReleased + amount;
-      const unlocked = released >= maximum;
+      const unlocked = released >= grant.signupCredits + unlockCredits && dripRemainingAfter <= 0;
       const updated = await db.users.update({
         id: userId,
         ...(assessment ? { signupGrantAssessment: assessment } : {}),
@@ -218,6 +222,7 @@ async function releaseStage(
           nextCondition: unlocked ? null : 'verification',
           ...(reason ? { unlockedBy: reason } : {}),
           ...(dripDay ? { dripCredits: (grant.dripCredits ?? 0) + dripAmount, lastDripDay: dripDay } : {}),
+          unlockCredits,
           ...(dripPeriod ? { lastDripPeriod: dripPeriod } : {}),
           ...(typeof evidence === 'object' && 'unlockedOrgId' in evidence
             ? { unlockedOrgId: evidence.unlockedOrgId }
@@ -310,6 +315,23 @@ async function unlockWithHeldTranche(
   return { ...remainder, creditsGranted, currentCredits: remainder.currentCredits ?? tranche.currentCredits };
 }
 
+let unsetDripCapAlertDay: string | undefined;
+
+/** Fire-and-forget, at most once per UTC day per process: the drip is paying from the registry default cap. */
+function notifyUnsetDripCap(protection: GrantAdapters['db']['signupProtection'], fallback: number) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!protection?.notifyConfig || unsetDripCapAlertDay === today) return;
+  unsetDripCapAlertDay = today;
+  protection.notifyConfig({ setting: 'signupGrantDripCap', fallback }).catch(error => {
+    console.warn('[signup-grant] Unset drip cap alert failed', error);
+  });
+}
+
+/** Test seam: clears the once-per-day alert dedupe. */
+export function resetUnsetDripCapAlert() {
+  unsetDripCapAlertDay = undefined;
+}
+
 export async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettings']) {
   const { dailyCredits, dripCap, dripCapSource } = await resolveSignupGrantSchedule(adminSettings);
   return { dailyCredits, dripCap, dripCapSource };
@@ -328,8 +350,9 @@ export async function dripSignupGrant(
 ): Promise<GrantFreeCreditsResult> {
   if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
-  const { dailyCredits, dripCap: maxCredits } = await resolveDripLimits(adapters.db.adminSettings);
-  if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
+  const { dailyCredits, dripCap, dripCapSource } = await resolveDripLimits(adapters.db.adminSettings);
+  if (dripCapSource === 'default') notifyUnsetDripCap(adapters.db.signupProtection, dripCap);
+  if (!(dailyCredits > 0) || !(dripCap > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || hasPaidSignupDrip(user.signupGrant, day, period)) return noGrant();
   // Existence only, and bounded: holders that are blocked, AI-revoked or held before `day` are ignored
@@ -349,7 +372,7 @@ export async function dripSignupGrant(
     userId,
     'signup',
     'activity_drip',
-    async current => (current.emailVerified ? { drip: { day, dailyCredits, maxCredits, period } } : false),
+    async current => (current.emailVerified ? { drip: { day, dailyCredits, dripCap, period } } : false),
     adapters
   );
 }
