@@ -27,6 +27,7 @@ import {
 } from '../constants/forcedRetrieval';
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
+import { ARENA_QUALITY_DEFAULTS } from '../preferenceArena';
 import {
   AI_EDIT_VERSION_RETENTION_DEFAULT,
   AI_EDIT_VERSION_RETENTION_MAX,
@@ -507,6 +508,14 @@ export const SettingKeySchema = z.enum([
   'noCardUnlockGithubMinRepos',
   'noCardUnlockWorkEmailDomainDailyCap',
   'noCardUnlockProbeInconclusiveAllows',
+  'preferenceArenaEnabled',
+  'preferenceArenaCreditsPerVote',
+  'preferenceArenaDailyVoteCap',
+  'preferenceArenaLifetimeCreditCap',
+  'preferenceArenaMinResponseMs',
+  'preferenceArenaGoldRatePercent',
+  'preferenceArenaMinGoldVotes',
+  'preferenceArenaMinGoldAccuracyPercent',
   'signupAnomaly',
 
   // WEATHER SERVICE SETTINGS
@@ -4488,6 +4497,84 @@ export const settingsMap = {
       'Grant the work-email unlock when the catch-all mail-domain check cannot reach a verdict. This deployment cannot run that check, so ON grants work-email unlocks after only the MX and disposable-domain checks. OFF (default) refuses them.',
     category: 'Users',
     userReadable: true,
+  }),
+  preferenceArenaEnabled: makeBooleanSetting({
+    key: 'preferenceArenaEnabled',
+    // Read by the client to decide whether to show the arena entry point.
+    userReadable: true,
+    name: 'Preference Arena',
+    defaultValue: false,
+    description:
+      'Lets verified users compare two model answers to a prompt and pick the better one, earning a small capped credit reward per accepted vote. When OFF (default), no pairs are served and votes are refused.',
+    category: 'Users',
+  }),
+  preferenceArenaCreditsPerVote: makeNumberSetting({
+    key: 'preferenceArenaCreditsPerVote',
+    name: 'Preference Arena: Credits Per Vote',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Credits granted per accepted vote. 0 keeps the arena collecting votes without paying.',
+    category: 'Users',
+  }),
+  preferenceArenaDailyVoteCap: makeNumberSetting({
+    key: 'preferenceArenaDailyVoteCap',
+    name: 'Preference Arena: Daily Reward Cap (votes)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Most votes per user per UTC day that can earn credits. 0 earns nothing.',
+    category: 'Users',
+  }),
+  preferenceArenaLifetimeCreditCap: makeNumberSetting({
+    key: 'preferenceArenaLifetimeCreditCap',
+    name: 'Preference Arena: Lifetime Credit Cap',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description: 'Most credits one user can earn from the arena in total. 0 earns nothing.',
+    category: 'Users',
+  }),
+  preferenceArenaMinResponseMs: makeNumberSetting({
+    key: 'preferenceArenaMinResponseMs',
+    name: 'Preference Arena: Minimum Response Time (ms)',
+    defaultValue: ARENA_QUALITY_DEFAULTS.minResponseMs,
+    int: true,
+    min: 0,
+    description:
+      'Votes cast faster than this (ms, measured on the server) are recorded but earn nothing. 0 keeps rewards off.',
+    category: 'Users',
+  }),
+  preferenceArenaGoldRatePercent: makeNumberSetting({
+    key: 'preferenceArenaGoldRatePercent',
+    name: 'Preference Arena: Gold Question Rate (%)',
+    defaultValue: ARENA_QUALITY_DEFAULTS.goldRatePercent,
+    int: true,
+    min: 0,
+    max: 100,
+    description:
+      'Percent of served pairs drawn from the gold-question set used to check rater quality. Gold pairs must have a clear winner; a Tie on a gold pair counts as a miss.',
+    category: 'Users',
+  }),
+  preferenceArenaMinGoldVotes: makeNumberSetting({
+    key: 'preferenceArenaMinGoldVotes',
+    name: 'Preference Arena: Minimum Gold Answers',
+    defaultValue: ARENA_QUALITY_DEFAULTS.minGoldVotes,
+    int: true,
+    min: 0,
+    description: 'Gold questions a rater must answer before any vote can earn. 0 earns nothing.',
+    category: 'Users',
+  }),
+  preferenceArenaMinGoldAccuracyPercent: makeNumberSetting({
+    key: 'preferenceArenaMinGoldAccuracyPercent',
+    name: 'Preference Arena: Minimum Gold Accuracy (%)',
+    defaultValue: ARENA_QUALITY_DEFAULTS.minGoldAccuracyPercent,
+    int: true,
+    min: 0,
+    max: 100,
+    description:
+      'Raters whose gold accuracy falls below this stop earning. Their votes are still recorded. 0 keeps rewards off.',
+    category: 'Users',
   }),
   freeTierDailySpendCapCredits: makeNumberSetting({
     key: 'freeTierDailySpendCapCredits',
