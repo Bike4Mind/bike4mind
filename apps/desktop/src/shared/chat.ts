@@ -894,6 +894,18 @@ export function isLocalModel(id: string): boolean {
   return id.startsWith('local:');
 }
 
+/**
+ * Whether a turn on this model is sent any tools. A device-local model needs its catalog entry
+ * to know; a hosted one is assumed able unless the catalog says otherwise. Main decides the
+ * turn's tools by this, and the renderer hides controls that only work through them.
+ */
+export function modelSupportsTools(
+  modelId: string,
+  option: Pick<ChatModelOption, 'supportsTools'> | undefined
+): boolean {
+  return option?.supportsTools !== false && (!isLocalModel(modelId) || !!option);
+}
+
 export function isLocalBackend(model: { backend?: string }): boolean {
   return model.backend === 'ollama' || model.backend?.startsWith('local-') === true;
 }

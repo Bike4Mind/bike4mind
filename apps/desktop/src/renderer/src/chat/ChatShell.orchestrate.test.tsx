@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSession, ChatSessionSummary } from '@shared/chat';
+import type { ChatModelOption, ChatSession, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -78,6 +78,7 @@ const CODE = {
   id: 'code-1',
   title: 'Code thread',
   mode: 'code',
+  model: 'test-model',
   project: {
     directory: '/work/repo',
     name: 'repo',
@@ -111,6 +112,7 @@ let host: HTMLElement | null = null;
 const streamUnsubscribe = vi.fn();
 const onStreamEvent = vi.fn(() => streamUnsubscribe);
 let listed: ChatSessionSummary[] = SESSIONS;
+let catalogModels: ChatModelOption[] = [];
 const setSessionOrchestrate = vi.fn(async (id: string, orchestrate: boolean) => {
   const found = listed.find(session => session.id === id);
   if (!found) return null;
@@ -123,6 +125,7 @@ const setSessionOrchestrate = vi.fn(async (id: string, orchestrate: boolean) => 
 beforeEach(() => {
   window.localStorage.clear();
   listed = SESSIONS;
+  catalogModels = [];
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -147,7 +150,7 @@ beforeEach(() => {
         workspaceChanges: async () => null,
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
-        listModels: async () => ({ models: [] }),
+        listModels: async () => ({ models: catalogModels }),
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
       pullRequests: quietBridge({ watch: async () => null }),
@@ -353,7 +356,37 @@ describe('orchestrate mode in the chat shell', () => {
     expect(setSessionOrchestrate).toHaveBeenCalledTimes(1);
     await act(async () => delegate()?.click());
     expect(setSessionOrchestrate).toHaveBeenLastCalledWith(CODE.id, false);
-    expect(delegate()?.checked).toBe(false);
+    // Off with no agents, the stage has nothing to show and falls back to the conversation.
+    expect(query('orchestrator-stage')).toBeNull();
+    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+  });
+
+  it('reopens an empty code session on the conversation when its surface was left on orchestrate but the flag is off', async () => {
+    window.localStorage.setItem(`b4m.orchestrator.surface.${CODE.id}`, 'orchestrate');
+    listed = [...SESSIONS, CODE];
+    await openParent(CODE.title, 'code');
+    expect(query('orchestrator-stage')).toBeNull();
+    expect(query('chat-thread-empty-host')).not.toBeNull();
+    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+  });
+
+  it('keeps the empty stage for a code session whose flag is on', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.surface.${CODE.id}`, 'orchestrate');
+    listed = [...SESSIONS, { ...CODE, orchestrate: true } as ChatSessionSummary];
+    await openParent(CODE.title, 'code');
+    expect(query('orchestrator-empty-state')).not.toBeNull();
+  });
+
+  it('offers neither the chip nor the switch on a code session whose model has no tools', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.surface.${CODE.id}`, 'orchestrate');
+    catalogModels = [{ id: 'no-tools', name: 'No tools', supportsTools: false } as ChatModelOption];
+    listed = [...SESSIONS, { ...CODE, model: 'no-tools', orchestrate: true } as ChatSessionSummary];
+    await openParent(CODE.title, 'code');
+    expect(query('chat-orchestrate-chip')).toBeNull();
+    expect(query('orchestrator-stage')).toBeNull();
+    expect(query('orchestrator-delegate-switch')).toBeNull();
   });
 
   it('offers no orchestrate controls on a code agent at the spawn depth cap, even with the flag on', async () => {

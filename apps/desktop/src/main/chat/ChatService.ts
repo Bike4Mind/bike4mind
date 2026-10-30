@@ -60,6 +60,7 @@ import {
   localBackend,
   MAX_SPAWN_DEPTH,
   messagesSinceBoundary,
+  modelSupportsTools,
   NO_LOCAL_MODEL,
   orchestratesAgents,
   parseLocalModelId,
@@ -2797,7 +2798,7 @@ export class ChatService {
         this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null);
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
-      let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
+      let toolsSupported = modelSupportsTools(session.model, modelOption);
       // See chat/deferredTools.ts. Decided once per turn, so a turn never mixes the two shapes.
       const deferredSetting = this.deps.deferredTools;
       const deferred =

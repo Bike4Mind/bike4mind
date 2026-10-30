@@ -12,7 +12,14 @@ import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { canSpawnDeeper, findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import {
+  canSpawnDeeper,
+  findModelOption,
+  isLocalBackend,
+  isLocalModel,
+  modelSupportsTools,
+  SESSION_TITLE_MAX_LENGTH,
+} from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
@@ -492,10 +499,17 @@ export function ChatShell({
   const orchestratorPrefs = useOrchestratorPrefs(activeId);
   const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
-  // One at the depth cap could start none, so main ignores its flag and so does this.
-  const orchestrateCapable = !!activeSummary?.project && canSpawnDeeper(activeSummary);
+  // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag
+  // there (orchestratesAgents, toolsSupported) and so does this.
+  const orchestrateCapable =
+    !!activeSummary?.project &&
+    canSpawnDeeper(activeSummary) &&
+    modelSupportsTools(activeSummary.model, findModelOption(catalog.models, activeSummary.model));
   const delegating = activeSummary?.orchestrate === true;
-  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || orchestrateCapable);
+  // With no agents the stage is only worth showing while Orchestrate is on; a surface left on
+  // 'orchestrate' with the flag off (or reset by a relaunch) opens on the conversation.
+  const orchestrating =
+    orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || (orchestrateCapable && delegating));
   const { setOrchestrate } = conversation;
   const startOrchestrating = useCallback(() => {
     if (!delegating) void setOrchestrate(true);
@@ -1069,7 +1083,8 @@ export function ChatShell({
               </Box>
               <OrchestrateToggle
                 states={spawnedStates}
-                surface={orchestratorPrefs.surface}
+                // The surface shown, which is Chat when a stored 'orchestrate' has nothing to show.
+                surface={orchestrating ? 'orchestrate' : 'chat'}
                 onSurfaceChange={orchestratorPrefs.setSurface}
                 canStart={orchestrateCapable}
                 onStart={startOrchestrating}
