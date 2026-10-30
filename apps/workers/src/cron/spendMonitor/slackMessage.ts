@@ -35,9 +35,7 @@ const RULE_TITLES: Record<SpendRuleId, string> = {
 
 const PLATFORM_RULES: ReadonlySet<SpendRuleId> = new Set(['platform_spike', 'platform_cost_spike']);
 
-// Labels come from user-controlled names, and the alarms channel contract is ASCII only.
-const toAscii = (text: string) => text.replace(/\P{ASCII}/gu, '?');
-const safe = (text: string) => escapeMrkdwn(toAscii(text));
+const safe = escapeMrkdwn;
 
 const formatCredits = (credits: number) => Math.round(credits).toLocaleString('en-US');
 const formatUsd = (usd: number) => `$${usd.toFixed(2)}`;
@@ -57,20 +55,26 @@ function formatAmount(rule: SpendRuleId, amount: number, creditUsd: number): str
   return `${formatCredits(amount)} credits (~${formatUsd(amount * creditUsd)})`;
 }
 
+function listPriceContext(stage: string, rule: SpendRuleId, creditUsd: number): string[] {
+  const context = [safe(stage)];
+  if (rule !== 'platform_cost_spike') context.push(`approx. at list price, ${formatUsd(creditUsd)} per credit`);
+  return context;
+}
+
 function buildResolveMessage(input: SpendAlertMessageInput, title: string): SlackAlarmMessage {
   const { alert, scope, creditUsd } = input;
   const peak =
     alert.rule === 'platform_cost_spike' ? formatUsd(alert.peakValue) : `${formatCredits(alert.peakValue)} credits`;
   const endedAt = alert.resolvedAt ?? new Date();
   const duration = formatDuration(endedAt.getTime() - alert.openedAt.getTime());
-  const line = `Resolved: ${title} - ${toAscii(scope.label)}, peak ${peak}, lasted ${duration}`;
+  const line = `Resolved: ${title} - ${scope.label}, peak ${peak}, lasted ${duration}`;
 
   return composeAlarmMessage({
     stage: input.stage,
     level: 'info',
     title: line,
     sections: [],
-    context: [safe(input.stage), `approx. at list price, ${formatUsd(creditUsd)} per credit`],
+    context: listPriceContext(input.stage, alert.rule, creditUsd),
     summary: 'spend incident resolved',
   });
 }
@@ -112,7 +116,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   const buttons: { label: string; url: string }[] = [];
   const appUrl = input.appUrl?.replace(/\/+$/, '');
   if (appUrl) {
-    if (scope.adminPath) buttons.push({ label: `Open ${toAscii(scope.label)}`, url: `${appUrl}${scope.adminPath}` });
+    if (scope.adminPath) buttons.push({ label: `Open ${scope.label}`, url: `${appUrl}${scope.adminPath}` });
     buttons.push({ label: ADMIN_LINKS['spend-monitor'].label, url: `${appUrl}${ADMIN_LINKS['spend-monitor'].path}` });
   }
 
@@ -128,6 +132,6 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     sections,
     buttons,
     context,
-    summary: `${toAscii(scope.label)}, ${formatAmount(alert.rule, alert.lastValue, creditUsd)} in the last 15m`,
+    summary: `${scope.label}, ${formatAmount(alert.rule, alert.lastValue, creditUsd)} in the last 15m`,
   });
 }
