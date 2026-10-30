@@ -36,6 +36,7 @@ const repo = vi.hoisted(() => ({
   updateForUser: vi.fn(),
   deleteForUser: vi.fn(),
   create: vi.fn(),
+  removeFromOversees: vi.fn(),
 }));
 const tickets = vi.hoisted(() => ({
   softDeleteByLoop: vi.fn(),
@@ -44,6 +45,12 @@ const tickets = vi.hoisted(() => ({
   countBlockedByLoop: vi.fn(),
 }));
 const loopEvents = vi.hoisted(() => ({ listForLoop: vi.fn(), deleteManyForLoop: vi.fn() }));
+const directives = vi.hoisted(() => ({
+  listForLoop: vi.fn(),
+  deleteManyForLoop: vi.fn(),
+  findByIdForUser: vi.fn(),
+  transition: vi.fn(),
+}));
 const settings = vi.hoisted(() => ({ EnableLoops: true as unknown }));
 const executions = vi.hoisted(() => ({ sumCreditsByLoop: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
@@ -51,6 +58,7 @@ vi.mock('@bike4mind/database', () => ({
   agentExecutionRepository: executions,
   workItemRepository: tickets,
   loopEventRepository: loopEvents,
+  loopDirectiveRepository: directives,
   adminSettingsRepository: {
     getSettingsValue: async (key: string) => settings[key as 'EnableLoops'],
     findAll: async () => [],
@@ -76,6 +84,8 @@ currentModule.name = 'tickets';
 await import('@pages/api/loops/[id]/tickets');
 currentModule.name = 'events';
 await import('@pages/api/loops/[id]/events');
+currentModule.name = 'override';
+await import('@pages/api/loops/[id]/events/[eventId]/override');
 
 const OID = '507f1f77bcf86cd799439011';
 
@@ -108,6 +118,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   settings.EnableLoops = true;
   executions.sumCreditsByLoop.mockResolvedValue({});
+  directives.listForLoop.mockResolvedValue([]);
   tickets.countBlockedByLoop.mockResolvedValue({});
   getOrCreateSession.mockResolvedValue({ sessionId: 's-new' });
   resolveDefaultChatModel.mockResolvedValue({ model: 'default-model' });
@@ -127,6 +138,7 @@ describe('EnableLoops gate', () => {
     ['item', 'patch'],
     ['item', 'delete'],
     ['run', 'post'],
+    ['override', 'post'],
   ];
 
   it.each(routes)('%s %s is a 404 while the setting is off, before touching the repository', async (mod, method) => {
@@ -391,7 +403,45 @@ describe('DELETE /api/loops/:id', () => {
     expect(repo.deleteForUser).toHaveBeenCalledWith(OID, 'u1');
     expect(tickets.softDeleteByLoop).toHaveBeenCalledWith('u1', OID);
     expect(loopEvents.deleteManyForLoop).toHaveBeenCalledWith('u1', OID);
+    expect(directives.deleteManyForLoop).toHaveBeenCalledWith('u1', OID);
+    expect(repo.removeFromOversees).toHaveBeenCalledWith('u1', OID);
     expect(res._getStatusCode()).toBe(204);
+  });
+});
+
+describe('oversees', () => {
+  const OTHER = '507f1f77bcf86cd799439022';
+  const ownLoops = (...ids: string[]) =>
+    repo.findByIdAndUserId.mockImplementation(async (id: string) => (ids.includes(id) ? loop({ id }) : null));
+
+  it('saves a valid list on create and on edit', async () => {
+    ownLoops(OID, OTHER);
+    await call('collection', 'post', { body: { ...validBody, oversees: [OTHER] } }).result;
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ oversees: [OTHER] }));
+
+    await call('item', 'patch', { query: { id: OID }, body: { oversees: [OTHER] } }).result;
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID, 'u1', { oversees: [OTHER] }, 'draft');
+  });
+
+  it.each([
+    ['itself', () => [OID], /itself/],
+    ['an unknown or foreign loop', () => ['507f1f77bcf86cd799439099'], /unknown loop/],
+    ['more than 5 loops', () => Array.from({ length: 6 }, (_, i) => `l${i}`), /5 entries or fewer/],
+    ['a non-array', () => 'abc', /array/],
+  ])('rejects %s with a 400', async (_label, value, message) => {
+    ownLoops(OID, OTHER);
+    await expect(
+      call('item', 'patch', { query: { id: OID }, body: { oversees: value() } }).result
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(message) });
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  it('clears on null or an empty list', async () => {
+    ownLoops(OID);
+    await call('item', 'patch', { query: { id: OID }, body: { oversees: [] } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID, 'u1', { oversees: null }, 'draft');
+    await call('item', 'patch', { query: { id: OID }, body: { oversees: null } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID, 'u1', { oversees: null }, 'draft');
   });
 });
 
@@ -448,6 +498,21 @@ describe('GET /api/loops/:id/tickets', () => {
   });
 });
 
+const directive = (overrides: Record<string, unknown> = {}) => ({
+  id: 'd1',
+  loopId: OID,
+  userId: 'u1',
+  fromLoopId: 'overseer',
+  fromLoopName: 'Overseer',
+  executionId: 'x1',
+  instruction: 'Stop writing tests',
+  reason: 'Slow',
+  state: 'open',
+  replies: [],
+  createdAt: new Date(1000),
+  ...overrides,
+});
+
 describe('GET /api/loops/:id/events', () => {
   it('is session-only', () => {
     expect(baseApiOptions.events).toEqual({ auth: 'jwtOnly' });
@@ -473,5 +538,116 @@ describe('GET /api/loops/:id/events', () => {
     repo.findByIdAndUserId.mockResolvedValue(null);
     await expect(call('events', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
     expect(loopEvents.listForLoop).not.toHaveBeenCalled();
+  });
+
+  it('merges directives sent and received with unsure events, newest first, without owner ids', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    loopEvents.listForLoop.mockResolvedValue([
+      { id: 'u1', kind: 'unsure', executionId: 'x', reason: 'r', createdAt: new Date(2000) },
+    ]);
+    directives.listForLoop.mockResolvedValue([
+      directive({ id: 'd2', createdAt: new Date(3000) }),
+      directive({
+        id: 'd1',
+        createdAt: new Date(1000),
+        replies: [{ by: 'owner', outcome: 'withdrawn', userId: 'u1', at: new Date(1500) }],
+      }),
+    ]);
+
+    const { res, result } = call('events', 'get', { query: { id: OID } });
+    await result;
+
+    expect(directives.listForLoop).toHaveBeenCalledWith('u1', OID, 100);
+    const rows = res._getJSONData();
+    expect(rows.map((row: { id: string; kind: string }) => [row.id, row.kind])).toEqual([
+      ['d2', 'directive'],
+      ['u1', 'unsure'],
+      ['d1', 'directive'],
+    ]);
+    expect(rows[0]).toMatchObject({ fromLoopId: 'overseer', fromLoopName: 'Overseer', state: 'open' });
+    expect(rows[0]).not.toHaveProperty('userId');
+    expect(rows[2].replies[0]).not.toHaveProperty('userId');
+  });
+});
+
+describe('POST /api/loops/:id/events/:eventId/override', () => {
+  const override = (body: Record<string, unknown>, query: Record<string, string> = { id: OID, eventId: 'd1' }) =>
+    call('override', 'post', { query, body });
+
+  beforeEach(() => {
+    repo.findByIdAndUserId.mockResolvedValue(loop());
+    directives.transition.mockImplementation(async (_id, _u, _from, state, reply) =>
+      directive({ state, replies: [reply] })
+    );
+  });
+
+  it('is session-only', () => {
+    expect(baseApiOptions.override).toEqual({ auth: 'jwtOnly' });
+  });
+
+  it.each(['open', 'accepted', 'pushed_back'])('withdraws a %s directive as an owner reply', async state => {
+    directives.findByIdForUser.mockResolvedValue(directive({ state }));
+    const { res, result } = override({ action: 'withdraw', note: ' not needed ' });
+    await result;
+    expect(directives.transition).toHaveBeenCalledWith(
+      'd1',
+      'u1',
+      ['open', 'accepted', 'pushed_back'],
+      'withdrawn',
+      expect.objectContaining({ by: 'owner', outcome: 'withdrawn', note: 'not needed', userId: 'u1' })
+    );
+    expect(res._getJSONData()).toMatchObject({ state: 'withdrawn', kind: 'directive' });
+    expect(res._getJSONData().replies[0]).not.toHaveProperty('userId');
+  });
+
+  it('overrules a pushed-back directive back to open, from the overseer side too', async () => {
+    directives.findByIdForUser.mockResolvedValue(directive({ state: 'pushed_back', loopId: 'w', fromLoopId: OID }));
+    const { res, result } = override({ action: 'overrule' });
+    await result;
+    expect(directives.transition).toHaveBeenCalledWith(
+      'd1',
+      'u1',
+      ['pushed_back'],
+      'open',
+      expect.objectContaining({ by: 'owner', outcome: 'overruled' })
+    );
+    expect(res._getJSONData().state).toBe('open');
+  });
+
+  it.each([
+    ['overrule', 'open'],
+    ['overrule', 'accepted'],
+    ['withdraw', 'done'],
+    ['withdraw', 'withdrawn'],
+  ])('is a 409 to %s a directive that is %s', async (action, state) => {
+    directives.findByIdForUser.mockResolvedValue(directive({ state }));
+    await expect(override({ action }).result).rejects.toMatchObject({ statusCode: 409 });
+    expect(directives.transition).not.toHaveBeenCalled();
+  });
+
+  it('is a 409 when the directive changed underneath', async () => {
+    directives.findByIdForUser.mockResolvedValue(directive());
+    directives.transition.mockResolvedValue(null);
+    await expect(override({ action: 'withdraw' }).result).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("is a 404 for another user's loop or event, or an event of an unrelated loop", async () => {
+    repo.findByIdAndUserId.mockResolvedValueOnce(null);
+    await expect(override({ action: 'withdraw' }).result).rejects.toMatchObject({ statusCode: 404 });
+
+    directives.findByIdForUser.mockResolvedValueOnce(null);
+    await expect(override({ action: 'withdraw' }).result).rejects.toMatchObject({ statusCode: 404 });
+
+    directives.findByIdForUser.mockResolvedValueOnce(directive({ loopId: 'a', fromLoopId: 'b' }));
+    await expect(override({ action: 'withdraw' }).result).rejects.toMatchObject({ statusCode: 404 });
+    expect(directives.transition).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown action or an oversized note', async () => {
+    directives.findByIdForUser.mockResolvedValue(directive());
+    await expect(override({ action: 'delete' }).result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(override({ action: 'withdraw', note: 'x'.repeat(1001) }).result).rejects.toMatchObject({
+      statusCode: 400,
+    });
   });
 });

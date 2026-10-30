@@ -24,7 +24,7 @@ import {
   type AgentExecutionStatus,
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
-import { LOOP_TICKET_TOOL_NAMES } from '@bike4mind/common';
+import { LOOP_DIRECTIVE_TOOL_NAMES, LOOP_OVERSEER_TOOL_NAMES, LOOP_TICKET_TOOL_NAMES } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import type { ApiKeyInfo } from '@server/cli/auth';
@@ -41,6 +41,8 @@ import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConn
 import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
 import { admitApiKeyCompletion } from '@server/utils/untrustedCompletionQuota';
 import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
+
+const LOOP_RUN_TOOL_NAMES = [...LOOP_TICKET_TOOL_NAMES, ...LOOP_DIRECTIVE_TOOL_NAMES, ...LOOP_OVERSEER_TOOL_NAMES];
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -339,9 +341,10 @@ export async function startAgentExecution(
     // asked for still does. An interactive run ignores the dispatch payload and takes only
     // what the user chose to remember in this notebook, which is strictly better than
     // trusting a client-supplied tool list.
-    // A loop run's ticket tools are added by the executor, never named in `enabledTools`.
+    // A loop run's ticket and directive tools are added by the executor, never named in `enabledTools`.
+    // The overseer tools are approved on every loop run: an approval for a tool the run is not offered is inert.
     approvedTools: isHeadlessConnection(input.connectionId)
-      ? [...(input.enabledTools ?? []), ...(input.loopId ? LOOP_TICKET_TOOL_NAMES : [])]
+      ? [...(input.enabledTools ?? []), ...(input.loopId ? LOOP_RUN_TOOL_NAMES : [])]
       : (remembered?.approvedTools ?? []),
     // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
     // stale interactive-session denial (deny is checked first in classifyToolPermission).

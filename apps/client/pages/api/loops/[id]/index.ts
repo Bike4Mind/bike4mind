@@ -1,6 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { agentExecutionRepository, loopEventRepository, loopRepository, workItemRepository } from '@bike4mind/database';
+import {
+  agentExecutionRepository,
+  loopDirectiveRepository,
+  loopEventRepository,
+  loopRepository,
+  workItemRepository,
+} from '@bike4mind/database';
 import { ILoop, ILoopWithUsage } from '@bike4mind/common';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -15,6 +21,7 @@ import {
   validateLoopInterval,
   validateLoopModel,
   validateLoopName,
+  validateLoopOversees,
   validateLoopStages,
   validateLoopTools,
 } from '@server/utils/loopValidation';
@@ -42,10 +49,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .patch(async (req, res) => {
     await assertLoopsEnabled();
     const id = String(req.query.id);
-    // agentId and budgetCreditsPerDay are widened to allow the explicit null that clears them.
-    const body = req.body as Partial<Omit<ILoop, 'agentId' | 'budgetCreditsPerDay'>> & {
+    // agentId, budgetCreditsPerDay and oversees are widened to allow the explicit null that clears them.
+    const body = req.body as Partial<Omit<ILoop, 'agentId' | 'budgetCreditsPerDay' | 'oversees'>> & {
       agentId?: string | null;
       budgetCreditsPerDay?: number | null;
+      oversees?: string[] | null;
     };
 
     const existing = await loopRepository.findByIdAndUserId(id, req.user!.id);
@@ -62,6 +70,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (body.budgetCreditsPerDay !== undefined) {
       patch.budgetCreditsPerDay =
         body.budgetCreditsPerDay === null ? null : validateLoopBudget(body.budgetCreditsPerDay);
+    }
+    if (body.oversees !== undefined) {
+      patch.oversees = await validateLoopOversees(body.oversees, existing.id, req.user!.id);
     }
     const now = new Date();
     if (body.status !== undefined) Object.assign(patch, nextStatusPatch(existing, body.status, now));
@@ -89,6 +100,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (!(await loopRepository.deleteForUser(id, req.user!.id))) throw notFound(id);
     await workItemRepository.softDeleteByLoop(req.user!.id, id);
     await loopEventRepository.deleteManyForLoop(req.user!.id, id);
+    await loopDirectiveRepository.deleteManyForLoop(req.user!.id, id);
+    await loopRepository.removeFromOversees(req.user!.id, id);
     res.status(204).end();
   });
 

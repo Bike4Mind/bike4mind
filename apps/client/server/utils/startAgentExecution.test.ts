@@ -561,13 +561,21 @@ describe('startAgentExecution', () => {
     );
   });
 
-  it("persists a loop run's loopId and pre-approves the loop ticket tools the executor adds for it", async () => {
+  it("persists a loop run's loopId and pre-approves the loop tools the executor adds for it", async () => {
     await startAgentExecution(input({ userId: 'loop-run', enabledTools: ['web_search'], loopId: 'loop1' }), logger);
 
     expect(mockCreateExecution).toHaveBeenCalledWith(
       expect.objectContaining({
         loopId: 'loop1',
-        approvedTools: ['web_search', 'loop_ticket_list', 'loop_ticket_create', 'loop_ticket_update'],
+        approvedTools: [
+          'web_search',
+          'loop_ticket_list',
+          'loop_ticket_create',
+          'loop_ticket_update',
+          'loop_directive_respond',
+          'loop_oversee_status',
+          'loop_directive_issue',
+        ],
       })
     );
   });

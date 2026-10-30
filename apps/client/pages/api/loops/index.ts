@@ -22,6 +22,7 @@ import {
   validateLoopModel,
   validateLoopName,
   validateLoopOrganizationId,
+  validateLoopOversees,
   validateLoopStages,
   validateLoopTools,
 } from '@server/utils/loopValidation';
@@ -59,6 +60,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const agentId = body.agentId === undefined ? undefined : validateLoopAgentId(body.agentId);
     const budgetCreditsPerDay =
       body.budgetCreditsPerDay === undefined ? undefined : validateLoopBudget(body.budgetCreditsPerDay);
+    const oversees =
+      body.oversees === undefined ? null : await validateLoopOversees(body.oversees, undefined, req.user!.id);
 
     const organizationId =
       body.organizationId === undefined ? undefined : validateLoopOrganizationId(body.organizationId);
@@ -92,6 +95,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       ...(stages && { stages }),
       ...(agentId && { agentId }),
       ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
+      ...(oversees && { oversees }),
       status: 'draft',
     } as Omit<ILoop, 'id' | 'createdAt' | 'updatedAt'>);
 

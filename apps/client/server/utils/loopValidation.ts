@@ -4,7 +4,7 @@
  */
 
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { adminSettingsRepository } from '@bike4mind/database';
+import { adminSettingsRepository, loopRepository } from '@bike4mind/database';
 import type { ILoop, LoopStatus } from '@bike4mind/common';
 
 export const LOOP_RATE_LIMIT = 60;
@@ -17,6 +17,7 @@ const TOOL_NAME_MAX = 200;
 const ID_MAX = 200;
 const STAGES_MAX = 20;
 const STAGE_NAME_MAX = 60;
+const OVERSEES_MAX = 5;
 const INTERVAL_MIN = 5;
 /** One week. */
 const INTERVAL_MAX = 10_080;
@@ -60,6 +61,20 @@ export function validateLoopStages(value: unknown): string[] {
   const stages = validateStringList('stages', value, STAGES_MAX, STAGE_NAME_MAX);
   if (stages.length < 2) throw new BadRequestError('stages must contain at least 2 distinct entries');
   return stages;
+}
+
+/**
+ * The owner's other loops this loop oversees; `null` or `[]` clears it (returned as null). One message for a
+ * missing and a foreign id, so the check never confirms another user's loop exists.
+ */
+export async function validateLoopOversees(value: unknown, loopId: string | undefined, userId: string) {
+  if (value === null) return null;
+  const ids = validateStringList('oversees', value, OVERSEES_MAX, ID_MAX);
+  if (ids.length === 0) return null;
+  if (loopId && ids.includes(loopId)) throw new BadRequestError('a loop cannot oversee itself');
+  const loops = await Promise.all(ids.map(id => loopRepository.findByIdAndUserId(id, userId)));
+  if (loops.some(loop => !loop)) throw new BadRequestError('oversees contains an unknown loop');
+  return ids;
 }
 
 export function validateLoopInterval(value: unknown): number {

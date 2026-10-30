@@ -1,13 +1,32 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { loopEventRepository, loopRepository } from '@bike4mind/database';
+import { loopDirectiveRepository, loopEventRepository, loopRepository } from '@bike4mind/database';
+import type { ILoopDirective } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
 
 /** Events returned per loop, newest first; older ones stay in the DB. */
 export const LOOP_EVENT_LIMIT = 100;
 
-/** A loop's event log (unsure runs and how their owner answered), newest first. */
+/** A directive as a log row; owner replies drop their `userId`. Shared with the override route. */
+export const directiveRow = (directive: ILoopDirective) => ({
+  id: directive.id,
+  kind: 'directive' as const,
+  loopId: directive.loopId,
+  fromLoopId: directive.fromLoopId,
+  fromLoopName: directive.fromLoopName,
+  executionId: directive.executionId,
+  instruction: directive.instruction,
+  reason: directive.reason,
+  state: directive.state,
+  replies: directive.replies.map(reply => (reply.by === 'owner' ? { ...reply, userId: undefined } : reply)),
+  createdAt: directive.createdAt,
+});
+
+/**
+ * A loop's event log, newest first: unsure runs and how their owner answered, plus directives the loop sent
+ * or received. Directives live in their own collection (LoopDirectiveModel) and are merged in here.
+ */
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: LOOP_RATE_LIMIT, windowMs: LOOP_RATE_WINDOW_MS, bucket: 'loops-events' }))
   .get(async (req, res) => {
@@ -16,9 +35,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const loop = await loopRepository.findByIdAndUserId(id, req.user!.id);
     if (!loop) throw new NotFoundError('Loop not found for id: ' + id);
 
-    const events = await loopEventRepository.listForLoop(req.user!.id, loop.id, LOOP_EVENT_LIMIT);
-    res.json(
-      events.map(event => ({
+    const [events, directives] = await Promise.all([
+      loopEventRepository.listForLoop(req.user!.id, loop.id, LOOP_EVENT_LIMIT),
+      loopDirectiveRepository.listForLoop(req.user!.id, loop.id, LOOP_EVENT_LIMIT),
+    ]);
+    const rows = [
+      ...events.map(event => ({
         id: event.id,
         kind: event.kind,
         executionId: event.executionId,
@@ -29,8 +51,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
         reason: event.reason,
         resolution: event.resolution,
         createdAt: event.createdAt,
-      }))
-    );
+      })),
+      ...directives.map(directiveRow),
+    ];
+    rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    res.json(rows.slice(0, LOOP_EVENT_LIMIT));
   });
 
 export default handler;
