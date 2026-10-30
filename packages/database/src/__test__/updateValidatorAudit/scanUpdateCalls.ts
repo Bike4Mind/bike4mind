@@ -187,18 +187,16 @@ const typeIdentifiers = (node: ts.Node): string[] => {
 
 const collectStringConsts = (sf: ts.SourceFile): Map<string, string> => {
   const consts = new Map<string, string>();
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer &&
-      ts.isStringLiteralLike(unwrap(node.initializer))
-    ) {
-      consts.set(node.name.text, (unwrap(node.initializer) as ts.StringLiteralLike).text);
+  // Top-level only: a same-named const inside a function must not shadow the module-scope name.
+  for (const statement of sf.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      const value = declaration.initializer && unwrap(declaration.initializer);
+      if (ts.isIdentifier(declaration.name) && value && ts.isStringLiteralLike(value)) {
+        consts.set(declaration.name.text, value.text);
+      }
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
+  }
   return consts;
 };
 
@@ -395,6 +393,8 @@ export function scanSource(fileName: string, text: string, index: ModelIndex): S
             ts.isObjectLiteralExpression(optionsObject) &&
             isTrueRunValidators(optionsObject)) ||
           chainSetsRunValidators(node);
+        // bulkWrite keeps its options at index 1 and its update shapes inside the ops array, so it is
+        // always reported as an ungated writer of unknown paths: pessimistic on purpose.
         const written: WrittenPaths =
           method === 'bulkWrite' ? { paths: [], unvalidatablePaths: [], dynamic: true } : collectPaths(updateArg);
         const writer = enclosingWriter(node);
@@ -457,7 +457,8 @@ export function listModelSourceFiles(modelsDir: string): string[] {
 
 export function scanModelsDir(modelsDir: string): ScanResult {
   const files = listModelSourceFiles(modelsDir).map(file => ({
-    fileName: path.relative(modelsDir, file),
+    // MODEL_OVERRIDES keys use forward slashes on every platform.
+    fileName: path.relative(modelsDir, file).split(path.sep).join('/'),
     text: fs.readFileSync(file, 'utf8'),
   }));
   const index = indexModels(files);
