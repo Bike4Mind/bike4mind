@@ -622,6 +622,20 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
   });
 
+  it('ties every signup stage to the visit the code was entered in', async () => {
+    const visitId = 'c'.repeat(32);
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `b4m_vid=${visitId}`;
+
+    await handler(req, res);
+
+    expect(mockEmitFunnelEvent.mock.calls.map(([c]) => [c.event, c.visitId])).toEqual([
+      ['email_verified', visitId],
+      ['credits_granted', visitId],
+      ['signup_completed', visitId],
+    ]);
+  });
+
   it('reports credits_granted with zero when the signup seeded none', async () => {
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);

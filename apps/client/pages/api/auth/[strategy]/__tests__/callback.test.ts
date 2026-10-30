@@ -400,6 +400,15 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
+  it("ties a new account's signup funnel to the visit it came from", async () => {
+    const visitId = 'd'.repeat(32);
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: `${touchCookie}; b4m_vid=${visitId}`,
+    });
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(expect.objectContaining({ visitId }));
+  });
+
   it("persists a new account's acquisition with the provider as the signup method", async () => {
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
 
