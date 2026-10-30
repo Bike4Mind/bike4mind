@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { CardVerification } from '@server/billing/cardVerificationModel';
+import { CardVerificationRefused } from '@server/billing/cardVerificationLifecycle';
 import { cardVerificationRuntime, finishCardVerification } from '@server/billing/cardVerificationRuntime';
 
 const handler = baseApi({ auth: false }).post(async (req, res) => {
@@ -32,7 +33,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     if (!runtime.guards) return res.status(503).end();
     await runtime.guards.recordFailure(intent, record);
   } else {
-    await finishCardVerification(record.verificationId, record.userId);
+    try {
+      await finishCardVerification(record.verificationId, record.userId);
+    } catch (error) {
+      // A refusal is final for this event; the recovery cron owns any follow-up, so Stripe must not retry.
+      if (!(error instanceof CardVerificationRefused)) throw error;
+    }
   }
   return res.status(200).end();
 });

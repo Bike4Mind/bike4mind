@@ -18,6 +18,7 @@ vi.mock('@server/billing/cardVerificationRuntime', () => ({
   cardVerificationRuntime: async () => ({ guards: { recordFailure: mocks.recordFailure } }),
 }));
 import handler from '../card-verification-webhook';
+import { CardVerificationRefused } from '@server/billing/cardVerificationLifecycle';
 import { Config } from '@bike4mind/server-utils/utils/config';
 const call = async () => {
   const { res } = createMocks();
@@ -65,6 +66,12 @@ describe('signed verification webhook', () => {
       'whsec_synthetic'
     );
     expect(mocks.finish).toHaveBeenCalledWith('synthetic-verification', 'synthetic-user');
+  });
+  it('acknowledges a refused completion so Stripe does not retry it', async () => {
+    mocks.finish.mockRejectedValueOnce(new CardVerificationRefused('unavailable'));
+    expect((await call()).statusCode).toBe(200);
+    mocks.finish.mockRejectedValueOnce(new Error('synthetic outage'));
+    await expect(call()).rejects.toThrow('synthetic outage');
   });
   it('ignores unknown or other-environment verifications', async () => {
     mocks.find.mockResolvedValue(null);
