@@ -164,6 +164,7 @@ const youngAccountSpendAlert =
           target: {
             ...youngAccountSpendAlertDeadLetter.ruleTarget.target,
             // SST defaults to a literal {} input; omit it to retain EventBridge's scheduled time.
+            // The handler's window, its DLQ message body and replay all depend on it.
             input: undefined,
           },
         },
