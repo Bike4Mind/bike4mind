@@ -85,8 +85,19 @@ describe('ArtifactPublisher', () => {
     });
   });
 
-  it('reports any other 403 as a failure, not as the opt-out', async () => {
-    post.mockRejectedValue(httpError(403, { error: 'Forbidden' }));
+  it("reports any other 403 as a failure with the server's own reason", async () => {
+    post.mockRejectedValue(httpError(403, { error: 'You are not a member of the selected organization.' }));
+
+    const [result] = await publisher.publish([artifact()], 'session-1');
+    expect(result.save).toEqual({ status: 'failed', reason: 'You are not a member of the selected organization.' });
+  });
+
+  it.each([
+    ['no body', undefined],
+    ['a string body', 'Forbidden'],
+    ['a non-string error', { error: 403 }],
+  ])('reports a 403 with %s as a failure', async (_label, data) => {
+    post.mockRejectedValue(httpError(403, data));
 
     const [result] = await publisher.publish([artifact()], 'session-1');
     expect(result.save).toEqual({ status: 'failed', reason: 'The server answered 403.' });
