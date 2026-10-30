@@ -5,6 +5,7 @@ export type ProfileAction =
   | 'editProfile'
   | 'credits'
   | 'suspend'
+  | 'reinstate'
   | 'restrict'
   | 'role'
   | 'productAccess'

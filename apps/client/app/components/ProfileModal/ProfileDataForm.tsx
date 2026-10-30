@@ -135,20 +135,28 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, onCancel })
     const data = Object.fromEntries(editedKeys.map(key => [key, editUser[key]])) as Partial<IUserDocument>;
 
     setEditing(true);
-    setEditedFields({});
 
     updateUser.mutate(
       {
         id: editUser.id,
         data,
       },
-      { onSettled: () => setEditing(false) }
+      { onSuccess: () => setEditedFields({}), onSettled: () => setEditing(false) }
     );
   };
   return (
     <>
       <SectionContainer>
-        <Grid className="profile-data-form-grid-container" container spacing={2} justifyContent="flex-start">
+        <Grid
+          component="fieldset"
+          disabled={editing}
+          data-testid="profile-form-fields"
+          className="profile-data-form-grid-container"
+          container
+          spacing={2}
+          justifyContent="flex-start"
+          sx={{ border: 0, p: 0, minWidth: 0 }}
+        >
           <Grid className="profile-data-form-field-container" data-testid="profile-form-field" xs={12} sm={6} md={4}>
             <Typography className="profile-data-form-label" data-testid="profile-form-label">
               Name:
@@ -182,6 +190,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, onCancel })
             </Typography>
             <SingleOrganizationSelector
               currentOrgId={editUser.organizationId}
+              disabled={editing}
               onChange={orgId => {
                 setEditedFields(prev => ({ ...prev, organizationId: true }));
                 setEditUser(prev => ({ ...prev, organizationId: orgId }));
@@ -233,6 +242,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, onCancel })
             </Typography>
             <Select
               data-testid="profile-form-select"
+              disabled={editing}
               value={editUser.preferredContact}
               onSelect={(value: string | null) => handlePreferredContact(null, value as string)}
               options={contactOptions}
@@ -244,6 +254,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, onCancel })
             </Typography>
             <Select
               data-testid="profile-form-select"
+              disabled={editing}
               value={editUser.tshirtSize}
               onSelect={(value: string | null) => handlePreferredShirt(null, value as string)}
               options={shirtOptions}

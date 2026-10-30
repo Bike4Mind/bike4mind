@@ -9,10 +9,15 @@ const { mockFindAllWithSecretPresence, mockFindByEmailDomain, mockCreateIDP } = 
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain: Record<string, unknown> = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (middlewares.push(fn), chain),
         get: (fn: (req: unknown, res: unknown) => unknown) => ((h.GET = fn), chain),
         post: (fn: (req: unknown, res: unknown) => unknown) => ((h.POST = fn), chain),
       }
@@ -34,9 +39,9 @@ vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn
 
 import handler from '../index';
 
-const call = async (method: string, body?: unknown) => {
+const call = async (method: string, body?: unknown, user: object = { id: 'a1', isAdmin: true }) => {
   const { req, res } = createMocks({ method: method as 'GET', body: body as object });
-  (req as unknown as Record<string, unknown>).user = { id: 'a1', isAdmin: true };
+  (req as unknown as Record<string, unknown>).user = user;
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 };
@@ -103,5 +108,13 @@ describe('/api/admin/identity-providers response schema', () => {
     expect(JSON.stringify(body)).not.toMatch(/PRIVATE-KEY|PRIVATE-CERT|OKTA-SECRET/);
     expect(body).not.toHaveProperty('somethingUndeclared');
     expect(body.id).toBe('idp1');
+  });
+
+  it('refuses a non-admin before reading or creating anything', async () => {
+    const nonAdmin = { id: 'u1', isAdmin: false };
+    await expect(call('GET', undefined, nonAdmin)).rejects.toThrow(/missing permission/i);
+    await expect(call('POST', { name: 'x' }, nonAdmin)).rejects.toThrow(/missing permission/i);
+    expect(mockFindAllWithSecretPresence).not.toHaveBeenCalled();
+    expect(mockCreateIDP).not.toHaveBeenCalled();
   });
 });

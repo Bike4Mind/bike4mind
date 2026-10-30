@@ -1,4 +1,4 @@
-import { signupProtectionRepository } from '@bike4mind/database';
+import { signupGrantBudgetRepository, signupProtectionRepository } from '@bike4mind/database';
 import type { SignupProtection } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { escapeSlackText } from '@bike4mind/services';
@@ -7,6 +7,27 @@ import { postMessageToSlackWithOutcome } from '@server/integrations/slack/slack'
 export const signupProtection: SignupProtection = {
   get repository() {
     return signupProtectionRepository;
+  },
+  grantBudget: {
+    get repository() {
+      return signupGrantBudgetRepository;
+    },
+    async notify(alert) {
+      try {
+        const outcome = await postMessageToSlackWithOutcome(
+          alert.threshold === 100
+            ? `Signup grant budget exhausted for ${alert.day}: ${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid; new grants are held.`
+            : `Signup grant budget at ${alert.threshold}% for ${alert.day}: ${alert.spent.toLocaleString('en-US')} of ${alert.budget.toLocaleString('en-US')} credits paid.`,
+          'SlackSecurityAlertsWebhookUrl',
+          { timeoutMs: 3000 }
+        );
+        if (outcome === 'failed') {
+          Logger.globalInstance.error('Signup grant budget alert was not delivered', { threshold: alert.threshold });
+        }
+      } catch (error) {
+        Logger.globalInstance.error('Signup grant budget alert failed', error);
+      }
+    },
   },
   async notifyHold(review) {
     try {

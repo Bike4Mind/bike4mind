@@ -38,14 +38,21 @@ vi.mock('@server/analytics/funnel', () => ({
   emitEmailVerifiedFunnelEvents: (...a: unknown[]) => mockEmitVerifiedFunnel(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+// parseAdminActionReason stays real so the 400s are the route's own.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 await import('../verify-email');
 
-const makeReq = () => ({
+const REASON = 'Support ticket confirmed the address';
+
+const makeReq = (body: unknown = { reason: REASON }) => ({
   query: { userId: 'user-1' },
+  body,
   user: { id: 'admin-1', username: 'admin', isAdmin: true },
   headers: {},
   logger: { info: vi.fn(), error: vi.fn() },
@@ -69,6 +76,7 @@ describe('POST /api/admin/users/[userId]/verify-email', () => {
       expect.objectContaining({
         action: 'user.email.verified',
         target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
+        reason: REASON,
       })
     );
     expect(h.update).toHaveBeenCalledWith({
@@ -131,5 +139,17 @@ describe('POST /api/admin/users/[userId]/verify-email', () => {
     expect(h.update).not.toHaveBeenCalled();
     expect(mockApplyGrants).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ alreadyVerified: true }));
+  });
+
+  it.each([
+    [{}, /outdated version/],
+    [{ reason: 'no' }, /at least/i],
+  ])('rejects a missing or too-short reason %j with no write and no audit', async (body, message) => {
+    h.findById.mockResolvedValue({ id: 'user-1', username: 'u', emailVerified: false, email: 'a@b.test' });
+
+    await expect(h.handler!(makeReq(body), { json: vi.fn() })).rejects.toThrow(message);
+
+    expect(h.update).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

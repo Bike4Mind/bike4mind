@@ -148,9 +148,16 @@ describe('/api/embed/history', () => {
     expect(body.error_description).toBe('Origin not allowed for this embed key');
   });
 
-  it('serves an opaque origin when the key has no allowed origins', async () => {
+  it('denies an opaque origin when the key has no allowed origins', async () => {
     mockVerifyEmbedKeyById.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
-    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'null' });
+    const { status, body } = await call('GET', { authorization: 'Bearer eyJ.tok', origin: 'null' });
+    expect(status).toBe(403);
+    expect(body.error_description).toBe('Origin not allowed for this embed key');
+  });
+
+  it('serves a request without an Origin header when the key has no allowed origins', async () => {
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...KEY_INFO, allowedOrigins: [] });
+    const { status } = await call('GET', { authorization: 'Bearer eyJ.tok' });
     expect(status).toBe(200);
   });
 

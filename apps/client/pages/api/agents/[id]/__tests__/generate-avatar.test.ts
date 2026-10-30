@@ -1,3 +1,17 @@
+import { estimateImageCredits } from '@bike4mind/services/imageCost';
+import { ApiKeyScope, CreditHolderType, ImageModels } from '@bike4mind/common';
+import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+vi.mock('@server/billing/reserveRequestCredits', () => ({
+  reserveRequestCredits: vi.fn(async () => ({ refund: vi.fn(), settle: vi.fn(async () => 1) })),
+}));
+vi.mock('@bike4mind/services/imageCost', () => ({
+  estimateImageCredits: vi.fn(() => ({ requiredCredits: 50, usdCost: 0.025 })),
+}));
+
+import { assertMediaModelAdmission } from '@server/billing/assertMediaModelAdmission';
+import { ForbiddenError } from '@bike4mind/utils';
+vi.mock('@server/billing/assertMediaModelAdmission', () => ({ assertMediaModelAdmission: vi.fn(async () => {}) }));
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@server/utils/untrustedCompletionQuota', () => ({
@@ -5,6 +19,7 @@ vi.mock('@server/utils/untrustedCompletionQuota', () => ({
 }));
 
 const h = vi.hoisted(() => ({
+  imageGenerate: vi.fn(),
   agentFindById: vi.fn(),
   agentUpdate: vi.fn(),
   fabFileCreate: vi.fn(),
@@ -55,7 +70,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   return {
     ...actual,
     getSettingsMap: vi.fn(async () => ({})),
-    aiImageService: vi.fn(() => ({ generate: vi.fn(async () => ['https://provider.test/avatar.png']) })),
+    aiImageService: vi.fn(() => ({ generate: h.imageGenerate })),
   };
 });
 
@@ -81,14 +96,13 @@ const AGENT = { id: 'agent-1', userId: 'u1', name: 'Test Agent' };
 const AVATAR_IMAGE_BYTES = 500_000;
 const STORAGE_LIMIT_MB = 1; // checkStorageLimit converts this to a 1,000,000-byte limit
 
-const makeReq = (user: Record<string, unknown>) =>
-  ({
-    method: 'POST',
-    query: { id: 'agent-1' },
-    body: {},
-    user,
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-  }) as never;
+const makeReq = (user: Record<string, unknown>) => ({
+  method: 'POST',
+  query: { id: 'agent-1' },
+  body: {},
+  user,
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+});
 
 const makeRes = () => {
   const json = vi.fn();
@@ -106,6 +120,7 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.B4M_SELF_HOST = 'true';
+    h.imageGenerate.mockResolvedValue(['https://provider.test/avatar.png']);
     h.agentFindById.mockResolvedValue(AGENT);
     h.agentUpdate.mockResolvedValue(AGENT);
     h.fabFileCreate.mockResolvedValue({ id: 'file-1' });
@@ -129,6 +144,84 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
 
   afterEach(() => {
     process.env.B4M_SELF_HOST = ORIGINAL_SELF_HOST;
+  });
+
+  it('preserves the paid-plan refusal before avatar prompt or image generation', async () => {
+    const refusal = new ForbiddenError('paid plan required', { errorCode: 'model_requires_subscription' });
+    vi.mocked(assertMediaModelAdmission).mockRejectedValueOnce(refusal);
+    const { res } = makeRes();
+    await expect(
+      run({ id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 }, res)
+    ).rejects.toBe(refusal);
+    expect(assertMediaModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'test-image-model', true);
+    const operations = await h.getOperationsModel.mock.results[0].value;
+    expect(operations.llm.complete).not.toHaveBeenCalled();
+    expect(h.storageUpload).not.toHaveBeenCalled();
+    expect(reserveRequestCredits).not.toHaveBeenCalled();
+  });
+
+  it('reserves avatar credits before generation and settles the generated image', async () => {
+    const { res } = makeRes();
+    const req = Object.assign(
+      makeReq({ id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 }),
+      {
+        apiKeyInfo: {
+          scopes: [ApiKeyScope.WRITE_AGENTS],
+          billingOwnerType: CreditHolderType.Organization,
+          organizationId: 'billing-org',
+        },
+      }
+    );
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    expect(vi.mocked(reserveRequestCredits).mock.calls[0][0].req).toBe(req);
+    expect(reserveRequestCredits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        req: expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }) }),
+        requiredCredits: 50,
+        featureLabel: 'avatar generation',
+      })
+    );
+    expect(vi.mocked(reserveRequestCredits).mock.invocationCallOrder[0]).toBeLessThan(
+      h.imageGenerate.mock.invocationCallOrder[0]
+    );
+    const reservation = await vi.mocked(reserveRequestCredits).mock.results[0].value;
+    expect(reservation.settle).toHaveBeenCalledWith(
+      50,
+      expect.objectContaining({ type: 'image_generation_usage', model: 'test-image-model' })
+    );
+    expect(reservation.refund).not.toHaveBeenCalled();
+  });
+
+  it.each([ImageModels.GPT_IMAGE_1_5, ImageModels.GPT_IMAGE_2])(
+    'reserves the same automatic quality it renders with %s',
+    async model => {
+      const operations = await h.getOperationsModel();
+      h.getOperationsModel.mockResolvedValue({
+        ...operations,
+        imageModelId: model,
+        imageModelInfo: { id: model, backend: 'openai' },
+      });
+      const { res } = makeRes();
+      await run({ id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 }, res);
+      expect(estimateImageCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ id: model }),
+        1,
+        expect.objectContaining({ quality: 'auto' })
+      );
+      expect(h.imageGenerate).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ model, quality: 'auto' })
+      );
+    }
+  );
+
+  it('refunds the avatar reservation on provider failure', async () => {
+    h.imageGenerate.mockRejectedValueOnce(new Error('provider failed'));
+    const { res } = makeRes();
+    await run({ id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 }, res);
+    const reservation = await vi.mocked(reserveRequestCredits).mock.results[0].value;
+    expect(reservation.refund).toHaveBeenCalledOnce();
+    expect(reservation.settle).not.toHaveBeenCalled();
   });
 
   it('refuses a user already over their storage quota, before uploading or creating a FabFile', async () => {

@@ -48,17 +48,17 @@ Building a module that runs inside a B4M deployment is not a third-party option;
 
 Fetch the discovery document from `https://<your-b4m-host>/.well-known/openid-configuration`. It advertises:
 
-| Field                                   | Value                         |
-| --------------------------------------- | ----------------------------- |
-| `issuer`                                | the B4M host URL              |
-| `authorization_endpoint`                | `{issuer}/oauth/authorize`    |
-| `token_endpoint`                        | `{issuer}/api/oauth/token`    |
-| `userinfo_endpoint`                     | `{issuer}/api/oauth/userinfo` |
-| `jwks_uri`                              | `{issuer}/api/oauth/jwks`     |
-| `scopes_supported`                      | `openid`, `email`, `profile`  |
-| `code_challenge_methods_supported`      | `S256`                        |
-| `token_endpoint_auth_methods_supported` | `client_secret_post`, `none`  |
-| `id_token_signing_alg_values_supported` | `RS256`                       |
+| Field                                   | Value                                          |
+| --------------------------------------- | ---------------------------------------------- |
+| `issuer`                                | the B4M host URL                               |
+| `authorization_endpoint`                | `{issuer}/oauth/authorize`                     |
+| `token_endpoint`                        | `{issuer}/api/oauth/token`                     |
+| `userinfo_endpoint`                     | `{issuer}/api/oauth/userinfo`                  |
+| `jwks_uri`                              | `{issuer}/api/oauth/jwks`                      |
+| `scopes_supported`                      | `openid`, `email`, `profile`, `offline_access` |
+| `code_challenge_methods_supported`      | `S256`                                         |
+| `token_endpoint_auth_methods_supported` | `client_secret_post`, `none`                   |
+| `id_token_signing_alg_values_supported` | `RS256`                                        |
 
 Use `jwks_uri` exactly as published. `/.well-known/jwks.json` also answers today, but it is an alias, not the advertised URL. Both documents are cached for an hour, so cache them on your side too.
 
@@ -66,7 +66,7 @@ Discovery does not list the `ai:generate` and `me:read` scopes because they are 
 
 ### The authorization request
 
-Use the authorization code flow with PKCE (`S256`), plus `state` and `nonce`. **Always send PKCE**, even though your client is confidential.
+Use the authorization code flow with PKCE (`S256`), plus `state` and `nonce`. **Always send PKCE**, even though your client is confidential. Note that this is advice, not a server guarantee: B4M requires `code_challenge` only from public clients, so a confidential client that omits it is not refused. Send it anyway.
 
 1. On your server, generate a random `state`, a random `nonce`, and a random `code_verifier`. Compute `code_challenge = BASE64URL(SHA256(code_verifier))`. Store all three in the user's pre-login session.
 2. Redirect the browser to `authorization_endpoint` with: `client_id`, `redirect_uri`, `response_type=code`, `scope=openid email profile ai:generate`, `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
@@ -199,7 +199,7 @@ FEDERATED_JWKS_URI="https://<your-b4m-host>/api/oauth/jwks" \
 
 Register the trust config in the same run. Adding `federatedIdp` to an existing client by hand leaves `allowedScopes` without `ai:generate` and `me:read`, and the exchange then fails with 403 `invalid_scope`.
 
-An admin can also register, edit, deactivate and rotate clients from the admin console (Security > OAuth Clients), which applies the same rules as the script. The script remains for installs that have no admin user yet. Redirect URIs must be https (http only for localhost, 127.0.0.1 and [::1]); when you edit a client, URIs it already stores are kept even if they predate these rules, and only newly-added ones are checked.
+An admin can also register, edit, deactivate and rotate clients from the admin console (Trust and safety > OAuth clients), which applies the same rules as the script. The script remains for installs that have no admin user yet. Redirect URIs must be https (http only for localhost, 127.0.0.1 and [::1]); when you edit a client, URIs it already stores are kept even if they predate these rules, and only newly-added ones are checked.
 
 A stock self-hosted stack does not expose the completions API (`/api/ai/v1/completions`) on its public origin, so your app's completion calls return 404. Add this route inside the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (see [the sample in the Caddyfile](https://github.com/bike4mind/bike4mind/blob/main/selfhost/caddy/Caddyfile)):
 
@@ -361,6 +361,22 @@ Request `me:read` at the exchange (`scope: "ai:generate me:read"`) and call `GET
 - `subscription` is `null` when the user has none, and can also be `null` for a paying user (for example `tier: "other"`, a subscriber on a retired price). Do not treat `null` as "not paying".
 - `credits.balance` is the user's personal balance, the same number as `GET /api/v1/credits`.
 
+### Is this user a B4M admin?
+
+A federated app that runs its own ops console can ask whether its signed-in user is a B4M admin, instead of keeping a separate admin list. `POST https://<your-b4m-host>/api/oauth/federated-admin` takes the same client auth and ID token as the exchange in section 5:
+
+| Field           | Value                                 |
+| --------------- | ------------------------------------- |
+| `client_id`     | your client id                        |
+| `client_secret` | your client secret (server-side only) |
+| `id_token`      | the ID token for your logged-in user  |
+
+The response is `{ "is_admin": boolean }`. Nothing is minted; a subject that resolves to no B4M user, or to a blocked account, is simply not an admin.
+
+This is gated on the opt-in `federated:admin-status` scope, which is **not** one of the scopes section 5 exchanges for. Two things must be true: an operator has added the scope to your client's `allowedScopes`, and the user's grant covers it, which means requesting it in the authorization request (section 3). The grant is enforced with no grace period, so users who consented before the scope existed must re-authorize before this endpoint answers for them. The scope is available only to relying-party clients; a first-party client is refused outright.
+
+Errors follow section 5: 400 `invalid_request` for a malformed body, 401 `invalid_client`, 401 `invalid_grant` for a bad or expired ID token, 403 `access_denied` when the client has no trust config or the user's grant does not cover `federated:admin-status` (re-authorize with the scope), 403 `invalid_scope` when the client is not registered for the scope or is not a relying party, 429 with `Retry-After` at 300 requests per minute per client, and 503 `temporarily_unavailable` when the grant cannot be read (retry; do not re-authorize). Cache the answer per user for a few minutes rather than asking on every request.
+
 ## 8. What not to do
 
 - Never send the client secret or a minted `b4m_live_` key to the browser. Both stay on your server.
@@ -369,6 +385,7 @@ Request `me:read` at the exchange (`scope: "ai:generate me:read"`) and call `GET
 - Never pay for users' work with a single "house" API key of your own. Use the exchange so each user is billed for their own usage.
 - Never match on error `message` text. Use `code` / `errorCode`.
 - Never skip `state`, `nonce` or PKCE.
+- Never send the OAuth access token to any B4M route other than `userinfo`. It is not an API credential. To call AI or account APIs, exchange the **ID token** at `/api/oauth/ai-token` (section 5) and use the `b4m_live_` key you get back. A relying-party client that sends the access token to completions is refused; a client still classified first-party receives a full session token from `/api/oauth/token`, which works but is a full-account credential and must not be used this way.
 
 ## 9. Worked example
 

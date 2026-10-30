@@ -1,3 +1,8 @@
+vi.mock('../../helpers/modelAdmission', () => ({
+  createToolModelAdmission: vi.fn(async () => ({ assert: vi.fn(async (_modelId: string) => {}) })),
+}));
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels } from '@bike4mind/common';
@@ -577,5 +582,25 @@ describe('image_generation expected provider failures become the tool result, lo
     });
 
     await expect(toolFn({ prompt: 'a red bike' })).rejects.toThrow('upstream exploded');
+  });
+});
+
+describe('imageGeneration model admission', () => {
+  it('refuses before provider execution and admits the resolved transparent-image model', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createToolModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const context = createFakeContext();
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      editModel: ImageModels.GPT_IMAGE_2,
+    });
+    await expect(
+      toolFn({ prompt: 'transparent image', background: 'transparent', image: 'data:image/png;base64,AAAA' })
+    ).rejects.toBe(refusal);
+    expect(createToolModelAdmission).toHaveBeenLastCalledWith(context);
+    expect(assertAdmission).toHaveBeenCalledWith(ImageModels.GPT_IMAGE_1_5);
   });
 });

@@ -16,7 +16,11 @@ import {
 import { insufficientCreditsError, TooManyRequestsError, type ModelInfo } from '@bike4mind/common';
 import { meterCompletionBackend } from '@bike4mind/services';
 import { processWake, WakePayloadSchema } from './wakeHandler';
-import { MISSION_MODEL_REFUSED_BLOCKER, MISSION_NEEDS_CREDITS_BLOCKER, MissionModelRefusedError } from './wakeMetering';
+import {
+  MISSION_MODEL_REFUSED_BLOCKER,
+  MISSION_NEEDS_CREDITS_BLOCKER,
+  MissionModelRefusedError,
+} from '@server/deepAgent/wakeMetering';
 
 const NEUTRAL: DriveVector = {
   curiosity: 0.5,

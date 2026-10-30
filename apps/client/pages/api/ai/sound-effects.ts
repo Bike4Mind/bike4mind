@@ -1,3 +1,5 @@
+import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
+import { DEFAULT_SOUND_MODEL_ID } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import {
   isSupportedElevenLabsFormat,
@@ -47,6 +49,8 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
+
+  await (await createModelAdmission(req.user!)).assert(DEFAULT_SOUND_MODEL_ID);
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,

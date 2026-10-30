@@ -52,6 +52,7 @@ vi.mock('./tabs/ActivityTab', () => ({
 }));
 vi.mock('./tabs/SignInsTab', () => ({ SignInsTab: () => <div data-testid="stub-signins" /> }));
 vi.mock('./tabs/AdminLogTab', () => ({ AdminLogTab: () => <div data-testid="stub-admin-log" /> }));
+vi.mock('./UserRiskBadges', () => ({ UserRiskBadges: () => <div data-testid="stub-risk-badges" /> }));
 vi.mock('./UserProfileStats', () => ({ UserProfileStats: () => <div data-testid="stub-stats" /> }));
 vi.mock('./tabs/OverviewTab', () => ({
   OverviewTab: ({
@@ -394,22 +395,43 @@ describe('UserProfileView', () => {
       expect(screen.queryByTestId('user-profile-status-banner')).not.toBeInTheDocument();
     });
 
-    it('Reinstate on a suspended account writes isBanned: false and offers an undo', async () => {
+    it('Reinstate opens the reinstate dialog and writes nothing until a reason is confirmed', () => {
       setup(buildProfile({ isBanned: true }));
 
       expect(screen.getByTestId('user-profile-status-banner')).toHaveTextContent('Suspended.');
       fireEvent.click(screen.getByTestId('user-profile-reinstate-btn'));
 
-      await waitFor(() => expect(mocks.update).toHaveBeenCalledWith({ isBanned: false }));
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(screen.getByTestId('reinstate-dialog')).toBeInTheDocument();
+      expect(screen.getByTestId('reinstate-dialog-confirm-btn')).toBeDisabled();
+    });
+
+    it('confirming the reinstate dialog writes isBanned: false with the reason and offers an undo', async () => {
+      setup(buildProfile({ isBanned: true }));
+      fireEvent.click(screen.getByTestId('user-profile-reinstate-btn'));
+      fireEvent.click(screen.getByTestId('reinstate-dialog-reason-input-preset-0'));
+
+      fireEvent.click(screen.getByTestId('reinstate-dialog-confirm-btn'));
+
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenCalledWith({ isBanned: false, statusChangeReason: 'Suspended in error' })
+      );
       expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('Account reinstated');
       fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
-      await waitFor(() => expect(mocks.update).toHaveBeenLastCalledWith({ isBanned: true }));
+      await waitFor(() =>
+        expect(mocks.update).toHaveBeenLastCalledWith({
+          isBanned: true,
+          statusChangeReason: 'Undo: Suspended in error',
+        })
+      );
     });
 
     it('the reinstatement toast links to the Admin log tab', async () => {
       const { onTabChange } = setup(buildProfile({ isBanned: true }));
 
       fireEvent.click(screen.getByTestId('user-profile-reinstate-btn'));
+      fireEvent.click(screen.getByTestId('reinstate-dialog-reason-input-preset-0'));
+      fireEvent.click(screen.getByTestId('reinstate-dialog-confirm-btn'));
       fireEvent.click(await screen.findByTestId('undo-toast-audit-btn'));
 
       expect(onTabChange).toHaveBeenCalledWith('admin');
@@ -418,8 +440,10 @@ describe('UserProfileView', () => {
     it('shows no toast when the reinstatement fails', async () => {
       mocks.update.mockRejectedValue(new Error('nope'));
       setup(buildProfile({ isBanned: true }));
-
       fireEvent.click(screen.getByTestId('user-profile-reinstate-btn'));
+      fireEvent.click(screen.getByTestId('reinstate-dialog-reason-input-preset-0'));
+
+      fireEvent.click(screen.getByTestId('reinstate-dialog-confirm-btn'));
 
       await waitFor(() => expect(mocks.update).toHaveBeenCalled());
       expect(screen.queryByTestId('undo-toast')).not.toBeInTheDocument();

@@ -27,6 +27,11 @@ import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly'
 import * as z from 'zod';
 import qs from 'qs';
 import { Request } from 'express';
+import { respond } from '@server/utils/respond';
+import {
+  adminUserDownloadResponseSchema,
+  adminUserListResponseSchema,
+} from '@server/users/adminUserListResponseSchema';
 
 const querySchema = z.object({
   // Positive only: 0 reaches $limit/$skip as an invalid stage and surfaces as a 500.
@@ -453,7 +458,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       await User.populate(users, { path: 'organizationId' });
 
-      return res.json({
+      return respond(res, adminUserListResponseSchema, {
         users: users.map((user: IUserObject) => {
           const serialized = withSafeOrganization(User.hydrate(user).toJSON(), viewer);
           // pendingInvite is not a User path, so it is added after hydrate rather than through it.
@@ -469,7 +474,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       await User.populate(results, { path: 'organizationId' });
 
-      return res.json({
+      return respond(res, adminUserDownloadResponseSchema, {
         users: results.map((user: IUserObject) => withSafeOrganization(User.hydrate(user).toJSON(), viewer)),
         totalUsers: results.length,
       });
