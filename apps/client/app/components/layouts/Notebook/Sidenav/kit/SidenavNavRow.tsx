@@ -39,7 +39,12 @@ export const SidenavNavRow = ({
   ...rest
 }: SidenavNavRowProps) => {
   const activate = (e: SyntheticEvent<HTMLElement>) => {
-    if (!disabled) onClick?.(e);
+    // A disabled link row must not follow its href, which Enter still clicks through pointer-events: none.
+    if (disabled) {
+      e.preventDefault();
+      return;
+    }
+    onClick?.(e);
   };
   // A caller-chosen element (a router Link, a <button>) brings its own semantics and keyboard.
   const asButton = component === undefined;

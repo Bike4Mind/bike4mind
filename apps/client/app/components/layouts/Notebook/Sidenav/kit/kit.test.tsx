@@ -37,6 +37,11 @@ describe('SidenavNavRow', () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
+  it('keeps a disabled link row from following its href', () => {
+    wrap(<SidenavNavRow data-testid="row" component="a" href="/new" icon={null} label="New" disabled />);
+    expect(fireEvent.click(screen.getByTestId('row'))).toBe(false);
+  });
+
   it('renders as the given element without forcing a button role', () => {
     wrap(<SidenavNavRow data-testid="row" component="a" href="/new" icon={null} label="Back" />);
     const row = screen.getByTestId('row');
