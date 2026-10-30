@@ -9,6 +9,7 @@ import type { ChatStreamEvent } from '@shared/chat';
 import { type Mock, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import type { ModelCatalog } from './ModelCatalog';
+import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -63,9 +64,14 @@ describe('ChatService deferred tools', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     post = boundPost;
-    const emitted = events;
     deferredTools = { startSetMaxTokens: 100_000 };
-    service = new ChatService({
+    service = createService();
+  });
+
+  function createService(mcp?: McpManager): ChatService {
+    const emitted = events;
+    const boundPost = post;
+    return new ChatService({
       store,
       // Read per turn, so a test can switch the flag or the limit before a turn.
       get deferredTools() {
@@ -89,8 +95,9 @@ describe('ChatService deferred tools', () => {
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => emitted.push(event),
+      ...(mcp ? { mcp } : {}),
     });
-  });
+  }
 
   const body = (index: number): Body => post.mock.calls[index][1] as Body;
 
@@ -322,6 +329,66 @@ describe('ChatService deferred tools', () => {
     const secondPrompt = second.messages.findLastIndex(message => message.role === 'user');
     expect(third.messages[secondPrompt].cache).toBe(true);
     expect(third.messages.filter(message => message.cache).length).toBe(3);
+  });
+
+  describe('an MCP server that changes mid-turn', () => {
+    const echo = {
+      serverId: 'echo',
+      serverName: 'echo',
+      remoteName: 'echo',
+      definition: {
+        schema: {
+          name: 'mcp__echo_echo',
+          description: 'Echo the text back.',
+          parameters: { type: 'object', properties: { text: { type: 'string' } } },
+        },
+      },
+    } as unknown as McpToolBinding;
+    let bindings: McpToolBinding[];
+
+    beforeEach(() => {
+      bindings = [];
+      service = createService({
+        ensureConnected: async () => {},
+        tools: () => bindings,
+        state: async () => ({ servers: [] }),
+        findTool: (name: string) => bindings.find(binding => binding.definition.schema.name === name),
+      } as unknown as McpManager);
+    });
+
+    it.each([
+      ['added', [], [echo], 'tool_addition'],
+      ['removed', [echo], [], 'tool_removal'],
+    ])(
+      'states a server %s mid-turn after the tool results, as the last message before the answer',
+      async (_label, from, to, change) => {
+        bindings = from;
+        const { id } = await service.createSession();
+        const before = post.mock.calls.length;
+        await service.send(id, 'read it');
+        await vi.waitUntil(() => streams.length === before + 1, { timeout: 3000, interval: 5 });
+        bindings = to;
+        streams[before].write(
+          frame({
+            type: 'tool_use',
+            tools: [{ id: 'call_1', name: 'file_read', arguments: JSON.stringify({ path: join(root, 'tiny.txt') }) }],
+          })
+        );
+        streams[before].write(frame('[DONE]'));
+        await vi.waitUntil(() => streams.length === before + 2, { timeout: 3000, interval: 5 });
+        const second = body(before + 1);
+        const [use, result, live] = second.messages.slice(-3);
+        expect(blockNames(use, 'tool_use')).toEqual(['file_read']);
+        expect(result.role).toBe('user');
+        expect((result.content as { type: string }[]).map(block => block.type)).toContain('tool_result');
+        expect(live.role).toBe('system');
+        expect(blockNames(live, change)).toContain('mcp__echo_echo');
+
+        streams[before + 1].write(frame({ type: 'content', text: 'It says z.' }));
+        streams[before + 1].write(frame('[DONE]'));
+        await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+      }
+    );
   });
 
   it.each([
