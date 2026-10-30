@@ -6,6 +6,7 @@ import {
   usageEventRepository,
   userRepository,
   withTransaction,
+  newAccountSpendCapAdapters,
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
@@ -61,6 +62,7 @@ export const holdAdapters = {
   organizations: organizationRepository,
   creditTransactions: creditTransactionRepository,
   deductCredits: creditService.deductCreditsWithOrgSupport,
+  newAccountSpendCap: newAccountSpendCapAdapters,
 };
 
 type ReserveRequestCreditsParams = {

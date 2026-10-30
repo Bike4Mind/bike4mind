@@ -18,6 +18,11 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   creditTransactionRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
