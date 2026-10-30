@@ -93,14 +93,14 @@ export function buildRoster(input: {
   const views: AgentView[] = [];
 
   for (const session of sessions) {
-    if (session.archived || !session.origin) continue;
+    if (session.archived || !session.origin || session.id === rootId) continue;
     const depth = depthBelow(session, rootId, byId);
     if (depth === null) continue;
 
     const state = deriveAgentState(statuses.get(session.id), session.lastOutcome);
     views.push({
       id: session.id,
-      title: session.title || 'Untitled agent',
+      title: session.title.trim() || 'Untitled agent',
       parentId: session.origin.parentSessionId,
       depth,
       seedPrompt: session.origin.seedPrompt,
