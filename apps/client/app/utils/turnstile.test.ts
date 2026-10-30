@@ -402,6 +402,26 @@ describe('getTurnstileToken', () => {
     expect(document.querySelector('[data-testid="turnstile-challenge-overlay"]')).toBeNull();
   });
 
+  it("gives up with the last attempt's timeout after earlier attempts were rejected with a code", async () => {
+    vi.useFakeTimers();
+    render
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => opts['error-callback']('600010'));
+        return 'widget-1';
+      })
+      .mockImplementationOnce((_el: HTMLElement, opts: RenderOptions) => {
+        queueMicrotask(() => opts['error-callback']('600010'));
+        return 'widget-2';
+      })
+      .mockImplementationOnce(() => 'widget-3');
+    const pending = getTurnstileToken('site', 'otc-send').catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(70_000);
+    const error = await pending;
+    expect(error).toMatchObject({ reason: 'timeout', attempts: MAX_CHALLENGE_ATTEMPTS });
+    expect((error as TurnstileError).errorCode).toBeUndefined();
+    expect(turnstileFailureMessage(error)).toBe(TURNSTILE_RETRY_MESSAGE);
+  });
+
   it('does not retry a site configuration error', async () => {
     render.mockImplementation((_el: HTMLElement, opts: RenderOptions) => {
       queueMicrotask(() => opts['error-callback']('110200'));
