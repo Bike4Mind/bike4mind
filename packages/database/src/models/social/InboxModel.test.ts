@@ -118,28 +118,44 @@ describe('InboxModel keyed notices', () => {
     await Inbox.syncIndexes();
   });
 
-  it('creates once per open key and lists it by prefix', async () => {
-    expect(await inboxRepository.upsertKeyedNotice(notice('loop:a:status:error'))).toBe(true);
-    expect(await inboxRepository.upsertKeyedNotice(notice('loop:a:status:error'))).toBe(false);
-    await inboxRepository.upsertKeyedNotice(notice('other:a'));
+  it('creates once per key and lists it by prefix', async () => {
+    expect(await inboxRepository.createKeyedNotice(notice('loop:a:status:error'))).toBe(true);
+    expect(await inboxRepository.createKeyedNotice(notice('loop:a:status:error'))).toBe(false);
+    await inboxRepository.createKeyedNotice(notice('other:a'));
 
     expect(await Inbox.countDocuments({ sourceKey: 'loop:a:status:error' })).toBe(1);
-    const open = await inboxRepository.listOpenKeyed('loop:');
+    const open = await inboxRepository.listKeyed('loop:');
     expect(open.map(n => n.sourceKey)).toEqual(['loop:a:status:error']);
   });
 
   it('resolve soft-deletes and frees the key for a recurrence', async () => {
-    await inboxRepository.upsertKeyedNotice(notice('loop:a:status:error'));
-    const [open] = await inboxRepository.listOpenKeyed('loop:');
+    await inboxRepository.createKeyedNotice(notice('loop:a:status:error'));
+    const [open] = await inboxRepository.listKeyed('loop:');
     await inboxRepository.resolveKeyed([open.id]);
 
-    expect(await inboxRepository.listOpenKeyed('loop:')).toEqual([]);
+    expect(await inboxRepository.listKeyed('loop:')).toEqual([]);
     // The soft-delete plugin hides deleted docs from model queries; read the raw collection.
     const resolved = await Inbox.collection.findOne({ _id: new mongoose.Types.ObjectId(open.id) });
     expect(resolved?.deletedAt).toBeInstanceOf(Date);
     expect(resolved?.sourceKey).toBeUndefined();
 
-    expect(await inboxRepository.upsertKeyedNotice(notice('loop:a:status:error'))).toBe(true);
-    expect(await inboxRepository.listOpenKeyed('loop:')).toHaveLength(1);
+    expect(await inboxRepository.createKeyedNotice(notice('loop:a:status:error'))).toBe(true);
+    expect(await inboxRepository.listKeyed('loop:')).toHaveLength(1);
+  });
+
+  it('a receiver-deleted notice keeps its key until resolved', async () => {
+    await inboxRepository.createKeyedNotice(notice('loop:a:status:error'));
+    const [held] = await inboxRepository.listKeyed('loop:');
+    expect(await inboxRepository.deleteByReceiverId('owner-1', held.id)).toBe(true);
+
+    expect(await inboxRepository.listKeyed('loop:')).toEqual([held]);
+    expect(await inboxRepository.createKeyedNotice(notice('loop:a:status:error'))).toBe(false);
+
+    const deletedAt = (await Inbox.collection.findOne({ _id: new mongoose.Types.ObjectId(held.id) }))?.deletedAt;
+    await inboxRepository.resolveKeyed([held.id]);
+    const resolved = await Inbox.collection.findOne({ _id: new mongoose.Types.ObjectId(held.id) });
+    expect(resolved?.deletedAt).toEqual(deletedAt);
+    expect(resolved?.sourceKey).toBeUndefined();
+    expect(await inboxRepository.createKeyedNotice(notice('loop:a:status:error'))).toBe(true);
   });
 });

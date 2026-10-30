@@ -34,7 +34,7 @@ const InboxSchema = new mongoose.Schema<IInboxObject>(
 
 InboxSchema.plugin(softDeletePlugin);
 
-// Dedupes keyed system notices at the DB: only open notices carry a sourceKey (resolve unsets it).
+// Dedupes keyed system notices at the DB: a notice holds its sourceKey until resolveKeyed unsets it.
 InboxSchema.index({ sourceKey: 1 }, { unique: true, partialFilterExpression: { sourceKey: { $exists: true } } });
 
 export const Inbox: IInboxModel =
@@ -149,7 +149,7 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
     return !!result;
   }
 
-  async upsertKeyedNotice(data: {
+  async createKeyedNotice(data: {
     userId: string;
     receiverId: string;
     title: string;
@@ -158,6 +158,8 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
     sourceKey: string;
     link?: string;
   }): Promise<boolean> {
+    // The unique sourceKey index is the dedupe, so make sure it exists before the first insert.
+    await this.model.init();
     try {
       await this.model.create(data);
       return true;
@@ -167,17 +169,21 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
     }
   }
 
-  async listOpenKeyed(prefix: string): Promise<{ id: string; sourceKey: string }[]> {
-    const docs = await this.model.find(
-      { sourceKey: { $regex: `^${escapeRegex(prefix)}` }, deletedAt: null },
-      { sourceKey: 1 }
-    );
+  async listKeyed(prefix: string): Promise<{ id: string; sourceKey: string }[]> {
+    // includeDeleted: a notice the receiver deleted still holds its key until resolveKeyed frees it.
+    const docs = await this.model
+      .find({ sourceKey: { $regex: `^${escapeRegex(prefix)}` } }, { sourceKey: 1 })
+      .setOptions({ includeDeleted: true });
     return docs.map(doc => ({ id: doc.id, sourceKey: doc.sourceKey! }));
   }
 
   async resolveKeyed(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
-    await this.model.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: new Date() }, $unset: { sourceKey: '' } });
+    // Soft-delete before freeing the key, so a failure in between never leaves an open, unkeyed notice.
+    await this.model.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: new Date() } });
+    await this.model
+      .updateMany({ _id: { $in: ids } }, { $unset: { sourceKey: '' } })
+      .setOptions({ includeDeleted: true });
   }
 }
 

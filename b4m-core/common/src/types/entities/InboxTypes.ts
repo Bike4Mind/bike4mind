@@ -34,8 +34,8 @@ export interface IInboxRepository extends IBaseRepository<IInboxDocument> {
     type: InboxType;
   }): Promise<IInboxDocument>;
   deleteByReceiverId(receiverId: string, messageId: string): Promise<boolean>;
-  /** Creates a keyed notice; returns false when an open notice with that `sourceKey` already exists. */
-  upsertKeyedNotice(data: {
+  /** Creates a keyed notice; returns false when a notice still holds that `sourceKey`. */
+  createKeyedNotice(data: {
     userId: string;
     receiverId: string;
     title: string;
@@ -44,8 +44,8 @@ export interface IInboxRepository extends IBaseRepository<IInboxDocument> {
     sourceKey: string;
     link?: string;
   }): Promise<boolean>;
-  /** Open keyed notices whose `sourceKey` starts with `prefix`. */
-  listOpenKeyed(prefix: string): Promise<{ id: string; sourceKey: string }[]>;
+  /** Notices still holding a `sourceKey` that starts with `prefix`, including ones the receiver deleted. */
+  listKeyed(prefix: string): Promise<{ id: string; sourceKey: string }[]>;
   /** Soft-deletes the notices and frees their `sourceKey` so the same key can recur. */
   resolveKeyed(ids: string[]): Promise<void>;
 }

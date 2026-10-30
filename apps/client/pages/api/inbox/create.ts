@@ -29,7 +29,8 @@ const handler = baseApi().post(
         receiver: z.string().max(40),
         title: z.string().max(80),
         message: z.string().max(800),
-        type: z.nativeEnum(InboxType).optional().default(InboxType.COMMON),
+        // LOOP notices are server-written only (loopNotices sweep), never sent through this route.
+        type: z.enum([InboxType.COMMON, InboxType.SHARE]).optional().default(InboxType.COMMON),
       })
       .parse(req.body);
 

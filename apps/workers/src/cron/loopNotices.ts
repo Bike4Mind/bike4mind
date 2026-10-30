@@ -1,4 +1,4 @@
-import { InboxType, loopStatusNeedsOwner, type ILoop, type IWorkItem } from '@bike4mind/common';
+import { InboxType, loopStatusNeedsOwner, type ILoop, type IWorkItem, type LoopStatus } from '@bike4mind/common';
 import { inboxRepository, loopRepository, usableObjectIds, workItemRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 
@@ -6,7 +6,7 @@ const KEY_PREFIX = 'loop:';
 const TITLE_CHARS = 120;
 const MESSAGE_CHARS = 1000;
 
-const STATUS_TITLES: Record<string, string> = {
+const STATUS_TITLES: Partial<Record<LoopStatus, string>> = {
   needs_you: 'needs you',
   error: 'stopped with an error',
   paused: 'paused',
@@ -64,33 +64,37 @@ export function desiredLoopNotices(
 
 /**
  * Reconciles the owner inbox with loop state: opens a notice for every desired key that has none and
- * resolves every open `loop:` notice no longer desired (loop live again, ticket unblocked, closed or
+ * resolves every keyed `loop:` notice no longer desired (loop live again, ticket unblocked, closed or
  * deleted, loop deleted). Idempotent per tick; the inbox's unique `sourceKey` index dedupes overlapping
- * ticks. A changed reason on an unchanged key does not re-notify.
+ * ticks. A changed reason on an unchanged key does not re-notify, and a notice the owner deleted keeps its
+ * key (so is not re-sent) until its cause clears.
  *
  * ponytail: global scan of candidate loops and blocked loop tickets every tick; go per-user or
  * event-driven if loop counts grow.
  */
 export async function syncLoopNotices(logger: Logger): Promise<void> {
-  const [candidates, tickets, open] = await Promise.all([
+  const [candidates, tickets, held] = await Promise.all([
     loopRepository.find({ status: { $in: ['needs_you', 'error', 'paused'] } }),
     workItemRepository.find({ loopId: { $exists: true }, deletedAt: null, status: 'blocked' }),
-    inboxRepository.listOpenKeyed(KEY_PREFIX),
+    inboxRepository.listKeyed(KEY_PREFIX),
   ]);
-  const loopIds = usableObjectIds([...new Set(tickets.map(ticket => ticket.loopId!))], 'loopNotices', logger);
-  const ticketLoops = loopIds.length > 0 ? await loopRepository.find({ _id: { $in: loopIds } }) : [];
-  const loopsById = new Map(ticketLoops.map(loop => [loop.id, loop]));
+  const loopsById = new Map(candidates.map(loop => [loop.id, loop]));
+  const missing = [...new Set(tickets.map(ticket => ticket.loopId!))].filter(id => !loopsById.has(id));
+  const loopIds = usableObjectIds(missing, 'loopNotices', logger);
+  if (loopIds.length > 0) {
+    for (const loop of await loopRepository.find({ _id: { $in: loopIds } })) loopsById.set(loop.id, loop);
+  }
 
   const desired = desiredLoopNotices(candidates, tickets, loopsById);
   const desiredKeys = new Set(desired.map(notice => notice.sourceKey));
-  const openKeys = new Set(open.map(notice => notice.sourceKey));
+  const heldKeys = new Set(held.map(notice => notice.sourceKey));
 
   let created = 0;
   for (const notice of desired) {
-    if (openKeys.has(notice.sourceKey)) continue;
-    if (await inboxRepository.upsertKeyedNotice({ ...notice, userId: 'SYSTEM', type: InboxType.LOOP })) created++;
+    if (heldKeys.has(notice.sourceKey)) continue;
+    if (await inboxRepository.createKeyedNotice({ ...notice, userId: 'SYSTEM', type: InboxType.LOOP })) created++;
   }
-  const stale = open.filter(notice => !desiredKeys.has(notice.sourceKey)).map(notice => notice.id);
+  const stale = held.filter(notice => !desiredKeys.has(notice.sourceKey)).map(notice => notice.id);
   await inboxRepository.resolveKeyed(stale);
 
   if (created > 0 || stale.length > 0) {

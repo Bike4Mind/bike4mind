@@ -3,7 +3,14 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { adminSettingsRepository, Inbox, Loop, WorkItem, workItemRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  Inbox,
+  inboxRepository,
+  Loop,
+  WorkItem,
+  workItemRepository,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 
 /**
@@ -174,5 +181,40 @@ describe('loop notices', () => {
     await Loop.deleteOne({ _id: other.id });
     await tick();
     expect(await openNotices()).toHaveLength(0);
+  });
+
+  it('does not re-send a notice the owner deleted, until the cause clears and recurs', async () => {
+    const loop = await createLoop({ status: 'paused', statusReason: 'Out of credits' });
+    await tick();
+    const [notice] = await openNotices();
+    await inboxRepository.deleteByReceiverId('owner-1', notice._id.toString());
+    await tick();
+    expect(await openNotices()).toHaveLength(0);
+
+    await Loop.updateOne(
+      { _id: loop.id },
+      { $set: { status: 'live', nextRunAt: new Date(NOW.getTime() + 60_000) }, $unset: { statusReason: '' } }
+    );
+    await tick();
+    await Loop.updateOne({ _id: loop.id }, { $set: { status: 'paused', statusReason: 'Out of credits' } });
+    await tick();
+    expect(await openNotices()).toHaveLength(1);
+  });
+
+  it('keeps the open notice when only the reason text changes', async () => {
+    const loop = await createLoop({ status: 'error', statusReason: 'Run failed' });
+    await tick();
+    await Loop.updateOne({ _id: loop.id }, { $set: { statusReason: 'Run failed again' } });
+    await tick();
+    const notices = await openNotices();
+    expect(notices).toHaveLength(1);
+    expect(notices[0].message).toContain('Run failed\n');
+  });
+
+  it('a failed sync is logged and does not fail the tick', async () => {
+    await createLoop({ status: 'error', statusReason: 'Run failed' });
+    vi.spyOn(inboxRepository, 'listKeyed').mockRejectedValue(new Error('boom'));
+    await tick();
+    expect(logger.error).toHaveBeenCalledWith('[Loops] Notice sync failed', expect.any(Error));
   });
 });
