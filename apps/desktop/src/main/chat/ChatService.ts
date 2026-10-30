@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -18,6 +19,7 @@ import type {
   ChatModelCatalog,
   ChatModelOption,
   ChatProject,
+  ChatPromptCacheStamp,
   ChatQueuedMessage,
   ChatReplyRound,
   ChatSentRound,
@@ -1401,6 +1403,10 @@ export class ChatService {
     return this.deps.store.setReasoningEffort(sessionId, effort);
   }
 
+  setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setPromptCacheTtl(sessionId, ttl);
+  }
+
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
     return this.deps.store.setPinned(sessionId, pinned);
   }
@@ -2652,6 +2658,10 @@ export class ChatService {
       const askForThinking = requestsThinking(session.reasoningEffort, { thinkingToggle });
       const effort = reasoningEffortFor(session.reasoningEffort, session.model);
       const effortField = effort ? { reasoningEffort: effort } : {};
+      // The server keeps 5 minutes for a model without the hour, but sending it there says nothing.
+      const cacheTtl: PromptCacheTtl =
+        session.promptCacheTtl === '1h' && modelOption?.supportsOneHourCache ? '1h' : DEFAULT_PROMPT_CACHE_TTL;
+      const cacheTtlField = cacheTtl === '1h' ? { cacheTtl } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
       const images: ImageContext | undefined = this.deps.prepareImage
@@ -2886,6 +2896,11 @@ export class ChatService {
         // A plain reply keeps no rounds, but one that reasoned needs them to carry the reasoning.
         const keepRounds = toolCalls.length > 0 || rounds.some(round => round.reasoning);
         const finalContent = joinRounds(rounds.map(round => round.text));
+        const lastTiming = produced[produced.length - 1]?.timing;
+        const promptCache: ChatPromptCacheStamp | undefined =
+          cacheable && !localTurn && lastTiming
+            ? { cachedAt: lastTiming.firstTokenAt ?? lastTiming.endedAt, ttl: cacheTtl, model: session.model }
+            : undefined;
 
         const message: ChatMessage = {
           id: replyId,
@@ -2898,6 +2913,7 @@ export class ChatService {
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
+          ...(promptCache ? { promptCache } : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
@@ -2910,6 +2926,7 @@ export class ChatService {
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
           ...(keepRounds ? { rounds } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
+          ...(promptCache ? { promptCache } : {}),
         });
       };
 
@@ -3012,6 +3029,7 @@ export class ChatService {
                 // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
+                ...cacheTtlField,
                 ...(maxTokens ? { maxTokens } : {}),
               },
               onCompletionEvent,
@@ -3401,6 +3419,7 @@ export class ChatService {
       thinking: message.thinking,
       artifacts: message.artifacts,
       usage: message.usage,
+      promptCache: message.promptCache,
     });
     if (updated) this.captureSessionHistory(updated, historyScope);
   }

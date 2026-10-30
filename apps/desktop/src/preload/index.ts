@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
+import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -161,6 +162,8 @@ const api: DesktopApi = {
     },
     setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
+    setSessionPromptCacheTtl: (sessionId: string, ttl: PromptCacheTtl) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPromptCacheTtl, sessionId, ttl),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
