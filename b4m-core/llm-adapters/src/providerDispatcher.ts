@@ -5,9 +5,10 @@ type SdkFetchOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>['fet
 
 let agent: Agent | undefined;
 
-/** One pool shared by every provider SDK client so sockets survive the per-turn backend construction. */
+// Node's global dispatcher drops idle sockets after 4 s; a longer idle timeout lets consecutive chat
+// turns reuse the provider connection.
 export function providerDispatcher(): Agent {
-  agent ??= new Agent({ keepAliveTimeout: 60_000, keepAliveMaxTimeout: 600_000 });
+  agent ??= new Agent({ keepAliveTimeout: 60_000 });
   return agent;
 }
 

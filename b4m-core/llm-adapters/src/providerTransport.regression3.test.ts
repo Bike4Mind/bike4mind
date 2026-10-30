@@ -245,7 +245,7 @@ describe('stale keep-alive sockets in the shared pool (real sockets, 127.0.0.1)'
 });
 
 describe('Agent options match the global dispatcher except keep-alive', () => {
-  it('only keepAliveTimeout / keepAliveMaxTimeout differ from a default undici Agent', async () => {
+  it('only keepAliveTimeout differs from a default undici Agent', async () => {
     const optionsOf = (a: object) => {
       const sym = Object.getOwnPropertySymbols(a).find(s => s.description === 'options') as symbol;
       return (a as Record<symbol, Record<string, unknown>>)[sym];
@@ -256,7 +256,7 @@ describe('Agent options match the global dispatcher except keep-alive', () => {
     const differing = [...new Set([...Object.keys(ours), ...Object.keys(base)])].filter(
       k => typeof ours[k] !== 'function' && JSON.stringify(ours[k]) !== JSON.stringify(base[k])
     );
-    expect(differing.sort()).toEqual(['keepAliveMaxTimeout', 'keepAliveTimeout']);
+    expect(differing).toEqual(['keepAliveTimeout']);
     expect(ours.headersTimeout).toBeUndefined();
     expect(ours.bodyTimeout).toBeUndefined();
     expect(ours.allowH2).toBeUndefined();
