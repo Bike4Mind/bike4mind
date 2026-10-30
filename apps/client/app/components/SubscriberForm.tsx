@@ -78,9 +78,9 @@ const SubscriberForm = ({ initialEmail = '', source }: SubscriberFormProps) => {
     },
   };
 
-  const inputFields = [
-    { name: 'firstName', label: 'First Name', type: 'text' },
-    { name: 'lastName', label: 'Last Name', type: 'text' },
+  const inputFields: { name: string; label: string; type: string; maxLength?: number }[] = [
+    { name: 'firstName', label: 'First Name', type: 'text', maxLength: 50 },
+    { name: 'lastName', label: 'Last Name', type: 'text', maxLength: 50 },
     { name: 'email', label: 'Email', type: 'email' },
   ];
 
@@ -105,7 +105,9 @@ const SubscriberForm = ({ initialEmail = '', source }: SubscriberFormProps) => {
               <Input
                 required
                 type={field.type}
-                slotProps={{ input: { 'data-testid': `subscriber-form-${field.name}-input` } }}
+                slotProps={{
+                  input: { 'data-testid': `subscriber-form-${field.name}-input`, maxLength: field.maxLength },
+                }}
                 value={formData[field.name as keyof typeof formData]}
                 onChange={e => setFormData(prev => ({ ...prev, [field.name]: e.target.value }))}
                 sx={{
