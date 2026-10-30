@@ -3864,6 +3864,9 @@ export class ChatCompletionProcess {
         );
         const startLimit = getSettingsValue('DeferredToolStartSetMaxTokens', defaultAdminSettings);
         if (loaded.size > 0 && startTokens > (startLimit ?? Number.POSITIVE_INFINITY)) {
+          logger.info(
+            `Deferring the tool start set: ~${startTokens} tokens exceeds the ${startLimit} limit (${loaded.size} tools)`
+          );
           toolTimeline = planToolTimeline(historyToolTurns, offeredToolNames, undeclarable);
         }
       }
