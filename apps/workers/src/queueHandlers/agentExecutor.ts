@@ -3597,6 +3597,8 @@ async function chargeSubagentTokens(
           model: args.model,
           inputTokens: args.completionInfo.totalInputTokens ?? 0,
           outputTokens: args.completionInfo.totalOutputTokens ?? 0,
+          cacheReadTokens: args.usage?.cacheReadTokens || undefined,
+          cacheWriteTokens: args.usage?.cacheWriteTokens || undefined,
         },
         {
           db: {

@@ -195,6 +195,18 @@ export const CompletionMessageSchema = z.object({
 export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
 
 /**
+ * The caller's own conversation id. Recorded on the credit ledger row so spend can be traced back
+ * to a conversation; never used for authorization or lookups.
+ */
+export const CompletionSessionIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .describe(
+    "Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise."
+  );
+
+/**
  * Schema for CLI LLM completion requests
  * Shared between Next.js API route (dev) and Lambda function (production)
  *
@@ -213,6 +225,7 @@ export const CompletionRequestSchema = z.object({
   temperature: z.number().optional(),
   // OpenAI wire naming; normalizes into options.maxTokens alongside the legacy `maxTokens` alias.
   max_tokens: z.number().optional(),
+  sessionId: CompletionSessionIdSchema.optional(),
   options: z
     .object({
       temperature: z.number().optional(),

@@ -86,6 +86,9 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
     sessionId: { type: String, required: false },
     inputTokens: { type: Number, required: false },
     outputTokens: { type: Number, required: false },
+    // Prompt-cache tokens, disjoint from inputTokens (see CacheTokenFields in CreditTransactionTypes.ts).
+    cacheReadTokens: { type: Number, required: false },
+    cacheWriteTokens: { type: Number, required: false },
     apiKeyId: { type: String, required: false }, // For completion_api_usage (optional - present for API key auth, undefined for JWT)
 
     // Transfer and received credit fields

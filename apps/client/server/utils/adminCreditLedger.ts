@@ -57,6 +57,11 @@ export function ledgerPageFilter({ kind, model, source, from, to }: AdminLedgerF
 type LedgerDocument = Awaited<ReturnType<typeof creditTransactionRepository.findLedgerPage>>[number];
 
 const asString = (value: unknown): string | undefined => (typeof value === 'string' && value ? value : undefined);
+const asStringArray = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+  return strings.length > 0 ? strings : undefined;
+};
 const asNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
@@ -149,6 +154,11 @@ export async function buildLedgerRows(
       questId: asString(record.questId),
       inputTokens: asNumber(record.inputTokens),
       outputTokens: asNumber(record.outputTokens),
+      cacheReadTokens: asNumber(record.cacheReadTokens),
+      cacheWriteTokens: asNumber(record.cacheWriteTokens),
+      // Only completion rows carry a client conversation id; other usage rows' sessionId is a quest session.
+      sessionId: type === 'completion_api_usage' ? asString(record.sessionId) : undefined,
+      toolNames: asStringArray(metadata.toolNames),
       description: asString(record.description),
       reason: asString(record.reason),
       note: asString(metadata.note),

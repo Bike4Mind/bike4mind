@@ -73,6 +73,9 @@ export interface DeductTextGenerationCreditsParams extends DeductCreditsWithOrgS
   inputTokens: number;
   /** Output tokens used */
   outputTokens: number;
+  /** Prompt-cache tokens, disjoint from inputTokens */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 /**
@@ -116,6 +119,8 @@ export interface DeductDecisionCreditsParams extends DeductCreditsCommonParams {
   type: 'decision_usage';
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   /** Present for API key auth, undefined for JWT */
   apiKeyId?: string;
 }
@@ -125,6 +130,8 @@ export interface DeductCompletionApiUsageCreditsParams extends DeductCreditsComm
   type: 'completion_api_usage';
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   /** Present for API key auth, undefined for JWT */
   apiKeyId?: string;
 }
@@ -249,6 +256,8 @@ export async function deductCreditsWithOrgSupport(
       questId: params.questId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     };
   } else if (type === 'sound_effects_usage') {
     // Quest-less: sound effects has no questId.
@@ -269,6 +278,8 @@ export async function deductCreditsWithOrgSupport(
       type,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
       apiKeyId: params.apiKeyId,
     };
   } else {
