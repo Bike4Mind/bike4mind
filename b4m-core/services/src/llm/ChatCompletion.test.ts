@@ -773,6 +773,34 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('quest saves', () => {
+    it('write only changed fields, never deletedAt, and leave every final field persisted', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.deletedAt = null;
+      const writes: Record<string, unknown>[] = [];
+      const record = async (patch: Record<string, unknown>) => {
+        writes.push(JSON.parse(JSON.stringify(patch)));
+        return patch;
+      };
+      mockDb.quests.update.mockImplementation(record);
+      mockDb.quests.updateIfUnfinished.mockImplementation(record);
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      expect(writes.length).toBeGreaterThan(1);
+      for (const w of writes) {
+        expect(w).not.toHaveProperty('deletedAt');
+        expect(w).not.toHaveProperty('createdAt');
+      }
+      expect(writes.filter(w => 'timestamp' in w)).toHaveLength(1);
+
+      const persisted: Record<string, unknown> = Object.assign({}, ...writes);
+      const final = JSON.parse(JSON.stringify(mockQuest));
+      for (const key of ['deletedAt', 'createdAt', 'updatedAt']) delete final[key];
+      expect(persisted).toEqual(final);
+    });
+  });
+
   describe('an unrecognised timezone', () => {
     it('falls back to server time instead of failing the turn', async () => {
       mockSession.userId = 'user1';
