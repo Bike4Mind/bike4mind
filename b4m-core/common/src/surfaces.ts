@@ -259,6 +259,11 @@ export interface WorkspaceSessionSettingsEntry {
    * that must reply the same way every time. Null hands the turn to the model.
    */
   respond?: (ctx: WorkspaceTurnContext) => Promise<WorkspaceTurnReply | null>;
+  /**
+   * Whether `respond` scripts this session's turns, for a workspace that scripts only some of its
+   * sessions. Absent, every session on a workspace with `respond` counts as scripted.
+   */
+  answersTurns?: (ctx: WorkspaceSessionSettingsContext) => Promise<boolean>;
 }
 
 /**
@@ -313,9 +318,23 @@ export async function applyWorkspaceSessionSettings<TSession extends SurfaceSett
   return effective as TSession;
 }
 
-/** Whether `session`'s workspace answers its turns itself, so no model may answer one. */
-export function workspaceAnswersTurns(session: SurfaceSettingsSession, table: WorkspaceSessionSettingsTable): boolean {
-  return !!ownedFieldsFor(session, table, false)?.entry.respond;
+/**
+ * Whether `ctx.session`'s workspace answers its turns itself, so no model may answer one. A predicate
+ * that throws counts as yes, since a wrong no would let a model improvise a scripted reply.
+ */
+export async function workspaceAnswersTurns(
+  ctx: WorkspaceSessionSettingsContext,
+  table: WorkspaceSessionSettingsTable
+): Promise<boolean> {
+  const entry = ownedFieldsFor(ctx.session, table, false)?.entry;
+  if (!entry?.respond) return false;
+  if (!entry.answersTurns) return true;
+  try {
+    return await entry.answersTurns(ctx);
+  } catch (error) {
+    ctx.logger?.warn(`Workspace turn predicate for "${normalizeSurfaceId(ctx.session.surface)}" failed`, error);
+    return true;
+  }
 }
 
 /**
@@ -393,7 +412,7 @@ export function userSetSessionFields(
 /** Checks a contributed table once, at load, so a malformed entry fails at startup rather than every turn. */
 export function defineWorkspaceSessionSettingsTable(entries: Record<string, unknown>): WorkspaceSessionSettingsTable {
   for (const [id, entry] of Object.entries(entries)) {
-    const { ownedFields, resolve, respond } = (entry ?? {}) as Partial<
+    const { ownedFields, resolve, respond, answersTurns } = (entry ?? {}) as Partial<
       Record<keyof WorkspaceSessionSettingsEntry, unknown>
     >;
     if (!Array.isArray(ownedFields) || !ownedFields.every(field => OWNABLE_FIELD_SET.has(field))) {
@@ -406,6 +425,11 @@ export function defineWorkspaceSessionSettingsTable(entries: Record<string, unkn
     }
     if (respond !== undefined && typeof respond !== 'function') {
       throw new Error(`Workspace session settings for "${id}": respond must be a function when set`);
+    }
+    if (answersTurns !== undefined && (typeof answersTurns !== 'function' || respond === undefined)) {
+      throw new Error(
+        `Workspace session settings for "${id}": answersTurns must be a function, set only beside respond`
+      );
     }
   }
   return entries as WorkspaceSessionSettingsTable;

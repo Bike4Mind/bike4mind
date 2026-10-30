@@ -165,6 +165,12 @@ vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', (
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
     'responding-workspace': { ownedFields: [], resolve: async () => ({}), respond: async () => null },
+    'partly-responding-workspace': {
+      ownedFields: [],
+      resolve: async () => ({}),
+      respond: async () => null,
+      answersTurns: async () => false,
+    },
   },
 }));
 
@@ -1010,7 +1016,17 @@ describe('processExecution tool deps', () => {
 
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
       expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith('exec-1', {
-        message: 'This workspace answers its own turns, so agent runs are not available in it',
+        message: 'This session answers its own turns, so agent runs are not available in it',
+      });
+    });
+
+    it('runs on a responding workspace whose predicate says this session is not scripted', async () => {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+
+      await runWithSession({ ...baseSession, surface: 'partly-responding-workspace' });
+
+      expect(agentExecutionRepository.markFailed).not.toHaveBeenCalledWith('exec-1', {
+        message: 'This session answers its own turns, so agent runs are not available in it',
       });
     });
 
