@@ -7,10 +7,19 @@ import type { AgentState } from './roster';
 import { createThemedMount, el, query } from './testUtils';
 
 const onSurfaceChange = vi.fn();
+const onStart = vi.fn();
 const themed = createThemedMount();
 
-const renderToggle = (states: AgentState[], surface: SessionSurface = 'chat') =>
-  themed.render(<OrchestrateToggle states={states} surface={surface} onSurfaceChange={onSurfaceChange} />);
+const renderToggle = (states: AgentState[], surface: SessionSurface = 'chat', canStart = false) =>
+  themed.render(
+    <OrchestrateToggle
+      states={states}
+      surface={surface}
+      onSurfaceChange={onSurfaceChange}
+      canStart={canStart}
+      onStart={onStart}
+    />
+  );
 
 afterEach(() => {
   themed.unmount();
@@ -22,6 +31,28 @@ describe('OrchestrateToggle', () => {
     await renderToggle([]);
     expect(query('chat-orchestrate-chip')).toBeNull();
     expect(query('chat-surface-toggle-chat')).toBeNull();
+  });
+
+  it('offers a plain Orchestrate chip on a code session with no agents, which starts orchestrating', async () => {
+    await renderToggle([], 'chat', true);
+    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+    act(() => el('chat-orchestrate-chip').querySelector('button')?.click());
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onSurfaceChange).not.toHaveBeenCalled();
+  });
+
+  it('offers the Chat / Orchestrate control on a code session with no agents yet, once orchestrating', async () => {
+    await renderToggle([], 'orchestrate', true);
+    expect(query('chat-orchestrate-chip')).toBeNull();
+    act(() => el('chat-surface-toggle-chat').click());
+    expect(onSurfaceChange).toHaveBeenCalledWith('chat');
+  });
+
+  it('only switches the surface from the chip once agents exist, even on a code session', async () => {
+    await renderToggle(['working'], 'chat', true);
+    act(() => el('chat-orchestrate-chip').querySelector('button')?.click());
+    expect(onSurfaceChange).toHaveBeenCalledWith('orchestrate');
+    expect(onStart).not.toHaveBeenCalled();
   });
 
   it('counts agents and says when any is working', async () => {

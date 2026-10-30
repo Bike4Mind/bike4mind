@@ -72,6 +72,21 @@ const CHILD_B = {
   title: 'Second agent',
   origin: { parentSessionId: PARENT_B.id, seedPrompt: 'do another thing' },
 } as ChatSessionSummary;
+// A Code session with no agents yet: the one place Orchestrate can be started from nothing.
+const CODE = {
+  ...PARENT,
+  id: 'code-1',
+  title: 'Code thread',
+  mode: 'code',
+  project: {
+    directory: '/work/repo',
+    name: 'repo',
+    branch: 'main',
+    workspace: false,
+    workingDirectory: '/work/repo',
+    contextDirectories: [],
+  },
+} as ChatSessionSummary;
 const SESSIONS = [PARENT, CHILD, PARENT_B, CHILD_B];
 
 const INTRO_SEEN_KEY = 'b4m.orchestrator.introSeen';
@@ -95,9 +110,19 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 const streamUnsubscribe = vi.fn();
 const onStreamEvent = vi.fn(() => streamUnsubscribe);
+let listed: ChatSessionSummary[] = SESSIONS;
+const setSessionOrchestrate = vi.fn(async (id: string, orchestrate: boolean) => {
+  const found = listed.find(session => session.id === id);
+  if (!found) return null;
+  const { orchestrate: _previous, ...rest } = found;
+  const updated = (orchestrate ? { ...rest, orchestrate: true } : rest) as ChatSessionSummary;
+  listed = listed.map(session => (session.id === id ? updated : session));
+  return updated;
+});
 
 beforeEach(() => {
   window.localStorage.clear();
+  listed = SESSIONS;
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -114,19 +139,25 @@ beforeEach(() => {
     {
       chat: quietBridge({
         onStreamEvent,
-        listSessions: async () => SESSIONS,
+        listSessions: async () => listed,
         getSession: async (id: string) =>
-          ({ ...(SESSIONS.find(session => session.id === id) ?? PARENT), messages: [] }) as unknown as ChatSession,
+          ({ ...(listed.find(session => session.id === id) ?? PARENT), messages: [] }) as unknown as ChatSession,
+        setSessionOrchestrate,
+        inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
+        workspaceChanges: async () => null,
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
+      pullRequests: quietBridge({ watch: async () => null }),
+      // A Code session's chips shorten paths against the home directory.
+      getAppInfo: async () => ({ homeDirectory: '/home/user' }),
     },
     {
       get(target, name: string | symbol) {
         if (typeof name !== 'string') return undefined;
-        return name in target ? target[name as 'chat' | 'sidebar'] : quietBridge({});
+        return name in target ? target[name as keyof typeof target] : quietBridge({});
       },
     }
   );
@@ -158,7 +189,7 @@ async function clickSessionRow(title: string) {
   await act(async () => undefined);
 }
 
-async function openParent() {
+async function openParent(title: string = PARENT.title, mode: 'chat' | 'code' = 'chat') {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -169,7 +200,8 @@ async function openParent() {
       </CssVarsProvider>
     );
   });
-  await clickSessionRow(PARENT.title);
+  if (mode === 'code') await act(async () => el('mode-switch-code-btn').click());
+  await clickSessionRow(title);
 }
 
 const enterOrchestrate = () => act(() => el('chat-orchestrate-chip').querySelector('button')?.click());
@@ -289,6 +321,47 @@ describe('orchestrate mode in the chat shell', () => {
     await openParent();
     expect(window.localStorage.getItem('b4m.orchestrator.view.other-scope')).toBe('board');
     expect(window.localStorage.getItem('b4m.orchestrator.surface.other-scope')).toBe('orchestrate');
+  });
+
+  it('offers no chip on a chat session with no agents', async () => {
+    listed = [...SESSIONS, { ...PARENT, id: 'plain-1', title: 'Plain chat' } as ChatSessionSummary];
+    await openParent('Plain chat');
+    expect(query('chat-orchestrate-chip')).toBeNull();
+  });
+
+  it('starts orchestrating an empty code session from its chip, with an empty stage and the delegate switch on', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    listed = [...SESSIONS, CODE];
+    await openParent(CODE.title, 'code');
+    expect(el('chat-orchestrate-chip').textContent).toBe('Orchestrate');
+
+    await act(async () => el('chat-orchestrate-chip').querySelector('button')?.click());
+    expect(setSessionOrchestrate).toHaveBeenCalledWith(CODE.id, true);
+    expect(el('orchestrator-empty-state').textContent).toBe(
+      'No agents yet. Describe the work and it will be split across agents.'
+    );
+    expect(el('orchestrator-dock').querySelector('[data-testid="chat-thread-empty-host"]')).not.toBeNull();
+    const delegate = () => el('orchestrator-delegate-switch').querySelector('input');
+    expect(delegate()?.checked).toBe(true);
+
+    // Back to Chat leaves the behaviour on; only the switch turns it off.
+    act(() => el('chat-surface-toggle-chat').click());
+    expect(query('orchestrator-stage')).toBeNull();
+    expect(setSessionOrchestrate).toHaveBeenCalledTimes(1);
+
+    await act(async () => el('chat-orchestrate-chip').querySelector('button')?.click());
+    expect(setSessionOrchestrate).toHaveBeenCalledTimes(1);
+    await act(async () => delegate()?.click());
+    expect(setSessionOrchestrate).toHaveBeenLastCalledWith(CODE.id, false);
+    expect(delegate()?.checked).toBe(false);
+  });
+
+  it('leaves the delegate switch out of a chat session stage', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    expect(query('orchestrator-stage')).not.toBeNull();
+    expect(query('orchestrator-delegate-switch')).toBeNull();
   });
 
   it('opens an agent session from the stage', async () => {

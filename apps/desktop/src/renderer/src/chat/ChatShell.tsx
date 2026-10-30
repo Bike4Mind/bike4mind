@@ -490,12 +490,21 @@ export function ChatShell({
   // States only: the activity stream is subscribed inside OrchestratorSurface, while orchestrating.
   const spawnedStates = useMemo(() => agentStates(sessions, statuses, activeId), [sessions, statuses, activeId]);
   const orchestratorPrefs = useOrchestratorPrefs(activeId);
-  const { setDockOpen, setView: setOrchestratorView } = orchestratorPrefs;
-  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && spawnedStates.length > 0;
+  const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
+  // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
+  const orchestrateCapable = !!activeSummary?.project;
+  const delegating = activeSummary?.orchestrate === true;
+  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || orchestrateCapable);
+  const { setOrchestrate } = conversation;
+  const startOrchestrating = useCallback(() => {
+    if (!delegating) void setOrchestrate(true);
+    setOrchestratorSurface('orchestrate');
+  }, [delegating, setOrchestrate, setOrchestratorSurface]);
 
   // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
-  // already true when it mounts, which is the same commit that enters orchestrate mode.
-  const orchestrateEntry = orchestrating ? activeId : null;
+  // already true when it mounts, which is the same commit that enters orchestrate mode. Held back
+  // while the stage is empty, so the intro plays as the first agent walks in.
+  const orchestrateEntry = orchestrating && spawnedStates.length > 0 ? activeId : null;
   const [introEntry, setIntroEntry] = useState<string | null>(null);
   const [introPhase, setIntroPhase] = useState<IntroPhase>('off');
   if (orchestrateEntry !== introEntry) {
@@ -1061,6 +1070,8 @@ export function ChatShell({
                 states={spawnedStates}
                 surface={orchestratorPrefs.surface}
                 onSurfaceChange={orchestratorPrefs.setSurface}
+                canStart={orchestrateCapable}
+                onStart={startOrchestrating}
               />
               {!opening && conversation.session?.historyEnabled === true && (
                 <Tooltip
@@ -1184,6 +1195,9 @@ export function ChatShell({
                   actions={agentActions}
                   introPlaying={introPhase === 'playing'}
                   renderView={renderOrchestratorView}
+                  delegate={
+                    orchestrateCapable ? { on: delegating, onChange: on => void setOrchestrate(on) } : undefined
+                  }
                   dockControl={
                     <Tooltip
                       size="sm"

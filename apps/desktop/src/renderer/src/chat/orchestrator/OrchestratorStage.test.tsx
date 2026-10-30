@@ -16,7 +16,9 @@ const onViewChange = vi.fn();
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const themed = createThemedMount();
 
-const renderStage = (agents: AgentView[], dockControl?: ReactNode) =>
+const onDelegateChange = vi.fn();
+
+const renderStage = (agents: AgentView[], dockControl?: ReactNode, delegate?: boolean) =>
   themed.render(
     <OrchestratorStage
       agents={agents}
@@ -25,6 +27,7 @@ const renderStage = (agents: AgentView[], dockControl?: ReactNode) =>
       actions={actions}
       introPlaying={false}
       dockControl={dockControl}
+      delegate={delegate === undefined ? undefined : { on: delegate, onChange: onDelegateChange }}
     />
   );
 
@@ -45,6 +48,35 @@ afterEach(() => {
 });
 
 describe('OrchestratorStage', () => {
+  it('shows an empty state instead of a view while there are no agents', async () => {
+    await renderStage([]);
+    expect(el('orchestrator-empty-state').textContent).toBe(
+      'No agents yet. Describe the work and it will be split across agents.'
+    );
+    expect(query('orchestrator-table')).toBeNull();
+
+    await renderStage([agentFixture('w', 'working')]);
+    expect(query('orchestrator-empty-state')).toBeNull();
+    expect(query('orchestrator-table-row-w')).not.toBeNull();
+  });
+
+  it('reflects and sets the delegate switch, and leaves it out when not offered', async () => {
+    await renderStage([], undefined, true);
+    const input = () => el('orchestrator-delegate-switch').querySelector('input');
+    expect(el('orchestrator-delegate-switch').textContent).toContain('Delegate to agents');
+    expect(input()?.checked).toBe(true);
+    act(() => input()?.click());
+    expect(onDelegateChange).toHaveBeenCalledWith(false);
+
+    await renderStage([], undefined, false);
+    expect(input()?.checked).toBe(false);
+    act(() => input()?.click());
+    expect(onDelegateChange).toHaveBeenLastCalledWith(true);
+
+    await renderStage([]);
+    expect(query('orchestrator-delegate-switch')).toBeNull();
+  });
+
   it('summarises the roster, with ~ when a cost is unknown', async () => {
     await renderStage(FIXTURE);
     expect(query('orchestrator-summary-strip')?.textContent).toBe(

@@ -10,11 +10,15 @@ interface OrchestrateToggleProps {
   states: readonly AgentState[];
   surface: SessionSurface;
   onSurfaceChange(surface: SessionSurface): void;
+  /** A Code session, which can start orchestrating before it has any agents. */
+  canStart: boolean;
+  /** From the chip of an agentless session: turn Orchestrate on and show its surface. */
+  onStart(): void;
 }
 
-/** Header entry point into orchestrate mode; absent for a session that has spawned no agents. */
-export function OrchestrateToggle({ states, surface, onSurfaceChange }: OrchestrateToggleProps) {
-  if (states.length === 0) return null;
+/** Header entry point into orchestrate mode; absent for a Chat session that has spawned no agents. */
+export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart, onStart }: OrchestrateToggleProps) {
+  if (states.length === 0 && !canStart) return null;
 
   if (surface === 'orchestrate') {
     return (
@@ -32,6 +36,14 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange }: Orchestr
           Orchestrate
         </Button>
       </ToggleButtonGroup>
+    );
+  }
+
+  if (states.length === 0) {
+    return (
+      <Chip size="sm" variant="soft" color="neutral" data-testid="chat-orchestrate-chip" onClick={onStart}>
+        Orchestrate
+      </Chip>
     );
   }
 

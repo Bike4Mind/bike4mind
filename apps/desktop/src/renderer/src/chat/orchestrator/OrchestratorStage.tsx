@@ -1,5 +1,6 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Switch from '@mui/joy/Switch';
 import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
@@ -32,6 +33,8 @@ export interface OrchestratorStageProps {
   renderView?(view: OrchestratorViewId, props: OrchestratorViewProps): ReactNode;
   /** Rendered at the end of the header row. */
   dockControl?: ReactNode;
+  /** The session's Orchestrate behaviour, separate from which surface is shown; Code sessions only. */
+  delegate?: { on: boolean; onChange(on: boolean): void };
 }
 
 const VIEW_LABEL: Record<OrchestratorViewId, string> = { tavern: 'Tavern', board: 'Board', table: 'Table' };
@@ -49,6 +52,7 @@ export function OrchestratorStage({
   introPlaying,
   renderView,
   dockControl,
+  delegate,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = agents.find(agent => agent.id === selectedId) ?? null;
@@ -108,11 +112,36 @@ export function OrchestratorStage({
           </Button>
         )}
         <Box sx={{ flex: 1 }} />
+        {delegate && (
+          <Typography
+            component="label"
+            level="body-sm"
+            data-testid="orchestrator-delegate-switch"
+            startDecorator={
+              <Switch size="sm" checked={delegate.on} onChange={event => delegate.onChange(event.target.checked)} />
+            }
+          >
+            Delegate to agents
+          </Typography>
+        )}
         {dockControl}
       </Box>
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'auto' }}>
-          {renderView ? renderView(view, viewProps) : <TableView {...viewProps} />}
+          {agents.length === 0 ? (
+            <Box
+              data-testid="orchestrator-empty-state"
+              sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3 }}
+            >
+              <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
+                No agents yet. Describe the work and it will be split across agents.
+              </Typography>
+            </Box>
+          ) : renderView ? (
+            renderView(view, viewProps)
+          ) : (
+            <TableView {...viewProps} />
+          )}
         </Box>
         {selected && (
           <AgentPeekDrawer key={selected.id} agent={selected} onClose={() => setSelectedId(null)} actions={actions} />
