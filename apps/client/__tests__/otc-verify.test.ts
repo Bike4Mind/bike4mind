@@ -279,17 +279,18 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockFindByEmail).not.toHaveBeenCalled();
   });
 
-  describe('re-issued pending tokens keep the same payload shape', () => {
+  describe.each([true, null, undefined])('reissued token payload shape (%s)', challengeVerified => {
     const signedPayloads = () => mockJwtSign.mock.calls.map(([payload]) => payload as Record<string, unknown>);
     const expectPayloadShape = () => {
       expect(signedPayloads().length).toBeGreaterThan(0);
       for (const payload of signedPayloads()) {
-        expect(Object.keys(payload).sort()).toEqual(['attempts', 'email', 'jti']);
+        expect(Object.keys(payload).sort()).toEqual(['attempts', 'challengeVerified', 'email', 'jti']);
+        expect(payload.challengeVerified).toBe(challengeVerified === true ? true : null);
       }
     };
 
     beforeEach(() => {
-      mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash' }));
+      mockJwtVerify.mockReturnValue(validToken({ otcHash: 'token-hash', challengeVerified }));
       mockFindByEmail.mockResolvedValue(null);
     });
 

@@ -40,3 +40,5 @@ export * from './WsConnectTicketModel';
 export * from './GithubUnlockClaimModel';
 
 export * from './SignupProtectionModel';
+export * from './SignupGrantBudgetModel';
+export * from './SignupGrantReleaseBatchModel';

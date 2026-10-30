@@ -17,7 +17,10 @@ export const networkMetaSchema = z.object({
   wafBotSignal: z.boolean().nullable().optional(),
 }) satisfies z.ZodType<INetworkMeta>;
 
-export const signupMetaSchema = networkMetaSchema.extend({ capturedAt: z.date() }) satisfies z.ZodType<ISignupMeta>;
+export const signupMetaSchema = networkMetaSchema.extend({
+  capturedAt: z.date(),
+  challengeVerified: z.literal(true).nullable().optional(),
+}) satisfies z.ZodType<ISignupMeta>;
 
 /** Server/admin-only observation; a shared fingerprint is not an access decision. */
 export const signupFingerprintClusterSchema = z.object({

@@ -2,8 +2,10 @@ import type { AdminUserProfile } from '../userProfileModel';
 
 /** Every named write on the profile. Each opens one dialog; the page renders only the active one. */
 export type ProfileAction =
+  | 'editProfile'
   | 'credits'
   | 'suspend'
+  | 'reinstate'
   | 'restrict'
   | 'role'
   | 'productAccess'

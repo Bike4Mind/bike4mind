@@ -98,11 +98,24 @@ export const desktopTheme = extendTheme({
     JoyTooltip: {
       defaultProps: { modifiers: avoidPage },
       styleOverrides: {
-        root: {
+        root: ({ theme, ownerState }) => ({
           maxWidth: `min(${TOOLTIP_MAX_WIDTH}px, calc(100vw - 32px))`,
           // A path has no spaces to wrap at.
           overflowWrap: 'anywhere',
-        },
+          ...(ownerState.color === 'neutral' &&
+            ownerState.variant === 'soft' && {
+              backgroundColor: theme.vars.palette.background.popup,
+            }),
+        }),
+        arrow: ({ theme, ownerState }) => ({
+          ...(ownerState.color === 'neutral' &&
+            ownerState.variant === 'soft' && {
+              '&::before': {
+                borderTopColor: theme.vars.palette.background.popup,
+                borderRightColor: theme.vars.palette.background.popup,
+              },
+            }),
+        }),
       },
     },
   },

@@ -80,6 +80,7 @@ import {
 } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -562,6 +563,15 @@ if (isMonitoredStage) {
       displayName: 'Young Account Spend Alert',
       application: 'Signup',
       queue: youngAccountSpendAlertDeadLetter.queue,
+    });
+  }
+
+  if (signupGrantHeldReleaseDeadLetter) {
+    createDlqAlarms({
+      label: 'signup-grant-held-release',
+      displayName: 'Signup Grant Held Release',
+      application: 'Signup',
+      queue: signupGrantHeldReleaseDeadLetter.queue,
     });
   }
 

@@ -3,14 +3,14 @@ import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useQueryClient } from '@tanstack/react-query';
 import BlockIcon from '@mui/icons-material/Block';
 import { useComplianceModal } from '../ComplianceModal';
-import { useAdminProfileModal } from '../../AdminProfileModal';
 import GrantSubscriptionModal from '../Details/GrantSubscriptionModal';
 import BulkAbuseResponseModal from '../BulkAbuseResponseModal';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { AdminCommandPalette, type AdminCommand } from '../../shared/AdminCommandPalette';
-import { Kbd, useUndoToast } from '../../shared';
+import { Kbd } from '../../shared';
 import { AdjustCreditsDialog } from './actions/AdjustCreditsDialog';
-import { SuspendDialog } from './actions/SuspendDialog';
+import { ReinstateDialog, SuspendDialog } from './actions/SuspendDialog';
+import { EditProfileDialog } from './actions/EditProfileDialog';
 import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actions/accessDialogs';
 import {
   ApiKeyTrustDialog,
@@ -21,11 +21,11 @@ import {
   RestrictDialog,
   SendMessageDialog,
 } from './actions/accountDialogs';
-import { useAdminUserUpdate } from './actions/useAdminUserUpdate';
 import type { ProfileAction, ProfileDialogProps } from './actions/profileActions';
 import { UserProfileHeader } from './UserProfileHeader';
 import { UserProfileStats } from './UserProfileStats';
 import { UserProfileTabs } from './UserProfileTabs';
+import { UserRiskBadges } from './UserRiskBadges';
 import { OverviewTab } from './tabs/OverviewTab';
 import { CreditsTab } from './tabs/credits/CreditsTab';
 import { ApiKeysTab } from './tabs/keys/ApiKeysTab';
@@ -49,10 +49,14 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
   ...props
 }) => {
   switch (action) {
+    case 'editProfile':
+      return <EditProfileDialog {...props} />;
     case 'credits':
       return <AdjustCreditsDialog {...props} />;
     case 'suspend':
       return <SuspendDialog {...props} />;
+    case 'reinstate':
+      return <ReinstateDialog {...props} />;
     case 'restrict':
       return <RestrictDialog {...props} />;
     case 'role':
@@ -163,11 +167,8 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
   const [action, setAction] = useState<ProfileAction | null>(null);
   // Revoking keys has no profile dialog of its own; it reuses the audited bulk flow for this one user.
   const [revokeKeysOpen, setRevokeKeysOpen] = useState(false);
-  const update = useAdminUserUpdate(user.id);
-  const showUndo = useUndoToast();
   const queryClient = useQueryClient();
   const setComplianceUserId = useComplianceModal(state => state.setUserId);
-  const setEditProfileUserId = useAdminProfileModal(state => state.setUserId);
   const openAdminLog = () => onTabChange('admin');
 
   // The palette ignores its single-key shortcuts while any dialog is open, so `c` never fires behind one.
@@ -187,16 +188,6 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
     ],
     [user.isBanned]
   );
-
-  // Reinstating is the undo of a suspension, so it acts at once and offers its own undo.
-  const reinstate = async () => {
-    try {
-      await update({ isBanned: false });
-    } catch {
-      return; // useAdminUserUpdate already reported the failure.
-    }
-    showUndo({ message: 'Account reinstated', onUndo: () => update({ isBanned: true }), onViewAudit: openAdminLog });
-  };
 
   const panel = () => {
     switch (tab) {
@@ -226,14 +217,14 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({ user, tab, onT
     <Stack gap={2.5} data-testid="user-profile-view">
       <Breadcrumb name={displayName(user)} onBack={onBack} />
       <AdminCommandPalette commands={profileCommands} onOpenHelp={openHelpPanel} />
-      <StatusBanner user={user} onReinstate={() => void reinstate()} onLiftRestriction={() => setAction('restrict')} />
-      <UserProfileHeader
+      <StatusBanner
         user={user}
-        onAction={setAction}
-        onEditProfile={() => setEditProfileUserId(user.id)}
-        onCompliance={() => setComplianceUserId(user.id)}
+        onReinstate={() => setAction('reinstate')}
+        onLiftRestriction={() => setAction('restrict')}
       />
+      <UserProfileHeader user={user} onAction={setAction} onCompliance={() => setComplianceUserId(user.id)} />
       <UserProfileStats user={user} />
+      <UserRiskBadges userId={user.id} onOpenCompliance={() => setComplianceUserId(user.id)} />
       <Box>
         <UserProfileTabs value={tab} onChange={onTabChange} />
         <Box

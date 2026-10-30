@@ -6,12 +6,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { EmailEvents } from '@server/utils/eventBus';
-import {
-  generateVerificationLink,
-  getLogoUrl,
-  buildEmailLogoImg,
-  escapeHtml,
-} from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { buildEmailChangeMailer, type EmailChangeMessage } from '@server/users/emailChangeMailer';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { userService } from '@bike4mind/services';
 
@@ -78,72 +73,15 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       }
 
       // Resend the email change verification email
-      const brand = process.env.APP_NAME || '';
-      const logoUrl = getLogoUrl();
-      const verificationLink = `${generateVerificationLink(user.pendingEmailToken).replace('/verify-email', '/verify-change')}`;
-
-      const emailBody = `
-      <!DOCTYPE html>
-        <html>
-          <head>
-            <style>
-              body {
-                font-family: Arial, sans-serif;
-                line-height: 1.5;
-                color: #333333;
-              }
-              .content {
-                margin: 20px;
-              }
-              .logo {
-                display: block;
-                margin-bottom: 20px;
-              }
-              a {
-                color: #1a82e2;
-              }
-              .button {
-                display: inline-block;
-                padding: 12px 24px;
-                background-color: #1a82e2;
-                color: #ffffff;
-                text-decoration: none;
-                border-radius: 4px;
-                margin: 20px 0;
-              }
-              .admin-note {
-                background-color: #e3f2fd;
-                border-left: 4px solid #2196f3;
-                padding: 12px;
-                margin: 20px 0;
-              }
-            </style>
-          </head>
-          <body>
-            <div class="content">
-              ${buildEmailLogoImg(brand, logoUrl)}
-              <h2>Verify Your New Email Address</h2>
-              <p>Hello ${escapeHtml(user.username)},</p>
-              <div class="admin-note">
-                <strong>Note:</strong> An administrator has resent your email change verification link.
-              </div>
-              <p>You requested to change your email address from <strong>${escapeHtml(user.email ?? '')}</strong> to <strong>${escapeHtml(user.pendingEmail)}</strong>.</p>
-              <p>Please verify your new email address by clicking the button below:</p>
-              <p><a href="${verificationLink}" class="button" style="display: inline-block; padding: 12px 24px; background-color: #1a82e2; color: #ffffff; text-decoration: none; border-radius: 4px; margin: 20px 0;">Verify New Email Address</a></p>
-              <p>Or copy and paste this link into your browser:</p>
-              <p><a href="${verificationLink}">${verificationLink}</a></p>
-              <p>This link will expire in 24 hours.</p>
-              <p>If you did not request this email change, please contact support immediately.</p>
-            </div>
-          </body>
-        </html>
-    `;
-
-      await EmailEvents.Send.publish({
-        to: user.pendingEmail,
-        subject: 'Verify Your New Email Address',
-        body: emailBody,
-      });
+      const outbox: EmailChangeMessage[] = [];
+      await buildEmailChangeMailer(outbox, { adminNote: 'resent' }).sendEmailChangeVerification(
+        user,
+        user.pendingEmail,
+        user.pendingEmailToken
+      );
+      for (const email of outbox) {
+        await EmailEvents.Send.publish(email);
+      }
 
       // Update the resent timestamp
       await userRepository.update({ id: user.id, pendingEmailSentAt: new Date() });
