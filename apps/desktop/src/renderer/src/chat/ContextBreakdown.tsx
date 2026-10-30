@@ -121,11 +121,6 @@ export function ContextBreakdown({ context }: { context: ComposerUsage }) {
         <Box component="summary" sx={{ cursor: 'pointer' }}>
           About context accounting
         </Box>
-        <Typography level="body-xs" textColor="text.tertiary">
-          Last measured request, not unsent messages. Messages is the remainder after estimated overhead, including tool
-          results and attachments. Project context includes injected instructions, memory index and file tree. Read
-          memory and skill bodies are message content. Custom agent and deferred tool counts are not available.
-        </Typography>
         {capacity !== null && (
           <Typography level="body-xs" textColor="text.tertiary">
             {describeCompaction(capacity, context.modelWindow ?? null)}. Buffer is reserved headroom, not injected

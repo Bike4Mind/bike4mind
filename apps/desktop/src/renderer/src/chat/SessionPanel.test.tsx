@@ -313,6 +313,9 @@ describe('the Context section', () => {
     expect(get('context-row-messages').textContent).toContain('~45k');
     expect(get('context-row-reserve').textContent).toContain('20k');
     expect(get('context-row-free').textContent).toContain('130k');
+    expect(get('session-panel-context-body').textContent).not.toContain('Last measured request, not unsent messages');
+    expect(get('session-panel-context-body').textContent).toContain('Compacts automatically at 180k');
+    expect(get('session-panel-context-body').textContent).toContain('Buffer is reserved headroom, not injected');
     const inventory = get('context-inventory-mcp-tools') as HTMLDetailsElement;
     expect(inventory.open).toBe(false);
     await act(async () => inventory.querySelector('summary')!.click());
