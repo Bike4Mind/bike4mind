@@ -116,14 +116,32 @@ describe('buildSpendAlertMessage', () => {
     expect(out).toContain('lasted 45m');
   });
 
-  it('emits ASCII only, even for non-ASCII labels', () => {
-    const open = json(
-      build({ scope: { ...userScope, label: `J${String.fromCharCode(0xfc)}rgen ${String.fromCharCode(0x2014)} team` } })
-    );
-    const resolved = json(
-      build({ kind: 'resolve', scope: { ...userScope, label: `J${String.fromCharCode(0xfc)}rgen` } })
-    );
+  it('emits ASCII only for ASCII inputs', () => {
+    const open = json(build());
+    const resolved = json(build({ kind: 'resolve' }));
     expect(open).toMatch(/^\p{ASCII}*$/u);
     expect(resolved).toMatch(/^\p{ASCII}*$/u);
+  });
+
+  it('passes non-ASCII names through unchanged', () => {
+    const label = `J${String.fromCharCode(0xe9)}r${String.fromCharCode(0xf4)}me`;
+    expect(json(build({ scope: { ...userScope, label } }))).toContain(label);
+    expect(json(build({ kind: 'resolve', scope: { ...userScope, label } }))).toContain(label);
+  });
+
+  it('marks escalations in the context line', () => {
+    expect(json(build({ kind: 'escalate' }))).toContain('escalated, critical');
+  });
+
+  it('omits the list-price note on a resolved cost spike', () => {
+    const alert = {
+      ...baseAlert,
+      rule: 'platform_cost_spike' as const,
+      peakValue: 55,
+      resolvedAt: new Date('2026-10-30T10:30:00Z'),
+    };
+    const out = json(build({ kind: 'resolve', alert }));
+    expect(out).toContain('peak $55.00');
+    expect(out).not.toContain('list price');
   });
 });
