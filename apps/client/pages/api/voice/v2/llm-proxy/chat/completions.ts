@@ -157,7 +157,12 @@ async function runFullPipeline(
     }: {
       organizationId: string | null;
       featureLabel: string;
-    }) => createCompletionMeter(user, logger, featureLabel, { sessionId: sessionCtx.sessionId, organizationId }),
+    }) =>
+      createCompletionMeter(user, logger, featureLabel, {
+        sessionId: sessionCtx.sessionId,
+        organizationId,
+        apiKeyId: sessionCtx.apiKeyId,
+      }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
     // No-op: we run process() inline in this request handler, so we deliberately

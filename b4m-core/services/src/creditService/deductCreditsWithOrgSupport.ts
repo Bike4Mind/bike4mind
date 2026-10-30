@@ -33,6 +33,8 @@ export interface DeductCreditsCommonParams {
    * helper is invoked from web/agent chat-completion paths (image/video/text).
    */
   source?: CompletionSource;
+  /** The UserApiKey that authenticated the charged request; undefined for JWT/internal callers. */
+  apiKeyId?: string;
 }
 
 /**
@@ -116,8 +118,6 @@ export interface DeductDecisionCreditsParams extends DeductCreditsCommonParams {
   type: 'decision_usage';
   inputTokens: number;
   outputTokens: number;
-  /** Present for API key auth, undefined for JWT */
-  apiKeyId?: string;
 }
 
 /** Quest-less text completion on a platform key outside chat (e.g. lattice chat, AI file edit). */
@@ -125,8 +125,6 @@ export interface DeductCompletionApiUsageCreditsParams extends DeductCreditsComm
   type: 'completion_api_usage';
   inputTokens: number;
   outputTokens: number;
-  /** Present for API key auth, undefined for JWT */
-  apiKeyId?: string;
 }
 
 /**
@@ -238,6 +236,7 @@ export async function deductCreditsWithOrgSupport(
     sessionId,
     model,
     source,
+    apiKeyId: params.apiKeyId,
   };
 
   let transactionParams: SubtractCreditsParameters;
@@ -269,7 +268,6 @@ export async function deductCreditsWithOrgSupport(
       type,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
-      apiKeyId: params.apiKeyId,
     };
   } else {
     // Quest-scoped image/edit/video types; questId is guaranteed by their param shape.

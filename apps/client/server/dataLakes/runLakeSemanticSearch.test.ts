@@ -191,6 +191,15 @@ describe('runLakeSemanticSearch billing owner and source', () => {
     expect(recorded()).toMatchObject({ organization: null, source: 'api' });
   });
 
+  it('records the authenticating key on the embedding charge, and none for a JWT caller', async () => {
+    await runLakeSemanticSearch(apiKeyReq({ keyId: 'key-1', billingOwnerType: CreditHolderType.User }), input());
+    expect(recorded()).toMatchObject({ apiKeyId: 'key-1' });
+
+    mockRecordOperationalUsage.mockClear();
+    await runLakeSemanticSearch(jwtReq, input());
+    expect(recorded().apiKeyId).toBeUndefined();
+  });
+
   it('bills the user for an org-billed key that carries no organization id', async () => {
     await runLakeSemanticSearch(apiKeyReq({ billingOwnerType: CreditHolderType.Organization }), input());
 

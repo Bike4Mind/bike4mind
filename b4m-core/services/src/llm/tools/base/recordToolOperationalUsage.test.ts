@@ -187,6 +187,16 @@ describe('recordToolOperationalUsage', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
+  it("attributes the spend to the turn's authenticating API key", async () => {
+    await recordToolOperationalUsage(makeContext({ authOrigin: 'apiKey', apiKeyId: 'key-1' }), {
+      model: 'gpt-4o-mini',
+      completionInfo,
+      startTime: Date.now(),
+    });
+
+    expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key-1' });
+  });
+
   it('passes the host billing repos through so the spend can debit', async () => {
     const operationalBilling = { creditTransactions: {}, users: {}, organizations: {}, activePlans: {} };
     const context = makeContext();

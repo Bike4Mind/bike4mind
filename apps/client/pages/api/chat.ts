@@ -244,7 +244,12 @@ async function handleChat(
     }: {
       organizationId: string | null;
       featureLabel: string;
-    }) => createCompletionMeter(req.user!, req.logger, featureLabel, { sessionId, organizationId }),
+    }) =>
+      createCompletionMeter(req.user!, req.logger, featureLabel, {
+        sessionId,
+        organizationId,
+        apiKeyId: req.apiKeyInfo?.keyId,
+      }),
     invokeLambda: async (params: any) => {
       if (simplifiedRequest.wait) {
         // wait=true: the quest is processed inline below (ChatCompletionProcess). Do NOT

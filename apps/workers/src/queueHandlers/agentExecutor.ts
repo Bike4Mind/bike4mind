@@ -1613,6 +1613,7 @@ async function processExecution(
             questId: execution.questId,
             model: result.model,
             completionInfo: result.completionInfo,
+            apiKeyId: execution.apiKeyId,
           },
           logger
         );
@@ -1654,6 +1655,7 @@ async function processExecution(
               questId: execution.questId,
               model: partialResult.model,
               completionInfo: partialResult.completionInfo,
+              apiKeyId: execution.apiKeyId,
             },
             logger
           );
@@ -2035,6 +2037,7 @@ async function processExecution(
               totalInputTokens: meta?.inputTokens ?? 0,
               totalOutputTokens: meta?.outputTokens ?? 0,
             },
+            apiKeyId: execution.apiKeyId,
           },
           logger
         );
@@ -2468,6 +2471,7 @@ async function processExecution(
                 model: execution.model,
                 inputTokens,
                 outputTokens,
+                apiKeyId: execution.apiKeyId,
               },
               {
                 db: {
@@ -3553,6 +3557,7 @@ async function chargeSubagentTokens(
     questId: string;
     model: string;
     completionInfo: Pick<AgentResult['completionInfo'], 'totalCredits' | 'totalInputTokens' | 'totalOutputTokens'>;
+    apiKeyId?: string;
   },
   logger: Logger
 ): Promise<void> {
@@ -3570,6 +3575,7 @@ async function chargeSubagentTokens(
         model: args.model,
         inputTokens: args.completionInfo.totalInputTokens ?? 0,
         outputTokens: args.completionInfo.totalOutputTokens ?? 0,
+        apiKeyId: args.apiKeyId,
       },
       {
         db: {
@@ -4047,6 +4053,7 @@ async function processSubagentDispatch(
           questId: child.questId,
           model,
           completionInfo,
+          apiKeyId: child.apiKeyId,
         },
         logger
       );
@@ -4349,6 +4356,7 @@ async function processSubagentDispatch(
               model: childModel,
               inputTokens: 0,
               outputTokens: 0,
+              apiKeyId: child.apiKeyId,
             },
             {
               db: {

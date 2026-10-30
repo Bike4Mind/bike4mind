@@ -151,6 +151,8 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
    */
   generationId: z.string().optional(),
   adminRoleWithheld: z.boolean().optional(),
+  /** The UserApiKey that authenticated the request; recorded on the settled ledger row. */
+  apiKeyId: z.string().optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -311,8 +313,10 @@ export class ImageGenerationService {
     body,
     userId,
     adminRoleWithheld,
+    apiKeyId,
   }: {
     adminRoleWithheld?: boolean;
+    apiKeyId?: string;
     body: z.infer<typeof GenerateImageIvokeParamsSchema>;
     userId: string;
   }) {
@@ -486,6 +490,7 @@ export class ImageGenerationService {
           intent,
           generationId: uuidv4(),
           adminRoleWithheld,
+          apiKeyId,
         })
       );
 
@@ -847,6 +852,7 @@ export class ImageGenerationService {
       questId,
       userId,
       adminRoleWithheld,
+      apiKeyId,
       prompt,
       model,
       n = 1,
@@ -1640,7 +1646,7 @@ export class ImageGenerationService {
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,
-          { type: 'image_generation_usage', sessionId, questId, model },
+          { type: 'image_generation_usage', sessionId, questId, model, apiKeyId },
           { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger }
         );
         creditHold = undefined;

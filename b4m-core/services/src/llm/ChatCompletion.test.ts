@@ -5433,6 +5433,33 @@ describe('ChatCompletionProcess', () => {
       expect(mockQuest.promptMeta.functionCalls ?? []).toEqual([]);
     });
 
+    it("records the turn's authenticating API key on its text usage row", async () => {
+      const { complete } = reservationOrgSetup();
+      mockedUsdToCreditsStochastic.mockReturnValue(60);
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _options: unknown,
+          callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+        ) => {
+          await callback(['answer'], { inputTokens: 10, outputTokens: 1000 });
+        }
+      );
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await service.process({
+        body: { ...reservationBody(), authOrigin: 'apiKey', apiKeyId: 'key-1' },
+        logger: mockLogger,
+      });
+
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'text_generation_usage',
+        expect.objectContaining({ apiKeyId: 'key-1' })
+      );
+    });
+
     it('refunds the whole hold when a tool call is refused for credits before anything was spent', async () => {
       const { complete } = reservationOrgSetup();
       complete.mockImplementation(async () => {

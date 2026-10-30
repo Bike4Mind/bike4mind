@@ -12,6 +12,7 @@ import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
 import type { ILogger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { attributeToRequestApiKey } from '@server/billing/attributeToRequestApiKey';
 
 import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
@@ -52,7 +53,8 @@ export type CreditReservation = {
 /** The slice of an authenticated request billing reads. */
 type BillingRequest = {
   user?: IUserDocument;
-  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
+  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'> &
+    Partial<Pick<Express.ApiKeyInfo, 'keyId'>>;
   logger: ILogger;
 };
 
@@ -153,7 +155,10 @@ export async function reserveRequestCredits({
     hold: { ...hold, pendingHoldId: pending.id },
     refund: () => releaseHeldCredits({ ...hold, pendingHoldId: pending.id }, { featureLabel, logger: req.logger }),
     settle: (chargedCredits, entry) =>
-      settlePendingHold(hold, pending.id, chargedCredits, entry, { featureLabel, logger: req.logger }),
+      settlePendingHold(hold, pending.id, chargedCredits, attributeToRequestApiKey(entry, req), {
+        featureLabel,
+        logger: req.logger,
+      }),
   };
 }
 

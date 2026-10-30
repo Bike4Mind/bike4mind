@@ -487,6 +487,33 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
     });
   });
 
+  describe('apiKeyId attribution', () => {
+    it.each([
+      { type: 'image_generation_usage', questId: 'quest1' },
+      { type: 'text_generation_usage', questId: 'quest1', inputTokens: 1, outputTokens: 1 },
+      { type: 'music_generation_usage' },
+      { type: 'text_to_speech_usage' },
+      { type: 'speech_to_text_usage' },
+      { type: 'sound_effects_usage' },
+      { type: 'completion_api_usage', inputTokens: 1, outputTokens: 1 },
+    ] as const)('forwards apiKeyId for $type', async variant => {
+      const params = {
+        ...variant,
+        user: mockUser,
+        organization: null,
+        credits: 2,
+        sessionId: 'session1',
+        model: 'model-x',
+        apiKeyId: 'apikey-123',
+      } as DeductCreditsParams;
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({ type: variant.type, apiKeyId: 'apikey-123' });
+    });
+  });
+
   describe('error handling', () => {
     it('should propagate errors from updateUserDetails', async () => {
       mockOrgRepo.updateUserDetails.mockRejectedValue(new Error('DB connection failed'));

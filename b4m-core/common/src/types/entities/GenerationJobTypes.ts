@@ -130,6 +130,8 @@ type GenerationJobFields = {
   ownerType: CreditHolderType.User | CreditHolderType.Organization;
   ownerId: string;
   requestedBy: string;
+  /** The UserApiKey that authenticated the creating request; stamped on the settlement ledger row. */
+  apiKeyId?: string;
   source: GenerationJobSource;
   state: GenerationJobState;
   progress?: number;
