@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import type { ChatQueueEvent, ChatQueuedMessage } from '@shared/chat';
+import type { ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
@@ -17,6 +17,7 @@ const chat = {
   sendMessage: vi.fn(),
   cancelQueuedMessage: vi.fn(),
   sendQueuedMessageNow: vi.fn(),
+  respondToApproval: vi.fn(),
 };
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const onClose = vi.fn();
@@ -27,6 +28,19 @@ const renderDrawer = (agent: AgentView) =>
 
 const sessionWith = (...contents: string[]) => ({
   messages: contents.map((content, index) => ({ id: `m${index}`, role: 'assistant', content })),
+});
+
+const awaitingCall = (approvalId: string, command: string): ChatToolCall => ({
+  id: `call-${approvalId}`,
+  name: 'bash_execute',
+  input: { command },
+  status: 'awaiting-approval',
+  approvalId,
+  approvalDetail: command,
+});
+
+const sessionWithMessages = (...messages: Array<Partial<ChatMessage>>) => ({
+  messages: messages.map((message, index) => ({ id: `m${index}`, role: 'assistant', content: '', ...message })),
 });
 
 const input = () => el('orchestrator-peek-reply-input') as HTMLTextAreaElement;
@@ -48,6 +62,7 @@ beforeEach(() => {
   chat.sendMessage.mockResolvedValue({ ok: true, messageId: 'x' });
   chat.cancelQueuedMessage.mockResolvedValue(undefined);
   chat.sendQueuedMessageNow.mockResolvedValue(undefined);
+  chat.respondToApproval.mockResolvedValue(undefined);
   (window as unknown as { b4m: unknown }).b4m = { chat };
 });
 
@@ -215,5 +230,109 @@ describe('AgentPeekDrawer', () => {
     await act(async () => el('orchestrator-peek-archive-btn').click());
     expect(actions.archive).toHaveBeenCalledWith('a1');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  describe('pending requests', () => {
+    const pendingSession = () =>
+      sessionWithMessages({ content: 'Checking the tree' }, { toolCalls: [awaitingCall('ap-1', 'rm -rf build')] });
+
+    it('shows the pending approval of a session that is not the active one', async () => {
+      chat.getSession.mockResolvedValue(pendingSession());
+      await renderDrawer(agentFixture('child-1', 'needs-you'));
+      expect(chat.getSession).toHaveBeenCalledWith('child-1');
+      const pending = el('orchestrator-peek-pending');
+      expect(pending.querySelector('[data-testid="chat-tool-approval"]')).not.toBeNull();
+      expect(pending.textContent).toContain('rm -rf build');
+    });
+
+    it('answers through the same approval IPC the thread uses, then drops the card', async () => {
+      chat.getSession.mockResolvedValue(pendingSession());
+      await renderDrawer(agentFixture('child-1', 'needs-you'));
+      await act(async () => el('chat-tool-approve-once').click());
+      expect(chat.respondToApproval).toHaveBeenCalledWith('ap-1', { decision: 'once' });
+      expect(query('orchestrator-peek-pending')).toBeNull();
+    });
+
+    it('drops the card once the agent no longer needs the user', async () => {
+      chat.getSession.mockResolvedValue(pendingSession());
+      await renderDrawer(agentFixture('child-1', 'needs-you'));
+      expect(query('orchestrator-peek-pending')).not.toBeNull();
+      chat.getSession.mockResolvedValue(
+        sessionWithMessages({
+          toolCalls: [{ ...awaitingCall('ap-1', 'ls'), status: 'running', approvalId: undefined }],
+        })
+      );
+      await renderDrawer(agentFixture('child-1', 'working'));
+      expect(chat.getSession).toHaveBeenCalledTimes(2);
+      expect(query('orchestrator-peek-pending')).toBeNull();
+    });
+
+    it('refetches while waiting so a second request shows up', async () => {
+      chat.getSession.mockResolvedValue(pendingSession());
+      const waiting = agentFixture('child-1', 'needs-you', {
+        activity: { kind: 'tool', tool: 'bash_execute', detail: 'rm -rf build' },
+      });
+      await renderDrawer(waiting);
+      chat.getSession.mockResolvedValue(sessionWithMessages({ toolCalls: [awaitingCall('ap-2', 'git push')] }));
+      await renderDrawer({ ...waiting, activity: { kind: 'tool', tool: 'bash_execute', detail: 'git push' } });
+      expect(el('orchestrator-peek-pending').textContent).toContain('git push');
+    });
+
+    it('puts the card back with the error when the answer cannot be delivered', async () => {
+      chat.getSession.mockResolvedValue(pendingSession());
+      chat.respondToApproval.mockRejectedValue(new Error('gate gone'));
+      await renderDrawer(agentFixture('child-1', 'needs-you'));
+      await act(async () => el('chat-tool-approve-once').click());
+      expect(el('orchestrator-peek-pending-error').textContent).toBe('gate gone');
+      expect(query('chat-tool-approval')).not.toBeNull();
+    });
+
+    it('answers an ask-the-user question with the thread question card', async () => {
+      chat.getSession.mockResolvedValue(
+        sessionWithMessages({
+          toolCalls: [
+            {
+              id: 'q-call',
+              name: 'ask_user',
+              input: {
+                questions: [
+                  {
+                    question: 'Which branch?',
+                    options: [
+                      { label: 'main', description: 'The default branch' },
+                      { label: 'dev', description: 'The integration branch' },
+                    ],
+                  },
+                ],
+              },
+              status: 'awaiting-approval',
+              approvalId: 'ap-q',
+            },
+          ],
+        })
+      );
+      await renderDrawer(agentFixture('child-1', 'needs-you'));
+      expect(el('orchestrator-peek-pending').textContent).toContain('Which branch?');
+      await act(async () => el('chat-question-skip').click());
+      expect(chat.respondToApproval).toHaveBeenCalledWith('ap-q', { decision: 'deny' });
+    });
+  });
+
+  it('never renders an empty role line, and summarizes a tool-call-only message', async () => {
+    chat.getSession.mockResolvedValue(
+      sessionWithMessages(
+        { role: 'user', content: 'go' },
+        { content: '' },
+        { content: '', toolCalls: [{ id: 'c1', name: 'bash_execute', input: { command: 'ls' }, status: 'done' }] }
+      )
+    );
+    await renderDrawer(agentFixture('a1'));
+    const lines = [...document.querySelectorAll('[data-testid="orchestrator-peek-message"]')].map(
+      line => line.textContent ?? ''
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe('user: go');
+    expect(lines[1]).toMatch(/^assistant: \S/);
+    expect(lines[1]).toContain('ls');
   });
 });

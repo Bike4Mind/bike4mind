@@ -4,8 +4,10 @@ import IconButton from '@mui/joy/IconButton';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import { snippetOf } from '@shared/agentOutcome';
-import type { ChatMessage, ChatQueuedMessage } from '@shared/chat';
+import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { ToolCallList } from '../ToolCallList';
+import { groupToolCalls } from '../toolRows';
 import { activityLabel } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
@@ -25,8 +27,14 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong';
 }
 
-/** The newest messages, refetched whenever the agent's summary changes (a finished step bumps `updatedAt`). */
-function useRecentMessages(agentId: string, updatedAt: string): { messages: ChatMessage[]; loadError: string | null } {
+/**
+ * The session's messages, refetched whenever `refreshKey` changes. getSession includes the reply in
+ * flight, so a call parked at the approval gate is in here with its `approvalId`.
+ */
+function useSessionMessages(
+  agentId: string,
+  refreshKey: string
+): { messages: ChatMessage[]; loadError: string | null } {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
@@ -35,7 +43,7 @@ function useRecentMessages(agentId: string, updatedAt: string): { messages: Chat
       session => {
         if (stale) return;
         setLoadError(null);
-        setMessages(session ? session.messages.slice(-RECENT_MESSAGES) : []);
+        setMessages(session ? session.messages : []);
       },
       (error: unknown) => {
         if (!stale) setLoadError(errorText(error));
@@ -44,8 +52,73 @@ function useRecentMessages(agentId: string, updatedAt: string): { messages: Chat
     return () => {
       stale = true;
     };
-  }, [agentId, updatedAt]);
+  }, [agentId, refreshKey]);
   return { messages, loadError };
+}
+
+/**
+ * What changes when this agent may have a new message or request. The status push flips the state
+ * when the first request parks and when the last settles; while it stays 'needs-you', a further
+ * request shows up only as a new activity, which the roster already folds from the stream.
+ */
+function refreshKeyOf(agent: AgentView): string {
+  const waitingOn = agent.state === 'needs-you' && agent.activity ? activityLabel(agent.activity) : '';
+  return [agent.updatedAt, agent.state, waitingOn].join('\n');
+}
+
+function pendingCallsIn(messages: readonly ChatMessage[]): ChatToolCall[] {
+  return messages.flatMap(message =>
+    (message.toolCalls ?? []).filter(call => call.status === 'awaiting-approval' && call.approvalId)
+  );
+}
+
+/** One line for the message, or null when it has nothing to show. */
+function messageLine(message: ChatMessage): string | null {
+  if (message.content.trim()) return snippetOf(message.content, MESSAGE_SNIPPET_MAX);
+  const calls = message.toolCalls ?? [];
+  if (calls.length === 0) return null;
+  return snippetOf(
+    groupToolCalls(calls)
+      .map(group => group.label)
+      .join(', '),
+    MESSAGE_SNIPPET_MAX
+  );
+}
+
+/**
+ * The agent's requests parked at the approval gate, drawn with the thread's own cards and answered
+ * through the same `respondToApproval` call. An answered card goes at once rather than waiting for
+ * the status push, so a second click can never answer it twice.
+ */
+function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
+  const [error, setError] = useState<string | null>(null);
+  const open = calls.filter(call => call.approvalId && !answered.has(call.approvalId));
+
+  const respond = (approvalId: string, answer: ChatApprovalAnswer) => {
+    setError(null);
+    setAnswered(current => new Set(current).add(approvalId));
+    window.b4m.chat.respondToApproval(approvalId, answer).catch((caught: unknown) => {
+      setAnswered(current => {
+        const next = new Set(current);
+        next.delete(approvalId);
+        return next;
+      });
+      setError(errorText(caught));
+    });
+  };
+
+  if (open.length === 0 && !error) return null;
+  return (
+    <Box data-testid="orchestrator-peek-pending">
+      {error && (
+        <Typography level="body-xs" color="danger" data-testid="orchestrator-peek-pending-error">
+          {error}
+        </Typography>
+      )}
+      <ToolCallList calls={open} onRespond={respond} />
+    </Box>
+  );
 }
 
 function ReplyBox({ agentId }: { agentId: string }) {
@@ -165,7 +238,15 @@ function ReplyBox({ agentId }: { agentId: string }) {
 }
 
 export function AgentPeekDrawer({ agent, onClose, actions }: AgentPeekDrawerProps) {
-  const { messages, loadError } = useRecentMessages(agent.id, agent.updatedAt);
+  const { messages, loadError } = useSessionMessages(agent.id, refreshKeyOf(agent));
+  // The snapshot can trail the status push, so the state decides whether anything is still waiting.
+  const pending = agent.state === 'needs-you' ? pendingCallsIn(messages) : [];
+  const recent = messages
+    .flatMap(message => {
+      const line = messageLine(message);
+      return line === null ? [] : [{ id: message.id, role: message.role, line }];
+    })
+    .slice(-RECENT_MESSAGES);
   const canStop = agent.state === 'working' || agent.state === 'needs-you';
 
   return (
@@ -204,6 +285,8 @@ export function AgentPeekDrawer({ agent, onClose, actions }: AgentPeekDrawerProp
         </IconButton>
       </Box>
 
+      {pending.length > 0 && <PendingRequests calls={pending} />}
+
       <Typography
         level="body-xs"
         sx={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
@@ -223,9 +306,9 @@ export function AgentPeekDrawer({ agent, onClose, actions }: AgentPeekDrawerProp
             {loadError}
           </Typography>
         )}
-        {messages.map(message => (
+        {recent.map(message => (
           <Typography key={message.id} level="body-xs" data-testid="orchestrator-peek-message">
-            <b>{message.role}</b>: {snippetOf(message.content, MESSAGE_SNIPPET_MAX)}
+            <b>{message.role}</b>: {message.line}
           </Typography>
         ))}
       </Box>
