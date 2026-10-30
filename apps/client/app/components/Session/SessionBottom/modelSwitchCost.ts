@@ -53,7 +53,8 @@ export function getModelSwitchCostNotice({
   providerInputTokens?: number;
 }): number | null {
   if (!selectedModel || !answeredModelId || !previousInputTokens) return null;
-  if (selectedModel.id === (previousInputModelId ?? answeredModelId)) return null;
+  // The user's last pick is not a switch, and the model that answered (after any fallback) holds the cache.
+  if (selectedModel.id === answeredModelId || selectedModel.id === previousInputModelId) return null;
   const credits = providerInputTokens
     ? modelSwitchCacheCredits(selectedModel, providerInputTokens, answeredModelId)
     : modelSwitchCacheCredits(selectedModel, previousInputTokens, previousInputModelId);

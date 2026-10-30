@@ -102,6 +102,17 @@ describe('getModelSwitchCostNotice', () => {
     ).toBeNull();
   });
 
+  it('hides after a fallback hop when the selected model is the one that answered', () => {
+    expect(
+      getModelSwitchCostNotice({
+        ...base,
+        selectedModel: SONNET,
+        answeredModelId: SONNET.id,
+        previousInputModelId: OPUS.id,
+      })
+    ).toBeNull();
+  });
+
   it('hides for a new or empty conversation', () => {
     expect(getModelSwitchCostNotice({ ...base, selectedModel: SONNET, answeredModelId: undefined })).toBeNull();
     expect(getModelSwitchCostNotice({ ...base, selectedModel: SONNET, previousInputTokens: undefined })).toBeNull();

@@ -5005,7 +5005,11 @@ export class ChatCompletionProcess {
         options.tools = declareDeferredTools(options.tools, removedToolDeclarations, toolTimeline.loaded);
         outboundMessages = applyToolTimeline(outboundMessages, toolTimeline.changes, guidance);
         deferredState = {
-          declaredOnly: new Set([...removedToolDeclarations.map(t => t.toolSchema.name), DEFERRED_ANCHOR_TOOL_NAME]),
+          // A removed start-set tool keeps its guidance in the system prompt, so an undo hop keeps it declared too.
+          declaredOnly: new Set([
+            ...removedToolDeclarations.map(t => t.toolSchema.name).filter(name => !toolTimeline.loaded.has(name)),
+            DEFERRED_ANCHOR_TOOL_NAME,
+          ]),
           guidance: offeredToolNames
             .map(name => guidance.get(name)?.trim())
             .filter((text): text is string => Boolean(text))

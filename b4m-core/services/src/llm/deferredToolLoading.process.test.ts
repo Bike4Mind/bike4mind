@@ -503,6 +503,22 @@ describe('ChatCompletionProcess deferred tool loading', () => {
       expect(names(hop!.tools)).toEqual(expect.arrayContaining(['current_model_details', 'math_evaluate']));
     });
 
+    it('a hop to a model without deferred tool addition keeps a removed start-set tool declared', async () => {
+      const { hop } = await runTurn({
+        settings: ON,
+        requestTools: ['dice_roll'],
+        history: [{ prompt: 'first', offered: ['current_model_details', 'math_evaluate'] }],
+        fallbackTo: modelRow(ChatModels.CLAUDE_4_5_SONNET),
+      });
+
+      expect(hop).toBeDefined();
+      expect(changeMessages(hop!.messages)).toEqual([]);
+      const declared = hop!.tools.find(tool => tool.toolSchema.name === 'math_evaluate');
+      expect(declared).toBeDefined();
+      expect(declared!.toolSchema.defer_loading).toBeUndefined();
+      expect(await declared!.toolFn({})).toBe('The math_evaluate tool is not available in this conversation.');
+    });
+
     it('a hop to a supporting model keeps the deferred request', async () => {
       const { hop } = await runTurn({
         settings: ON,
