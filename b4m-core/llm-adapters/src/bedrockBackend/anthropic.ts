@@ -33,6 +33,7 @@ import { systemContentToText } from '../systemContent';
 import { sortToolsForStableCacheKey } from '../caching/stableToolOrder';
 import { DispatchModel } from '../dispatchModel';
 import {
+  applyAnthropicOutputCeiling,
   buildThinkingParams,
   effortForComplexity,
   planReasoningEffort,
@@ -1130,6 +1131,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         }
       }
     }
+    applyAnthropicOutputCeiling(body, options.outputTokenCeiling);
 
     // Log the complete payload for debugging
     console.log(

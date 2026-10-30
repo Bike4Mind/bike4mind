@@ -80,6 +80,13 @@ import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
 import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './llm/modelAdmission';
 import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import {
+  MIN_AFFORDABLE_OUTPUT_TOKENS,
+  affordableRoundBudget,
+  capRoundOutput,
+  gateEveryRound,
+  type RoundBudget,
+} from './completionCreditBudget';
 import { fallbackThinkingVisibility } from './thinkingVisibility';
 
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
@@ -751,6 +758,16 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Atomic credit reservation: Reserve estimated credits BEFORE execution
   // This prevents race conditions where concurrent requests pass the check
   let reservedCredits = 0;
+  // Prices a round's input the way the hold does and returns the output budget `availableCredits`
+  // can pay for on top of it; see completionCreditBudget. Set only when credits are enforced.
+  let roundBudgetFor: ((roundMessages: IMessage[], availableCredits: number) => RoundBudget) | null = null;
+  const refundReservation = async () => {
+    const refund = async () => {
+      await holderMethods.incrementCredits(holderId, reservedCredits);
+    };
+    if (params.creditHolds) await params.creditHolds.refund(refund);
+    else await refund();
+  };
 
   if (enforceCredits && modelInfo) {
     // Estimate cost from the input message length plus a realistic output size. The basis is
@@ -810,6 +827,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       }
     }
 
+    let balanceAfterHold = 0;
     const debit = async (): Promise<ICreditHolder> => {
       // Atomically reserve credits using incrementCredits with negative value
       const holderAfterReservation = await holderMethods.incrementCredits(holderId, -reservedCredits);
@@ -830,6 +848,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       logger?.debug?.(
         `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${holderAfterReservation.currentCredits}`
       );
+      balanceAfterHold = holderAfterReservation.currentCredits;
       return holderAfterReservation;
     };
     if (params.creditHolds) {
@@ -846,6 +865,43 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     } else {
       await debit();
     }
+
+    // The hold above is a realistic estimate, not a bound: an answer may run to maxTokens (or past
+    // it, where an adapter raises the budget for thinking). Cap the round at what this holder can
+    // actually pay - its remaining balance plus its own hold - so settlement cannot overdraw.
+    const minimumOutputTokens = Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, maxTokens);
+    const toolSearch = completionsSupportsToolSearch(modelInfo);
+    roundBudgetFor = (roundMessages, availableCredits) => {
+      const toolTokens = estimateToolTokens(completionOptions.tools ?? [], toolSearch);
+      const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
+      return affordableRoundBudget({
+        modelInfo,
+        inputUsd: estimateReservationUsd(modelInfo, roundMessages, inputTokens, 0, toolTokens),
+        inputTokens,
+        availableCredits,
+        minimumOutputTokens,
+      });
+    };
+    const firstRound = roundBudgetFor(messages, balanceAfterHold + reservedCredits);
+    if (!firstRound.affordable) {
+      await refundReservation();
+      const available = balanceAfterHold + reservedCredits;
+      throw new InsufficientCreditsError(
+        billToOrg
+          ? `Your organization does not have enough credits. It has ${available} credits, but even a short answer requires approximately ${firstRound.minimumCredits}. Please contact your organization administrator to add more credits.`
+          : `Insufficient credits. You have ${available} credits, but even a short answer requires approximately ${firstRound.minimumCredits} credits. ` +
+              `Try using a smaller model or reducing the prompt size.`,
+        'insufficient_credits'
+      );
+    }
+    if (firstRound.outputTokens < maxTokens) {
+      logger?.info?.('[CLI_CREDITS] Output budget lowered to what the balance can pay for', {
+        model,
+        maxTokens,
+        affordableOutputTokens: firstRound.outputTokens,
+      });
+    }
+    Object.assign(completionOptions, capRoundOutput(completionOptions, firstRound.outputTokens));
   }
 
   // Track tokens across callback invocations for credit calculation.
@@ -939,9 +995,36 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // spent what it streamed: it settles below like an abort the adapter resolves on, and is rethrown
   // once settled. Any other failure refunds the reservation here.
   let abortError: unknown;
+  // A server-tools completion runs its tool rounds inside the adapter, each re-sending the grown
+  // conversation; the first round was capped above, every later one is capped here against what
+  // is left once the rounds so far are paid for. A round that cannot afford a short answer ends
+  // the turn instead of overdrawing.
+  let stoppedForCredits = false;
+  const roundBudget = roundBudgetFor;
+  const completionLlm =
+    useServerTools && roundBudget
+      ? gateEveryRound(llm, async (roundMessages, roundOptions, round) => {
+          if (round === 0) return roundOptions;
+          const spentCredits = usdToCredits(settledUsdCost(modelInfo!));
+          const balance = (await fetchHolder())?.currentCredits ?? 0;
+          const budget = roundBudget(roundMessages, balance + reservedCredits - spentCredits);
+          if (!budget.affordable) {
+            stoppedForCredits = true;
+            logger?.info?.('[CLI_CREDITS] Tool loop stopped: the balance cannot pay for another round', {
+              model,
+              round,
+              spentCredits,
+              requiredCredits: budget.minimumCredits,
+            });
+            return null;
+          }
+          return capRoundOutput(roundOptions, budget.outputTokens);
+        })
+      : llm;
   try {
     await params.onReady?.();
-    await llm.complete(model, messages, completionOptions, wrappedOnChunk);
+    await completionLlm.complete(model, messages, completionOptions, wrappedOnChunk);
+    if (stoppedForCredits) finalStopReason = 'max_tokens';
     const heldText = reasoningWithholder?.flush();
     if (heldText) await onChunk([heldText]);
   } catch (error) {
@@ -951,11 +1034,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       // If completion fails, refund the reserved credits to whichever pool paid
       if (reservedCredits > 0) {
         logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
-        const refund = async () => {
-          await holderMethods.incrementCredits(holderId, reservedCredits);
-        };
-        if (params.creditHolds) await params.creditHolds.refund(refund);
-        else await refund();
+        await refundReservation();
       }
       // The success-path settlement/metering below is now unreachable, so an
       // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
@@ -1123,16 +1202,42 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   };
 
   let settlementCommitted = false;
+  // What settlement takes from the holder: the actual cost, unless that exceeds the hold plus the
+  // remaining balance.
+  let chargedCredits = finalCredits;
 
   // Adjust credits after completion: refund over-reservation or charge under-reservation
   if (enforceCredits && modelInfo) {
     try {
+      // Never take the balance below zero. With every round capped at what the holder can pay, a
+      // cost past the hold plus the balance is an estimate miss (a tokenizer under-count, a lapsed
+      // prompt cache) or a concurrent spend; it goes uncollected and loud rather than overdrawing.
+      if (finalCredits > reservedCredits) {
+        const balance = (await fetchHolder())?.currentCredits ?? 0;
+        chargedCredits = Math.min(finalCredits, reservedCredits + Math.max(0, balance));
+        if (chargedCredits < finalCredits) {
+          logger?.error?.(
+            '[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero',
+            {
+              userId,
+              holderId,
+              holderType,
+              model,
+              reserved: reservedCredits,
+              actual: finalCredits,
+              charged: chargedCredits,
+              uncollectedCredits: finalCredits - chargedCredits,
+            }
+          );
+        }
+      }
+
       let ledgerWritten = false;
       const settle = async () => {
         // Reuse the settlement values computed above - recomputing would draw a
         // second stochastic rounding and desync the charge from what the client saw.
         const usdCost = finalUsdCost;
-        const actualCredits = finalCredits;
+        const actualCredits = chargedCredits;
         const creditDifference = reservedCredits - actualCredits;
 
         logger?.info?.(
@@ -1145,39 +1250,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
         // Adjust the difference between reserved and actual against the paying pool
         if (creditDifference !== 0) {
-          // Pre-check: warn if adjustment will cause negative balance (under-reservation case)
-          if (creditDifference < 0) {
-            // Under-reservation: we need to charge more credits
-            // Check if this will cause negative balance
-            const currentHolder = await fetchHolder();
-            const currentBalance = currentHolder?.currentCredits ?? 0;
-            const projectedBalance = currentBalance + creditDifference;
-
-            if (projectedBalance < 0) {
-              logger?.warn?.(
-                '[CLI_CREDITS] WARNING: Adjustment will cause negative balance - tracking for reconciliation',
-                {
-                  userId,
-                  holderId,
-                  holderType,
-                  currentBalance,
-                  adjustment: creditDifference,
-                  projectedBalance,
-                  reserved: reservedCredits,
-                  actual: actualCredits,
-                }
-              );
-              // Proceed with adjustment but track the shortfall in transaction metadata
-            }
-          }
-
           holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
           logger?.debug?.(
             `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
               `New balance: ${holderAfterAdjustment?.currentCredits}`
           );
 
-          // Check for negative balance (should be rare with atomic reservation)
+          // Only a spend racing this settlement between the balance read above and this write gets here
           if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
             logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
               userId,
@@ -1273,11 +1352,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         }
       };
       const settled = params.creditHolds
-        ? await params.creditHolds.settle(finalCredits, settle)
+        ? await params.creditHolds.settle(chargedCredits, settle)
         : (await settle(), true);
       settlementCommitted = settled && ledgerWritten;
       // Emit analytics only after the transaction containing the ledger has committed.
-      if (settlementCommitted) recordUsageEvent(finalCredits);
+      if (settlementCommitted) recordUsageEvent(chargedCredits);
     } catch (error) {
       // Log with sufficient detail for manual reconciliation
       logger?.error?.('[CLI_CREDITS] CRITICAL: Failed to adjust credits - requires manual reconciliation', {
@@ -1303,7 +1382,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Only the embed path opts in (alwaysRecordUsage) - legacy callers are untouched.
   if (modelInfo && params.alwaysRecordUsage && !usageRecorded) {
     const charged = params.creditHolds ? settlementCommitted : enforceCredits;
-    recordUsageEvent(charged ? finalCredits : 0);
+    recordUsageEvent(charged ? chargedCredits : 0);
   }
 
   // A model missing from the catalog computes no cost, so per-key spend cannot

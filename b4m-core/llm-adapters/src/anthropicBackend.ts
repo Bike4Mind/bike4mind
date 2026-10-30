@@ -64,6 +64,7 @@ import {
 import {
   buildThinkingParams,
   effortForComplexity,
+  applyAnthropicOutputCeiling,
   isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
@@ -1463,6 +1464,7 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking.budget_tokens = maxThinkingBudget;
       }
     }
+    applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling);
 
     // Setup the actual API call with API-specific options
     try {
