@@ -1,9 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, UrlBlockedError } from '@bike4mind/common';
 import { toolRoutesRateLimit } from '@server/middlewares/toolRoutesRateLimit';
 import { runAuditedTool } from '@server/cli/runAuditedTool';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
-import { firecrawlFetch, webFetchBody } from '@bike4mind/services/llm/tools/implementation/webfetch';
+import {
+  RefusedFetchTargetError,
+  firecrawlFetch,
+  webFetchBody,
+} from '@bike4mind/services/llm/tools/implementation/webfetch';
 import { z } from 'zod';
 
 const WebFetchBodySchema = z.object({
@@ -34,6 +38,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
       const result = await firecrawlFetch(dbAdapters, url, {
         maxTimeoutMs: 52_000,
         offset,
+      }).catch((error: unknown) => {
+        // A refused target is the caller's input, not a server fault: 400 (logged at warn).
+        if (error instanceof RefusedFetchTargetError) throw new UrlBlockedError(error.message);
+        throw error;
       });
 
       const body = webFetchBody(result);

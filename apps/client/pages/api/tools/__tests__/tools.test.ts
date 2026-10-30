@@ -80,6 +80,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import webSearch from '../web-search';
+import webFetch from '../web-fetch';
 import weather from '../weather';
 import { TOOL_ROUTES_HOURLY_LIMIT } from '@server/middlewares/toolRoutesRateLimit';
 
@@ -188,6 +189,20 @@ describe('/api/tools/*', () => {
 
     expect(res._getStatusCode()).toBe(403);
     expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'http://169.254.169.254/latest/meta-data/',
+    'http://2852039166/latest/meta-data/',
+    'http://0xA9FEA9FE/latest/meta-data/',
+    'http://127.0.0.1:8080/',
+  ])('400s a refused fetch target (%s) instead of a 500', async url => {
+    const res = await call(webFetch, '/api/tools/web-fetch', { url });
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/not allowed or could not be resolved/);
+    expect(res._getJSONData().error).not.toMatch(/private|reserved|loopback|dns/i);
+    expect(mockAuditCreate).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'web_fetch', success: false }));
   });
 
   it('admits an API key holding ai:chat', async () => {
