@@ -54,6 +54,8 @@ describe('resolveDeprecatedModelId', () => {
     expect(resolveDeprecatedModelId('claude-3-5-sonnet-20241022')).toBe('claude-sonnet-4-6');
     expect(resolveDeprecatedModelId('claude-3-7-sonnet-20250219')).toBe('claude-sonnet-4-6');
     expect(resolveDeprecatedModelId('claude-sonnet-4-20250514')).toBe('claude-sonnet-4-6');
+    expect(resolveDeprecatedModelId('claude-opus-4-20250514')).toBe('claude-opus-4-8');
+    expect(resolveDeprecatedModelId('claude-opus-4-1-20250805')).toBe('claude-opus-4-8');
     expect(resolveDeprecatedModelId('claude-3-opus-20240229')).toBe('claude-opus-4-8');
     expect(resolveDeprecatedModelId('claude-3-haiku-20240307')).toBe('claude-haiku-5-5');
   });

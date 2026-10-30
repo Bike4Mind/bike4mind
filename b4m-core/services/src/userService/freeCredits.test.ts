@@ -120,6 +120,7 @@ describe('free credits service', () => {
           type: 'generic_add',
           transactionId: 'verify-grant:user-1',
           reason: 'test grant',
+          description: 'Signup credits: test grant',
         }),
         expect.objectContaining({ db: expect.objectContaining({ creditLots: adapters.db.creditLots }) })
       );

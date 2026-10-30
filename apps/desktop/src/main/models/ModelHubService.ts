@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   HubAccessError,
   HubRateLimitError,
@@ -13,7 +12,9 @@ import {
   curatedParamsLabel as paramsLabel,
   curatedPicks,
   curatedPins as pinsOf,
+  curatedRunner,
   curatedSource,
+  installedReviewed,
   isAbliteratedModel,
   isCuratedListable as listable,
   isCuratedPullable as pullable,
@@ -22,6 +23,7 @@ import {
   type HardwareProfile,
   ollamaPullRef,
   ollamaRefAliases,
+  servesReviewed,
   type HubGgufBuild,
   type HubModelDetail,
   type HubModelSummary,
@@ -160,10 +162,6 @@ const OLLAMA_LIBRARY_URL = 'https://ollama.com/library';
 const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const hubBuildId = (path: string) => path.replace(/\.gguf$/i, '');
 
-const modelDigest = (build: HubBuild) => libraryOf(build)?.digest ?? build.weights[0]?.sha256;
-
-const OLLAMA_LAYER = 'application/vnd.ollama.image.';
-const PINNED_LAYERS = ['template', 'params', 'license', 'projector', 'draft'] as const;
 const EXPLORE_HINT = ' You can still review the repo in Explore.';
 const LAYERS_CHANGED =
   "This model's weights, chat template, settings or license changed at its source since Bike4Mind reviewed it, " +
@@ -174,46 +172,7 @@ const LICENSE_CHANGED =
   EXPLORE_HINT;
 const NOW_ABLITERATED = 'Hugging Face now marks this repo as abliterated, so Curated does not offer it.';
 
-const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 const licenseSet = (ids: readonly string[]) => [...new Set(ids.map(id => id.toLowerCase()))].sort().join(',');
-
-/** True while the registry serves the reviewed weights and exactly the pinned other layers, nothing more. */
-export function servesReviewed(live: OllamaRegistryLayers, reviewed: HubBuild): boolean {
-  const pins = pinsOf(reviewed);
-  if (!pins || !live.model || live.model !== modelDigest(reviewed)) return false;
-  const expected = new Map<string, string>();
-  for (const kind of PINNED_LAYERS) {
-    const digest = pins[kind];
-    if (digest) expected.set(`${OLLAMA_LAYER}${kind}`, digest);
-  }
-  const types = new Set(live.others.map(layer => layer.mediaType));
-  return (
-    types.size === live.others.length &&
-    live.others.length === expected.size &&
-    live.others.every(layer => expected.get(layer.mediaType) === layer.digest)
-  );
-}
-
-/**
- * True when what Ollama installed is the reviewed weights, projector, draft, template, license and num_ctx.
- * Other params are covered by the registry check before the pull.
- */
-export function installedReviewed(inspection: ModelInspection, reviewed: HubBuild): boolean {
-  const pins = pinsOf(reviewed);
-  const contents = inspection.contents;
-  if (!pins || !contents || contents.modelBlob !== modelDigest(reviewed)) return false;
-  if (contents.adapterBlobs?.length) return false;
-  const matchesBlob = (actual: (string | null)[] | undefined, expected: string | null) =>
-    expected ? actual?.length === 1 && actual[0] === expected : (actual?.length ?? 0) === 0;
-  if (!matchesBlob(contents.projectorBlobs, pins.projector) || !matchesBlob(contents.draftBlobs, pins.draft))
-    return false;
-  // A library build with no template layer chats through Ollama's renderer, so /api/show has no template to compare.
-  const template = pins.installedTemplate ?? pins.template;
-  if (template && (contents.template === null || sha256(contents.template) !== template)) return false;
-  if (pins.license ? contents.license === null || sha256(contents.license) !== pins.license : contents.license)
-    return false;
-  return (configuredNumCtx(inspection.parameters) ?? null) === pins.numCtx;
-}
 
 /** Waits `ms`; false when `signal` aborts first. */
 function pause(ms: number, signal: AbortSignal): Promise<boolean> {
@@ -1275,8 +1234,7 @@ export class ModelHubService {
     this.#push(true);
     try {
       await target.runtime.pull(ref, {
-        // Pins are the GGUF child of a library manifest list; Apple Silicon Ollama would otherwise pick MLX.
-        ...(curated && libraryOf(curated.build) ? { runner: 'llamacpp' } : {}),
+        runner: curated ? curatedRunner(curated.build) : undefined,
         signal,
         onProgress: (progress: PullProgress) => {
           const phase = phaseOf(progress.status);

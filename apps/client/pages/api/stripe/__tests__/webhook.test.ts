@@ -76,6 +76,12 @@ vi.mock('@server/integrations/slack/subscriptionLifecycle', async importOriginal
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
 vi.mock('@server/billing/grantCreditPurchase', () => ({ grantCreditPurchase: vi.fn() }));
+// Payment risk screening has its own suite (server/billing/paymentRisk.test.ts).
+vi.mock('@server/billing/paymentRisk', () => ({
+  alertStripeRiskEvent: vi.fn(),
+  radarRiskLine: vi.fn().mockResolvedValue(null),
+  screenPaymentOutcome: vi.fn(),
+}));
 vi.mock('@server/analytics/signupEvents', () => ({
   emitPurchaseEvents: vi.fn(),
   emitBillingEvent: mocks.emitBillingEvent,

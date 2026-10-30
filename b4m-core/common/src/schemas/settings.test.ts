@@ -1477,6 +1477,15 @@ describe('API rate limit settings floor', () => {
   );
 });
 
+describe('preference arena settings exposure', () => {
+  it('keeps every arena setting except the enabled flag out of the user-readable set', () => {
+    const readable = new Set<string>(userReadableSettingKeys());
+    const arenaKeys = Object.keys(settingsMap).filter(key => key.startsWith('preferenceArena'));
+    expect(arenaKeys.length).toBeGreaterThan(1);
+    expect(arenaKeys.filter(key => readable.has(key))).toEqual(['preferenceArenaEnabled']);
+  });
+});
+
 describe('stageHiddenSettingKeys', () => {
   it('hides the deprecated drip settings and preview test mode on production stages', () => {
     expect(stageHiddenSettingKeys(true).sort()).toEqual([
