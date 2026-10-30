@@ -7,7 +7,6 @@ export default {
     [25, '68e1a4506bbca636'],
   ],
   'AdminModalTabNew.tsx': [[2, '1fd68f8a7bbdebfd']],
-  'AdminProfileModal.tsx': [[3, 'e235ea43ea3ff818']],
   'AdminSettingInputField.tsx': [[6, '2df9fe7f525eecc9']],
   'AdminSystemHealthTab.tsx': [[1, 'c76590d0c3aaf0ac']],
   'AdminWhatsNewModalsTab.tsx': [[1, '27481ac346d5dfed']],
