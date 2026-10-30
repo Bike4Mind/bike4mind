@@ -1,10 +1,11 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
-import { questRepository, Session, sessionRepository } from '@bike4mind/database';
+import { questRepository, Session, sessionRepository, userRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { sessionService } from '@bike4mind/services';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 export const handler = withEventContext(async (event, logger) => {
   const { sessionId, userId } = SessionEvents.AutoName.schema.parse(event.properties);
@@ -51,6 +52,12 @@ export const handler = withEventContext(async (event, logger) => {
       );
       return;
     }
+  }
+
+  const user = await userRepository.findById(userId ?? session.userId);
+  if (!user || aiAccessDeniedMessage(user)) {
+    logger.warn(`Skipping auto-naming for session ${sessionId}: user missing or AI access held`);
+    return;
   }
 
   // Wrap in try/catch: auto-naming is a non-critical UX feature. LLM failures

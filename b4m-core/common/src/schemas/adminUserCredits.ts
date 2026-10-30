@@ -165,6 +165,7 @@ export const API_KEY_ACCESS_BASES = [
   'developer',
   'open_to_all',
   'paid_subscription',
+  'credit_purchase',
   'no_paid_subscription',
   'disabled',
 ] as const;

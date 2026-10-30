@@ -105,6 +105,55 @@ describe('ModelServerRegistry', () => {
     });
   });
 
+  it('saves entered hardware for a server and for this computer, and says when this computer changed', async () => {
+    const fake = fakeOllama();
+    const file = memoryFile();
+    const quiet = { debug: () => undefined, warn: () => undefined };
+    const localSpecsChanged = vi.fn();
+    const servers = new ModelServerRegistry({
+      store: new ModelServerStore(cipher, file, quiet),
+      logger: { debug: () => undefined, warn: () => undefined },
+      fetchFor: fake.fetchFor,
+      localFetch: async () => json({ version: '0.12.0' }),
+      resolve: async () => [],
+      localSpecsChanged,
+    });
+    const saved = vi.fn();
+    servers.onServerSaved(saved);
+    const [, added] = await servers.add({
+      address: 'http://192.168.1.20:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    const specs = { ramGiB: 64, gpuMemoryGiB: 24, bandwidthGBps: 1008, unified: false };
+
+    const views = await servers.update(added.id, { specs });
+    expect(views[1].specs).toEqual(specs);
+    expect(servers.specs(added.id)).toEqual(specs);
+    expect(saved).toHaveBeenLastCalledWith(added.id);
+    expect(localSpecsChanged).not.toHaveBeenCalled();
+
+    const local = { ...specs, gpuMemoryGiB: null };
+    expect((await servers.update('local', { specs: local }))[0].specs).toEqual(local);
+    expect(servers.specs('local')).toEqual(local);
+    expect(saved).toHaveBeenLastCalledWith('local');
+    expect(localSpecsChanged).toHaveBeenCalledTimes(1);
+    await expect(servers.update('local', { name: 'mine' })).rejects.toThrow('no other settings');
+
+    // A restart reads this computer's specs back and says so, since sizing may have run on the probe alone.
+    const restarted = vi.fn();
+    const again = new ModelServerRegistry({
+      store: new ModelServerStore(cipher, file, quiet),
+      logger: quiet,
+      fetchFor: fake.fetchFor,
+      localSpecsChanged: restarted,
+    });
+    expect((await again.views())[0].specs).toEqual(local);
+    expect(restarted).toHaveBeenCalledTimes(1);
+  });
+
   it('detects Ollama by what it answers and marks plain http on a private address unencrypted', async () => {
     const { registry: servers } = registry(fakeOllama());
     const probe = await servers.probe({ address: '192.168.1.20:11434', credential: none });

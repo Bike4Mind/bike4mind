@@ -91,12 +91,24 @@ different reasons cannot stack grants. Stronger evidence can release the remaini
 delta. Grant stage records money released, not current identity trust or revocation.
 Identity consumers own verification, identity deduplication, and revocation.
 
-Activity checks use persisted successful chat turns stamped at creation by a
-session-authenticated server invocation for an enrolled account. A retry through
-an API key or an internal caller clears that provenance. Imported, legacy, API-key,
-pending, and failed turns do not qualify. Private message/day thresholds are disabled by zero;
-distinct UTC days must also span the corresponding elapsed whole days. The
-first-party eligibility-check endpoint and Billing status provide a retryable path.
+Activity qualifies on server-accrued heartbeat time, not chat turns: the client pings
+`/api/users/active-session` while the app is open and in use, the server accrues the gap
+between pings into `signupGrant.activity` for the current UTC day, and the day's drip pays
+once that reaches `signupGrantActivityMinActiveSeconds`. The drip pays only from the unlock
+pool. The first-party eligibility-check endpoint and Billing status provide a retryable
+path that pays when the accrued time already qualifies.
+For PR preview testing, the admin switch `signupGrantActivityPreviewTestMode` (default off)
+replaces UTC earning days with fixed five-minute windows. Only `pr<number>` stages honor it;
+production, staging and personal stages always use UTC days. Active time starts again in every
+window, and payouts still respect the unlock pool, lifetime cap, shared UTC daily budget and
+held-tranche priority. The heartbeat response tells the browser when the next window opens.
+
+To test, enable the switch in Admin Settings > Credits System > Users, set the active-time
+minimum to 60 seconds, and reload a fresh staged test account's tab. Stay active through
+several windows and verify one payout per window, then stop at the configured lifetime cap.
+Turning the switch off restores daily earning; a day already paid in test mode stays paid.
+A settings change needs a tab reload to discard the browser's previous next-earning time.
+
 Organization invitation unlocks have their own `signupGrantOrgInviteEnabled` rollout
 flag, disabled by default. Each organization can unlock at most its seat count
 over its lifetime; removing a member or deleting a recipient account does not

@@ -522,7 +522,59 @@
                 }
               },
               "promptText": {
-                "type": "string"
+                "type": "object",
+                "properties": {
+                  "blocks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "hardcoded",
+                            "admin",
+                            "user",
+                            "project",
+                            "session",
+                            "org",
+                            "caller"
+                          ]
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "redacted": {
+                          "type": "boolean"
+                        },
+                        "placement": {
+                          "type": "string",
+                          "enum": [
+                            "system",
+                            "user_turn",
+                            "mixed"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "name",
+                        "redacted",
+                        "placement"
+                      ]
+                    }
+                  },
+                  "sizeCapped": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "blocks",
+                  "sizeCapped"
+                ]
               },
               "performance": {
                 "type": "object",
@@ -4062,7 +4114,8 @@
             },
             "required": [
               "id"
-            ]
+            ],
+            "additionalProperties": {}
           },
           "originalPrompt": {
             "type": "string"

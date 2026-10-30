@@ -34,6 +34,38 @@ function omit(obj: Record<string, unknown>, keys: readonly string[]): Record<str
   return Object.fromEntries(Object.entries(obj).filter(([key]) => !excluded.has(key)));
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Dotted paths present in `sent` but dropped from `kept` (its schema-parsed copy).
+ * Field names only, never values, so the result is safe to log. A `toJSON` value (a
+ * Mongoose document) is compared as it will serialize.
+ */
+function undeclaredPaths(sent: unknown, kept: unknown, path = ''): string[] {
+  const value =
+    typeof sent === 'object' &&
+    sent !== null &&
+    !(sent instanceof Date) &&
+    typeof (sent as { toJSON?: unknown }).toJSON === 'function'
+      ? (sent as { toJSON(): unknown }).toJSON()
+      : sent;
+  if (Array.isArray(value) && Array.isArray(kept)) {
+    const paths = value.flatMap((item, i) => undeclaredPaths(item, kept[i], `${path}[]`));
+    return [...new Set(paths)];
+  }
+  if (!isPlainObject(value) || !isPlainObject(kept)) return [];
+  return Object.entries(value).flatMap(([key, child]) => {
+    const childPath = path ? `${path}.${key}` : key;
+    // An undefined value never reaches the wire, so dropping it leaks nothing.
+    if (!Object.hasOwn(kept, key)) return child === undefined ? [] : [childPath];
+    return undeclaredPaths(child, kept[key], childPath);
+  });
+}
+
 /** The request a contract route's handler receives; name it when a wrapper hides the handler from inference. */
 export type ContractRequest<C extends EndpointContract> = Request & {
   validated: RequestBodyOf<C>;
@@ -161,28 +193,46 @@ export function nextRouteForContract<C extends EndpointContract>(
     });
   }
 
-  // Non-prod safety net: warn if the handler emits a body that does not match the
-  // contract's response schema for that status. Catches drift on inline-assembled
-  // responses in tests/dev; compiled out of the hot path in production, warn-only,
-  // and wrapped so it can never affect the actual response.
-  if (process.env.NODE_ENV !== 'production' && Object.keys(contract.responses).length > 0) {
+  // Response boundary. A 2xx body matching the contract's schema for that status has
+  // its undeclared fields logged, and stripped as `respond()` (server/utils/respond.ts)
+  // does - but only outside production for now: contracts under-declare some fields
+  // routes deliberately send, so production logs the paths and sends the body
+  // unchanged until those logs are quiet. Error bodies are exempt: errorHandler
+  // spreads each error's `additionalInfo` (`errorCode`, `retryAfter`, ...) into the
+  // shared envelope, which the per-status schemas do not enumerate. A mismatch is
+  // logged and sent unchanged everywhere rather than 500ing like `respond()`.
+  if (Object.keys(contract.responses).length > 0) {
+    const strip = process.env.NODE_ENV !== 'production';
     prelude.push((req, res, next) => {
       const originalJson = res.json.bind(res);
       res.json = ((body: unknown) => {
+        let outgoing = body;
         try {
           const spec = contract.responses[res.statusCode];
           // No schema => the contract declares a raw (non-JSON) body for this
           // status, so there is nothing to check.
           const result = spec?.schema?.safeParse(body);
-          if (result && !result.success) {
+          if (result?.success) {
+            if (res.statusCode >= 300) return originalJson(body);
+            const undeclared = undeclaredPaths(body, result.data);
+            if (undeclared.length > 0) {
+              req.logger?.warn(
+                `[contract] ${contract.operationId} response ${res.statusCode} sends undeclared fields: ${undeclared.join(', ')}`
+              );
+            }
+            if (strip) outgoing = result.data;
+          } else if (result) {
+            // One line, bounded: this logs per request in production, and a union's raw
+            // ZodError message lists every branch's issues.
+            const violation = fromZodError(result.error, { maxIssuesInMessage: 5 }).message.slice(0, 1000);
             req.logger?.warn(
-              `[contract] ${contract.operationId} response ${res.statusCode} violates schema: ${result.error.message}`
+              `[contract] ${contract.operationId} response ${res.statusCode} violates schema: ${violation}`
             );
           }
         } catch {
-          // A dev assertion must never break the response.
+          // The check must never break the response.
         }
-        return originalJson(body);
+        return originalJson(outgoing);
       }) as typeof res.json;
       next();
     });

@@ -34,7 +34,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-956 routes: 61 contracted, 9 aliases of another route, 207 with no static caller in `apps/client/app`.
+957 routes: 61 contracted, 9 aliases of another route, 208 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -101,7 +101,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | models | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | notebooks | 6 | 0 | 6 | 0 | 0 | 0 | 2 |
 | oauth | 13 | 0 | 1 | 4 | 0 | 8 | 9 |
-| ollama | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
+| ollama | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | organizations | 36 | 0 | 35 | 1 | 0 | 0 | 1 |
 | otc | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | overwatch | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
@@ -140,7 +140,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | usage | 2 | 0 | 1 | 0 | 0 | 1 | 1 |
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
-| users | 33 | 0 | 28 | 5 | 0 | 0 | 3 |
+| users | 34 | 0 | 28 | 6 | 0 | 0 | 5 |
 | v1 | 59 | 55 | 53 | 0 | 0 | 6 | 48 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
@@ -1057,7 +1057,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/api/ollama/models` | GET | handler | - | no | - | 0 |
+| `/api/ollama/models` | GET | jwt | - | no | - | 0 |
 
 ### organizations
 
@@ -1528,6 +1528,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/users/[id]/update` | PUT | jwt+key | - | no | - | 5: `components/AgentList/VoiceCustomizeModal.tsx`, `components/ProfileModal/SettingsTabContent/VoicePreferenceSection.tsx`, `components/Session/AISettings/AdvancedAIModal.tsx` +2 more |
 | `/api/users/[id]/upload-photo` | POST | jwt | - | no | - | 1: `utils/userAPICalls.tsx` |
 | `/api/users/[id]/userInvites` | GET | jwt+key | - | no | - | 1: `utils/invitesAPICalls.ts` |
+| `/api/users/active-session` | POST | jwt | - | no | - | 1: `hooks/useSignupGrantHeartbeat.ts` |
 | `/api/users/activities/recent` | GET | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/by-email/[email]` | GET | jwt+key | - | no | - | 2: `hooks/data/skills.ts`, `hooks/data/user.ts` |
 | `/api/users/counterLogs` | GET | jwt+key | `admin:*` | no | - | 1: `utils/userAPICalls.tsx` |
@@ -1535,7 +1536,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/users/me/sessions/revoke-others` | POST | jwt+key | - | no | - | 1: `hooks/data/user.ts` |
 | `/api/users/me/storage-breakdown` | GET | jwt | - | no | - | 1: `hooks/data/storageBreakdown.ts` |
 | `/api/users/report` | POST | jwt+key | `admin:*` | no | - | 0 |
-| `/api/users/signup-grant-eligibility` | POST | jwt | - | no | - | 1: `components/subscription/SignupGrantStatus.tsx` |
+| `/api/users/signup-grant-eligibility` | POST | jwt | - | no | - | 0 |
 | `/api/users/tags` | GET | jwt+key | - | no | - | 1: `utils/userAPICalls.tsx` |
 
 ### v1

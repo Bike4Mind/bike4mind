@@ -52,7 +52,7 @@ DataLakeOwnershipOfferSchema.index({ dataLakeId: 1 }, { unique: true, partialFil
 // The recipient's pending-offer list.
 DataLakeOwnershipOfferSchema.index({ recipientUserId: 1, status: 1 });
 
-export const DataLakeOwnershipOfferModel =
+export const DataLakeOwnershipOfferModel: mongoose.Model<IDataLakeOwnershipOfferDocument> =
   (mongoose.models[ModelName] as unknown as mongoose.Model<IDataLakeOwnershipOfferDocument>) ||
   mongoose.model<IDataLakeOwnershipOfferDocument>(ModelName, DataLakeOwnershipOfferSchema);
 

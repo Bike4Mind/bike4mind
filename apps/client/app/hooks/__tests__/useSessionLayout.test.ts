@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import useSessionLayout, {
+  MODERATION_TIMEOUT_MESSAGE,
   addArtifactToRecent,
   setSessionLayout,
   saveOpenArtifactContent,
@@ -746,6 +747,7 @@ describe('useSessionLayout - LRU Cache Functions', () => {
     it('moves a still-scanning image to error, never to a sendable state', () => {
       const [timedOut] = markModerationScanTimedOut([makeFile('a', 'scanning')], ['a']);
       expect(timedOut.status).toBe('error');
+      expect(timedOut.errorMessage).toBe(MODERATION_TIMEOUT_MESSAGE);
       expect(getSendableMessageFileIds([timedOut]).ids).toEqual([]);
       expect(hasBlockingPendingFiles([timedOut])).toBe(false);
     });

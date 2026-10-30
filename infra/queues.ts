@@ -1247,7 +1247,7 @@ const tavernHeartbeatQueue = new sst.aws.Queue('tavernHeartbeatQueue', {
 
 // Deep Agent Wake Queue
 // One message → one wake cycle for one long-horizon agent (orient → act →
-// reflect → groom). See apps/client/server/deepAgent and
+// reflect → groom). See apps/workers/src/deepAgent/wakeHandler.ts and
 // docs/concepts/deep-agent-framework.md.
 const deepAgentWakeQueueDLQ = new sst.aws.Queue('deepAgentWakeQueueDLQ', {});
 const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
@@ -1259,7 +1259,7 @@ const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
 });
 const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
   {
-    handler: 'apps/client/server/deepAgent/wakeHandler.dispatch',
+    handler: 'apps/workers/src/deepAgent/wakeHandler.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,

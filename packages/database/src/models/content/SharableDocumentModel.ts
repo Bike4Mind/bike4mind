@@ -2,7 +2,7 @@ import mongoose, { Schema } from 'mongoose';
 import { IGroupShare, IShareableStaticMethods, IUserDocument, IUserShare, Permission } from '@bike4mind/common';
 import { usableObjectIds } from '../../utils/mongo';
 
-export const GroupShareableSchema = new Schema<IGroupShare>({
+export const GroupShareableSchema: Schema<IGroupShare> = new Schema<IGroupShare>({
   groupId: { type: String, required: true },
   permissions: {
     type: [String],
@@ -11,7 +11,7 @@ export const GroupShareableSchema = new Schema<IGroupShare>({
   },
 });
 
-export const UserShareableSchema = new Schema<IUserShare>(
+export const UserShareableSchema: Schema<IUserShare> = new Schema<IUserShare>(
   {
     userId: { type: String, required: true },
     permissions: {
@@ -42,7 +42,12 @@ UserShareableSchema.virtual('user', {
 });
 
 // Basic stub for sharing files and tools.
-export const ShareableDocumentSchema = {
+export const ShareableDocumentSchema: {
+  isGlobalRead: { type: BooleanConstructor; default: boolean };
+  isGlobalWrite: { type: BooleanConstructor; default: boolean };
+  groups: { type: Schema<IGroupShare>[]; default: never[] };
+  users: { type: Schema<IUserShare>[]; default: never[] };
+} = {
   isGlobalRead: { type: Boolean, default: false },
   isGlobalWrite: { type: Boolean, default: false },
   groups: {

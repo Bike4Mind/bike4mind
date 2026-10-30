@@ -39,6 +39,7 @@ import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
 import { registerAdminAuditAlerts } from './adminAuditAlerts';
+import { registerSignupGrantHeldRelease } from './signupGrantHeldRelease';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -114,6 +115,7 @@ async function main() {
   registerGenerationJobSweep(worker);
   registerSkillMarketReviewSla(worker);
   registerAdminAuditAlerts(worker);
+  registerSignupGrantHeldRelease(worker);
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);

@@ -16,6 +16,7 @@ import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
+import { BlankChat, BlankChatGreeting } from './BlankChat';
 import { SkillMarketPanel } from './SkillMarketPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
@@ -75,6 +76,7 @@ import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
 import { useSessionStartTiming } from './useSessionStartTiming';
 import { SpawnFailureToast } from './SpawnFailureToast';
+import { useCreationTools } from './useCreationTools';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -235,6 +237,24 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const [terminalFocus, setTerminalFocus] = useState<{ sessionId: string; seq: number } | null>(null);
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
+  const blankChatId =
+    screen === 'conversation' &&
+    !opening &&
+    activeId &&
+    conversation.session?.mode === 'chat' &&
+    conversation.messages.length === 0
+      ? activeId
+      : null;
+  const creationTools = useCreationTools(
+    `${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}:${auth?.user?.id ?? 'device-local'}`,
+    blankChatId,
+    conversation.session?.model
+  );
+  // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
+  const [composerFill, setComposerFill] = useState<{ id: number; text: string } | null>(null);
+  const fillSeq = useRef(0);
+  const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
+  const clearComposerFill = useCallback(() => setComposerFill(null), []);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
@@ -865,22 +885,35 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                       // sentence pointing at the sidebar: the header above says what the state is, this
                       // says what to do about it, and the composer's placeholder names the same step.
                       noSession={
-                        <Stack spacing={1.5} alignItems="center">
-                          <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                            {mode === 'code'
-                              ? 'Start a Code session to run a task here.'
-                              : 'Start a conversation to send your first message.'}
-                          </Typography>
-                          <Button
-                            size="sm"
-                            variant="soft"
-                            loading={creatingCode}
-                            onClick={() => void onCreate()}
-                            data-testid="chat-start-session-btn"
-                          >
-                            {mode === 'code' ? 'New Code session' : 'New conversation'}
-                          </Button>
-                        </Stack>
+                        mode === 'code' ? (
+                          <Stack spacing={1.5} alignItems="center">
+                            <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                              Start a Code session to run a task here.
+                            </Typography>
+                            <Button
+                              size="sm"
+                              variant="soft"
+                              loading={creatingCode}
+                              onClick={() => void onCreate()}
+                              data-testid="chat-start-session-btn"
+                            >
+                              New Code session
+                            </Button>
+                          </Stack>
+                        ) : (
+                          <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
+                            <Button
+                              size="sm"
+                              variant="soft"
+                              loading={creatingCode}
+                              onClick={() => void onCreate()}
+                              sx={{ mt: 2.5 }}
+                              data-testid="chat-start-session-btn"
+                            >
+                              New conversation
+                            </Button>
+                          </BlankChatGreeting>
+                        )
                       }
                       emptySession={
                         initialCodeSetup ? (
@@ -902,6 +935,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                               preparing={conversation.preparing !== null}
                             />
                           </Box>
+                        ) : blankChatId ? (
+                          <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
                         ) : undefined
                       }
                       // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
@@ -1104,6 +1139,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             onSendQueuedNow={conversation.sendQueuedNow}
             returned={conversation.returned}
             onReturnedConsumed={conversation.clearReturned}
+            fill={composerFill}
+            onFillConsumed={clearComposerFill}
             skills={skills}
             leading={
               <ApprovalModePill

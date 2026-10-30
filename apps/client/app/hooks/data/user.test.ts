@@ -166,6 +166,14 @@ describe('useUpdateUser', () => {
     expect(invalidatedKeys).toContainEqual(['organizations']);
   });
 
+  it("invalidates the edited user's admin queries so the profile's Recent activity refreshes", async () => {
+    const { invalidateSpy } = await save({ id: 'u1', name: 'New Name' });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(call => call[0]?.queryKey);
+    expect(invalidatedKeys).toContainEqual(['admin', 'users', 'u1']);
+    expect(invalidatedKeys).toContainEqual(['admin', 'user-entitlements', 'u1']);
+  });
+
   const fail = async (error: Error) => {
     vi.mocked(updateUserToServer).mockRejectedValue(error);
     const { Wrapper } = createWrapper();

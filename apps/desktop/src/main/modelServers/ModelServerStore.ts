@@ -3,9 +3,10 @@ import type {
   ModelServerAccess,
   ModelServerCredentialInput,
   ModelServerKind,
+  ModelServerSpecs,
   ModelServerTransport,
 } from '@shared/modelServers';
-import { LOCAL_SERVER_NAME } from '@shared/modelServers';
+import { LOCAL_SERVER_NAME, readSpecsShape, specsProblem } from '@shared/modelServers';
 import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
 
 export type StoredAuth = { type: 'none' } | { type: 'bearer' } | { type: 'header'; name: string };
@@ -21,6 +22,7 @@ export interface ModelServerRecord {
   /** Names from the last successful list. */
   models: string[];
   addedAt: string;
+  specs: ModelServerSpecs | null;
 }
 
 /**
@@ -38,11 +40,14 @@ interface StoredServer extends Record<string, unknown> {
   secret?: string;
   models?: string[];
   addedAt?: string;
+  specs?: ModelServerSpecs;
 }
 
 interface StoreDocument extends Record<string, unknown> {
   version: 1;
   servers: StoredServer[];
+  /** This computer's entered hardware, which overrides its probe. */
+  localSpecs?: ModelServerSpecs;
 }
 
 export const MAX_MODEL_SERVERS = 20;
@@ -159,7 +164,7 @@ export class ModelServerStore {
   }
 
   add(
-    input: Omit<ModelServerRecord, 'id' | 'auth' | 'models' | 'addedAt'>,
+    input: Omit<ModelServerRecord, 'id' | 'auth' | 'models' | 'addedAt' | 'specs'>,
     credential: ModelServerCredentialInput
   ): Promise<ModelServerRecord> {
     return this.commit(document => {
@@ -196,14 +201,18 @@ export class ModelServerStore {
       kind?: ModelServerKind;
       access?: ModelServerAccess;
       credential?: ModelServerCredentialInput;
+      specs?: ModelServerSpecs | null;
     }
   ): Promise<ModelServerRecord> {
     return this.commit(document => {
       this.assertWritable();
       const current = document.servers.find(server => server.id === id);
       if (!current) throw new Error('That model server is no longer saved.');
+      const specs = patch.specs === undefined ? undefined : checkedSpecs(patch.specs, false);
       const stored: StoredServer = { ...current };
       if (patch.name !== undefined) stored.name = this.checkName(document, patch.name, id);
+      if (specs === null) delete stored.specs;
+      else if (specs) stored.specs = specs;
       if (patch.kind !== undefined) stored.kind = patch.kind;
       if (patch.access !== undefined) stored.access = patch.access;
       let applied: (() => void) | undefined;
@@ -229,6 +238,19 @@ export class ModelServerStore {
       if (this.readOnly || !current || sameList(current.models ?? [], next)) return { document, result: undefined };
       const servers = document.servers.map(server => (server.id === id ? { ...server, models: next } : server));
       return { document: { ...document, servers }, result: undefined };
+    });
+  }
+
+  async localSpecs(): Promise<ModelServerSpecs | null> {
+    return readSpecs((await this.load()).localSpecs);
+  }
+
+  setLocalSpecs(specs: ModelServerSpecs | null): Promise<ModelServerSpecs | null> {
+    return this.commit(document => {
+      this.assertWritable();
+      const checked = checkedSpecs(specs, true);
+      const { localSpecs: _previous, ...rest } = document;
+      return { document: checked ? { ...rest, localSpecs: checked } : rest, result: checked };
     });
   }
 
@@ -392,5 +414,23 @@ function hydrate(stored: StoredServer): ModelServerRecord | null {
       ? stored.models.filter((name): name is string => typeof name === 'string')
       : [],
     addedAt: typeof stored.addedAt === 'string' ? stored.addedAt : '',
+    specs: readSpecs(stored.specs),
   };
+}
+
+/** Specs to store: null when every figure is blank; throws when Settings should not have sent them. */
+function checkedSpecs(specs: ModelServerSpecs | null, local: boolean): ModelServerSpecs | null {
+  if (!specs || (specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null)) return null;
+  const problem = specsProblem(specs, local);
+  if (problem) throw new Error(problem);
+  const { ramGiB, gpuMemoryGiB, bandwidthGBps, unified } = specs;
+  return { ramGiB, gpuMemoryGiB, bandwidthGBps, unified: !local && unified };
+}
+
+/** Specs as stored; a hand-edited or newer shape that does not check out is ignored, so the server stays unrated. */
+function readSpecs(value: unknown): ModelServerSpecs | null {
+  const specs = readSpecsShape(value);
+  if (!specs) return null;
+  if (specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null) return null;
+  return specsProblem(specs, true) ? null : specs;
 }

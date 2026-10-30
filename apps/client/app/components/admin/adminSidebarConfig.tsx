@@ -23,6 +23,7 @@ import {
   GitBranch,
   GitPullRequest,
   Globe,
+  HandCoins,
   Handshake,
   Hash,
   HeartPulse,
@@ -134,6 +135,7 @@ export enum AdminTab {
   Dashboard = 67,
   SignupDomainHolds = 68,
   SignupRiskReview = 69,
+  HeldSignupGrants = 70,
 }
 
 /**
@@ -205,6 +207,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Risk review',
         testid: 'admin-signup-risk-review-btn',
       },
+      { Icon: HandCoins, tab: AdminTab.HeldSignupGrants, label: 'Held signup grants' },
       { Icon: ArrowRightLeft, tab: AdminTab.Migrate, label: 'Migration', gate: 'userMigration' },
     ],
   },

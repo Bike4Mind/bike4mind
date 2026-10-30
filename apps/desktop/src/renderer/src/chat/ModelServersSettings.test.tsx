@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelServerAccess, ModelServerKind, ModelServerProbeResult, ModelServerView } from '@shared/modelServers';
 import { desktopTheme } from '../theme';
 import { ModelServersSettings } from './ModelServersSettings';
@@ -18,6 +18,24 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener() {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+function saved(kind: ModelServerKind, access: ModelServerAccess): ModelServerView {
+  return {
+    id: 'gpu',
+    name: 'gpu box',
+    local: false,
+    kind,
+    address: 'http://192.168.1.20:11434',
+    access,
+    auth: { type: 'none' },
+    credentialsPersisted: true,
+    credentialsMissing: false,
+    unencrypted: true,
+    health: { state: 'online', version: '0.12.0', latencyMs: 12, checkedAt: null, error: null },
+    models: ['qwen2.5:0.5b'],
+    specs: null,
+  };
+}
 
 let root: Root | undefined;
 let host: HTMLElement;
@@ -59,6 +77,7 @@ function server(overrides: Partial<ModelServerView>): ModelServerView {
     unencrypted: false,
     health,
     models: [],
+    specs: null,
     ...overrides,
   };
 }
@@ -93,6 +112,20 @@ async function mount(servers: ModelServerView[], probe = vi.fn()) {
     )
   );
   return { probe, update };
+}
+
+/** Renders one saved server without replacing window.b4m, so a describe's own stubs stay in place. */
+async function show(saved: ModelServerView) {
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () =>
+    root?.render(
+      <CssVarsProvider theme={desktopTheme}>
+        <ModelServersSettings servers={[saved]} onServers={() => undefined} loadError={null} />
+      </CssVarsProvider>
+    )
+  );
 }
 
 describe('ModelServersSettings add form', () => {
@@ -217,5 +250,79 @@ describe('ModelServersSettings access note', () => {
   it('shows no note for a server set to Chat only', async () => {
     await mount([saved('ollama', 'chat')]);
     expect(note()).toBeNull();
+  });
+});
+
+describe('ModelServersSettings hardware', () => {
+  const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+  const update = vi.fn(async () => ({ ok: true as const, servers: [] }));
+  const probedHardware = vi.fn(async () => ({
+    memoryKind: 'cpu' as const,
+    totalMemoryBytes: 62 * 1024 ** 3,
+    gpuMemoryBytes: null,
+    gpuName: null,
+  }));
+
+  async function type(testId: string, value: string) {
+    const input = byTestId(testId) as HTMLInputElement;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setValue?.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  const click = (testId: string) => act(async () => byTestId(testId)?.click());
+
+  beforeEach(() => {
+    update.mockClear();
+    (window as unknown as { b4m: unknown }).b4m = { modelServers: { update, probedHardware } };
+  });
+
+  it('saves RAM, GPU memory, bandwidth and unified memory for a saved server', async () => {
+    await show(saved('ollama', 'manage'));
+    await click('model-servers-specs-btn');
+    await type('model-servers-specs-ram-input', '128');
+    await type('model-servers-specs-gpu-input', '96');
+    await type('model-servers-specs-bandwidth-input', '256');
+    await click('model-servers-specs-unified-checkbox');
+    await click('model-servers-specs-save-btn');
+    expect(update).toHaveBeenCalledWith('gpu', {
+      specs: { ramGiB: 128, gpuMemoryGiB: 96, bandwidthGBps: 256, unified: true },
+    });
+    expect(probedHardware).not.toHaveBeenCalled();
+  });
+
+  it('asks for RAM before saving GPU memory for a saved server', async () => {
+    await show(saved('ollama', 'manage'));
+    await click('model-servers-specs-btn');
+    await type('model-servers-specs-gpu-input', '24');
+    await click('model-servers-specs-save-btn');
+    expect(byTestId('model-servers-specs-error')?.textContent).toContain('Enter the RAM too');
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('shows what was entered and lets it be cleared', async () => {
+    await show({
+      ...saved('ollama', 'manage'),
+      specs: { ramGiB: 64, gpuMemoryGiB: 24, bandwidthGBps: null, unified: false },
+    });
+    expect(byTestId('model-servers-specs-summary')?.textContent).toBe('Hardware entered: 64 GB RAM, 24 GB GPU memory.');
+    await click('model-servers-specs-btn');
+    expect((byTestId('model-servers-specs-ram-input') as HTMLInputElement).value).toBe('64');
+    await click('model-servers-specs-clear-btn');
+    expect(update).toHaveBeenCalledWith('gpu', { specs: null });
+  });
+
+  it('shows this computer what the probe found beside the fields, with no unified memory choice', async () => {
+    await show({ ...saved('ollama', 'manage'), id: 'local', name: 'This computer', local: true });
+    await click('model-servers-specs-btn');
+    expect(byTestId('model-servers-specs-probed')?.textContent).toBe('Detected: 62 GiB of RAM and no GPU memory.');
+    expect((byTestId('model-servers-specs-ram-input') as HTMLInputElement).placeholder).toBe('62');
+    expect(byTestId('model-servers-specs-unified-checkbox')).toBeNull();
+    await type('model-servers-specs-gpu-input', '16');
+    await click('model-servers-specs-save-btn');
+    expect(update).toHaveBeenCalledWith('local', {
+      specs: { ramGiB: null, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false },
+    });
   });
 });
