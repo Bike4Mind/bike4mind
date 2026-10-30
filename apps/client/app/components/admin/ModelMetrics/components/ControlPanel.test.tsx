@@ -40,7 +40,7 @@ const renderPanel = (dateFrom: string, dateTo: string) =>
     { wrapper: TestWrapper }
   );
 
-// The date comparison needs a dayjs plugin, and nothing else on the client registers it.
+// The range check calls a dayjs plugin that ControlPanel must register for itself.
 describe('ControlPanel date range', () => {
   it('accepts a range whose start is before its end', () => {
     renderPanel('2026-10-01T00:00:00.000Z', '2026-10-02T00:00:00.000Z');
