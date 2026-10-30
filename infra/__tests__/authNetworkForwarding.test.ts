@@ -36,13 +36,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function loadRouter(shared = false, prodCachePolicyId = '') {
+async function loadRouter(shared = false, prodCachePolicyId = '', sharedOriginRequestPolicyId = '') {
   vi.resetModules();
   mocks.cdn.defaultCacheBehavior = mocks.defaultBehavior;
   delete mocks.cdn.orderedCacheBehaviors;
   vi.stubEnv('DEV_ROUTER_DISTRIBUTION_ID', shared ? 'shared-router' : '');
   vi.stubEnv('PROD_CACHE_POLICY_ID', prodCachePolicyId);
   vi.stubEnv('STAGING_CACHE_POLICY_ID', '');
+  vi.stubEnv('AUTH_NETWORK_ORIGIN_REQUEST_POLICY_ID', sharedOriginRequestPolicyId);
   vi.stubEnv('SERVER_DOMAIN', 'example.test');
   vi.stubEnv('APP_CERT_ARN', '');
   vi.stubGlobal('$app', { stage: 'production' });
@@ -99,6 +100,15 @@ describe('authentication connection metadata forwarding', () => {
     expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(3);
     for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
       expect(behavior.cachePolicyId).toBe('shared-prod-cache');
+    }
+  });
+
+  it('attaches the account-level policy instead of creating one when its id is configured', async () => {
+    await loadRouter(false, '', 'shared-auth-network-policy');
+    expect(mocks.policy).not.toHaveBeenCalled();
+    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(3);
+    for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
+      expect(behavior.originRequestPolicyId).toBe('shared-auth-network-policy');
     }
   });
 
