@@ -3,7 +3,7 @@ import Table from '@mui/joy/Table';
 import Typography from '@mui/joy/Typography';
 import { useMemo, useState } from 'react';
 import { timeAgo } from '../prBarModel';
-import { activityLabel } from './activity';
+import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { formatAgentCost, type AgentView } from './roster';
@@ -26,11 +26,6 @@ const COMPARE: Record<SortKey, (a: AgentView, b: AgentView) => number> = {
 const FIRST_DIRECTION: Record<SortKey, Sort['direction']> = { agent: 'asc', updated: 'desc', cost: 'desc' };
 
 const clamp = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
-
-function nowText(agent: AgentView): string {
-  if (agent.state === 'working' && agent.activity) return activityLabel(agent.activity);
-  return agent.lastSnippet || '-';
-}
 
 function SortHeader({
   sortKey,
@@ -119,7 +114,7 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
               </td>
               <td>
                 <Typography level="body-xs" sx={clamp}>
-                  {nowText(agent)}
+                  {agentNowText(agent) ?? '-'}
                 </Typography>
               </td>
               <td>{timeAgo(agent.updatedAt, now) ?? '-'}</td>
