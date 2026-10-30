@@ -68,6 +68,8 @@ export class ArenaPairRepository extends BaseRepository<IArenaPairDocument> {
         $match: {
           active: true,
           ...poolFilter(pool),
+          // Grows with each user's vote history; goldChoice:{$exists:false} is not selective on the
+          // {active, goldChoice} index. Fine at launch scale.
           _id: { $nin: excludeIds.map(id => new mongoose.Types.ObjectId(id)) },
         },
       },
