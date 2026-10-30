@@ -59,10 +59,9 @@ describe('signup grant drip state on the self user schema', () => {
 });
 
 describe('verified unlock credits setting', () => {
-  it('can be cleared back to unset and defaults to the resolver fallback', () => {
+  it('declares the same default the signup grant falls back to', () => {
     const setting = settingsMap.verifiedUnlockCredits;
-    expect(setting.clearDeletesRow).toBe(true);
+    expect(setting.clearDeletesRow).toBeUndefined();
     expect(setting.defaultValue).toBe(VERIFIED_UNLOCK_CREDITS_DEFAULT);
-    expect(setting.schema.parse('')).toBe(VERIFIED_UNLOCK_CREDITS_DEFAULT);
   });
 });

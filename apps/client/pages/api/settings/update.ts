@@ -63,7 +63,7 @@ const handler = baseApi().put(
         await recordAdminSettingChange(req, { settingName: key, before: existing?.settingValue ?? null, after: null });
       });
       invalidateSettingsCache(key);
-      // null, not the declared default: the client renders that as the setting's unsetLabel, so an
+      // null, not the declared default: the client renders that as "per embedding space", so an
       // admin can tell a cleared setting apart from one pinned to the default's own number.
       return res.json({ settingName: key, settingValue: null });
     }

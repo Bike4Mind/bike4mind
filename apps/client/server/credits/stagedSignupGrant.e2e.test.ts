@@ -17,6 +17,7 @@ import {
 import { unlockSignupGrantFromActivity } from './activityUnlock';
 import { unlockSignupGrantFromOrgInvite } from './orgInviteUnlock';
 import { checkSignupGrantEligibility } from './signupGrantEligibility';
+import { createUniqueOAuthUser } from '../utils/auth/createOAuthUser';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -791,30 +792,71 @@ describe('staged signup ledger', () => {
 });
 
 describe('unset verified unlock credits', () => {
-  it('snapshots the same grant with the row deleted as with the default row stored', async () => {
+  const quietLogger = () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn(), log: vi.fn() });
+  const seed = async (withUnlockRow: boolean) => {
     await AdminSettings.create([
       { settingName: 'stagedSignupGrantEnabled', settingValue: 'true' },
       { settingName: 'signupGrantCredits', settingValue: '12' },
-      { settingName: 'verifiedUnlockCredits', settingValue: '0' },
+      ...(withUnlockRow ? [{ settingName: 'verifiedUnlockCredits', settingValue: '0' }] : []),
     ]);
-    const warn = vi.fn();
-    const stored = await newSignupGrant(adminSettingsRepository, undefined, { warn });
-    await AdminSettings.deleteOne({ settingName: 'verifiedUnlockCredits' }, { hardDelete: true });
-    const absent = await newSignupGrant(adminSettingsRepository, undefined, { warn });
+  };
+  const resetDb = async () => {
+    await User.collection.deleteMany({});
+    await AdminSettings.collection.deleteMany({});
+  };
+  const persistedGrant = async (id: string) => (await User.findById(id))?.toObject().signupGrant;
+
+  it('registers the same persisted grant with the row absent as with the default row stored', async () => {
+    const register = async (withUnlockRow: boolean) => {
+      await resetDb();
+      await seed(withUnlockRow);
+      const logger = quietLogger();
+      const user = await userService.registerUser(
+        {
+          email: 'user@example.test',
+          name: 'Synthetic User',
+          username: 'synthetic-user',
+          acceptedPolicyVersion: CURRENT_POLICY_VERSION,
+          ageAttestation: true,
+        } as Parameters<typeof userService.registerUser>[0],
+        {
+          db: {
+            users: userRepository,
+            adminSettings: adminSettingsRepository,
+            registrationInvites: { findByCode: async () => null, update: async () => undefined },
+          },
+          logger: logger as unknown as Parameters<typeof userService.registerUser>[1]['logger'],
+          skipInviteCheck: true,
+        }
+      );
+      return { grant: await persistedGrant(user.id), warn: logger.warn };
+    };
+
+    const stored = await register(true);
+    const absent = await register(false);
+    expect(stored.grant).toMatchObject({ stage: 'pending_email', signupCredits: 12, unlockCredits: 0 });
+    expect(absent.grant).toEqual(stored.grant);
+    expect(stored.warn).not.toHaveBeenCalled();
+    expect(absent.warn).toHaveBeenCalledOnce();
+  });
+
+  it('creates the same persisted OAuth grant with the row absent as with the default row stored', async () => {
+    const create = async (withUnlockRow: boolean) => {
+      await resetDb();
+      await seed(withUnlockRow);
+      const user = await createUniqueOAuthUser({
+        name: 'Synthetic User',
+        baseUsername: 'synthetic-user',
+        email: 'user@example.test',
+        oauthCredentials: { strategy: 'google', id: 'synthetic' },
+        pendingFreeCredits: true,
+      });
+      return persistedGrant(user.id);
+    };
+
+    const stored = await create(true);
+    const absent = await create(false);
+    expect(stored).toMatchObject({ stage: 'pending_email', signupCredits: 12, unlockCredits: 0 });
     expect(absent).toEqual(stored);
-    expect(warn).toHaveBeenCalledOnce();
-    const user = await User.create({
-      username: 'synthetic-user',
-      name: 'Synthetic User',
-      email: 'user@example.test',
-      emailVerified: true,
-      signupGrant: absent,
-    });
-    expect((await User.findById(user.id))?.toObject().signupGrant).toMatchObject({
-      stage: 'pending_email',
-      signupCredits: 12,
-      unlockCredits: 0,
-      creditsReleased: 0,
-    });
   });
 });

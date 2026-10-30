@@ -4098,8 +4098,6 @@ export const settingsMap = {
       'Maximum additional credits available after server-validated unlocks. Stronger evidence pays only the cumulative difference. Does not enable a verification flow.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
-    clearDeletesRow: true,
-    unsetLabel: `default, ${VERIFIED_UNLOCK_CREDITS_DEFAULT}`,
   }),
   signupGrantDailyBudget: makeNumberSetting({
     key: 'signupGrantDailyBudget',
