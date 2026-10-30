@@ -302,13 +302,25 @@ export async function apiRegisterViaOtc(
       `OTC registration failed: ${verifyResponse.status()} ${verifyResponse.statusText()} ${await verifyResponse.text()}`
     );
   }
+  // A registration answers { user, accessToken }; an email that already has an account logs in
+  // instead and answers a flat self-view, which must not pass for a fresh signup.
   const body = (await verifyResponse.json()) as { accessToken?: string; user?: { id?: string; _id?: string } };
   const refreshToken = refreshTokenFromSetCookie(verifyResponse.headers()['set-cookie']);
   const userId = body.user?.id || body.user?._id;
   if (!body.accessToken || !refreshToken || !userId) {
-    throw new Error(`OTC registration returned no session: keys=${Object.keys(body).join(',')}`);
+    throw new Error(
+      `OTC registration did not create an account (already registered?): keys=${Object.keys(body).join(',')}`
+    );
   }
   return { userId, accessToken: body.accessToken, refreshToken };
+}
+
+/**
+ * Origin header for a POST to a route behind csrfProtection with a session (not API key) bearer.
+ * The middleware rejects a session-authenticated write that names no same-site origin.
+ */
+export function sameOriginHeaders(): Record<string, string> {
+  return { Origin: new URL(process.env.API_URL || 'http://localhost:3000').origin };
 }
 
 export interface SignupGrantView {
