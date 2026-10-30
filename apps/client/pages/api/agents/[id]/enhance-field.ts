@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { agentRepository } from '@bike4mind/database';
 import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
@@ -25,6 +26,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
 >(
   withRequestCompletionQuota(async (req, res) => {
     await assertOutboundActionAllowed(req.user, req);
+    assertAiAccessAllowed(req.user);
     const { id } = req.query;
     const userId = req.user!.id;
     const { fieldName, currentValue, agentName } = req.body;

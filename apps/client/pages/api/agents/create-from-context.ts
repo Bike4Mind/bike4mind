@@ -32,6 +32,7 @@ import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import { v4 as uuidv4 } from 'uuid';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 
 interface CreateFromContextRequest {
@@ -390,6 +391,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
 >(
   withRequestCompletionQuota(async (req, res) => {
     await assertOutboundActionAllowed(req.user, req);
+    assertAiAccessAllowed(req.user);
     const { agentName, sessionId } = req.body;
     const authenticatedUserId = req.user!.id;
 

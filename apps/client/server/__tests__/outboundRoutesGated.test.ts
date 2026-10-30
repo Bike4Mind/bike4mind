@@ -53,8 +53,6 @@ describe('outbound routes gate untrusted and moderated accounts', () => {
   });
 
   it.each(INLINE_GATED)('%s calls assertOutboundActionAllowed', route => {
-    const src = source(route);
-    expect(src).toMatch(/\bawait assertOutboundActionAllowed\(req\.user, req\)/);
-    expect(src).not.toMatch(/\bassertAiAccessAllowed\(/);
+    expect(source(route)).toMatch(/\bawait assertOutboundActionAllowed\(req\.user, req\)/);
   });
 });
