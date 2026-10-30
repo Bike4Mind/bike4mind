@@ -12,7 +12,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { utcMidnight } from '@server/billing/freeTierDailyCapGate';
+import { isFreeTierCapUser, utcMidnight } from '@server/billing/freeTierDailyCapGate';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { zeroFilledDailySpend } from '@server/utils/adminCreditSummary';
@@ -49,6 +49,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
       getSettingsMap({ adminSettings: adminSettingsRepository }),
     ]);
 
+    const dailyCapUsd = getSettingsValue('freeTierDailySystemCostCapUsd', settings) ?? 0;
+    // Mirrors the gate's exemptions so the card never flags a user the cap cannot refuse.
+    // Org-billed turns are exempt per turn too, which a per-user summary cannot show.
+    const capApplies =
+      dailyCapUsd > 0 && getSettingsValue('enforceCredits', settings) === true && (await isFreeTierCapUser(user));
+
     return respond(res, adminCreditSummarySchema, {
       balance: user.currentCredits,
       spent: spend.spent,
@@ -64,7 +70,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
         todayUsd: systemToday,
         last7dUsd: system7d,
         last30dUsd: system30d,
-        dailyCapUsd: getSettingsValue('freeTierDailySystemCostCapUsd', settings) ?? 0,
+        dailyCapUsd,
+        capApplies,
       },
     });
   })

@@ -49,7 +49,7 @@ const SUMMARY: AdminCreditSummary = {
     { key: 'web', last7d: 600, last30d: 2600, last90d: 3000 },
     { key: null, last7d: 100, last30d: 400, last90d: 600 },
   ],
-  systemCost: { todayUsd: 0.0425, last7dUsd: 0.5, last30dUsd: 1.25, dailyCapUsd: 0.1 },
+  systemCost: { todayUsd: 0.0425, last7dUsd: 0.5, last30dUsd: 1.25, dailyCapUsd: 0.1, capApplies: true },
 };
 
 const ROWS: AdminLedgerRow[] = [
@@ -147,6 +147,23 @@ describe('CreditsTab', () => {
     renderTab();
     expect(screen.getByTestId('user-credits-system-cost-cap')).toHaveTextContent('Off');
     expect(screen.getByTestId('user-credits-system-cost')).not.toHaveTextContent('Daily cap reached');
+  });
+
+  it('marks a user the cap cannot refuse as exempt instead of capped', () => {
+    mocks.summary.mockReturnValue(
+      summaryResult({ data: { ...SUMMARY, systemCost: { ...SUMMARY.systemCost, todayUsd: 5, capApplies: false } } })
+    );
+    renderTab();
+    expect(screen.getByTestId('user-credits-system-cost')).toHaveTextContent('Exempt from cap');
+    expect(screen.getByTestId('user-credits-system-cost')).not.toHaveTextContent('Daily cap reached');
+  });
+
+  it('keeps a sub-cent cap readable instead of rounding it to $0.00', () => {
+    mocks.summary.mockReturnValue(
+      summaryResult({ data: { ...SUMMARY, systemCost: { ...SUMMARY.systemCost, dailyCapUsd: 0.000001 } } })
+    );
+    renderTab();
+    expect(screen.getByTestId('user-credits-system-cost-cap')).toHaveTextContent('$0.000001');
   });
 
   it('shows dashes for system cost while the summary is unavailable', () => {

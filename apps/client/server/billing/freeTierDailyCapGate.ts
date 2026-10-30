@@ -37,6 +37,23 @@ export function isFreeTierDailyCapError(error: unknown): error is TooManyRequest
 }
 
 /**
+ * Whether the free-tier daily caps can refuse this user's personally billed turns: not an admin
+ * and on the free rate tier. The admin credit summary uses it so its cap chip matches this gate.
+ */
+export async function isFreeTierCapUser(
+  user: IUserDocument,
+  req?: ActiveSubscriptionsRequest,
+  options?: { strict?: boolean }
+): Promise<boolean> {
+  // This is a billing exemption for the owner, independent of the key's permission scopes.
+  if (persistedIsAdmin(user)) return false;
+  // Dynamic: userRateTier pulls in the Subscription model at module init, which crashes route tests
+  // that mock @bike4mind/database but never reach the cap check.
+  const { resolveUserRateTier } = await import('@server/utils/userRateTier');
+  return (await resolveUserRateTier(user, req, options)) === 'free';
+}
+
+/**
  * Throw a 429 `daily_free_limit_reached` if the user is on the free tier and
  * has already spent their daily credit allowance or their daily system cost
  * allowance (provider USD of system-sourced work, which often bills 0 credits).
@@ -75,16 +92,9 @@ export async function checkFreeTierDailySpendCap({
     // Reuse a resolved user; ID-only callers defer their lookup until enforcement is enabled.
     const user = 'user' in input && input.user ? input.user : await input.userRepository.findById(input.userId);
     if (!user) return;
-    // This is a billing exemption for the owner, independent of the key's permission scopes.
-    if (persistedIsAdmin(user)) return;
-
-    // Dynamic: userRateTier pulls in the Subscription model at module init, which crashes route tests
-    // that mock @bike4mind/database but never reach the cap check.
-    const { resolveUserRateTier } = await import('@server/utils/userRateTier');
     // A degraded org-seat lookup cannot establish that the caller is free. Let the error
     // reach the fail-open handler instead of denying a paid seat's personal turn.
-    const tier = await resolveUserRateTier(user, req, { strict: true });
-    if (tier !== 'free') return;
+    if (!(await isFreeTierCapUser(user, req, { strict: true }))) return;
 
     const now = new Date();
     const startOfDay = utcMidnight(now);

@@ -63,6 +63,13 @@ const PROVIDER_USD_FORMAT = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 });
+// The cap is an admin-typed value, so keep enough digits that a sub-cent cap never reads as $0.00.
+const PROVIDER_CAP_FORMAT = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 6,
+});
 
 /** One line of monospace text, cut with an ellipsis; the full value stays on hover. */
 const CodeText: React.FC<{ text: string; title?: string }> = ({ text, title = text }) => (
@@ -209,13 +216,14 @@ const SummaryStrip: React.FC<{ summary: AdminCreditSummary | undefined; balance:
 /** Provider cost of system-sourced work (file indexing, search, tool and session operations), charged or not. */
 const SystemCostCard: React.FC<{ summary: AdminCreditSummary | undefined }> = ({ summary }) => {
   const cost = summary?.systemCost;
-  const capReached = cost !== undefined && cost.dailyCapUsd > 0 && cost.todayUsd >= cost.dailyCapUsd;
+  const capOn = cost !== undefined && cost.dailyCapUsd > 0;
+  const chip = !capOn ? undefined : !cost.capApplies ? (
+    <StatusChip tone="neutral" label="Exempt from cap" />
+  ) : cost.todayUsd >= cost.dailyCapUsd ? (
+    <StatusChip tone="bad" label="Daily cap reached" />
+  ) : undefined;
   return (
-    <SectionCard
-      title="System-sourced cost"
-      data-testid="user-credits-system-cost"
-      action={capReached ? <StatusChip tone="bad" label="Daily cap reached" /> : undefined}
-    >
+    <SectionCard title="System-sourced cost" data-testid="user-credits-system-cost" action={chip}>
       <Fact label="Today (UTC)" data-testid="user-credits-system-cost-today">
         {cost && PROVIDER_USD_FORMAT.format(cost.todayUsd)}
       </Fact>
@@ -226,7 +234,7 @@ const SystemCostCard: React.FC<{ summary: AdminCreditSummary | undefined }> = ({
         {cost && PROVIDER_USD_FORMAT.format(cost.last30dUsd)}
       </Fact>
       <Fact label="Free-tier daily cap" data-testid="user-credits-system-cost-cap">
-        {cost && (cost.dailyCapUsd > 0 ? PROVIDER_USD_FORMAT.format(cost.dailyCapUsd) : 'Off')}
+        {cost && (cost.dailyCapUsd > 0 ? PROVIDER_CAP_FORMAT.format(cost.dailyCapUsd) : 'Off')}
       </Fact>
     </SectionCard>
   );

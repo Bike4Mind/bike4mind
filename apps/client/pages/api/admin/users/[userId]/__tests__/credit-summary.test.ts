@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   findUser: vi.fn(),
   systemCost: vi.fn(),
   settingValue: vi.fn(),
+  rateTier: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -38,6 +39,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => ({}),
   getSettingsValue: h.settingValue,
 }));
+vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateTier: h.rateTier }));
 
 import handler from '../credit-summary';
 
@@ -73,7 +75,10 @@ beforeEach(() => {
     if (since.toISOString() === '2026-06-08T12:00:00.000Z') return 0.5;
     return 1.25;
   });
-  h.settingValue.mockReturnValue(0.1);
+  h.settingValue.mockImplementation((key: string) =>
+    key === 'enforceCredits' ? true : key === 'freeTierDailySystemCostCapUsd' ? 0.1 : undefined
+  );
+  h.rateTier.mockResolvedValue('free');
 });
 
 afterEach(() => {
@@ -145,6 +150,7 @@ describe('GET /api/admin/users/[userId]/credit-summary', () => {
       last7dUsd: 0.5,
       last30dUsd: 1.25,
       dailyCapUsd: 0.1,
+      capApplies: true,
     });
     expect(h.systemCost).toHaveBeenCalledWith('u1', new Date('2026-05-16T12:00:00Z'));
     expect(h.settingValue).toHaveBeenCalledWith('freeTierDailySystemCostCapUsd', {});
@@ -155,6 +161,22 @@ describe('GET /api/admin/users/[userId]/credit-summary', () => {
     const { res, promise } = run();
     await promise;
 
-    expect(res._getJSONData().systemCost.dailyCapUsd).toBe(0);
+    expect(res._getJSONData().systemCost).toMatchObject({ dailyCapUsd: 0, capApplies: false });
+  });
+
+  it.each([
+    ['a paid user', () => h.rateTier.mockResolvedValue('pro')],
+    ['an admin', () => h.findUser.mockResolvedValue({ id: 'u1', currentCredits: 0, isAdmin: true })],
+    ['a developer-tagged user', () => h.rateTier.mockResolvedValue('bypass')],
+    [
+      'any user while credits are not enforced',
+      () => h.settingValue.mockImplementation((key: string) => (key === 'freeTierDailySystemCostCapUsd' ? 0.1 : false)),
+    ],
+  ])('reports the daily cap as not applying to %s, as the gate exempts them', async (_label, arrange) => {
+    arrange();
+    const { res, promise } = run();
+    await promise;
+
+    expect(res._getJSONData().systemCost).toMatchObject({ dailyCapUsd: 0.1, capApplies: false });
   });
 });
