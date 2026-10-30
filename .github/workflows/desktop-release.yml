@@ -138,8 +138,14 @@ jobs:
         run: pnpm turbo:core:build
       - name: Check desktop types
         run: pnpm --filter @bike4mind/desktop typecheck
+      # The desktop unit suite and the local tool layer it covers assume a POSIX shell and
+      # paths, so Windows runs only the packaging script tests until that layer is ported.
       - name: Test desktop
+        if: matrix.platform != 'win'
         run: pnpm --filter @bike4mind/desktop test
+      - name: Test desktop packaging script
+        if: matrix.platform == 'win'
+        run: pnpm --filter @bike4mind/desktop exec node --test scripts/test_package_local.cjs
       - name: Check updater transport with temporary profiles
         if: matrix.platform == 'linux'
         run: node apps/desktop/scripts/smoke-updater.cjs

@@ -19,7 +19,9 @@ No Node.js, pnpm, or source checkout is required.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
 3. On Windows x64, download `setup.exe` and run it. The installer is not code signed yet,
-   so SmartScreen shows a warning on first run. In-app updates work on Windows.
+   so SmartScreen shows a warning on first run. In-app updates work on Windows. The local
+   tool layer (shell commands, file access, sandboxing) is built around a POSIX shell and
+   is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
 builds in the source repository do not gain an updater retroactively: install the first signed
@@ -214,7 +216,8 @@ read access to repository contents; the publication job runs only for pushes or 
 dispatches on `main`. PR runs are isolated from the main release concurrency group.
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
-typechecks and tests on macOS, Linux and Windows, then packages Apple Silicon, Linux x64 and Windows x64.
+typechecks on macOS, Linux and Windows, runs the desktop unit tests on macOS and Linux (the
+suite assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows x64.
 The three platform jobs run in parallel; Turbo also builds independent shared packages
 in parallel while respecting dependency order. Intel macOS release builds are temporarily
 paused; local x64 packaging remains available. Publication waits for all build jobs and
