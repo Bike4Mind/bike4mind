@@ -21,6 +21,8 @@ import {
 } from './analyticsRollup';
 
 const QUERY_DEADLINE_MS = 30_000;
+// Per query: the live slice runs several stages in sequence, all inside the 60s API Lambda (infra/web.ts).
+const LIVE_QUERY_DEADLINE_MS = 15_000;
 const PRESET_DAYS = { '7d': 7, '28d': 28, '90d': 90, '12m': 365 } as const;
 // Internal traffic, never a user-facing surface (spec 4.3).
 const EXCLUDED_SOURCES = new Set(['system']);
@@ -260,14 +262,14 @@ export function buildOverview({
 async function distinctUsersBefore(today: string, windowDays: number): Promise<string[]> {
   return AnalyticsUserDay.distinct('userId', {
     day: { $gte: shiftDay(today, -(windowDays - 1)), $lt: today },
-  }).maxTimeMS(QUERY_DEADLINE_MS);
+  }).maxTimeMS(LIVE_QUERY_DEADLINE_MS);
 }
 
 /** Today so far, with collectDayUsage and classifyCohort so it counts exactly what the nightly rollup will. */
 export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
   const [usage, cohort, weekIds, monthIds] = await Promise.all([
-    collectDayUsage(today),
-    classifyCohort(today, { now }),
+    collectDayUsage(today, { maxTimeMS: LIVE_QUERY_DEADLINE_MS }),
+    classifyCohort(today, { now, maxTimeMS: LIVE_QUERY_DEADLINE_MS }),
     distinctUsersBefore(today, WAU_WINDOW_DAYS),
     distinctUsersBefore(today, MAU_WINDOW_DAYS),
   ]);
@@ -292,7 +294,13 @@ export async function getAnalyticsOverview(
       .select('day dau wau mau signups requestsBySource computedAt')
       .maxTimeMS(QUERY_DEADLINE_MS)
       .lean<OverviewDailyRow[]>(),
-    window.partialDay ? loadLiveDay(window.partialDay, now) : Promise.resolve(null),
+    // A failed live slice leaves today as a gap, like a missing rollup day, instead of failing the page.
+    window.partialDay
+      ? loadLiveDay(window.partialDay, now).catch(error => {
+          console.warn('analytics overview: live slice for today failed', error);
+          return null;
+        })
+      : Promise.resolve(null),
   ]);
   return buildOverview({ window, signupsMode: query.signups, rows, live, now });
 }
