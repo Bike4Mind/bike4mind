@@ -112,4 +112,15 @@ describe('SubscriberForm challenge gate', () => {
     await screen.findByText('Verification failed. Please refresh and try again.');
     expect(screen.queryByText(/thanks for being interested/i)).toBeNull();
   });
+
+  it('shows the rate-limit message when the API answers 429', async () => {
+    createSubscriberMock.mockRejectedValue(
+      makeAxiosError(429, { error: 'Rate limit exceeded. Try again in 60 seconds.' })
+    );
+    render(<SubscriberForm />, { wrapper: Wrapper });
+    fillAndSubmit();
+
+    await screen.findByText('Rate limit exceeded. Try again in 60 seconds.');
+    expect(screen.queryByText(/thanks for being interested/i)).toBeNull();
+  });
 });
