@@ -4,7 +4,7 @@ import type { SNSEvent } from 'aws-lambda';
 const resource = vi.hoisted(() => ({
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.slack.example/webhook' },
   SLACK_ALARMS_WEBHOOK_URL: undefined as { value: string } | undefined,
-  App: { stage: 'dev' },
+  App: { stage: 'production' },
 }));
 
 vi.mock('sst', () => ({ Resource: resource }));
@@ -36,7 +36,7 @@ const makeEvent = (message: string): SNSEvent => ({
 
 const alarmPayload = (state: string) =>
   JSON.stringify({
-    AlarmName: 'bike4mind-dev-test-alarm',
+    AlarmName: 'bike4mind-production-test-alarm',
     AlarmDescription: 'Test alarm description',
     NewStateValue: state,
     NewStateReason: 'Threshold crossed',
@@ -60,9 +60,9 @@ describe('dlqAlarmToSlack handler', () => {
     expect(init.method).toBe('POST');
     const body = JSON.parse(init.body as string);
     expect(body.text).toContain('Test alarm');
-    expect(JSON.stringify(body.blocks)).toContain(':small_blue_diamond: dev alarm: Test alarm');
+    expect(JSON.stringify(body.blocks)).toContain(':warning: Production warning: Test alarm');
     expect(JSON.stringify(body.attachments)).toContain('Test alarm description');
-    expect(JSON.stringify(body.attachments)).toContain('bike4mind-dev-test-alarm');
+    expect(JSON.stringify(body.attachments)).toContain('bike4mind-production-test-alarm');
   });
 
   it('posts a resolved message when the alarm returns to OK', async () => {

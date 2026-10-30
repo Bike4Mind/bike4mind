@@ -218,7 +218,8 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // SSE-only transport, via the same seam interactive bootstrap uses so the two
     // can't drift. Headless never opens the feature-event socket: no feature
     // modules are registered in a `-p` run.
-    const sse = await createSseBackend({ apiClient, model: config.defaultModel });
+    // `session` is declared below; the getter only runs once a completion is sent.
+    const sse = await createSseBackend({ apiClient, model: config.defaultModel, getSessionId: () => session.id });
     const attached = await attachOllama(sse.llm, config, {}, createHeadlessLlmBackendDeps(options.verbose));
     const { llm, models } = attached;
     for (const warning of attached.warnings) process.stderr.write(`${sanitizeTerminalText(warning)}\n`);

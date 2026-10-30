@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ZodError } from 'zod';
 
 /**
  * GET /api/[type]/[id]/invites delegates listing to sharingService.listInvitesForDocument
@@ -13,6 +14,8 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
   deleteHandler: null as null | ((req: any, res: any) => unknown),
+  postMiddleware: [] as unknown[],
+  accounts: [] as Array<{ email: string }>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -22,8 +25,9 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    post: (fn: any) => {
-      mockRefs.postHandler = fn;
+    post: (...fns: any[]) => {
+      mockRefs.postMiddleware = fns.slice(0, -1);
+      mockRefs.postHandler = fns[fns.length - 1];
       return chain;
     },
     delete: (fn: any) => {
@@ -42,8 +46,21 @@ vi.mock('@bike4mind/services', () => ({
   sharingService: { listInvitesForDocument, createInvite, cancelInvite },
 }));
 
+const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
+const decrementCounter = vi.hoisted(() => vi.fn());
+const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
+
+const sendInviteNotificationEmails = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
+  getInviteTypeName: () => 'file',
+  sendInviteNotificationEmails,
+}));
+
 vi.mock('@bike4mind/database', () => ({
-  FabFile: {},
+  cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
+  User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
+  FabFile: { findById: () => Promise.resolve({ fileName: 'report.pdf' }) },
   Group: { findById: groupFindById },
   Session: {},
   Project: {},
@@ -63,6 +80,9 @@ vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import '@pages/api/[type]/[id]/invites/index';
+
+const isZodErrorOn = (field: string) => (error: unknown) =>
+  error instanceof ZodError && error.issues.some(issue => issue.path[0] === field);
 
 describe('GET /api/[type]/[id]/invites', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -139,6 +159,152 @@ describe('POST /api/[type]/[id]/invites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
+    mockRefs.accounts = [];
+    tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+  });
+
+  // Bulk share links send one request per item and mail nobody, so a request limit here would fail
+  // them partway; the mail is bounded per recipient instead.
+  it('applies no per-request limit and charges nothing for a share link', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockRefs.postMiddleware).toEqual([]);
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(createInvite).toHaveBeenCalledOnce();
+  });
+
+  // The project route enforces API-key scopes this route does not; only the raw value can reach
+  // here, since the static projects route shadows the alias.
+  it.each(['Project', 'projects'])('refuses to create a project invite via the %s segment', async pathType => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: pathType, id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/project invites/);
+    expect(createInvite).not.toHaveBeenCalled();
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+  });
+
+  it('refuses more recipients than one request may name', async () => {
+    const recipients = Array.from({ length: 26 }, (_, i) => `507f1f77bcf86cd7994390${String(i).padStart(2, '0')}`);
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toSatisfy(isZodErrorOn('recipients'));
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('refuses an over-long message, which would be mailed to every recipient', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'], description: 'x'.repeat(1001) },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toSatisfy(isZodErrorOn('description'));
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  // Only project invites can name an address with no account, so the typed-address budget is
+  // the project route's alone; charging it here would fail bulk shares to account holders.
+  it('charges the recipients against the shared budget but not the typed-address budget', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com', 'b@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledOnce();
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:invite-recipients',
+      2,
+      200,
+      60 * 60 * 1000
+    );
+    expect(createInvite).toHaveBeenCalledOnce();
+  });
+
+  it('refuses the invite once the recipient budget is spent', async () => {
+    tryAddWithinLimitFixedWindow.mockResolvedValueOnce({ success: false, expiresAt: new Date(Date.now() + 60_000) });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many invitations/);
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('gives the budget back when the invite is not created', async () => {
+    createInvite.mockRejectedValueOnce(new Error('Could not find a user for: a@example.com'));
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com', 'b@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Could not find a user/);
+    expect(decrementCounter).toHaveBeenCalledTimes(2);
+    expect(decrementCounter).toHaveBeenCalledWith('rate-limit:u1:invite-recipients');
+  });
+
+  // No type this route accepts puts an address with no account in `pending` today; this pins the
+  // shared mailer's fallback should the sharing service ever start to.
+  it('emails an address with no account the fixed template only, and an account holder the message', async () => {
+    createInvite.mockResolvedValue({
+      id: 'i1',
+      token: TOKEN,
+      recipients: { pending: ['member@example.com', 'stranger@example.com'] },
+    });
+    mockRefs.accounts = [{ email: 'Member@example.com' }];
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['member@example.com', 'stranger@example.com'], description: 'hi' },
+    });
+    (req as any).user = { id: 'u1', name: 'Ann', email: 'ann@example.com' };
+
+    await mockRefs.postHandler!(req, res);
+    await vi.waitFor(() => expect(sendInviteNotificationEmails).toHaveBeenCalledTimes(2));
+
+    expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
+      ['member@example.com'],
+      'Ann',
+      'ann@example.com',
+      'report.pdf',
+      'file',
+      expect.stringContaining(TOKEN),
+      'hi'
+    );
+    expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
+      ['stranger@example.com'],
+      'Ann',
+      'ann@example.com',
+      'report.pdf',
+      'file',
+      expect.stringContaining(TOKEN)
+    );
   });
 
   // The `link` is the one place the token belongs, and it is what the client reads. Echoing the bare

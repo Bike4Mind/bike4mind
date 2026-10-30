@@ -177,3 +177,30 @@ describe.each([
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SidenavItem selected frame', () => {
+  // jsdom never paints ::before, so read the emitted CSS: a rule giving the row's ::before content is the bar.
+  const barRules = (row: Element) =>
+    [...document.styleSheets]
+      .flatMap(sheet => [...sheet.cssRules])
+      .map(rule => rule.cssText)
+      .filter(text => [...row.classList].some(c => text.includes(`.${c}::before`)) && text.includes('content'));
+
+  it('draws the selected bar on a sidebar row', () => {
+    const { container } = render(
+      <TestWrapper>
+        <SidenavItem session={session} selected />
+      </TestWrapper>
+    );
+    expect(barRules(container.firstElementChild!)).not.toHaveLength(0);
+  });
+
+  it('draws no selected bar on the header row', () => {
+    const { container } = render(
+      <TestWrapper>
+        <SidenavItem session={session} location="header" selected />
+      </TestWrapper>
+    );
+    expect(barRules(container.firstElementChild!)).toHaveLength(0);
+  });
+});

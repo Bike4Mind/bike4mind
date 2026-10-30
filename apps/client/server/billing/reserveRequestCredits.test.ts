@@ -45,6 +45,11 @@ vi.mock('@bike4mind/database', () => ({
   pendingCreditHoldRepository: { record: recordHold, claim: claimHold, markSettled, findSettlement },
   usageEventRepository: {},
   withTransaction,
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 const checkDailyCap = vi.hoisted(() => vi.fn());
 vi.mock('./freeTierDailyCapGate', () => ({ checkFreeTierDailySpendCap: checkDailyCap }));

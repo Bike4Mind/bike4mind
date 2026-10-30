@@ -9,12 +9,14 @@ import {
   organizationRepository,
   userRepository,
 } from '@bike4mind/database';
+import { lakeOwnershipOfferResponseSchema } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeOwnershipOfferDb } from '@server/dataLakes/lakeOwnershipOfferDb';
 import { sendLakeOwnershipOfferEmail } from '@server/utils/dataLakeOwnershipOfferNotifier';
+import { respond } from '@server/utils/respond';
 
 const TransferOwnershipInput = z.object({
   newOwnerUserId: z.string().min(1),
@@ -107,7 +109,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
       { logger: req.logger }
     );
 
-    return res.json({ offer });
+    return respond(res, lakeOwnershipOfferResponseSchema, { offer });
   })
   .delete(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     assertDataLakeShareScope(req);
@@ -125,7 +127,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
       return dataLakeService.cancelLakeOwnershipOffer(actor, lake, grants, { db: lakeOwnershipOfferDb });
     });
 
-    return res.json({ offer });
+    return respond(res, lakeOwnershipOfferResponseSchema, { offer });
   });
 
 export const config = {

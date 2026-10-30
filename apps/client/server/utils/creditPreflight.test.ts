@@ -20,6 +20,11 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
   organizationRepository: { findById: (...a: unknown[]) => mocks.orgFindById(...a) },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 // Real cap helper: the org branch's decision is the one under test.
 vi.mock('@bike4mind/services', async () => {

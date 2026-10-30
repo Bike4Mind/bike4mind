@@ -15,6 +15,7 @@ import { apiKeyService, mementoService } from '@bike4mind/services';
 import { MementoEvaluationService } from '@bike4mind/services/llm';
 import { isMementosV2Enabled, writeFactToLedger } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/mementoEmbedding';
+import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 
 const { findMostSimilarMemento } = mementoService;
 
@@ -75,6 +76,16 @@ export const handler = withEventContext(async (event, logger) => {
     prompt,
     endUserId: userId,
     factStyle: writeV2,
+    onUsage: ({ modelInfo, completionInfo, startTime }) =>
+      recordSessionOperationalUsage({
+        userId,
+        sessionId,
+        modelId: model,
+        modelInfo,
+        completionInfo,
+        startTime,
+        logger,
+      }),
   });
 
   if (!evaluations || evaluations.length === 0) {

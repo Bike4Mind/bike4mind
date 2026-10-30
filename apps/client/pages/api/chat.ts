@@ -133,7 +133,7 @@ async function handleChat(
   // An explicit request model wins. Otherwise fall back to the admin default, which on a
   // local-only self-host box may itself need a fallback (see resolveDefaultChatModel), so
   // only probe when no explicit model was sent.
-  let model = simplifiedRequest.model;
+  let model = simplifiedRequest.model?.trim();
   if (!model) {
     const resolved = await resolveDefaultChatModel({
       configuredModel: getSettingsValue('DefaultAPIModel', settings),

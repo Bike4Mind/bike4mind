@@ -101,7 +101,13 @@ describe('applySignupDomainGrant', () => {
       subscriptionGranted: false,
     });
     expect(mockAddCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'user-1', credits: 1000, transactionId: 'domain-grant-credits:user-1' }),
+      expect.objectContaining({
+        ownerId: 'user-1',
+        credits: 1000,
+        transactionId: 'domain-grant-credits:user-1',
+        reason: 'domain-grant signup credits',
+        description: 'Signup credits from an email-domain grant',
+      }),
       expect.objectContaining({ db: expect.objectContaining({ creditLots: creditLotRepository }) })
     );
     expect(mockApplyPartnerRuleMembership).toHaveBeenCalledWith(

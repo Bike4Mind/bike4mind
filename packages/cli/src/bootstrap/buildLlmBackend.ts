@@ -26,6 +26,8 @@ export interface BuildLlmBackendInput {
   ollamaHost?: string;
   /** Deadline for listing a saved Ollama host's models (ms); defaults to `SAVED_OLLAMA_LISTING_TIMEOUT_MS`. */
   ollamaListingTimeoutMs?: number;
+  /** The live session id, sent with each completion so the server ledger can attribute it. */
+  getSessionId?: () => string | undefined;
 }
 
 export const SAVED_OLLAMA_LISTING_TIMEOUT_MS = 5_000;
@@ -274,10 +276,10 @@ export async function buildLlmBackend(
   input: BuildLlmBackendInput,
   deps: BuildLlmBackendDeps = defaultLlmBackendDeps
 ): Promise<BuildLlmBackendResult> {
-  const { config, apiClient, startupLog, tokenGetter } = input;
+  const { config, apiClient, startupLog, tokenGetter, getSessionId } = input;
 
   const sse = await createSseBackend(
-    { apiClient, model: config.defaultModel },
+    { apiClient, model: config.defaultModel, getSessionId },
     { createServerBackend: deps.createServerBackend, clearWebSocketToolExecutor: deps.clearWebSocketToolExecutor }
   );
   const wsManager = await connectFeatureEventSocket(config, sse.serverConfig.websocketUrl, deps, {

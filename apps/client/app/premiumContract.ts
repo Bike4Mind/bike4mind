@@ -124,6 +124,13 @@ export interface PremiumNavDescriptor {
    * same visibility rule. Omitted -> the "More" flyout only. Use for a product's main launch point.
    */
   sidebar?: boolean;
+  /**
+   * A hook naming a short tag for the item's sidebar row (a few words at most: the tag never shrinks,
+   * so a long one squeezes the row's label), or null for none. SidenavNav draws it in the Gears row's
+   * Start here style and calls it once per render of the row, so it must follow the rules of hooks.
+   * Only the sidebar row shows it, not the "More" flyout.
+   */
+  useSidebarTag?: () => string | null;
 }
 
 /**
