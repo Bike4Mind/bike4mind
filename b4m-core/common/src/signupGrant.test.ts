@@ -18,6 +18,19 @@ describe('signup grant configuration', () => {
     expect(await newSignupGrant(settings(offEnv), 60)).toMatchObject({ signupCredits: 60, unlockCredits: 0 });
   });
 
+  it('pays an invite worth more than the initial credits whole under a stored drip cap of 0', async () => {
+    const offEnv = { signupGrantInitialCredits: '75', signupGrantDailyCredits: '0', signupGrantDripCap: '0' };
+    expect(await newSignupGrant(settings(offEnv), 200)).toMatchObject({ signupCredits: 200, unlockCredits: 0 });
+  });
+
+  it.each([
+    ['a stored drip cap', { signupGrantInitialCredits: '75', signupGrantDripCap: '9000' }],
+    ['a legacy unlock key of 0', { signupGrantCredits: '75', verifiedUnlockCredits: '0' }],
+    ['no cap key', { signupGrantCredits: '75' }],
+  ])('still splits an invite into tranche plus locked remainder under %s', async (_label, values) => {
+    expect(await newSignupGrant(settings(values), 200)).toMatchObject({ signupCredits: 75, unlockCredits: 125 });
+  });
+
   it.each(['0', '75', '-1', 'invalid'])(
     'preserves a restricted legacy setting %s and falls back to the default drip cap',
     async value => {

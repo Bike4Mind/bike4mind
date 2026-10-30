@@ -156,20 +156,26 @@ export async function resolveSignupGrantSettings(adminSettings: Pick<IAdminSetti
 
 /**
  * Every signup enrolls a staged grant. A drip cap of 0 (seeded where staging used to be off) locks nothing,
- * so the grant pays the same initial credits the flat path did.
+ * so the grant pays the same credits the flat path did.
  * `totalCredits` fixes the whole entitlement (tranche first, remainder locked) instead of the signup settings.
  */
 export async function newSignupGrant(
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>,
   totalCredits?: number
 ) {
-  const config = await resolveSignupGrantSettings(adminSettings);
+  const schedule = await resolveSignupGrantSchedule(adminSettings);
+  // Only a stored cap of 0 pays an invite whole: a legacy unlock key of 0 never governed the invite split.
+  const locksNothing = schedule.dripCapSource === 'setting' && schedule.dripCap === 0;
   const signupCredits =
-    totalCredits === undefined ? config.signupCredits : Math.min(config.signupCredits, totalCredits);
+    totalCredits === undefined
+      ? schedule.initialCredits
+      : locksNothing
+        ? totalCredits
+        : Math.min(schedule.initialCredits, totalCredits);
   return {
     stage: 'pending_email',
     signupCredits,
-    unlockCredits: totalCredits === undefined ? config.unlockCredits : totalCredits - signupCredits,
+    unlockCredits: totalCredits === undefined ? schedule.dripCap : totalCredits - signupCredits,
     creditsReleased: 0,
     nextCondition: 'email_verification',
   } satisfies SignupGrant;

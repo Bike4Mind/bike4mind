@@ -682,6 +682,38 @@ describe('registerUser', () => {
         expect(grant.signupCredits + grant.unlockCredits).toBe(10);
         expect(created().pendingCreditGrant).toBeNull();
       });
+
+      it('pays a referral invite above the initial credits whole where the migration seeded drip cap 0', async () => {
+        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+          const values: Record<string, string> = {
+            stagedSignupGrantEnabled: 'false',
+            signupGrantInitialCredits: '4',
+            signupGrantDailyCredits: '0',
+            signupGrantDripCap: '0',
+            ReferralCreditsAmount: '10',
+          };
+          return name in values ? { settingValue: values[name] } : readSetting(name);
+        });
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 10, unlockCredits: 0, creditsReleased: 0 });
+      });
+
+      it('keeps the referral split under a stored drip cap above 0', async () => {
+        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+          const values: Record<string, string> = {
+            signupGrantInitialCredits: '4',
+            signupGrantDripCap: '9000',
+            ReferralCreditsAmount: '10',
+          };
+          return name in values ? { settingValue: values[name] } : readSetting(name);
+        });
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4, unlockCredits: 6, creditsReleased: 0 });
+      });
     });
 
     it('allows registration when invite check is skipped (OTC \u2014 email already proven)', async () => {
