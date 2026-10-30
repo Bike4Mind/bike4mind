@@ -249,31 +249,21 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
     expect(invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY)).toHaveLength(1);
   });
 
-  it('handles a refusal again after enforcement is turned off and back on without a reload', async () => {
-    const { queryClient, rerender } = renderWrapper();
-    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const adminSettingsRefetches = () =>
-      invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY).length;
-    const rerenderWrapper = () =>
-      rerender(
-        <CssVarsProvider theme={appTheme}>
-          <QueryClientProvider client={queryClient}>
-            <MFAEnforcementWrapper>
-              <div data-testid="app-content" />
-            </MFAEnforcementWrapper>
-          </QueryClientProvider>
-        </CssVarsProvider>
-      );
-
-    const onRejected = await registeredRefusalHandler();
-    await onRejected(enrollmentRefusal()).catch(() => undefined);
-    expect(adminSettingsRefetches()).toBe(1);
-
+  it('handles a refusal again once the refetch settles, even if it still reads enforcement off', async () => {
+    // The refusing server instance can be ahead of the one answering the settings refetch.
+    adminSettings.enforceMFA = 'false';
     try {
-      adminSettings.enforceMFA = 'false';
-      rerenderWrapper();
-      adminSettings.enforceMFA = 'true';
-      rerenderWrapper();
+      const { queryClient } = renderWrapper();
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      const adminSettingsRefetches = () =>
+        invalidate.mock.calls.filter(([arg]) => arg?.queryKey === ADMIN_SETTINGS_QUERY_KEY).length;
+
+      const onRejected = await registeredRefusalHandler();
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+      expect(adminSettingsRefetches()).toBe(1);
+
+      await Promise.allSettled(invalidate.mock.results.map(r => r.value));
+      await new Promise(resolve => setTimeout(resolve, 0));
 
       await onRejected(enrollmentRefusal()).catch(() => undefined);
       expect(adminSettingsRefetches()).toBe(2);

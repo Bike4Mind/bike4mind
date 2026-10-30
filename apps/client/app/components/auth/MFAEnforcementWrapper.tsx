@@ -85,26 +85,26 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   }, [setupMFAMutate, mfaStatusQuery.refetch]);
 
   // The server refuses a session that owes enrollment as soon as its own settings cache sees
-  // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on the
-  // first refusal so the enrollment flow renders instead of an app whose every call fails. Only
-  // the first: refetching on each of a burst of refusals re-ran the settings load once per 403.
-  const refusalHandledRef = useRef(false);
+  // enforceMFA, which can be minutes before this tab's settings query refetches. Refetch on a
+  // refusal so the enrollment flow renders instead of an app whose every call fails. One refetch
+  // at a time: a burst of refusals would otherwise re-run the settings load once per 403. Re-arm
+  // when it settles, since a failed or stale refetch must not leave later refusals ignored.
+  const refusalRefetchInFlightRef = useRef(false);
   useEffect(
     () =>
       registerMfaEnrollmentInterceptor(api, () => {
-        if (refusalHandledRef.current) return;
-        refusalHandledRef.current = true;
+        if (refusalRefetchInFlightRef.current) return;
+        refusalRefetchInFlightRef.current = true;
         setEnrollmentRefused(true);
-        void queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY });
-        void queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] });
+        void Promise.allSettled([
+          queryClient.invalidateQueries({ queryKey: ADMIN_SETTINGS_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: ['mfa', 'status'] }),
+        ]).then(() => {
+          refusalRefetchInFlightRef.current = false;
+        });
       }),
     [queryClient]
   );
-  // Re-arm once enforcement is seen off, so an admin turning it back on without a reload still
-  // gets this tab's next refusal handled.
-  useEffect(() => {
-    if (!enforceMFA) refusalHandledRef.current = false;
-  }, [enforceMFA]);
 
   // Check if user needs to be forced to setup MFA
   useEffect(() => {
@@ -181,7 +181,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       {
         onSuccess: () => {
           setShowMFASetup(false);
-          refusalHandledRef.current = false;
           toast.success('MFA setup completed successfully');
 
           // Refresh all relevant data
