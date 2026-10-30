@@ -14,6 +14,8 @@ import {
   useToggleFavoriteSession,
   useUpdateSessionTags,
 } from '@client/app/hooks/data/sessions';
+import type { Theme } from '@mui/joy/styles';
+import { conversationRowSx } from '@client/app/components/layouts/Notebook/Sidenav/kit';
 import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -422,52 +424,35 @@ const SessionSidenavItem: FC<{
   );
 
   const boxStyles = useMemo(
-    () => (theme: any) => ({
-      borderRadius: '8px',
-      cursor: 'pointer',
-      backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
-      position: 'relative',
-      // Add left border indicator for active state
-      '&::before': isSelected
-        ? {
-            content: '""',
-            position: 'absolute',
-            left: 0,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            width: '2px',
-            height: '80%',
-            backgroundColor: theme.palette.primary[500],
-            borderRadius: '1px',
-          }
-        : {},
-      '&:hover': {
-        backgroundColor: isSelected ? undefined : theme.palette.notebooklist.hoverBg,
-        '& .item-actions:not(.isProcessing)': {
-          visibility: 'visible',
-          opacity: 1,
-        },
-      },
-      '& .item-actions:not(.isProcessing)': {
-        visibility: isSelected ? 'visible' : 'hidden',
-        opacity: isSelected ? 1 : 0,
-      },
-      // A touch screen has no hover to reveal the row menu, and a keyboard user tabbing onto it
-      // would otherwise land on an invisible button.
-      '@media (hover: none)': {
-        '& .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
-      },
-      '&:focus-within .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
-      // Header style
-      ...(location === 'header' && {
-        backgroundColor: 'transparent',
-        display: 'flex',
-        '&::before': {},
+    () => [
+      // The header shows the open notebook's title, not a list selection: no wash, no bar.
+      (theme: Theme) => conversationRowSx(theme, isSelected && location !== 'header'),
+      {
         '&:hover': {
-          backgroundColor: 'transparent',
+          '& .item-actions:not(.isProcessing)': {
+            visibility: 'visible',
+            opacity: 1,
+          },
         },
-      }),
-    }),
+        '& .item-actions:not(.isProcessing)': {
+          visibility: isSelected ? 'visible' : 'hidden',
+          opacity: isSelected ? 1 : 0,
+        },
+        // A touch screen has no hover to reveal the row menu, and a keyboard user tabbing onto it
+        // would otherwise land on an invisible button.
+        '@media (hover: none)': {
+          '& .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
+        },
+        '&:focus-within .item-actions:not(.isProcessing)': { visibility: 'visible', opacity: 1 },
+        // Header style
+        ...(location === 'header' && {
+          display: 'flex',
+          '&:hover': {
+            backgroundColor: 'transparent',
+          },
+        }),
+      },
+    ],
     [isSelected, location]
   );
 
