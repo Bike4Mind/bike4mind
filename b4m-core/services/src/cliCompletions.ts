@@ -14,6 +14,7 @@ import {
   PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
+  ICreditHolderFlooredDebit,
   ICreditHolderMethods,
   IAdminSettingsRepository,
   IApiKeyRepository,
@@ -559,7 +560,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const billToOrg = organization !== null;
   const holderId = billToOrg ? organization!.id : userId;
   const holderType = billToOrg ? CreditHolderType.Organization : CreditHolderType.User;
-  const holderMethods: ICreditHolderMethods = billToOrg ? db.organizations! : db.users;
+  const holderMethods: ICreditHolderMethods & ICreditHolderFlooredDebit = billToOrg ? db.organizations! : db.users;
   const fetchHolder = (): Promise<ICreditHolder | null> =>
     billToOrg ? db.organizations!.findById(holderId) : db.users.findById(holderId);
 
@@ -1258,33 +1259,22 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       // Never take the balance below zero. With every round capped at what the holder can pay, a
       // cost past the hold plus the balance is an estimate miss (a tokenizer under-count, a lapsed
       // prompt cache) or a concurrent spend; it goes uncollected and loud rather than overdrawing.
+      // This read sizes the hold receipt; the floored debit in settle() is what enforces the floor
+      // against a spend landing after it.
       if (finalCredits > reservedCredits) {
         const balance = (await fetchHolder())?.currentCredits ?? 0;
         chargedCredits = Math.min(finalCredits, reservedCredits + Math.max(0, balance));
-        if (chargedCredits < finalCredits) {
-          logger?.error?.(
-            '[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero',
-            {
-              userId,
-              holderId,
-              holderType,
-              model,
-              reserved: reservedCredits,
-              actual: finalCredits,
-              charged: chargedCredits,
-              uncollectedCredits: finalCredits - chargedCredits,
-            }
-          );
-        }
       }
 
       let ledgerWritten = false;
+      // settle() can be retried, so each attempt starts from the cap rather than a previous attempt's charge.
+      const cappedCredits = chargedCredits;
       const settle = async () => {
         // Reuse the settlement values computed above - recomputing would draw a
         // second stochastic rounding and desync the charge from what the client saw.
         const usdCost = finalUsdCost;
-        const actualCredits = chargedCredits;
-        const creditDifference = reservedCredits - actualCredits;
+        let actualCredits = cappedCredits;
+        let creditDifference = reservedCredits - actualCredits;
 
         logger?.info?.(
           `[CLI_CREDITS] Actual usage: ${actualCredits} credits for ${finalInputTokens} input + ${finalOutputTokens} output tokens. ` +
@@ -1294,29 +1284,19 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // Track the final holder (user or org) state for the transaction record
         let holderAfterAdjustment: ICreditHolder | null = null;
 
-        // Adjust the difference between reserved and actual against the paying pool
-        if (creditDifference !== 0) {
+        if (creditDifference > 0) {
           holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
-          logger?.debug?.(
-            `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
-              `New balance: ${holderAfterAdjustment?.currentCredits}`
-          );
-
-          // Only a spend racing this settlement between the balance read above and this write gets here
-          if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
-            logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
-              userId,
-              holderId,
-              holderType,
-              balance: holderAfterAdjustment.currentCredits,
-              reserved: reservedCredits,
-              actual: actualCredits,
-            });
-          }
         } else {
-          // No adjustment needed, fetch current state for transaction record
+          if (creditDifference < 0) {
+            // Floored and atomic: a concurrent completion can spend the balance between the read above
+            // and this write, and the floor must hold against it, so only what is left gets taken.
+            const debited = await holderMethods.decrementCreditsFloored(holderId, -creditDifference);
+            actualCredits = reservedCredits + debited;
+            creditDifference = -debited;
+          }
           holderAfterAdjustment = await fetchHolder();
         }
+        chargedCredits = actualCredits;
 
         // Create transaction record with ACTUAL usage (not estimated/reserved)
         // Skip balance update since we already adjusted atomically above
@@ -1405,6 +1385,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         ? await params.creditHolds.settle(chargedCredits, settle)
         : (await settle(), true);
       settlementCommitted = settled && ledgerWritten;
+      if (chargedCredits < finalCredits) {
+        logger?.error?.('[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero', {
+          userId,
+          holderId,
+          holderType,
+          model,
+          reserved: reservedCredits,
+          actual: finalCredits,
+          charged: chargedCredits,
+          uncollectedCredits: finalCredits - chargedCredits,
+        });
+      }
       // Emit analytics only after the transaction containing the ledger has committed.
       if (settlementCommitted) recordUsageEvent(chargedCredits);
     } catch (error) {
