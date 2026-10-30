@@ -286,3 +286,64 @@ describe('OpenAI request shaping with a dispatchProfile', () => {
     expect(messages.some(m => m.role === 'system')).toBe(false);
   });
 });
+
+describe('OpenAI reasoning_effort for a catalog-only model', () => {
+  const catalogOnly = (overrides: Partial<ModelInfo> = {}) =>
+    modelRecord('gpt-6-sol', {
+      can_think: true,
+      openaiReasoningEffort: true,
+      dispatchProfile: {
+        maxTokensParam: 'max_completion_tokens',
+        toolTransport: 'responses',
+        effortMapVariant: 'gpt5',
+      },
+      ...overrides,
+    });
+
+  it('sends reasoning_effort on a no-tools chat turn', async () => {
+    const { backend, chatCreate } = buildBackend();
+    backend.setDispatchModel(catalogOnly());
+    const params = await callChat(backend, chatCreate, 'gpt-6-sol', { reasoningEffort: 'high' });
+    expect(params.reasoning_effort).toBe('high');
+  });
+
+  it('classifies complexity into an effort through the profile effort map', async () => {
+    const { backend, chatCreate } = buildBackend();
+    backend.setDispatchModel(catalogOnly());
+    const params = await callChat(backend, chatCreate, 'gpt-6-sol', { complexity: 'simple' });
+    expect(params.reasoning_effort).toBe('low');
+  });
+
+  it('does not send it when the catalog never stated the style, even with can_think and max_completion_tokens', async () => {
+    const { backend, chatCreate } = buildBackend();
+    backend.setDispatchModel(catalogOnly({ openaiReasoningEffort: undefined }));
+    const params = await callChat(backend, chatCreate, 'gpt-6-sol', { reasoningEffort: 'high' });
+    expect(params).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('drops it on a chat turn with tools when the record says the combination 400s', async () => {
+    const { backend, chatCreate } = buildBackend();
+    backend.setDispatchModel(
+      catalogOnly({
+        effortIncompatibleWithTools: true,
+        dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' },
+      })
+    );
+    const params = await callChat(backend, chatCreate, 'gpt-6-sol', { reasoningEffort: 'high', tools: [tool] });
+    expect(params).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('keeps today behavior for an id in the hardcoded sets when the record states nothing', async () => {
+    const { backend, chatCreate } = buildBackend();
+    backend.setDispatchModel(modelRecord(ChatModels.GPT5_4, { can_think: true }));
+    const params = await callChat(backend, chatCreate, ChatModels.GPT5_4, { reasoningEffort: 'high' });
+    expect(params.reasoning_effort).toBe('high');
+    const gated = buildBackend();
+    gated.backend.setDispatchModel(modelRecord(ChatModels.GPT5_4, { can_think: true }));
+    const withTools = await callChat(gated.backend, gated.chatCreate, ChatModels.GPT5_4, {
+      reasoningEffort: 'high',
+      tools: [tool],
+    });
+    expect(withTools).not.toHaveProperty('reasoning_effort');
+  });
+});
