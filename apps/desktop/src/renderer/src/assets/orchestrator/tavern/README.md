@@ -10,29 +10,29 @@ The slot coordinates in `tavern/scene.ts` (`TAVERN_SLOTS`, `DOOR_POINT`) are pic
 
 The prompt id names a file in `apps/desktop/scripts/orchestrator-art/prompts/`; the full prompt per output file is in `apps/desktop/scripts/orchestrator-art/prompts.json`. All 20 sprites come from one 4x5 sheet render (2048x1648, transparent background) so their style and scale match.
 
-| File | Model | Prompt id (sheet cell) | Generated |
-|------|-------|------------------------|-----------|
-| `backdrop.png` | `gpt-image-2.5-sunburst` | `backdrop` (whole image, 2048x1152 opaque, downscaled to 1280x720) | 2026-10-30 |
-| `char-1-work.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 1) | 2026-10-30 |
-| `char-1-call.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 2) | 2026-10-30 |
-| `char-1-rest.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 3) | 2026-10-30 |
-| `char-1-ko.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 4) | 2026-10-30 |
-| `char-1-idle.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 5) | 2026-10-30 |
-| `char-2-work.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 1) | 2026-10-30 |
-| `char-2-call.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 2) | 2026-10-30 |
-| `char-2-rest.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 3) | 2026-10-30 |
-| `char-2-ko.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 4) | 2026-10-30 |
-| `char-2-idle.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 5) | 2026-10-30 |
-| `char-3-work.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 1) | 2026-10-30 |
-| `char-3-call.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 2) | 2026-10-30 |
-| `char-3-rest.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 3) | 2026-10-30 |
-| `char-3-ko.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 4) | 2026-10-30 |
-| `char-3-idle.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 5) | 2026-10-30 |
-| `char-4-work.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 1) | 2026-10-30 |
-| `char-4-call.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 2) | 2026-10-30 |
-| `char-4-rest.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 3) | 2026-10-30 |
-| `char-4-ko.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 4) | 2026-10-30 |
-| `char-4-idle.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 5) | 2026-10-30 |
+| File              | Model                    | Prompt id (sheet cell)                                             | Generated  |
+| ----------------- | ------------------------ | ------------------------------------------------------------------ | ---------- |
+| `backdrop.png`    | `gpt-image-2.5-sunburst` | `backdrop` (whole image, 2048x1152 opaque, downscaled to 1280x720) | 2026-10-30 |
+| `char-1-work.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 1)                                      | 2026-10-30 |
+| `char-1-call.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 2)                                      | 2026-10-30 |
+| `char-1-rest.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 3)                                      | 2026-10-30 |
+| `char-1-ko.png`   | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 4)                                      | 2026-10-30 |
+| `char-1-idle.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 1, column 5)                                      | 2026-10-30 |
+| `char-2-work.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 1)                                      | 2026-10-30 |
+| `char-2-call.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 2)                                      | 2026-10-30 |
+| `char-2-rest.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 3)                                      | 2026-10-30 |
+| `char-2-ko.png`   | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 4)                                      | 2026-10-30 |
+| `char-2-idle.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 2, column 5)                                      | 2026-10-30 |
+| `char-3-work.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 1)                                      | 2026-10-30 |
+| `char-3-call.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 2)                                      | 2026-10-30 |
+| `char-3-rest.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 3)                                      | 2026-10-30 |
+| `char-3-ko.png`   | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 4)                                      | 2026-10-30 |
+| `char-3-idle.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 3, column 5)                                      | 2026-10-30 |
+| `char-4-work.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 1)                                      | 2026-10-30 |
+| `char-4-call.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 2)                                      | 2026-10-30 |
+| `char-4-rest.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 3)                                      | 2026-10-30 |
+| `char-4-ko.png`   | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 4)                                      | 2026-10-30 |
+| `char-4-idle.png` | `gpt-image-2.5-sunburst` | `sheet-all` (row 4, column 5)                                      | 2026-10-30 |
 
 ## Regenerating
 
