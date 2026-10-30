@@ -6,7 +6,6 @@ const STARTER_CREDIT_SETTINGS: IAdminSettings['settingName'][] = [
   'defaultFreeCredits',
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
-  'verifiedUnlockCredits',
 ];
 
 /**
@@ -20,7 +19,7 @@ export async function getOpenSignupStarterCredits(): Promise<number> {
   try {
     // One round trip: this runs on every anonymous view of an open-public page.
     const rows = await adminSettingsRepository.findBySettingNames(STARTER_CREDIT_SETTINGS);
-    const byName = (name: string) => rows.find(r => r.settingName === name) ?? null;
+    const byName = (name: IAdminSettings['settingName']) => rows.find(r => r.settingName === name) ?? null;
     const open = settingsMap.allowOpenRegistration.schema.safeParse(byName('allowOpenRegistration')?.settingValue);
     if (!(open.success ? open.data : settingsMap.allowOpenRegistration.defaultValue)) return 0;
     const staged = await resolveSignupGrantSettings({ findBySettingName: async name => byName(name) });

@@ -180,9 +180,9 @@ const SIGNUP_GATE_MARKER = '<input type="checkbox" id="b4m-gate-dismiss"';
 
 export interface SignupGateOptions {
   /**
-   * Credits a new account starts with (the `defaultFreeCredits` admin setting). Omitted or
-   * non-positive renders no number, so a page baked at publish time never states a stale amount -
-   * the serve handler re-renders the gate with the live value (replaceSignupGateHtml).
+   * Credits a new account starts with (getOpenSignupStarterCredits: the staged signup tranche, else
+   * `defaultFreeCredits`). Omitted or non-positive renders no number, so a page baked at publish
+   * time never states a stale amount - the serve handler re-renders the gate with the live value (replaceSignupGateHtml).
    */
   starterCredits?: number | null;
   /** Same-origin path of the artifact, sent as /register's `redirectTo` so signup lands back on it. */
