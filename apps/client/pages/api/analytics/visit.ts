@@ -3,7 +3,14 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { isAnalyticsConfigured, emitVisitEvent } from '@server/analytics/emitActiveEvent';
 import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
-import { isProbableBot, mintVisitId, readVisitId, visitCookieHeader } from '@server/analytics/visitSession';
+import {
+  isProbableBot,
+  mintVisitId,
+  readVisitId,
+  readVisitPending,
+  visitCookieHeader,
+  visitPendingCookieHeader,
+} from '@server/analytics/visitSession';
 import { readVisitLanding } from '@server/analytics/visitLanding';
 
 /**
@@ -20,9 +27,16 @@ import { readVisitLanding } from '@server/analytics/visitLanding';
  * one event; a request that already carries one emits nothing and only slides the
  * inactivity window forward. One event per visit, by construction rather than by throttle.
  *
+ * One exception to "emits at the start": a visitor still being asked for consent can't send a
+ * source yet, and a visit's source is read from its one event alone. So a beacon awaiting
+ * consent starts the visit and holds its event, marked by the pending cookie, and the beacon
+ * the browser sends once the visitor answers (or leaves without answering) emits it
+ * (visitBeacon.ts releaseVisitBeacon).
+ *
  * Unauthenticated deliberately, and correspondingly narrow: its body is at most a referrer
- * origin and a landing path, it returns no body, writes one cookie, and the only thing it
- * records is a server-minted id, those two (checked: visitLanding.ts) and the campaign cookie.
+ * origin and a landing path (or the awaiting-consent flag), it returns no body, writes the visit
+ * cookie (and, while the event is held, the pending mark), and the only thing it records is a
+ * server-minted id, those two (checked: visitLanding.ts) and the campaign cookie.
  * There is nothing here to act on behalf of a user, which is why it needs neither auth nor CSRF
  * protection; what it does need is a bound on volume, since it is a public path that writes.
  * Hence the per-IP rate limit below, on top of the `/api/` per-IP counter the edge WAF already
@@ -30,8 +44,8 @@ import { readVisitLanding } from '@server/analytics/visitLanding';
  *
  * The referrer comes from the body, never the Referer header: the beacon is a fetch from the
  * app's own page, so the header always names that page, and a visit read from it came from the
- * app itself. A body without one (no consent, no referrer, or a page loaded before this shipped)
- * records none, which reads as direct.
+ * app itself. A body without one (consent declined or never given, no referrer, or a page loaded
+ * before this shipped) records none, which reads as direct.
  */
 
 // Per-IP, and generous against real use: a page load fires this once, so a browser needs
@@ -39,6 +53,11 @@ import { readVisitLanding } from '@server/analytics/visitLanding';
 // an agent that presents a browser user-agent and keeps no cookies, which would otherwise
 // mint a fresh visit on every request.
 const VISIT_BEACON_RATE_LIMIT = { limit: 60, windowMs: 60 * 1000, bucket: 'analytics-visit' } as const;
+
+/** The beacon a visitor sends while still being asked for consent (visitBeacon.ts). */
+function isAwaitingConsent(body: unknown): boolean {
+  return typeof body === 'object' && body !== null && (body as Record<string, unknown>).awaitingConsent === true;
+}
 
 const handler = baseApi({ auth: false, maxBodySize: 1024 })
   .use(rateLimit(VISIT_BEACON_RATE_LIMIT))
@@ -56,12 +75,20 @@ const handler = baseApi({ auth: false, maxBodySize: 1024 })
 
     const existing = readVisitId(req.headers.cookie);
     const visitId = existing ?? mintVisitId();
+    const secure = !isDevelopment();
+
+    const markedPending = readVisitPending(req.headers.cookie);
+    const unrecorded = existing === undefined || markedPending;
+    const hold = unrecorded && isAwaitingConsent(req.body);
 
     // Sent on every call, not only when minting - this is what keeps an active browser on
-    // one visit instead of starting a new one every 30 minutes.
-    res.setHeader('Set-Cookie', visitCookieHeader(visitId, { secure: !isDevelopment() }));
+    // one visit instead of starting a new one every 30 minutes. The pending mark slides with
+    // it while the event is held, and is expired once it is not.
+    const cookies = [visitCookieHeader(visitId, { secure })];
+    if (hold || markedPending) cookies.push(visitPendingCookieHeader(hold, { secure }));
+    res.setHeader('Set-Cookie', cookies);
 
-    if (existing !== undefined) return res.status(204).end();
+    if (!unrecorded || hold) return res.status(204).end();
 
     const landing = readVisitLanding(req.body);
 

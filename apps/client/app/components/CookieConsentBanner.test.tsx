@@ -22,6 +22,7 @@ vi.mock('@client/app/utils/metaPixel', async importOriginal => ({
 import { CookieConsentBanner, useCookieSettings } from './CookieConsentBanner';
 import { CONSENT_VENDORS } from '../utils/consentVendors';
 import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
+import { beaconVisit } from '../utils/visitBeacon';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
@@ -392,6 +393,64 @@ describe('CookieConsentBanner', () => {
       expect(mockGtag).not.toHaveBeenCalled();
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
       expect(mockLoadMetaPixel).not.toHaveBeenCalled();
+    });
+  });
+
+  // The first visit from search or a shared link lands on this ask, so the visit beacon holds
+  // its source until the answer (visitBeacon.ts). The answer is what sends it.
+  describe('recording the visit the beacon held for the answer', () => {
+    const bodies = (fetchMock: ReturnType<typeof vi.fn>) =>
+      fetchMock.mock.calls.map(c => JSON.parse((c as [string, RequestInit])[1].body as string) as unknown);
+
+    beforeEach(() => {
+      Object.defineProperty(document, 'referrer', { value: 'https://www.google.com/search?q=x', configurable: true });
+      window.history.replaceState({}, '', '/pricing?utm_source=newsletter');
+    });
+    afterEach(() => {
+      Object.defineProperty(document, 'referrer', { value: '', configurable: true });
+      window.history.replaceState({}, '', '/');
+      vi.unstubAllGlobals();
+      vi.stubGlobal('gtag', mockGtag);
+    });
+
+    it('sends the held source on Accept, after the campaign it carries is written', () => {
+      let cookieAtRelease = '';
+      const fetchMock = vi.fn().mockImplementation(() => {
+        cookieAtRelease = document.cookie;
+        return Promise.resolve({ status: 204 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      captureUtmParams();
+      beaconVisit();
+      window.history.replaceState({}, '', '/login');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(bodies(fetchMock)).toEqual([
+        { awaitingConsent: true },
+        { referrer: 'https://www.google.com', landingPath: '/pricing' },
+      ]);
+      expect(cookieAtRelease).toContain('b4m_utm=');
+    });
+
+    it('sends no source on Decline', () => {
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      beaconVisit();
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(bodies(fetchMock)).toEqual([{ awaitingConsent: true }, {}]);
     });
   });
 
