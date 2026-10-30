@@ -596,6 +596,23 @@ describe('registerUser', () => {
       expect(invited.signupGrant).toBeUndefined();
     });
 
+    it('snapshots the schedule keys over the old tranche and unlock keys', async () => {
+      setAllowOpenRegistration('true');
+      const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+      mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+        const values: Record<string, string> = {
+          stagedSignupGrantEnabled: 'true',
+          signupGrantCredits: '12',
+          verifiedUnlockCredits: '28',
+          signupGrantInitialCredits: '0',
+          signupGrantDripCap: '40',
+        };
+        return name in values ? { settingValue: values[name] } : readSetting(name);
+      });
+      const result = await registerUser(noInviteParams, mockAdapters);
+      expect(result.signupGrant).toMatchObject({ signupCredits: 0, unlockCredits: 40, creditsReleased: 0 });
+    });
+
     describe('invite-code grants under the staged signup grant', () => {
       const enableStaging = () => {
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();

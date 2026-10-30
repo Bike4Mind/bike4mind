@@ -41,7 +41,7 @@ export async function payActivityDripForDay(userId: string, now: Date = new Date
   if (!user || !grant || grant.stage === 'pending_email' || grant.stage === 'unlocked') return noGrant();
   const period = resolvedPeriod ?? (await resolveSignupDripPeriod(signupProtection.grantBudget?.now?.() ?? now));
   if (hasPaidSignupDrip(grant, period.day, period.key)) return noGrant();
-  const { dailyCredits, maxCredits } = await userService.resolveDripLimits(adminSettingsRepository);
+  const { dailyCredits, dripCap: maxCredits } = await userService.resolveDripLimits(adminSettingsRepository);
   if (!(dailyCredits > 0) || !(maxCredits > 0) || (grant.dripCredits ?? 0) >= maxCredits) return noGrant();
   return userService.dripSignupGrant(
     userId,

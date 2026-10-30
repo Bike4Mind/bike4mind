@@ -1,7 +1,12 @@
 import { renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ values: {} as Record<string, unknown> }));
-vi.mock('./data/settings', () => ({ useGetSettingsValue: (key: string) => h.values[key] }));
+vi.mock('./data/settings', () => ({
+  useGetSettingsValue: (key: string) => h.values[key],
+  useSettingsFromServer: () => ({
+    data: Object.entries(h.values).map(([settingName, settingValue]) => ({ settingName, settingValue })),
+  }),
+}));
 import { useSignupGrantCredits } from './useSignupGrantCredits';
 
 describe('signup grant copy configuration', () => {
@@ -32,11 +37,18 @@ describe('signup grant copy configuration', () => {
     expect(renderHook(useSignupGrantCredits).result.current).toBe(37);
   });
   it.each(['', ' ', -1, 1.5, Infinity, 'invalid'])(
-    'rejects an invalid configured tranche %j like the server',
+    'treats an invalid configured tranche %j as unset, like the server',
     signup => {
       h.values.stagedSignupGrantEnabled = true;
       h.values.signupGrantCredits = signup;
-      expect(renderHook(useSignupGrantCredits).result.current).toBe(0);
+      expect(renderHook(useSignupGrantCredits).result.current).toBe(37);
     }
   );
+  it('prefers the initial credits key over the old tranche key, honouring an explicit 0', () => {
+    h.values.stagedSignupGrantEnabled = true;
+    h.values.signupGrantInitialCredits = '500';
+    expect(renderHook(useSignupGrantCredits).result.current).toBe(500);
+    h.values.signupGrantInitialCredits = '0';
+    expect(renderHook(useSignupGrantCredits).result.current).toBe(0);
+  });
 });

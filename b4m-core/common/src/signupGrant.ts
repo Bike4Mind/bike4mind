@@ -1,3 +1,4 @@
+import { settingsMap } from './schemas/settings';
 import type { IAdminSettingsRepository } from './types';
 
 export const SIGNUP_GRANT_UNLOCK_REASONS = [
@@ -70,16 +71,87 @@ export function nonnegativeGrantCredits(value: unknown): number {
   return Number.isSafeInteger(amount) && amount >= 0 ? amount : 0;
 }
 
+export type SignupGrantCreditKey =
+  | 'signupGrantInitialCredits'
+  | 'signupGrantDailyCredits'
+  | 'signupGrantDripCap'
+  | 'signupGrantInviteBonusCredits'
+  | 'signupGrantCredits'
+  | 'defaultFreeCredits'
+  | 'signupGrantActivityDailyCredits'
+  | 'signupGrantActivityMaxCredits'
+  | 'verifiedUnlockCredits';
+
+/** A stored credit amount, or undefined when absent, blank or invalid so the caller falls back; '0' is a value. */
+export function storedGrantCredits(key: SignupGrantCreditKey, value: unknown): number | undefined {
+  if (value == null || (typeof value === 'string' && !value.trim())) return undefined;
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  if (!settingsMap[key].schema.safeParse(value).success) return undefined;
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount >= 0 ? amount : undefined;
+}
+
+export type SignupGrantDripCapSource = 'setting' | 'legacy' | 'default';
+
+export interface SignupGrantSchedule {
+  initialCredits: number;
+  dailyCredits: number;
+  dripCap: number;
+  inviteBonusCredits: number;
+  dripCapSource: SignupGrantDripCapSource;
+}
+
+/**
+ * Resolves the schedule from stored values. Must stay in sync with the client mirror in
+ * apps/client/app/hooks/useSignupGrantSchedule.ts.
+ */
+export function signupGrantScheduleFromValues(
+  read: (key: SignupGrantCreditKey) => number | undefined
+): SignupGrantSchedule {
+  const cap = read('signupGrantDripCap');
+  const legacyCaps = [read('signupGrantActivityMaxCredits'), read('verifiedUnlockCredits')].filter(
+    (value): value is number => value !== undefined
+  );
+  return {
+    initialCredits: read('signupGrantInitialCredits') ?? read('signupGrantCredits') ?? read('defaultFreeCredits') ?? 0,
+    dailyCredits: read('signupGrantDailyCredits') ?? read('signupGrantActivityDailyCredits') ?? 0,
+    dripCap: cap ?? (legacyCaps.length ? Math.min(...legacyCaps) : (settingsMap.signupGrantDripCap.defaultValue ?? 0)),
+    inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
+    dripCapSource: cap !== undefined ? 'setting' : legacyCaps.length ? 'legacy' : 'default',
+  };
+}
+
+const SCHEDULE_KEYS: SignupGrantCreditKey[] = [
+  'signupGrantInitialCredits',
+  'signupGrantDailyCredits',
+  'signupGrantDripCap',
+  'signupGrantInviteBonusCredits',
+  'signupGrantCredits',
+  'defaultFreeCredits',
+  'signupGrantActivityDailyCredits',
+  'signupGrantActivityMaxCredits',
+  'verifiedUnlockCredits',
+];
+
+/** The new schedule keys win; while one is unset its pre-schedule key still applies. */
+export async function resolveSignupGrantSchedule(
+  adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>
+): Promise<SignupGrantSchedule> {
+  const stored = new Map<SignupGrantCreditKey, number | undefined>();
+  for (const key of SCHEDULE_KEYS) {
+    stored.set(key, storedGrantCredits(key, (await adminSettings.findBySettingName(key))?.settingValue));
+  }
+  return signupGrantScheduleFromValues(key => stored.get(key));
+}
+
 /** Missing new settings preserve the installed grant; migration never enables staging. */
 export async function resolveSignupGrantSettings(adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>) {
   const enabled = await adminSettings.findBySettingName('stagedSignupGrantEnabled');
-  const signup = await adminSettings.findBySettingName('signupGrantCredits');
-  const legacy = signup == null ? await adminSettings.findBySettingName('defaultFreeCredits') : null;
-  const unlock = await adminSettings.findBySettingName('verifiedUnlockCredits');
+  const schedule = await resolveSignupGrantSchedule(adminSettings);
   return {
     enabled: enabled?.settingValue === 'true' || (enabled?.settingValue as unknown) === true,
-    signupCredits: nonnegativeGrantCredits(signup == null ? legacy?.settingValue : signup.settingValue),
-    unlockCredits: nonnegativeGrantCredits(unlock?.settingValue),
+    signupCredits: schedule.initialCredits,
+    unlockCredits: schedule.dripCap,
   };
 }
 

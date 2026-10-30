@@ -2,7 +2,7 @@ import {
   CreditHolderType,
   hasPaidSignupDrip,
   PENDING_FREE_CREDITS_TAG,
-  settingsMap,
+  resolveSignupGrantSchedule,
   type IUserDocument,
   type SignupGrant,
   type SignupGrantUnlockReason,
@@ -311,14 +311,8 @@ async function unlockWithHeldTranche(
 }
 
 export async function resolveDripLimits(adminSettings: GrantAdapters['db']['adminSettings']) {
-  const read = async (key: 'signupGrantActivityDailyCredits' | 'signupGrantActivityMaxCredits') => {
-    const parsed = settingsMap[key].schema.safeParse((await adminSettings.findBySettingName(key))?.settingValue);
-    return parsed.success ? parsed.data : 0;
-  };
-  return {
-    dailyCredits: await read('signupGrantActivityDailyCredits'),
-    maxCredits: await read('signupGrantActivityMaxCredits'),
-  };
+  const { dailyCredits, dripCap, dripCapSource } = await resolveSignupGrantSchedule(adminSettings);
+  return { dailyCredits, dripCap, dripCapSource };
 }
 
 /**
@@ -334,7 +328,7 @@ export async function dripSignupGrant(
 ): Promise<GrantFreeCreditsResult> {
   if (period !== undefined && !/^preview:\d{1,4}:\d+$/.test(period)) return noGrant();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return noGrant();
-  const { dailyCredits, maxCredits } = await resolveDripLimits(adapters.db.adminSettings);
+  const { dailyCredits, dripCap: maxCredits } = await resolveDripLimits(adapters.db.adminSettings);
   if (!(dailyCredits > 0) || !(maxCredits > 0)) return noGrant();
   const user = await adapters.db.users.findById(userId);
   if (!user?.signupGrant || hasPaidSignupDrip(user.signupGrant, day, period)) return noGrant();

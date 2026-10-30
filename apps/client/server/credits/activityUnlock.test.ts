@@ -29,7 +29,7 @@ const settings = (values: Record<string, string>) =>
 describe('activity signup drip evaluation', () => {
   beforeEach(() => {
     h.drip.mockReset();
-    h.limits.mockResolvedValue({ dailyCredits: 1000, maxCredits: 9000 });
+    h.limits.mockResolvedValue({ dailyCredits: 1000, dripCap: 9000, dripCapSource: 'setting' });
     settings({ signupGrantActivityEnabled: 'true' });
   });
 

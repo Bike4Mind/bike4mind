@@ -65,6 +65,7 @@ let settingValues: Record<string, unknown> = {};
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => settingValues[key] ?? false,
   useConfig: () => ({ data: { seedStageName: 'production' } }),
+  useSettingsFromServer: () => ({ data: undefined }),
 }));
 
 vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({

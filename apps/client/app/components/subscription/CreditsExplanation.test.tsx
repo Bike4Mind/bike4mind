@@ -14,6 +14,7 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'defaultFreeCredits' ? state.defaultFreeCredits : undefined),
+  useSettingsFromServer: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 1000 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({

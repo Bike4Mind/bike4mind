@@ -36,7 +36,7 @@ export async function recordHeartbeat(userId: string, now: Date = new Date()): P
   if (!(await isActivityDripEnabled())) return result;
   const requiredSeconds = await resolveRequiredActiveSeconds();
   result.requiredSeconds = requiredSeconds;
-  const { dailyCredits, maxCredits } = await userService.resolveDripLimits(adminSettingsRepository);
+  const { dailyCredits, dripCap: maxCredits } = await userService.resolveDripLimits(adminSettingsRepository);
   if (!(dailyCredits > 0) || !(maxCredits > 0) || (grant.dripCredits ?? 0) >= maxCredits) return result;
 
   const prior = grant.activity;
