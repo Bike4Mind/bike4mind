@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/utils';
 import {
   ARTIST_REFERENCE_REFUSAL,
   PROVIDER_BLOCK_REFUSAL,
@@ -445,5 +447,26 @@ describe('music_generation tool', () => {
       expect(statusUpdate).toHaveBeenCalledOnce();
       expect(logger.warn).toHaveBeenCalledOnce();
     });
+  });
+});
+
+describe('music_generation model admission', () => {
+  it('returns a free-tier refusal from the job engine as the tool result, logged at warn', async () => {
+    const refusal = new ForbiddenError('Model "test-music" requires a paid plan.', {
+      errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+    });
+    const { tool, statusUpdate, logger } = build(vi.fn().mockRejectedValue(refusal));
+    await expect(tool.toolFn({ model: 'test-music', prompt: 'a sea shanty' })).resolves.toBe(
+      'Error: Model "test-music" requires a paid plan.'
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[music_generation]'), { modelId: 'test-music' });
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still throws any other job-engine failure', async () => {
+    const failure = new Error('database unavailable');
+    const { tool, logger } = build(vi.fn().mockRejectedValue(failure));
+    await expect(tool.toolFn({ model: 'test-music', prompt: 'a sea shanty' })).rejects.toBe(failure);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

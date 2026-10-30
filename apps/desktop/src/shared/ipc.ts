@@ -34,6 +34,7 @@ import type {
   ChatImageActionResult,
   ChatImageRef,
   ChatModelCatalog,
+  CreationTool,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
   ChatQueuedMessage,
@@ -149,6 +150,7 @@ export const IPC_CHANNELS = {
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
   chatGetLocalContextFit: 'chat:get-local-context-fit',
+  chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSettleLocalModel: 'chat:settle-local-model',
   chatSetSessionHistory: 'chat:set-session-history',
@@ -286,6 +288,7 @@ export const IPC_CHANNELS = {
   permissionsGetState: 'permissions:get-state',
   permissionsSetRules: 'permissions:set-rules',
   permissionsSetSharing: 'permissions:set-sharing',
+  permissionsExportApprovalSummary: 'permissions:export-approval-summary',
   capabilitiesGetState: 'capabilities:get-state',
   capabilitiesRevoke: 'capabilities:revoke',
   /**
@@ -679,6 +682,8 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
+    /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
+    listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** Device-local only: moves a conversation whose model is not installed to the pick a send would use. */
@@ -1053,6 +1058,11 @@ export interface DesktopApi {
     /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
     setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
     setSharing(share: boolean): Promise<PermissionsState>;
+    /**
+     * Saves a Markdown digest of the local approval log where the user picks (see approvalSummary.ts).
+     * False when the save dialog was cancelled.
+     */
+    exportApprovalSummary(): Promise<boolean>;
   };
   capabilities: {
     getState(): Promise<CapabilityLedgerState>;

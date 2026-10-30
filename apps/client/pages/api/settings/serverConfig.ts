@@ -9,6 +9,8 @@ import {
   type ToolAvailability,
 } from '@bike4mind/services/llm/toolAvailability';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { stageHiddenSettingKeys } from '@bike4mind/common';
+import { PRODUCTION_STAGES } from '@bike4mind/infra';
 import { resolveEffectiveEmbeddingModel } from '@bike4mind/server-utils/embeddings/effectiveEmbeddingModel';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { isTurnstileSecretConfigured } from '@bike4mind/server-utils/utils/turnstile';
@@ -63,6 +65,8 @@ export type ServerConfig = {
   effectiveEmbeddingModel: string;
   /** False when no Turnstile secret is provisioned, so the admin toggle is a no-op. Boolean only; never the secret. */
   turnstileSecretConfigured: boolean;
+  /** Setting keys the admin settings list hides on this stage. Display only; never enforced on write. */
+  hiddenAdminSettingKeys: string[];
 };
 
 // Get Admin Settings - requires authentication
@@ -123,6 +127,7 @@ const handler = baseApi({ auth: true }).get(
       toolAvailability,
       effectiveEmbeddingModel,
       turnstileSecretConfigured: isTurnstileSecretConfigured(Config.TURNSTILE_SECRET_KEY),
+      hiddenAdminSettingKeys: stageHiddenSettingKeys(PRODUCTION_STAGES.includes(Config.STAGE)),
     };
 
     return res.json(config);

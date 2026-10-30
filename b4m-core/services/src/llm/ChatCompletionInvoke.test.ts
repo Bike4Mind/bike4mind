@@ -472,6 +472,8 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     expect(mockDb.quests.update).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'error', reply: expect.stringContaining(`"${SUCCESSOR_ID}" is not accessible`) })
     );
+    // Only the paid-plan refusal is downgraded to warn; any other refusal still logs at error.
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(`Model ${SUCCESSOR_ID} is not admitted`));
   });
 
   // invoke() records an admission refusal on the error quest rather than throwing, so the ForbiddenError
@@ -486,7 +488,9 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
 
     expect(gate.loadFreeTierAllowedModels).toHaveBeenCalledWith(mockDb.adminSettings);
     expect((invoke as any).questStartParams).toBeNull();
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(`Model ${SUCCESSOR_ID} is not admitted`));
+    // The caller's plan, not a fault: logged at warn so it does not page.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`Model ${SUCCESSOR_ID} is not admitted`));
+    expect(logger.error).not.toHaveBeenCalledWith(expect.stringContaining('is not admitted'));
     expectErrorWithoutPin('requires a paid plan');
   });
 

@@ -164,6 +164,7 @@ const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
 vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
+    'responding-workspace': { ownedFields: [], resolve: async () => ({}), respond: async () => null },
   },
 }));
 
@@ -305,12 +306,37 @@ describe('processExecution tool deps', () => {
       return deps.user as { isAdmin?: boolean };
     }
 
+    async function depsUsersReadFor(doc: Record<string, unknown>) {
+      const { agentExecutionRepository, userRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValueOnce(doc as never);
+      const deps = await runWithSession(baseSession);
+      const users = (deps.db as { users: typeof userRepository }).users;
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ isAdmin: true } as never);
+      try {
+        return { users, owner: (await users.findById('user-1')) as { isAdmin?: boolean } };
+      } finally {
+        findUser.mockRestore();
+      }
+    }
+
     it('withholds the owner admin role when the run was started that way', async () => {
       expect((await depsUserFor({ ...execDoc, apiKeyId: 'key-1', adminRoleWithheld: true })).isAdmin).toBe(false);
     });
 
     it('keeps the owner admin role for a run that does not withhold it', async () => {
       expect((await depsUserFor({ ...execDoc, apiKeyId: 'key-1' })).isAdmin).toBe(true);
+    });
+
+    it('withholds it from a tool that re-reads the owner by id', async () => {
+      const { owner } = await depsUsersReadFor({ ...execDoc, apiKeyId: 'key-1', adminRoleWithheld: true });
+      expect(owner.isAdmin).toBe(false);
+    });
+
+    it('hands tools the plain user repository for a run that does not withhold it', async () => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { users, owner } = await depsUsersReadFor({ ...execDoc, apiKeyId: 'key-1' });
+      expect(users).toBe(userRepository);
+      expect(owner.isAdmin).toBe(true);
     });
   });
 
@@ -488,6 +514,17 @@ describe('processExecution tool deps', () => {
 
       expect(markFailed).toHaveBeenCalledWith('exec-1', {
         message: 'Model "claude-sonnet-5" is not available to this user',
+      });
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+    });
+
+    it('fails a run whose model the catalog no longer carries instead of throwing', async () => {
+      const { getLlmByModel } = await import('@bike4mind/llm-adapters');
+      vi.mocked(getLlmByModel).mockReturnValueOnce(null);
+      const { markFailed } = await runWithModels([]);
+
+      expect(markFailed).toHaveBeenCalledWith('exec-1', {
+        message: 'Model "claude-sonnet-5" is no longer available. Choose a different model for this agent.',
       });
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
     });
@@ -737,6 +774,87 @@ describe('processExecution tool deps', () => {
       );
     });
 
+    describe('usage events', () => {
+      const pricedModel = { ...runModel, pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } } };
+
+      async function pricedTracker() {
+        await runWithModels([pricedModel]);
+        return (buildSharedToolsMock.mock.calls[0][1] as { subagentTracker: ServerSubagentTracker }).subagentTracker;
+      }
+
+      const usageRecord = async () => {
+        const { usageEventRepository } = await import('@bike4mind/database');
+        return vi.mocked(usageEventRepository.record);
+      };
+
+      it('records a usage event for a tracked in-process subagent, as the in-chat path does', async () => {
+        const tracker = await pricedTracker();
+        await tracker.onComplete({ childExecutionId: 'child-1', result: childResult });
+
+        const record = await usageRecord();
+        expect(record).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            requestId: 'quest-1',
+            userId: 'user-1',
+            feature: 'tool',
+            provider: 'anthropic',
+            model: 'claude-sonnet-5',
+            inputTokens: 10,
+            outputTokens: 5,
+            creditsCharged: 7,
+          })
+        );
+        expect(record.mock.calls[0][0].costUsd).toBeCloseTo(10 * 3e-6 + 5 * 15e-6, 12);
+      });
+
+      it("records a timed-out in-process subagent's partial spend", async () => {
+        const tracker = await pricedTracker();
+        await tracker.onFailure({
+          childExecutionId: 'child-1',
+          error: 'aborted',
+          isTimeout: true,
+          partialResult: childResult,
+        });
+
+        expect(await usageRecord()).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ feature: 'tool', creditsCharged: 7, inputTokens: 10, outputTokens: 5 })
+        );
+      });
+
+      it('records untracked subagent spend from the priced usage onSubagentCredits reports', async () => {
+        await runWithModels([pricedModel]);
+        const callbacks = buildSharedToolsMock.mock.calls[0][1] as {
+          onSubagentCredits: (credits: number, meta: Record<string, unknown>) => Promise<void>;
+        };
+
+        await callbacks.onSubagentCredits(4, {
+          usdCost: 0.002,
+          provider: 'anthropic',
+          model: 'claude-sonnet-5',
+          inputTokens: 2,
+          outputTokens: 1,
+          cacheReadTokens: 3,
+          cacheWriteTokens: 0,
+        });
+
+        expect(await usageRecord()).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ creditsCharged: 4, costUsd: 0.002, inputTokens: 2, cachedInputTokens: 3 })
+        );
+      });
+
+      it('records nothing for a subagent that stopped before its first model call', async () => {
+        const tracker = await pricedTracker();
+        const idle = {
+          ...childResult,
+          completionInfo: { ...childResult.completionInfo, totalCredits: 0, totalInputTokens: 0, totalOutputTokens: 0 },
+        };
+        await tracker.onComplete({ childExecutionId: 'child-1', result: idle });
+
+        expect(await usageRecord()).not.toHaveBeenCalled();
+        expect(deductCreditsMock).not.toHaveBeenCalled();
+      });
+    });
+
     it('refuses a run when the model configurations cannot be read', async () => {
       const { adminSettingsRepository } = await import('@bike4mind/database');
       vi.mocked(adminSettingsRepository.findOne).mockRejectedValueOnce(new Error('settings down'));
@@ -890,6 +1008,22 @@ describe('processExecution tool deps', () => {
           message: 'Workspace session settings resolver for "settings-workspace" failed',
         })
       );
+    });
+
+    it('refuses a run on a workspace that answers its own turns, before any tool or model work', async () => {
+      const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(sessionRepository.findById).mockResolvedValue({
+        ...baseSession,
+        surface: 'responding-workspace',
+      } as never);
+      const { handler } = await import('./agentExecutor');
+
+      await expect(handler(continuationEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
+
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+      expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith('exec-1', {
+        message: 'This workspace answers its own turns, so agent runs are not available in it',
+      });
     });
 
     it('keeps the stored flag on a session outside any contributed workspace', async () => {

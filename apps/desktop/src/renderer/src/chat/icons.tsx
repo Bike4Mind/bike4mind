@@ -60,6 +60,15 @@ export function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** Sessions branching off another one: a stem turning into an arrow. */
+export function SubSessionsIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4.5 2.5v5.25A2.75 2.75 0 0 0 7.25 10.5h5.25M10 8l2.5 2.5L10 13" />
+    </Glyph>
+  );
+}
+
 /** Disclosure for a row that expands downward in place: points down closed, up open. */
 export function DisclosureIcon({ open }: { open: boolean }) {
   return (
@@ -434,6 +443,79 @@ export function ExternalLinkIcon() {
   return (
     <Glyph>
       <path d="M9.5 2.5h4v4M13.5 2.5 8 8M12 9.5v3a1 1 0 01-1 1H3.5a1 1 0 01-1-1V5a1 1 0 011-1h3" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a framed picture, a sun over a hill. */
+export function ImageIcon() {
+  return (
+    <Glyph>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+      <circle cx="6" cy="6.5" r="1.1" />
+      <path d="M2.75 11.5 6.5 8.25l2.25 2 1.75-1.5 3 2.5" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a film frame with a play triangle. */
+export function VideoIcon() {
+  return (
+    <Glyph>
+      <rect x="2.5" y="3.5" width="11" height="9" rx="1.5" />
+      <path d="M7 6.25v3.5L10 8z" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a speech bubble carrying a short waveform. */
+export function VoiceIcon() {
+  return (
+    <Glyph>
+      <path d="M3.5 3h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5V11h-.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M6 6v2M8 5v4M10 6v2" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a speaker sending out two arcs. */
+export function SoundIcon() {
+  return (
+    <Glyph>
+      <path d="M2.75 6.25h2L8 3.5v9l-3.25-2.75h-2z" />
+      <path d="M10.25 6a3 3 0 0 1 0 4M12 4.25a5.5 5.5 0 0 1 0 7.5" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a pair of beamed notes. */
+export function MusicIcon() {
+  return (
+    <Glyph>
+      <circle cx="4.75" cy="11.75" r="1.75" />
+      <circle cx="11.25" cy="10.25" r="1.75" />
+      <path d="M6.5 11.75V4.5l6.5-1.75v7.5" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a pen nib writing a line. */
+export function PenIcon() {
+  return (
+    <Glyph>
+      <path d="M10.25 3.25 12.75 5.75 6 12.5H3.5V10z" />
+      <path d="M9 13.25h4" />
+    </Glyph>
+  );
+}
+
+/** Blank-chat suggestion: a question in a speech bubble. */
+export function AskIcon() {
+  return (
+    <Glyph>
+      <path d="M3.5 3h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5V11h-.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M6.6 5.9a1.45 1.45 0 1 1 2 1.35c-.4.2-.6.45-.6.9" />
+      <path d="M8 9.4v.05" />
     </Glyph>
   );
 }

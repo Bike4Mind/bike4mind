@@ -1,4 +1,5 @@
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
+import { providerFetchOptions } from './providerDispatcher';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
@@ -63,6 +64,7 @@ import {
 import {
   buildThinkingParams,
   effortForComplexity,
+  applyAnthropicOutputCeiling,
   isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
@@ -287,6 +289,7 @@ export class AnthropicBackend implements ICompletionBackend {
         : { apiKey: federated ? undefined : apiKey }),
       maxRetries: 5,
       fetch: retryFetch,
+      fetchOptions: providerFetchOptions(),
     });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
@@ -1036,10 +1039,13 @@ export class AnthropicBackend implements ICompletionBackend {
       m => m.cache === true && m.role === 'system' && !isToolChangeMessage(m)
     );
     const anyMessageCacheControlled = anyUserOrAssistantCacheControlled || anySystemCacheControlled;
+    // A tool round reads the newest flagged message the first call wrote; older flags (a lookback
+    // breakpoint) are spent and would take the slot this round's end-of-array anchor needs.
+    const newestFlagged = toolCallCount > 0 ? messages.findLastIndex(m => m.cache === true && m.role !== 'system') : -1;
 
     const cacheStampedMessages: IMessage[] = anyUserOrAssistantCacheControlled
-      ? messages.map(m => {
-          if (m.cache !== true || m.role === 'system') return m;
+      ? messages.map((m, index) => {
+          if (m.cache !== true || m.role === 'system' || index < newestFlagged) return m;
           const content = m.content;
           if (typeof content === 'string') {
             return {
@@ -1461,6 +1467,7 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking.budget_tokens = maxThinkingBudget;
       }
     }
+    applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling);
 
     // Setup the actual API call with API-specific options
     try {
@@ -1547,12 +1554,20 @@ export class AnthropicBackend implements ICompletionBackend {
           let idleTimeoutKeepalive = false;
           // The provider billed the prompt once message_start arrived, so the rejection carries it.
           const streamTimeoutError = () => {
+            const turnUsage = accumTurnUsage?.length
+              ? streamingTurnUsage
+                ? appendAnthropicTurn(accumTurnUsage, { ...streamingTurnUsage, output_tokens: 0 })
+                : accumTurnUsage
+              : undefined;
             const usage = {
               inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens ?? 0),
               cacheReadInputTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens ?? 0),
               cacheCreationInputTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens ?? 0),
+              ...(accumOutputTokens > 0 ? { outputTokens: accumOutputTokens } : {}),
+              ...(turnUsage ? { turnUsage } : {}),
             };
-            const hasUsage = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens > 0;
+            const hasUsage =
+              usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens + accumOutputTokens > 0;
             return createAnthropicStreamTimeoutError(idleTimeoutKind, idleTimeoutMsForError, {
               keepalive: idleTimeoutKeepalive,
               usage: hasUsage ? usage : undefined,

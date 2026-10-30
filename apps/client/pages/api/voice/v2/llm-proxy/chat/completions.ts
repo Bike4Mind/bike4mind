@@ -6,6 +6,7 @@
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
 import { DATA_LAKE_TOOL_NAMES, questGenerationJobs } from '@bike4mind/common';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
@@ -32,7 +33,7 @@ import {
 } from '@bike4mind/voice';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
-import { withholdAdminRole } from '@server/auth/apiKeyAdminScope';
+import { ownerWithheldUsers, withholdAdminRole } from '@server/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
@@ -171,6 +172,14 @@ async function runFullPipeline(
     // whole completion happens synchronously here.
     invokeLambda: async () => {},
   };
+  // A tool that re-reads the owner by id must see the same withheld role as `user`. Kept out of the
+  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.test.ts).
+  if (sessionCtx.adminRoleWithheld) {
+    chatCompletionOptions.db = {
+      ...chatCompletionOptions.db,
+      users: ownerWithheldUsers(sessionCtx.userId, chatCompletionOptions.db.users),
+    };
+  }
 
   const invokeBody = {
     sessionId: sessionCtx.sessionId,
@@ -262,7 +271,10 @@ export const config = {
   },
 };
 
-const handler = baseApi({ auth: false }).post(async (req, res) => {
+// Anonymous by design (the voice session token is the auth), so it opts into the network block itself.
+const ipGatedApi = baseApi({ auth: false }).use(checkBlockedIP({ surface: 'app' }));
+
+const handler = ipGatedApi.post(async (req, res) => {
   const body = req.body as OpenAIChatRequest & {
     elevenlabs_extra_body?: { b4m_session?: unknown };
   };

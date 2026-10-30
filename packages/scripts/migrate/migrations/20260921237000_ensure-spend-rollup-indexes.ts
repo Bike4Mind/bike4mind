@@ -9,7 +9,7 @@ import { type MigrationFile } from './index';
  * Idempotent: createIndexes is a no-op for indexes that already exist.
  */
 const migration: MigrationFile = {
-  id: 20260921236500,
+  id: 20260921237000,
   name: 'ensure spend rollup indexes',
 
   up: async () => {

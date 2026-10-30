@@ -147,6 +147,7 @@ const api: DesktopApi = {
     getLocalContext: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContext),
     setLocalContext: setting => ipcRenderer.invoke(IPC_CHANNELS.chatSetLocalContext, setting),
     getLocalContextFit: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContextFit),
+    listCreationTools: (model: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListCreationTools, model),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     settleLocalModel: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSettleLocalModel, sessionId),
@@ -379,6 +380,7 @@ const api: DesktopApi = {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsGetState),
     setRules: (scope, lists) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetRules, scope, lists),
     setSharing: (share: boolean) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetSharing, share),
+    exportApprovalSummary: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsExportApprovalSummary),
   },
   capabilities: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.capabilitiesGetState),

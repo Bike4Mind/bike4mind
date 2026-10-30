@@ -1570,7 +1570,18 @@ export interface components {
             /** @enum {string} */
             exclusionReason?: 'duplicate' | 'disabled' | 'token_limit';
           }[];
-          promptText?: string;
+          promptText?: {
+            blocks: {
+              /** @enum {string} */
+              source: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org' | 'caller';
+              name: string;
+              text?: string;
+              redacted: boolean;
+              /** @enum {string} */
+              placement: 'system' | 'user_turn' | 'mixed';
+            }[];
+            sizeCapped: boolean;
+          };
           performance: {
             total_ms: number;
             phases: {
@@ -2136,6 +2147,8 @@ export interface components {
       )[];
       temperature?: number;
       max_tokens?: number;
+      /** @description Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise. */
+      sessionId?: string;
       options?: {
         temperature?: number;
         maxTokens?: number;
@@ -2840,6 +2853,8 @@ export interface components {
       };
       session: {
         id: string;
+      } & {
+        [key: string]: unknown;
       };
       originalPrompt: string;
       enhancedPrompt: string;

@@ -35,5 +35,6 @@ export function applyReplyDone(message: ChatMessage, event: ReplyDoneEvent): Cha
     toolCalls: event.toolCalls ?? message.toolCalls,
     artifacts: event.artifacts ?? message.artifacts,
     usage: event.usage ?? message.usage,
+    contextSnapshot: event.contextSnapshot,
   };
 }

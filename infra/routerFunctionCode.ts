@@ -92,8 +92,8 @@ async function handler(event) {
 // Code of the one viewer-response function every preview stage in an account shares instead of
 // creating its own (CloudFront caps functions per account). It must equal what a preview's own
 // function would hold: the CSP backstop with bare prefixes (routePrefix is '' on deployed stages)
-// plus noindex, which is the same on every non-production stage. Deployed once per account by
-// scripts/preview-shared-response-function.mjs; re-publish it whenever this code changes.
+// plus noindex, which is the same on every non-production stage. The function itself is owned by
+// OpenTofu in the infrastructure repo, which vendors this output; regenerate it whenever this changes.
 export function sharedPreviewResponseFunctionCode(): string {
   return responseFunctionCode(userFileCspInjection(userFileCdnPrefixes) + noindexResponseInjection('preview'));
 }

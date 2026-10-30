@@ -58,6 +58,7 @@ export const GENERATION_JOB_ERROR_CODES = [
   'input_image_not_found',
   'enqueue_failed',
   'cancelled',
+  'account_blocked',
 ] as const;
 export type GenerationJobErrorCode = (typeof GENERATION_JOB_ERROR_CODES)[number];
 

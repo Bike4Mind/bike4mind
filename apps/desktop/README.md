@@ -18,11 +18,14 @@ No Node.js, pnpm, or source checkout is required.
    and drag Bike4Mind into Applications.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
+3. On Windows x64, download `setup.exe` and run it. The installer is not code signed yet,
+   so SmartScreen shows a warning on first run. In-app updates work on Windows. The local
+   tool layer (shell commands, file access, sandboxing) is built around a POSIX shell and
+   is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
 builds in the source repository do not gain an updater retroactively: install the first signed
 feed-enabled build manually. `SHA256SUMS.txt` accompanies each release for checksum verification.
-Windows packaging exists locally but is not yet part of the release pipeline.
 
 ## Running it
 
@@ -207,22 +210,23 @@ commit since the last desktop release, including pending shared dependency chang
 
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
-`desktop-mac-arm64` and `desktop-linux-x64` for installers,
+`desktop-mac-arm64`, `desktop-linux-x64` and `desktop-win-x64` for installers,
 plus `installer-checksums` for `SHA256SUMS.txt`. PR jobs have only
 read access to repository contents; the publication job runs only for pushes or manual
 dispatches on `main`. PR runs are isolated from the main release concurrency group.
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
-typechecks and tests on macOS and Linux, then packages Apple Silicon and Linux x64.
-The two platform jobs run in parallel; Turbo also builds independent shared packages
+typechecks on macOS, Linux and Windows, runs the desktop unit tests on macOS and Linux (the
+suite assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows x64.
+The three platform jobs run in parallel; Turbo also builds independent shared packages
 in parallel while respecting dependency order. Intel macOS release builds are temporarily
-paused; local x64 packaging remains available. Publication waits for both build jobs and
-validates the arm64 DMG, arm64 ZIP, and Linux AppImage.
+paused; local x64 packaging remains available. Publication waits for all build jobs and
+validates the arm64 DMG, arm64 ZIP, Linux AppImage, and Windows installer.
 Failed uploads leave a draft release, not a partially published download page.
 
 macOS jobs read the repository or organization Actions variable `OSX_RUNNER_LABEL`,
 defaulting to `macos-26-runner` when unset or empty. The selected runner must be
-Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
+Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`. Windows runs on `windows-2025`.
 Paid runner usage is billed by GitHub.
 
 Publication uses the existing release App only to reserve protected source version tags.
@@ -256,6 +260,10 @@ Apple Silicon runs on a native standard runner. The tests use a mock keychain
 to avoid system prompts or accessing a real login keychain. It does not verify secure
 credential persistence. This does
 not verify Gatekeeper approval on a fresh machine.
+
+The Windows job runs the NSIS installer silently into a temporary directory and runs the same
+startup checks against the installed app. `win-x64-smoke-results` contains the screenshot and
+logs. It does not verify SmartScreen behaviour or a real user profile.
 
 Installer versions follow SemVer, selected automatically by
 `scripts/desktop_release_version.py`. The first release uses the package version
@@ -295,8 +303,8 @@ Desktop updates use only the dedicated repository's Latest release. Production r
 automation is unchanged. Keep source desktop release tags intact;
 changing the package version does not override existing release history.
 
-Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
-Without it, users must select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+The hosted backend defaults to `https://app.bike4mind.com`; the repository variable
+`B4M_DEFAULT_API_URL` overrides it. `DESKTOP_RELEASE_REPOSITORY` supplies the
 dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
 `https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
 destinations fail closed. PR builds have no signing credentials and are not published.
@@ -315,8 +323,8 @@ The override is ignored in packaged apps and builds without test keys. Test-key
 builds use a separate cache directory and are rejected by `curated:check-build`;
 never enable the dev flag for a release.
 
-The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
-installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
+The validation job generates `latest-mac.yml`, `latest-linux.yml` and `latest.yml` (Windows) from the actual
+installer bytes, with SHA-512 and size. ZIP and setup.exe blockmaps are mandatory; AppImage blockmaps
 are embedded by electron-builder, and any external blockmaps are retained. Payload URLs
 are pinned to the version tag, so a later Latest switch cannot break an already offered
 update. All assets are uploaded to a draft and downloaded for byte comparison before
@@ -344,7 +352,7 @@ partial manifest. Published assets are not overwritten on retry.
    `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset.
 6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
-   `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
+   `latest-linux.yml` and `latest.yml` downloads redirect successfully (also `latest-mac.yml` for
    the Developer ID path only). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
 7. Test two signed versions using a temporary installation and profile. Check, download,
@@ -407,18 +415,14 @@ GitHub Releases, then rerun the workflow on corrected `main` to publish a new ve
 
 ### Baking the backend URL
 
-`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is what makes
-**Production** selectable in the environment picker - `hostedAvailable()` in
-`src/main/auth/environment.ts` is false whenever it is empty, and the picker then reads
-"Production (not set in this build)". A packaged app inherits no shell environment, so
-there is nothing to read at runtime.
+`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is the
+**Production** entry in the environment picker. A packaged app inherits no shell
+environment, so there is nothing to read at runtime.
 
-**There is deliberately no fallback URL in source.** This repo is public and open-core;
-committing a hostname here would put it in every fork's bundle. The CLI has the same rule
-and the same shape (`packages/cli/tsdown.config.ts`, injected in `release.yaml` from a repo
-variable), so the two clients are branded the same way.
-
-Supply it per build, highest precedence first:
+When nothing supplies it, the build uses `https://app.bike4mind.com` (`PRODUCTION_API_URL` in
+`electron.vite.config.ts`), so every build signs in to production with nothing to type. The
+exception is `pnpm dev`, which bakes nothing and so starts on Local Dev (`http://localhost:3000`). A
+fork that runs its own backend overrides it, highest precedence first:
 
 ```bash
 B4M_DEFAULT_API_URL=https://your-backend.example pnpm package:mac
@@ -431,8 +435,7 @@ covers, at the root, for `.env` and `.env*.local` alike:
 B4M_DEFAULT_API_URL=https://your-backend.example
 ```
 
-Build with neither and the app ships with no hosted option at all, which is the correct
-state for an unbranded fork: Local Dev and a self-hosted URL still work.
+Local Dev and a self-hosted URL stay available from "Change server" on the sign-in card.
 
 ### Signing
 
@@ -723,8 +726,8 @@ token.
   HTTP client debug-logs request bodies.
 
 `B4M_DEFAULT_API_URL` is baked into the main bundle at build time (see the `define` block in
-`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown. Empty for an unbranded
-fork, which then has no Production option and must pick Local Dev or a custom URL.
+`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown, and falls back to
+`https://app.bike4mind.com` when no build supplies it (except in `pnpm dev`, which starts on Local Dev).
 
 Routing uses hash history. A packaged build loads the renderer over `file://`, which has no
 origin for the History API to push against, so hash history is the one mode that behaves

@@ -42,9 +42,10 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   isValidEncryptionKey: () => true,
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), error: vi.fn() } }));
+vi.mock('@bike4mind/observability', () => ({ Logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
+import { Logger } from '@bike4mind/observability';
 import handler from '../index';
 
 const SECRET_VALUE = 'sk-test-plaintext-value';
@@ -100,5 +101,18 @@ describe('POST /api/admin/system-secrets admin audit', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(res._getJSONData()).not.toHaveProperty('success');
     expect(h.clearSecretCache).not.toHaveBeenCalled();
+  });
+});
+
+describe('non-admin requests', () => {
+  it.each(['GET', 'POST'] as const)('%s is refused with a 403 logged at warn, not error', async method => {
+    const { req, res } = createMocks({ method, body: { secretName: 'OPENAI_API_KEY', value: SECRET_VALUE } });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(Logger.warn).toHaveBeenCalledTimes(1);
+    expect(Logger.error).not.toHaveBeenCalled();
+    expect(h.findBySecretName).not.toHaveBeenCalled();
   });
 });

@@ -277,6 +277,39 @@ describe('creditService - subtractCredits', () => {
       });
     });
 
+    it('records cache tokens, the client session and tool names, so the row explains its charge', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await subtractCredits(
+        {
+          type: 'completion_api_usage',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 183,
+          model: 'claude-opus-5-5',
+          sessionId: 'desktop-session-1',
+          inputTokens: 3,
+          outputTokens: 900,
+          cacheReadTokens: 180_000,
+          cacheWriteTokens: 12_000,
+          source: 'desktop',
+          metadata: { toolNames: ['read_file', 'bash'] },
+        },
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        'completion_api_usage',
+        expect.objectContaining({
+          sessionId: 'desktop-session-1',
+          inputTokens: 3,
+          cacheReadTokens: 180_000,
+          cacheWriteTokens: 12_000,
+          metadata: { toolNames: ['read_file', 'bash'] },
+        })
+      );
+    });
+
     it('should reject an unknown source value at the Zod enum boundary', async () => {
       const parameters = {
         type: 'completion_api_usage',

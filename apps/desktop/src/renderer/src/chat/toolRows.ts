@@ -76,6 +76,15 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Asked for ${n} folders`,
     active: 'Asking for a folder...',
   },
+  // A successful call names the PR through its label; these cover a refusal and the running row.
+  set_session_pull_request: {
+    did: "Set the session's PR to",
+    didAlone: "Changed the session's PR",
+    to: "set the session's PR to",
+    toAlone: "change the session's PR",
+    many: n => `Changed the session's PR ${n} times`,
+    active: "Changing the session's PR...",
+  },
   mcp_list_servers: {
     didAlone: 'Listed MCP servers',
     toAlone: 'list MCP servers',
@@ -372,6 +381,7 @@ const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
   mcp_set_server_enabled: ['server'],
   mcp_reconnect_server: ['server'],
   mcp_remove_server: ['server'],
+  set_session_pull_request: ['pull_request'],
 };
 
 /**

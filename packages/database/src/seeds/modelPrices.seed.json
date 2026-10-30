@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-20T08:56:18.099Z",
+  "generatedAt": "2026-10-29T04:53:56.000Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -426,7 +426,8 @@
         "1000000": {
           "input": 0.00001,
           "output": 0.00005,
-          "cache_read": 2.5e-7
+          "cache_read": 2.5e-7,
+          "cache_write": 0.0000125
         }
       }
     },
@@ -501,7 +502,8 @@
         "1000000": {
           "input": 0.000004,
           "output": 0.00002,
-          "cache_read": 2.0000000000000002e-7
+          "cache_read": 2.0000000000000002e-7,
+          "cache_write": 0.000005
         }
       }
     },
@@ -532,7 +534,8 @@
         "1000000": {
           "input": 0.000002,
           "output": 0.00001,
-          "cache_read": 1.0000000000000001e-7
+          "cache_read": 1.0000000000000001e-7,
+          "cache_write": 0.0000025
         }
       }
     },

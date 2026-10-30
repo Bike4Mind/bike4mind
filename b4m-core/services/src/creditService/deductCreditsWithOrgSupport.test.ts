@@ -269,6 +269,32 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
+    it.each(['text_generation_usage', 'completion_api_usage'] as const)(
+      'forwards cache read and write tokens for %s',
+      async type => {
+        const params = {
+          type,
+          user: mockUser,
+          organization: null,
+          credits: 15,
+          sessionId: 'session1',
+          questId: 'quest1',
+          model: 'claude-opus-5-5',
+          inputTokens: 5,
+          outputTokens: 250,
+          cacheReadTokens: 40_000,
+          cacheWriteTokens: 2_000,
+        } satisfies DeductCreditsParams;
+
+        await deductCreditsWithOrgSupport(params, mockAdapters);
+
+        expect(mockSubtractCredits).toHaveBeenCalledWith(
+          expect.objectContaining({ type, inputTokens: 5, cacheReadTokens: 40_000, cacheWriteTokens: 2_000 }),
+          expect.any(Object)
+        );
+      }
+    );
+
     it('should handle image_generation_usage type', async () => {
       const params: DeductCreditsParams = {
         type: 'image_generation_usage',
