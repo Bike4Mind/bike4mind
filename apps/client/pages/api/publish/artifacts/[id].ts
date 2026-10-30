@@ -280,6 +280,7 @@ const handler = baseApi()
     // Checked on the resulting state so a restricted owner can narrow a page but not widen it.
     // A gate change counts wherever the gate is still served: public, or via a live share link.
     const gateKindAfter = artifact.accessGate?.kind ?? null;
+    // Any gate-kind change counts as loosening, even domain to passphrase, so the check stays conservative.
     const gateLoosened =
       parsed.data.accessGate !== undefined &&
       gateKindBefore !== null &&
