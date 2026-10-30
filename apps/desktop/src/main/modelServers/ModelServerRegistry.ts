@@ -76,6 +76,8 @@ interface Entry {
   runtime: LocalRuntime;
   health: ModelServerHealth;
   product: OpenAICompatibleProduct | null;
+  /** From the last listing, so a conversation saved on an alias still finds its model while the server is down. */
+  aliasIds?: ReadonlyMap<string, string[]>;
 }
 
 export interface ModelServerRegistryDeps {
@@ -334,6 +336,7 @@ export class ModelServerRegistry {
               )
               .catch(() => undefined);
             entry.record = { ...entry.record, models: listed.map(model => model.name) };
+            entry.aliasIds = aliasIdsOf(listed);
             if (entry.health.state === 'unknown') void this.check(entry.record.id);
             return listed.map(model => ({ ...model, server }));
           } catch (raw) {
@@ -347,13 +350,17 @@ export class ModelServerRegistry {
         }
         const reason = unavailableReason(entry);
         const runtimeId = serverRuntimeId(entry.record.id);
-        return entry.record.models.map(name => ({
-          id: localModelId(runtimeId, name),
-          name,
-          backend: localBackend(runtimeId),
-          server,
-          unavailable: reason,
-        }));
+        return entry.record.models.map(name => {
+          const aliasIds = entry.aliasIds?.get(name);
+          return {
+            id: localModelId(runtimeId, name),
+            name,
+            backend: localBackend(runtimeId),
+            server,
+            ...(aliasIds ? { aliasIds } : {}),
+            unavailable: reason,
+          };
+        });
       })
     );
     return lists.flat();
@@ -533,8 +540,10 @@ export class ModelServerRegistry {
       error: null,
     });
     try {
-      const names = (await entry.client.listModels()).map(model => model.name);
+      const listed = await entry.client.listModels();
+      const names = listed.map(model => model.name);
       entry.record = { ...entry.record, models: names };
+      entry.aliasIds = aliasIdsOf(listed);
       await this.deps.store.setModels(entry.record.id, names);
     } catch (err) {
       this.deps.logger.debug(
@@ -599,6 +608,7 @@ export class ModelServerRegistry {
       runtime,
       health: previous && previous.record.kind === record.kind ? previous.health : { ...UNKNOWN_HEALTH },
       product,
+      ...(previous?.aliasIds ? { aliasIds: previous.aliasIds } : {}),
     };
   }
 
@@ -673,6 +683,12 @@ function within<T, L>(work: Promise<T>, ms: number, late: L): Promise<T | L> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<L>(resolve => (timer = setTimeout(() => resolve(late), ms)));
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
+function aliasIdsOf(listed: readonly ChatModelOption[]): Map<string, string[]> {
+  return new Map(
+    listed.flatMap((model): [string, string[]][] => (model.aliasIds?.length ? [[model.name, model.aliasIds]] : []))
+  );
 }
 
 function unavailableReason(entry: Entry): string {

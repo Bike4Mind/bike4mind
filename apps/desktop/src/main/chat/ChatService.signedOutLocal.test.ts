@@ -258,3 +258,48 @@ describe('signed-in chat', () => {
     expect((await service.createSession()).model).toBe(HOSTED_DEFAULT);
   });
 });
+
+describe('a conversation saved on a served-model alias', () => {
+  const SERVER = 'srv-gpu';
+  const ALIAS = localModelId(SERVER, 'qwen');
+  const served = (tools: boolean): ChatModelOption => ({
+    id: localModelId(SERVER, 'qwen-small'),
+    name: 'qwen-small',
+    backend: localBackend(SERVER),
+    server: { id: 'gpu', name: 'GPU vLLM' },
+    aliasIds: [ALIAS],
+    ...(tools ? {} : { supportsTools: false }),
+  });
+  const turnTools = (stream: Awaited<ReturnType<typeof fixture>>['stream']) =>
+    Math.max(...stream.mock.calls.map(([request]) => request.tools?.length ?? 0));
+
+  it.each(['device-local', 'signed-in'] as const)(
+    '%s: stays on the alias with the tools its primary entry has',
+    async mode => {
+      const { service, store, stream, listLocal, settled } = await fixture({
+        mode,
+        local: [GEMMA, served(true)],
+        last: [GEMMA, served(true)],
+      });
+      const session = await service.createSession();
+      await service.setSessionModel(session.id, ALIAS);
+      expect(await service.settleSessionModel(session.id)).toBeNull();
+      expect(await service.send(session.id, 'hello')).toEqual({ ok: true, messageId: expect.any(String) });
+      await settled(session.id);
+      expect((await store.get(session.id))?.model).toBe(ALIAS);
+      expect(stream.mock.calls.every(([request]) => request.model === ALIAS)).toBe(true);
+      expect(turnTools(stream)).toBeGreaterThan(0);
+      expect(listLocal).not.toHaveBeenCalledWith(true);
+    }
+  );
+
+  it.each(['device-local', 'signed-in'] as const)('%s: sends no tools when its primary has none', async mode => {
+    const { service, stream, settled } = await fixture({ mode, local: [served(false)], last: [served(false)] });
+    const session = await service.createSession();
+    await service.setSessionModel(session.id, ALIAS);
+    expect(await service.send(session.id, 'hello')).toMatchObject({ ok: true });
+    await settled(session.id);
+    expect(stream.mock.calls.every(([request]) => request.model === ALIAS)).toBe(true);
+    expect(turnTools(stream)).toBe(0);
+  });
+});

@@ -47,6 +47,7 @@ import type {
 import {
   awaitsWorktree,
   branchHolder,
+  findModelOption,
   isLocalBackend,
   isLocalModel,
   isResumableStop,
@@ -2430,7 +2431,7 @@ export class ChatService {
   private async reconcileModel(session: ChatSession): Promise<{ session: ChatSession; notice?: string }> {
     const available = this.deps.models?.cached();
     if (!available || available.length === 0) return { session };
-    if (available.some(model => model.id === session.model)) return { session };
+    if (findModelOption(available, session.model)) return { session };
     // A device-local model is never swapped for a hosted one: that would send the conversation to the server.
     if (isLocalModel(session.model)) return { session };
 
@@ -2452,7 +2453,7 @@ export class ChatService {
    * proceeds and anything else is refused, so nothing goes anywhere hosted.
    */
   private async settleDeviceLocal(session: ChatSession, models: readonly ChatModelOption[]): Promise<SettledModel> {
-    if (models.some(model => model.id === session.model)) return { session };
+    if (findModelOption(models, session.model)) return { session };
     if (models.length === 0)
       return parseLocalModelId(session.model)
         ? { session }
@@ -2477,7 +2478,7 @@ export class ChatService {
    */
   private async localModelsFor(model: string): Promise<ChatModelOption[]> {
     const last = this.deps.models?.lastLocal?.();
-    if (last?.some(option => option.id === model)) return last;
+    if (last && findModelOption(last, model)) return last;
     return (await this.deps.models?.listLocal?.(true)) ?? [];
   }
 
@@ -2523,7 +2524,7 @@ export class ChatService {
   private refuseUnreadableImages(model: string, attachments: readonly ChatAttachment[]): string | null {
     if (!attachments.some(attachment => attachment.kind === 'image')) return null;
 
-    const option = this.deps.models?.cached()?.find(candidate => candidate.id === model);
+    const option = findModelOption(this.deps.models?.cached() ?? undefined, model);
     if (!option || option.supportsVision !== false) return null;
 
     return `${option.name} cannot read images. Pick a model that can, or remove the image before sending.`;
@@ -2637,7 +2638,7 @@ export class ChatService {
           ? { models: await this.localModelsFor(session.model) }
           : await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
-      const modelOption = catalog?.models.find(option => option.id === session.model);
+      const modelOption = findModelOption(catalog?.models, session.model);
       const maxTokens = modelOption?.maxOutputTokens;
       const thinkingToggle =
         modelOption?.thinkingToggle ??
@@ -2646,7 +2647,7 @@ export class ChatService {
       const effort = reasoningEffortFor(session.reasoningEffort, session.model);
       const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
-      const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;
+      const vision = modelOption?.supportsVision !== false;
       const images: ImageContext | undefined = this.deps.prepareImage
         ? { vision, prepare: this.deps.prepareImage }
         : undefined;

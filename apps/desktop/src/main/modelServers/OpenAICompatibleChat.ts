@@ -173,6 +173,9 @@ export class OpenAICompatibleChat implements LocalChat {
         ...(model.capabilities.vision ? { supportsVision: true } : {}),
         ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name) } : {}),
         ...(model.baseModel ? { baseModel: model.baseModel } : {}),
+        ...(model.aliases?.length
+          ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
+          : {}),
         ...(this.toolsOff ? { supportsTools: false } : {}),
       }));
   }

@@ -185,6 +185,7 @@ describe('OpenAICompatibleChat against vLLM', () => {
       { name: 'sql-lora', contextWindow: MAX_MODEL_LEN, baseModel: 'qwen-small' },
     ]);
     expect(models.every(model => model.supportsTools === undefined)).toBe(true);
+    expect(models.map(model => model.aliasIds)).toEqual([[models[0].id.replace(/qwen-small$/, 'qwen')], undefined]);
   });
 
   it('takes the context from max_model_len before any listing, for the first name, an alias and an adapter', async () => {
@@ -382,5 +383,32 @@ describe('ModelServerRegistry with a vLLM server', () => {
     await servers.check(views[1].id);
     await vi.waitFor(async () => expect((await servers.views())[1].toolsHint).toBeUndefined());
     expect(changed).toHaveBeenCalled();
+  });
+
+  it('keeps the alias ids on the listed model while the server is down', async () => {
+    vllm = await startFakeVllm();
+    const quiet = { debug: () => undefined, warn: () => undefined };
+    const servers = new ModelServerRegistry({
+      store: new ModelServerStore(cipher, memoryFile(), quiet),
+      logger: quiet,
+      fetchFor: () => fetchLike,
+      localFetch: async () => new Response('{"version":"0.12.0"}'),
+      resolve: async () => ['127.0.0.1'],
+    });
+    const views = await servers.add({
+      address: vllm.baseUrl,
+      credential: { type: 'none' },
+      name: 'gpu vllm',
+      kind: 'openai-compatible',
+      access: 'chat',
+    });
+    const online = (await servers.models()).find(model => model.name === 'qwen-small');
+    expect(online?.aliasIds).toEqual([online?.id.replace(/qwen-small$/, 'qwen')]);
+
+    await vllm.close();
+    vllm = undefined;
+    await servers.check(views[1].id);
+    const down = (await servers.models()).find(model => model.name === 'qwen-small');
+    expect(down).toMatchObject({ id: online?.id, aliasIds: online?.aliasIds, unavailable: expect.any(String) });
   });
 });

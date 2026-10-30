@@ -36,7 +36,7 @@ afterEach(() => {
   host = null;
 });
 
-function mount(models = MODELS) {
+function mount(models = MODELS, modelId = models[0]?.id ?? null) {
   const onSelect = vi.fn<(model: string) => void>();
   const catalog: ModelCatalogController = { models, loading: false, error: null, reload: vi.fn() };
   host = document.createElement('div');
@@ -45,7 +45,7 @@ function mount(models = MODELS) {
   act(() => {
     root?.render(
       <CssVarsProvider>
-        <ModelPicker catalog={catalog} modelId={models[0]?.id ?? null} onSelect={onSelect} />
+        <ModelPicker catalog={catalog} modelId={modelId} onSelect={onSelect} />
       </CssVarsProvider>
     );
   });
@@ -289,6 +289,22 @@ describe('ModelPicker twin rows', () => {
         ])
       )
     ).toEqual({ 'local:srv-v:qwen-small': undefined, 'local:srv-v:sql-lora': 'LoRA on qwen-small' });
+  });
+
+  it('selects the primary row for a conversation saved on one of its served-name aliases', () => {
+    const server = { id: 'v', name: 'gpu vllm' };
+    mount(
+      [
+        { id: 'local:srv-v:qwen-small', name: 'qwen-small', server, aliasIds: ['local:srv-v:qwen'] },
+        { id: 'local:srv-v:sql-lora', name: 'sql-lora', server, baseModel: 'qwen-small' },
+      ],
+      'local:srv-v:qwen'
+    );
+    expect(el('model-picker-btn').textContent).toBe('qwen-small');
+    expect(document.querySelector('[data-testid="model-picker-unavailable"]')).toBeNull();
+    const bullet = String.fromCharCode(0x2022);
+    expect(options()[0].textContent?.startsWith(`${bullet} qwen-small`)).toBe(true);
+    expect(options()[1].textContent?.startsWith(bullet)).toBe(false);
   });
 
   it('shows the ids that tell twins apart, and filters on them', () => {

@@ -8,7 +8,7 @@ import MenuItem from '@mui/joy/MenuItem';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatModelOption } from '@shared/chat';
-import { isLocalModel, parseLocalModelId } from '@shared/chat';
+import { findModelOption, isLocalModel, parseLocalModelId } from '@shared/chat';
 import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME } from '@shared/modelServers';
 import type { NoLocalModels } from './noLocalModels';
 import type { ModelCatalogController } from './useChat';
@@ -20,7 +20,7 @@ const FILTER_THRESHOLD = 8;
 const MENU_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageUp', 'PageDown', 'Tab', 'Escape']);
 
 function shortLabel(models: readonly ChatModelOption[], modelId: string): string {
-  return models.find(model => model.id === modelId)?.name ?? modelId;
+  return findModelOption(models, modelId)?.name ?? modelId;
 }
 
 interface ModelGroup {
@@ -158,11 +158,12 @@ export function ModelPicker({
 
   // A saved model missing from a list that LOADED is genuinely gone from this deployment.
   // While the list is empty because it could not be read, nothing is known, so nothing is said.
-  const missing = !!modelId && models.length > 0 && !models.some(model => model.id === modelId);
+  const current = findModelOption(models, modelId);
+  const missing = !!modelId && models.length > 0 && !current;
   // Local mode: a hosted id or the placeholder is replaced by main as soon as it sees a list.
   const selecting = missing && local && !parseLocalModelId(modelId);
   const unavailable = missing && !selecting;
-  const serverDown = models.find(model => model.id === modelId)?.unavailable;
+  const serverDown = current?.unavailable;
 
   const details = useMemo(() => rowDetails(models), [models]);
   const matches = useMemo(() => {
@@ -320,7 +321,7 @@ export function ModelPicker({
             {group.models.map(model => (
               <MenuItem
                 key={model.id}
-                selected={model.id === modelId}
+                selected={model.id === current?.id}
                 disabled={!!model.unavailable}
                 onClick={() => onSelect(model.id)}
                 data-testid="model-picker-option"
@@ -328,7 +329,7 @@ export function ModelPicker({
               >
                 <Stack sx={{ minWidth: 0 }}>
                   <Typography level="body-sm" noWrap>
-                    {model.id === modelId ? '\u2022 ' : ''}
+                    {model.id === current?.id ? '\u2022 ' : ''}
                     {model.name}
                   </Typography>
                   {details.get(model.id) && (

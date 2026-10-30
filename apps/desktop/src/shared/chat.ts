@@ -862,13 +862,22 @@ export function localBackend(runtimeId: string): string {
  */
 export const NO_LOCAL_MODEL = 'local:';
 
+/** The listed entry for a saved model id, including an id saved on one of its aliases. */
+export function findModelOption<T extends { id: string; aliasIds?: readonly string[] }>(
+  models: readonly T[] | undefined,
+  id: string | null | undefined
+): T | undefined {
+  if (!models || !id) return undefined;
+  return models.find(model => model.id === id) ?? models.find(model => model.aliasIds?.includes(id));
+}
+
 /** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
 export function pickLocalModel(
-  models: readonly { id: string; unavailable?: string }[],
+  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string }[],
   remembered?: string | null
 ): string | null {
   const usable = models.filter(model => !model.unavailable);
-  if (remembered && usable.some(model => model.id === remembered)) return remembered;
+  if (remembered && findModelOption(usable, remembered)) return remembered;
   return usable[0]?.id ?? null;
 }
 
@@ -919,6 +928,8 @@ export interface ChatModelOption {
   server?: { id: string; name: string };
   /** A LoRA adapter's base model on the same server, shown with it in the picker. */
   baseModel?: string;
+  /** Ids of the other names a server serves this model under; a conversation saved on one resolves here. */
+  aliasIds?: string[];
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
 }
