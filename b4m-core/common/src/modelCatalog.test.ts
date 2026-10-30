@@ -77,11 +77,27 @@ describe('toModelInfo', () => {
     expect(toModelInfo({ ...minimal, reasoning: { supported: true, style: 'anthropic-legacy' } })).toMatchObject({
       thinkingStyle: 'legacy',
     });
-    // A non-Anthropic style has no ModelInfo spelling; unset lets the backend decide.
+    // thinkingStyle is Anthropic's; OpenAI's style rides on its own flag so unset still lets the backend decide.
     expect(toModelInfo({ ...minimal, reasoning: { supported: true, style: 'openai-effort' } })).toMatchObject({
       can_think: true,
       thinkingStyle: undefined,
+      openaiReasoningEffort: true,
     });
+  });
+
+  it('carries the OpenAI effort style and the tools quirk only when the record states them', () => {
+    const stated = toModelInfo({
+      ...minimal,
+      reasoning: { supported: true, style: 'openai-effort', effortIncompatibleWithTools: true },
+    });
+    expect(stated).toMatchObject({ openaiReasoningEffort: true, effortIncompatibleWithTools: true });
+
+    const silent = toModelInfo({ ...minimal, reasoning: { supported: true, style: 'anthropic-adaptive' } });
+    expect(silent).not.toHaveProperty('openaiReasoningEffort');
+    expect(silent).not.toHaveProperty('effortIncompatibleWithTools');
+    expect(toModelInfo({ ...minimal, reasoning: { supported: false, style: 'openai-effort' } })).not.toHaveProperty(
+      'openaiReasoningEffort'
+    );
   });
 
   it('treats either owner as able to disable, and reports the matching reason', () => {
@@ -168,6 +184,24 @@ describe('toModelRecord', () => {
     const { can_think: _think, thinkingStyle: _style, ...silent } = info;
     expect(toModelRecord(silent).reasoning).toBeUndefined();
     expect(toModelRecord(info).reasoning).toEqual({ supported: true, style: 'anthropic-adaptive' });
+  });
+
+  it('round-trips the OpenAI effort style and the tools quirk', () => {
+    const openai: ModelInfo = {
+      ...info,
+      thinkingStyle: undefined,
+      openaiReasoningEffort: true,
+      effortIncompatibleWithTools: true,
+    };
+    expect(toModelRecord(openai).reasoning).toEqual({
+      supported: true,
+      style: 'openai-effort',
+      effortIncompatibleWithTools: true,
+    });
+    expect(toModelInfo(toModelRecord(openai))).toMatchObject({
+      openaiReasoningEffort: true,
+      effortIncompatibleWithTools: true,
+    });
   });
 
   it('records a deprecation date as a deprecated lifecycle and nothing else as active', () => {
