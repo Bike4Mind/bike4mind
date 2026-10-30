@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { newSignupGrant, settingsMap } from '@bike4mind/common';
 
 const findBySettingNames = vi.fn();
 type Row = { settingName: string; settingValue: unknown };
@@ -98,6 +99,30 @@ describe('getOpenSignupStarterCredits', () => {
     ]);
 
     await expect(getOpenSignupStarterCredits()).resolves.toBe(0);
+  });
+
+  // Parity with the real grant: `newSignupGrant` reads the full stored set, not just the queried names, so a
+  // setting it starts reading that STARTER_CREDIT_SETTINGS lacks shows up here as a mismatch once seeded.
+  it.each([
+    { staged: true, tranche: 250, free: 5000 },
+    { staged: 'true', tranche: undefined, free: 5000 },
+    { staged: true, tranche: 0, free: 5000 },
+    { staged: false, tranche: 250, free: 5000 },
+    { staged: undefined, tranche: 250, free: 1200 },
+  ])('matches what an open signup is granted ($staged, $tranche, $free)', async ({ staged, tranche, free }) => {
+    const all: Row[] = [
+      ...rows(true, free),
+      { settingName: 'verifiedUnlockCredits', settingValue: 4750 },
+      ...(staged === undefined ? [] : [{ settingName: 'stagedSignupGrantEnabled', settingValue: staged }]),
+      ...(tranche === undefined ? [] : [{ settingName: 'signupGrantCredits', settingValue: tranche }]),
+    ];
+    stored(all);
+    const repo = {
+      findBySettingName: async (name: string) => all.find(r => r.settingName === name) ?? null,
+    } as Parameters<typeof newSignupGrant>[0];
+    const flat = settingsMap.defaultFreeCredits.schema.parse(free);
+
+    await expect(getOpenSignupStarterCredits()).resolves.toBe((await newSignupGrant(repo))?.signupCredits ?? flat);
   });
 
   it('returns 0 when the lookup fails', async () => {
