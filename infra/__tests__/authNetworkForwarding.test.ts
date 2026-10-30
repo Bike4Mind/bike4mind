@@ -36,12 +36,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function loadRouter(shared = false) {
+async function loadRouter(shared = false, prodCachePolicyId = '') {
   vi.resetModules();
   mocks.cdn.defaultCacheBehavior = mocks.defaultBehavior;
   delete mocks.cdn.orderedCacheBehaviors;
   vi.stubEnv('DEV_ROUTER_DISTRIBUTION_ID', shared ? 'shared-router' : '');
-  vi.stubEnv('PROD_CACHE_POLICY_ID', '');
+  vi.stubEnv('PROD_CACHE_POLICY_ID', prodCachePolicyId);
   vi.stubEnv('STAGING_CACHE_POLICY_ID', '');
   vi.stubEnv('SERVER_DOMAIN', 'example.test');
   vi.stubEnv('APP_CERT_ARN', '');
@@ -90,6 +90,15 @@ describe('authentication connection metadata forwarding', () => {
         pathPattern: behavior.pathPattern,
         originRequestPolicyId: 'auth-network-policy',
       });
+    }
+  });
+
+  it('carries the shared cache policy override onto the authentication behaviors', async () => {
+    await loadRouter(false, 'shared-prod-cache');
+    expect(mocks.cdn.defaultCacheBehavior.cachePolicyId).toBe('shared-prod-cache');
+    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(3);
+    for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
+      expect(behavior.cachePolicyId).toBe('shared-prod-cache');
     }
   });
 
