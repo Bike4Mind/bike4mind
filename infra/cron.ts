@@ -431,6 +431,28 @@ const adminAuditAlertsCron = runsScheduledJobs
     })
   : undefined;
 
+// OAuth Abuse Auto-Block - blocks IPs whose failed OAuth sign-ins reach the admin-set threshold, with
+// escalating durations. The admin evaluate endpoint runs the same code on demand.
+// Self-host twin: apps/workers/src/selfhost/oauthAbuseAutoBlock.ts; keep the schedules in step.
+const oauthAbuseAutoBlockCron = runsScheduledJobs
+  ? new sst.aws.Cron('oauthAbuseAutoBlockCron', {
+      schedule: 'rate(1 minute)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/oauthAbuseAutoBlock.handler',
+        runtime: 'nodejs24.x',
+        timeout: '50 seconds',
+        // The next minute's run is the retry; Lambda's async retries would overlap it.
+        retries: 0,
+        link: [...allSecrets],
+        environment: DEFAULT_LAMBDA_ENVIRONMENT,
+        logging: {
+          retention: '1 month',
+        },
+      },
+    })
+  : undefined;
+
 // Data Lake Vector Index Keep-Warm - one wide $vectorSearch per queryable per-model Atlas index, so
 // forced retrieval's 3s ANN candidate pick does not hit a cold index after an idle stretch
 // and fall back to picking files by name. Skips itself while EnableDataLakeVectorSearch is off.
@@ -1272,6 +1294,7 @@ const lakeInconsistencySweepCron = runsScheduledJobs
 
 export {
   adminAuditAlertsCron,
+  oauthAbuseAutoBlockCron,
   signupGrantHeldRelease,
   disposableDomainRefreshCron,
   dataLakeVectorIndexKeepWarmCron,

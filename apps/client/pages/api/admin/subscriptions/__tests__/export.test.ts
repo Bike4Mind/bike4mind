@@ -170,6 +170,22 @@ describe('GET /api/admin/subscriptions/export', () => {
     expect(res._getData()).not.toContain('# Truncated');
   });
 
+  it('pages past a legacy row with no createdAt using a null cursor date, and writes empty date cells', async () => {
+    const firstPage = Array.from({ length: 501 }, (_, index) => makeRow(index + 1));
+    firstPage[499] = makeRow(500, { createdAt: null, periodStartsAt: null, periodEndsAt: null });
+    mockPage.mockResolvedValueOnce(firstPage).mockResolvedValueOnce([makeRow(600)]);
+
+    const { res } = await call({});
+
+    expect(mockPage).toHaveBeenCalledTimes(2);
+    expect(mockPage.mock.calls[1][1]).toEqual({ createdAt: null, id: firstPage[499].id });
+    const legacyLine = res._getData().split('\n')[500];
+    expect(legacyLine.startsWith('"",')).toBe(true);
+    expect(legacyLine).not.toContain('Invalid');
+    expect(legacyLine).toContain(',-412,"","",""');
+    expect(legacyLine.endsWith('"sub_500"')).toBe(true);
+  });
+
   it('ends with a truncation line when the row cap is hit and more remain', async () => {
     mockPage.mockImplementation(async (_match, _after, limit: number) =>
       Array.from({ length: limit }, (_, index) => makeRow(index + 1))
