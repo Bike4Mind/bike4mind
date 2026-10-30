@@ -52,6 +52,13 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
 }));
 
 const mockLogEventSafe = vi.fn();
+const mockRecordPaymentStart = vi.fn();
+vi.mock('@server/billing/paymentRisk', () => ({
+  recordPaymentStart: (...args: unknown[]) => mockRecordPaymentStart(...args),
+}));
+const network = { ip: '203.0.113.7', isDatacenter: true, wafAnonIp: null };
+vi.mock('@server/auth/networkMeta', () => ({ readNetworkMeta: () => network }));
+
 vi.mock('@server/utils/analyticsLog', () => ({
   logEventSafe: (...args: unknown[]) => mockLogEventSafe(...args),
 }));
@@ -117,6 +124,17 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
       publishableKey: 'pk_test_123',
       paymentIntentId: 'pi_1',
     });
+  });
+
+  it('records where the payment started, for the payment risk alert', async () => {
+    const { req, res } = makeReq({ transactionType: TransactionType.Package, packageId: CreditPackageId.Usd20 });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockRecordPaymentStart).toHaveBeenCalledWith(
+      { paymentIntentId: 'pi_1', userId: 'user_1', amount: 2000, currency: 'usd', network },
+      expect.anything()
+    );
   });
 
   it('creates a payment intent for a non-subscribed user buying per-credit', async () => {

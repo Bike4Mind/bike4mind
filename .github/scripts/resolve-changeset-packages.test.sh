@@ -17,7 +17,7 @@ make_workspace() {
   root=$(mktemp -d)
 
   mkdir -p "$root/.changeset" "$root/b4m-core/common" "$root/b4m-core/auth" \
-    "$root/b4m-core/legacy" "$root/apps/client"
+    "$root/b4m-core/legacy" "$root/apps/client" "$root/b4m-core/local-models" "$root/packages/cli"
 
   cat >"$root/.changeset/config.json" <<'EOF'
 { "ignore": ["@bike4mind/legacy"] }
@@ -33,6 +33,12 @@ EOF
 EOF
   cat >"$root/apps/client/package.json" <<'EOF'
 { "name": "@bike4mind/client", "private": true }
+EOF
+  cat >"$root/b4m-core/local-models/package.json" <<'EOF'
+{ "name": "@bike4mind/local-models", "private": true }
+EOF
+  cat >"$root/packages/cli/package.json" <<'EOF'
+{ "name": "@bike4mind/cli", "publishConfig": { "access": "public" } }
 EOF
 
   printf '%s' "$root"
@@ -132,6 +138,28 @@ expect 'ignored package is never resolved' \
 expect 'private package is never resolved' \
   'client' \
   'apps/client/src/index.ts' \
+  ''
+
+expect 'a curated catalog change bumps the CLI that bundles it' \
+  'catalog' \
+  'catalog/model-hub/curated-v2.json' \
+  '@bike4mind/cli'
+
+expect 'a change to the private package the CLI inlines bumps the CLI' \
+  'local-models' \
+  'b4m-core/local-models/src/curated.ts' \
+  '@bike4mind/cli'
+
+expect 'a bundled input beside a CLI change resolves the CLI once' \
+  '' \
+  'catalog/model-hub/curated-v2.json
+packages/cli/src/index.ts
+b4m-core/local-models/src/curated.ts' \
+  '@bike4mind/cli'
+
+expect 'markdown beside a bundled input does not bump the CLI' \
+  '' \
+  'catalog/model-hub/README.md' \
   ''
 
 expect 'a directory that merely shares a name prefix does not match' \

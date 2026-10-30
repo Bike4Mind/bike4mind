@@ -2960,7 +2960,7 @@ export class ChatService {
                 messages: cacheable ? withCacheBreakpoints(wire) : wire,
                 tools,
                 thinking: askForThinking,
-                // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+                // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
                 sessionId,
                 ...effortField,
                 ...(maxTokens ? { maxTokens } : {}),

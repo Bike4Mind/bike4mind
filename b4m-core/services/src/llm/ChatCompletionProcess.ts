@@ -6709,6 +6709,8 @@ export class ChatCompletionProcess {
                 model: currentModel.id,
                 inputTokens,
                 outputTokens,
+                cacheReadTokens: cacheReadInputTokens || undefined,
+                cacheWriteTokens: cacheCreationInputTokens || undefined,
               },
               {
                 db: {
@@ -7483,6 +7485,8 @@ export class ChatCompletionProcess {
           model: usage.modelInfo.id,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
+          cacheReadTokens: usage.cacheReadInputTokens,
+          cacheWriteTokens: usage.cacheCreationInputTokens,
         },
         {
           db: {

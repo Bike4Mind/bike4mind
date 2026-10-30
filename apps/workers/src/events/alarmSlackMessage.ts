@@ -4,8 +4,9 @@
  *
  * Layout: a top-level header carries stage and level at a glance; the details sit in a
  * colour-barred attachment (red page / amber warn / blue info on production, grey on any other
- * stage, green when resolved). Mentions only ever apply to production page-level alarms.
- * Stages other than production post page-level alarms only; their warnings are dropped.
+ * stage, green when resolved). Mentions only ever apply to production alarms, at page level
+ * unless the setting widens them to warn (see parseMentionSetting). Stages other than production
+ * post page-level alarms only; their warnings are dropped.
  */
 
 import { classifyStage } from '@bike4mind/common';
@@ -37,7 +38,7 @@ export interface AlarmCatalogEntry {
 export interface FormatOptions {
   /** Origin of the app (https://app.example.com). Admin buttons are omitted when unset. */
   appUrl?: string;
-  /** Slack mention token such as <!channel>; applied to production page-level alarms only. */
+  /** Mention setting, as parseMentionSetting reads it; applied to production alarms only. */
   mention?: string;
 }
 
@@ -283,7 +284,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   SuccessfulSignups: {
     title: 'More new accounts than usual',
-    level: 'warn',
+    level: 'page',
     unit: 'new accounts',
     meaning:
       'The hourly census counted more new accounts in one hour than the ceiling. It notifies once per episode and stays on while each following hour also breaches.',
@@ -292,7 +293,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   NewAccountApiKeys: {
     title: 'New accounts are creating API keys fast',
-    level: 'warn',
+    level: 'page',
     unit: 'API keys',
     meaning:
       'Accounts under 24 hours old created more API keys in one hour than the ceiling. Credit farms create keys right after signing up.',
@@ -316,7 +317,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
   },
   'young-account-spend-rate': {
     title: 'New accounts are spending a lot on AI',
-    level: 'warn',
+    level: 'page',
     unit: 'USD',
     meaning:
       'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',
@@ -611,12 +612,40 @@ export function normalizeMentionToken(raw: string | undefined): string | undefin
   return undefined;
 }
 
+export interface MentionSetting {
+  token: string;
+  /** Least urgent level that still gets the mention: page (the default) or warn. */
+  level: Extract<AlarmLevel, 'page' | 'warn'>;
+}
+
+/** Lower is more urgent; a mention applies to every level at or above the setting's. */
+const LEVEL_RANK: Record<AlarmLevel, number> = { page: 0, warn: 1, info: 2 };
+
+const MENTION_LINE: Record<AlarmLevel, string> = {
+  page: 'production is paging',
+  warn: 'production needs attention',
+  info: 'production notice',
+};
+
+/**
+ * Parses the operator-supplied setting: a mention target (see normalizeMentionToken), optionally
+ * followed by a space and the level the mention extends down to. `here` mentions on page-level
+ * alarms only; `here warn` also mentions on warnings. Any other level word is ignored rather than
+ * silencing the page mention, since a typo in the parameter gives no feedback.
+ */
+export function parseMentionSetting(raw: string | undefined): MentionSetting | undefined {
+  const [target, levelWord] = (raw ?? '').trim().split(/\s+/, 2);
+  const token = normalizeMentionToken(target);
+  if (!token) return undefined;
+  return { token, level: levelWord?.toLowerCase() === 'warn' ? 'warn' : 'page' };
+}
+
 export interface ComposeParams {
   stage: string;
   level: AlarmLevel;
   /** Raw text: it goes into a plain_text header, and is escaped for the mrkdwn fallback. */
   title: string;
-  /** Mention token; only honoured on production page-level messages. */
+  /** Mention setting; only honoured on production messages at or above its level. */
   mention?: string;
   /** mrkdwn field cells (two per row). */
   fields?: string[];
@@ -637,11 +666,12 @@ export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
     : `:small_blue_diamond: ${stageLabel(params.stage)} alarm`;
   const color = production ? COLOR[params.level] : COLOR.nonprod;
   const headerText = `${prefix}: ${params.title}`;
-  const mention = production && params.level === 'page' ? normalizeMentionToken(params.mention) : undefined;
+  const setting = production ? parseMentionSetting(params.mention) : undefined;
+  const mention = setting && LEVEL_RANK[params.level] <= LEVEL_RANK[setting.level] ? setting.token : undefined;
 
   const blocks: unknown[] = [];
   if (mention) {
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${mention} production is paging` } });
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${mention} ${MENTION_LINE[params.level]}` } });
   }
   blocks.push({ type: 'header', text: { type: 'plain_text', text: headerText.slice(0, 150), emoji: true } });
 
