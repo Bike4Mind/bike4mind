@@ -1475,3 +1475,31 @@ describe('API rate limit settings floor', () => {
     }
   );
 });
+
+describe('spend monitor settings', () => {
+  const expectedDefaults = {
+    spendMonitorEnabled: true,
+    spendMonitorSlackEnabled: false,
+    spendMonitorPlatformSpikeRatio: 3,
+    spendMonitorPlatformCriticalRatio: 6,
+    spendMonitorPlatformSpikeFloorCredits: 5000,
+    spendMonitorPlatformCostFloorUsd: 20,
+    spendMonitorAccountSpikeRatio: 10,
+    spendMonitorAccountSpikeFloorCredits: 1000,
+    spendMonitorAccountCeilingCredits: 5000,
+  } as const;
+
+  it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {
+    const setting = settingsMap[key as keyof typeof expectedDefaults];
+    expect(setting.defaultValue).toBe(expected);
+    expect(setting.schema.parse(undefined)).toBe(expected);
+    expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
+  });
+
+  it('keeps the settings admin-only', () => {
+    const readable = new Set(userReadableSettingKeys());
+    for (const key of Object.keys(expectedDefaults)) {
+      expect(readable.has(key as never)).toBe(false);
+    }
+  });
+});
