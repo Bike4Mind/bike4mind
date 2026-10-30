@@ -108,7 +108,12 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
           latestInputModelId = quest.fallbackInfo?.primaryModel ?? quest.promptMeta?.model?.name;
           latestAnsweredModelId = quest.promptMeta?.model?.name;
           latestCacheReadTokens = quest.promptMeta?.tokenUsage?.cacheReadInputTokens ?? 0;
-          latestCacheExpiresAt = promptCacheExpiresAt(quest);
+          const tokenUsage = quest.promptMeta?.tokenUsage;
+          // A turn that neither read nor wrote the cache left nothing to expire.
+          latestCacheExpiresAt =
+            tokenUsage?.cacheReadInputTokens || tokenUsage?.cacheCreationInputTokens
+              ? promptCacheExpiresAt(quest)
+              : null;
           latestProviderInputTokens = providerPromptTokens(quest.promptMeta);
         }
       }
